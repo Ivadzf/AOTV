@@ -72,6 +72,18 @@ class PlatformPrefs @Inject constructor(
 
         /** Vínculo perfil local -> índice do perfil do Nuvio (JSON id -> index). */
         private const val KEY_NUVIO_PROFILE_LINKS = "nuvio_profile_links_v1"
+
+        /** Repositórios de plugins do Nuvio instalados (JSON array). */
+        private const val KEY_PLUGIN_REPOS = "plugin_repos_v1"
+
+        /** Plugins do Nuvio instalados (JSON array). O código JS fica em arquivo, não aqui. */
+        private const val KEY_PLUGINS = "plugins_v1"
+
+        /** Configurações dos plugins (JSON id -> {chave: valor}, do onSettings()). */
+        private const val KEY_PLUGIN_SETTINGS = "plugin_settings_v1"
+
+        /** Timeout de cada execução de plugin, em segundos (30–180, padrão 60). */
+        private const val KEY_PLUGIN_TIMEOUT = "plugin_timeout_sec"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -427,6 +439,144 @@ class PlatformPrefs @Inject constructor(
         if (old in autoOnBases) autoOnBases = autoOnBases - old + new
         refreshLayout()
     }
+
+    // ── Plugins do Nuvio (scrapers JS) ────────────────────────────────────────
+    // Mesmo padrão dos addons Stremio: metadados em JSON no SharedPreferences, com
+    // StateFlow para a tela de Plugins observar. O código JS de cada plugin fica em
+    // filesDir/plugin-code/<id>.js e os cookies em filesDir/plugin-cookies/<id>.json
+    // (ver PluginStore); aqui só vão metadados, nunca código nem cookie.
+
+    private fun readPluginRepos(): List<com.aotv.app.data.plugins.PluginRepo> = runCatching {
+        val arr = org.json.JSONArray(prefs.getString(KEY_PLUGIN_REPOS, null) ?: "[]")
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            com.aotv.app.data.plugins.PluginRepo(
+                url = o.optString("url"), name = o.optString("name"),
+                version = o.optString("version"), updatedAt = o.optLong("updatedAt", 0L),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private val _pluginRepos = MutableStateFlow(readPluginRepos())
+    val pluginRepos: StateFlow<List<com.aotv.app.data.plugins.PluginRepo>> = _pluginRepos.asStateFlow()
+
+    /** Repositórios instalados (ordem = ordem de instalação). */
+    var pluginRepoList: List<com.aotv.app.data.plugins.PluginRepo>
+        get() = _pluginRepos.value
+        set(value) {
+            val arr = org.json.JSONArray()
+            value.forEach { r ->
+                arr.put(org.json.JSONObject().put("url", r.url).put("name", r.name)
+                    .put("version", r.version).put("updatedAt", r.updatedAt))
+            }
+            prefs.edit().putString(KEY_PLUGIN_REPOS, arr.toString()).apply()
+            _pluginRepos.value = value
+        }
+
+    fun upsertPluginRepo(repo: com.aotv.app.data.plugins.PluginRepo) {
+        val list = pluginRepoList.toMutableList()
+        val i = list.indexOfFirst { it.url.equals(repo.url, true) }
+        if (i >= 0) list[i] = repo else list += repo
+        pluginRepoList = list
+    }
+
+    fun removePluginRepo(url: String) {
+        pluginRepoList = pluginRepoList.filterNot { it.url.equals(url, true) }
+    }
+
+    private fun readPlugins(): List<com.aotv.app.data.plugins.InstalledPlugin> = runCatching {
+        val arr = org.json.JSONArray(prefs.getString(KEY_PLUGINS, null) ?: "[]")
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            com.aotv.app.data.plugins.InstalledPlugin(
+                id = o.optString("id"), name = o.optString("name"),
+                repoUrl = o.optString("repoUrl"), version = o.optString("version"),
+                enabled = o.optBoolean("enabled", true), sha256 = o.optString("sha256"),
+                updatedAt = o.optLong("updatedAt", 0L),
+                supportedTypes = o.optJSONArray("supportedTypes")?.let { arr ->
+                    (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+                }.orEmpty().ifEmpty { listOf("movie", "tv") },
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private val _installedPlugins = MutableStateFlow(readPlugins())
+    /** Plugins instalados, que avisam quem observa. A tela de detalhe lê daqui. */
+    val installedPlugins: StateFlow<List<com.aotv.app.data.plugins.InstalledPlugin>> =
+        _installedPlugins.asStateFlow()
+
+    /** Plugins instalados (ordem = ordem de instalação). */
+    var installedPluginList: List<com.aotv.app.data.plugins.InstalledPlugin>
+        get() = _installedPlugins.value
+        set(value) {
+            val arr = org.json.JSONArray()
+            value.forEach { p ->
+                val types = org.json.JSONArray()
+                p.supportedTypes.forEach { types.put(it) }
+                arr.put(org.json.JSONObject().put("id", p.id).put("name", p.name)
+                    .put("repoUrl", p.repoUrl).put("version", p.version)
+                    .put("enabled", p.enabled).put("sha256", p.sha256)
+                    .put("updatedAt", p.updatedAt).put("supportedTypes", types))
+            }
+            prefs.edit().putString(KEY_PLUGINS, arr.toString()).apply()
+            _installedPlugins.value = value
+        }
+
+    fun upsertPlugin(plugin: com.aotv.app.data.plugins.InstalledPlugin) {
+        val list = installedPluginList.toMutableList()
+        val i = list.indexOfFirst { it.id == plugin.id }
+        if (i >= 0) list[i] = plugin else list += plugin
+        installedPluginList = list
+    }
+
+    fun removePlugin(id: String) {
+        installedPluginList = installedPluginList.filterNot { it.id == id }
+        val settings = pluginSettingsMap - id
+        pluginSettingsMap = settings
+    }
+
+    fun setPluginEnabled(id: String, enabled: Boolean) {
+        installedPluginList = installedPluginList.map { if (it.id == id) it.copy(enabled = enabled) else it }
+    }
+
+    /** Configurações de todos os plugins (id -> mapa chave/valor, do onSettings()). */
+    var pluginSettingsMap: Map<String, Map<String, Any?>>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(KEY_PLUGIN_SETTINGS, null) ?: "{}")
+            o.keys().asSequence().associateWith { id ->
+                val inner = o.optJSONObject(id) ?: org.json.JSONObject()
+                inner.keys().asSequence().associateWith { k -> inner.opt(k) as Any? }
+            }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val o = org.json.JSONObject()
+            value.forEach { (id, map) ->
+                val inner = org.json.JSONObject()
+                map.forEach { (k, v) ->
+                    when (v) {
+                        is Boolean -> inner.put(k, v)
+                        is Number -> inner.put(k, v)
+                        is String -> inner.put(k, v)
+                        null -> inner.put(k, org.json.JSONObject.NULL)
+                        else -> inner.put(k, v.toString())
+                    }
+                }
+                o.put(id, inner)
+            }
+            prefs.edit().putString(KEY_PLUGIN_SETTINGS, o.toString()).apply()
+        }
+
+    /** Configurações de um plugin (vazio = usar os padrões do onSettings()). */
+    fun pluginSettings(id: String): Map<String, Any?> = pluginSettingsMap[id].orEmpty()
+
+    fun setPluginSettings(id: String, values: Map<String, Any?>) {
+        pluginSettingsMap = pluginSettingsMap + (id to values)
+    }
+
+    /** Timeout de cada execução de plugin, em segundos (30–180, padrão 60). */
+    var pluginTimeoutSec: Int
+        get() = prefs.getInt(KEY_PLUGIN_TIMEOUT, 60).coerceIn(30, 180)
+        set(value) { prefs.edit().putInt(KEY_PLUGIN_TIMEOUT, value.coerceIn(30, 180)).apply() }
 
     // ── Catálogo AOTV (o catálogo próprio do app, fixo e desligável como um addon) ──
     private val _catalogOn = MutableStateFlow(prefs.getBoolean("aotv_catalog_on", true))
