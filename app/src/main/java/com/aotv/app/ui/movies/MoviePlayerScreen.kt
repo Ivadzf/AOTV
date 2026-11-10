@@ -461,7 +461,9 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     // Salva ao sair da tela do player. Usa `position` (último poll do currentPlayer, já
     // cast-aware) — NÃO exoPlayer.currentPosition: no onDispose o player já foi liberado
     // (ordem LIFO → release roda antes) e no Cast o player local está congelado.
+    // Ao entrar, trava em paisagem; ao sair, volta ao automático.
     DisposableEffect(Unit) {
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         onDispose {
             val pos = position.coerceAtLeast(0L)
             // Salva o episódio ATUAL (após próximo/anterior), não o que abriu a tela.
