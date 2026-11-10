@@ -11,8 +11,9 @@ import javax.inject.Singleton
 
 /**
  * Troca o id do Stremio (tt ou tmdb:) pelo do TMDB, para o cartão abrir o detalhe normal. Usado
- * pelas fileiras de addon da Início e pelas pastas das coleções. Item sem pôster ou sem par no
- * TMDB fica de fora.
+ * pelas fileiras de addon da Início e pelas pastas das coleções. Item sem pôster fica de fora;
+ * item com id IMDb mas sem par no TMDB (sem chave, por exemplo) fica com o id IMDb e o detalhe
+ * resolve o TMDB ao abrir.
  */
 @Singleton
 class AddonMetaResolver @Inject constructor(
@@ -26,7 +27,7 @@ class AddonMetaResolver @Inject constructor(
         metas.map { m ->
             async {
                 if (m.poster.isBlank()) return@async null
-                val tm = Regex("""^tmdb:(\d+)""").find(m.id)?.groupValues?.get(1)?.toIntOrNull()
+                val tm = Regex("""^tmdb:(?:movie:|series:)?(\d+)""").find(m.id)?.groupValues?.get(1)?.toIntOrNull()
                 val imdb = Regex("""^tt\d+""").find(m.id)?.value
                 val id = tm ?: imdb?.let { tt ->
                     imdbToTmdb[tt] ?: runCatching {
@@ -35,9 +36,13 @@ class AddonMetaResolver @Inject constructor(
                         else r.movieResults.firstOrNull() ?: r.tvResults.firstOrNull()
                         hit?.id
                     }.getOrNull()?.also { imdbToTmdb[tt] = it }
-                } ?: return@async null
+                }
+                // Sem par no TMDB (sem chave, por exemplo) o item fica com o id IMDb: o
+                // detalhe resolve o TMDB ao abrir, quando houver chave. Só sai quem não tem
+                // nem id tmdb: nem id IMDb.
+                if (id == null && imdb == null) return@async null
                 MovieItem(
-                    tmdbId = id, embedId = id.toString(), title = m.name, overview = m.description,
+                    tmdbId = id ?: 0, embedId = imdb ?: id.toString(), title = m.name, overview = m.description,
                     posterUrl = m.poster, backdropUrl = m.background, year = m.year, rating = m.rating,
                     type = if (series) MediaType.SERIES else MediaType.MOVIE,
                 )
