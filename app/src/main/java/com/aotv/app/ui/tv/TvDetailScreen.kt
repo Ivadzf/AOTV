@@ -84,7 +84,9 @@ private fun TvDetailScreenBody(
 ) {
     LaunchedEffect(item.tmdbId) { viewModel.load(item) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val primary = rememberDetailPrimary(item, state, viewModel, onPlayEpisode, onPlayDirect)
+    // Item que chegou só com o id IMDb e teve o TMDB resolvido ao abrir.
+    val detailItem = if (state.resolvedTmdbId > 0) item.copy(tmdbId = state.resolvedTmdbId) else item
+    val primary = rememberDetailPrimary(detailItem, state, viewModel, onPlayEpisode, onPlayDirect)
     val isSeries = item.type == MediaType.SERIES
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
@@ -202,7 +204,7 @@ private fun TvDetailScreenBody(
                                     horizontalArrangement = Arrangement.spacedBy(0.75.r),
                                 ) {
                                     (1..seasons).forEach { n ->
-                                        TvChip("Temporada $n", state.selectedSeason == n, { viewModel.loadSeason(item.tmdbId, n) })
+                                        TvChip("Temporada $n", state.selectedSeason == n, { viewModel.loadSeason(detailItem.tmdbId, n) })
                                     }
                                 }
                             }
@@ -210,7 +212,7 @@ private fun TvDetailScreenBody(
                     }
 
                     if (isSeries) item(key = "eps") {
-                        TvEpisodes(state, item, onPlayEpisode, onPlayDirect, viewModel::selectEpisode)
+                        TvEpisodes(state, detailItem, onPlayEpisode, onPlayDirect, viewModel::selectEpisode)
                     } else item(key = "sources") {
                         Column(Modifier.fillMaxWidth()) {
                             Row(
