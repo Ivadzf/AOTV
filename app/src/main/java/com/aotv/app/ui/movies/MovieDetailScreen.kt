@@ -1144,6 +1144,7 @@ internal fun SourceList(
  * com Column + verticalScroll, a posição se perdia (o "Mostrar mais" voltava
  * pro topo e as outras fontes não apareciam).
  */
+@Composable
 private fun androidx.compose.foundation.lazy.LazyListScope.sourceListItems(
     streams: List<com.aotv.app.data.remote.StremioStream>,
     facts: List<com.aotv.app.data.remote.SourceFacts>,
