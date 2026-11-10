@@ -191,8 +191,21 @@ class AccountsViewModel @Inject constructor(
     }
 
     fun pickNuvioProfile(index: Int) {
-        // A escolha vira o vínculo do perfil local ativo (a importação segue o perfil).
-        prefs.setNuvioProfileLink(prefs.profileId.value, index)
+        // O toque no perfil do Nuvio troca também o perfil LOCAL ativo: a importação
+        // (addons, lista, progresso, debrid, coleções) cai no perfil com o nome certo
+        // (Juliana/Davi/Igor), em vez de cair sempre no Principal. Antes o toque só
+        // mudava DE ONDE os dados vinham; o destino era sempre o perfil local ativo.
+        val name = local.value.nuvioProfiles.firstOrNull { it.index == index }?.name
+        var localId = prefs.nuvioProfileLinks.entries.firstOrNull { it.value == index }?.key
+        if (localId == null && name != null) {
+            localId = prefs.profiles.value.firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
+            if (localId != null) prefs.setNuvioProfileLink(localId, index)
+        }
+        if (localId == null && name != null) {
+            localId = prefs.addProfile(name, kids = false)?.id
+            if (localId != null) prefs.setNuvioProfileLink(localId, index)
+        }
+        if (localId != null && prefs.profileId.value != localId) prefs.selectProfile(localId)
         local.update { it.copy(nuvioProfile = index) }
     }
 
