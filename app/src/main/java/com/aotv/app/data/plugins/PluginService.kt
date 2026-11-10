@@ -8,6 +8,7 @@ import com.aotv.app.data.remote.hasDolbyVision
 import com.aotv.app.data.remote.hasHdr
 import com.aotv.app.data.remote.ptAudio
 import com.aotv.app.data.remote.qualityRankOf
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
@@ -60,6 +61,7 @@ class PluginService @Inject constructor(
         val code = store.readCode(plugin.id) ?: return emptyList()
         val timeoutMs = prefs.pluginTimeoutSec * 1000L
         val settings = store.pluginSettings(plugin.id)
+        val started = System.currentTimeMillis()
         val result = pluginSemaphore.withPermit {
             engine.runGetStreams(
                 plugin = plugin, code = code, tmdbId = tmdbId, mediaType = mediaType,
@@ -67,13 +69,41 @@ class PluginService @Inject constructor(
                 timeoutMs = timeoutMs, cookieJar = store.cookieJar(plugin.id),
             )
         }
+        val elapsed = System.currentTimeMillis() - started
         val raw = result.getOrElse { e ->
+            recordLastRun(plugin.id, e, 0, elapsed)
             Log.w(TAG, "plugin ${plugin.id} falhou: ${e.message}")
             return emptyList()
         }
-        return raw.mapNotNull { normalize(it, plugin.name) }
+        val streams = raw.mapNotNull { normalize(it, plugin.name) }
             .distinctBy { it.url }
             .sortedByDescending { it.qualityRank }
+        recordLastRun(plugin.id, null, streams.size, elapsed)
+        return streams
+    }
+
+    /**
+     * Registra o resultado da execução p/ o diagnóstico da tela de Plugins.
+     * Nunca lança nem atrasa o retorno: uma falha aqui não pode derrubar
+     * a lista de fontes.
+     */
+    private fun recordLastRun(pluginId: String, error: Throwable?, count: Int, millis: Long) {
+        runCatching {
+            val now = System.currentTimeMillis()
+            val run = when {
+                error is TimeoutCancellationException -> PluginLastRun(
+                    status = "timeout", millis = millis, at = now,
+                    detail = "Tempo esgotado (${millis / 1000}s)",
+                )
+                error != null -> PluginLastRun(
+                    status = "error", millis = millis, at = now,
+                    detail = (error.message ?: error.javaClass.simpleName).take(120),
+                )
+                count > 0 -> PluginLastRun(status = "ok", streams = count, millis = millis, at = now)
+                else -> PluginLastRun(status = "empty", millis = millis, at = now)
+            }
+            prefs.setPluginLastRun(pluginId, run)
+        }
     }
 
     /** Descritores de onSettings() (p/ a tela de Plugins). Vazio se não exportar. */
