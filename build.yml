@@ -1,0 +1,67 @@
+# AOTV — build no GitHub Actions
+#
+# Por que existe: o Gradle NÃO executa na VM do Muse (o Java não consegue
+# nem falar consigo mesmo no loopback; ver ../BUILD.md). No runner do GitHub
+# ele roda normalmente, então o primeiro APK do AOTV sai por aqui.
+#
+# Por que NÃO usa ./gradlew: o gradle-wrapper.jar é binário e NÃO vai para o
+# repo (o push para o GitHub é 100% texto). O Gradle 8.14.1 é instalado no
+# runner por gradle/actions/setup-gradle e o build roda com `gradle`.
+#
+# Por que baixa a fonte: o arquivo plus_jakarta_sans.ttf também NÃO vai para
+# o repo (binário). O workflow baixa a fonte direto do repositório
+# google/fonts e confere o SHA-256 antes de compilar.
+#
+# Sem segredos: a chave TMDB vem vazia por padrão (o usuário informa a
+# própria em Configurações). O build de release assinado com o keystore
+# próprio fica para depois.
+
+name: Build AOTV
+
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-debug:
+    name: Debug APK (sem segredos)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Android SDK 35
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar pacotes do SDK
+        run: |
+          sdkmanager "cmdline-tools;latest" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses
+
+      - name: Baixar fonte Plus Jakarta Sans
+        run: |
+          mkdir -p app/src/main/res/font
+          curl -sL -o app/src/main/res/font/plus_jakarta_sans.ttf "https://github.com/google/fonts/raw/main/ofl/plusjakartasans/PlusJakartaSans%5Bwght%5D.ttf"
+          echo "89b3fb38aa0d275d7a731d0d817a4f1622b316b4d7fbdedcf02ee9099ff68bc8  app/src/main/res/font/plus_jakarta_sans.ttf" | sha256sum -c -
+
+      - name: Gradle 8.14.1
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.14.1"
+
+      - name: Compilar debug
+        run: gradle assembleDebug --stacktrace
+
+      - name: Publicar APK debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: aotv-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
