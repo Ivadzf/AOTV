@@ -67,6 +67,21 @@ fun AddonSiteConfig(
     var typed by remember { mutableStateOf("") }
     var note by remember { mutableStateOf<String?>(null) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    // Carregamento da página de configuração: indicador enquanto carrega e mensagem clara
+    // quando a página não existe (addon sem /configure, que dá 404) ou a rede falha.
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    /** Mensagem de erro da página (code null = falha de rede). */
+    fun pageError(code: Int?): String = when (code) {
+        404 -> "Este addon não tem página de configuração. " +
+            if (plainUrl != null) "Você pode instalá-lo direto, sem configurar."
+            else "Não há nada para configurar nele."
+        null -> "Não foi possível carregar a página de configuração. Verifique sua conexão" +
+            if (plainUrl != null) " ou instale direto, sem configurar." else " e tente de novo."
+        else -> "A página de configuração devolveu erro $code. " +
+            if (plainUrl != null) "Você pode instalar direto, sem configurar." else "Tente de novo mais tarde."
+    }
 
     fun offer(text: String?, action: Boolean): Boolean {
         val link = AddonLinks.capturedLink(text) ?: return false
@@ -135,9 +150,14 @@ fun AddonSiteConfig(
     }
 
     val page: @Composable (Modifier) -> Unit = { mod ->
-        AndroidView(
+        Column(mod) {
+            if (loading) LinearProgressIndicator(
+                color = Accent, trackColor = BackgroundCard2,
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+            )
+            AndroidView(
             // clipToBounds evita a WebView pintar por cima do cabeçalho.
-            modifier = mod.clipToBounds(),
+            modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
             factory = { ctx ->
                 WebView(ctx).apply {
                     setOnFocusChangeListener { _, has -> webFocused = has }
@@ -165,8 +185,39 @@ fun AddonSiteConfig(
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) =
                             handle(request.url.toString())
 
+                        override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                            // Redirecionamento para o manifest (ex.: /configure que devolve o
+                            // manifest.json): intercepta e oferece a instalação, sem abrir a página.
+                            if (url != null && offer(url, true)) {
+                                view.stopLoading()
+                                loading = false
+                                return
+                            }
+                            loading = true
+                            loadError = null
+                        }
+
                         override fun onPageFinished(view: WebView, url: String?) {
+                            loading = false
                             view.evaluateJavascript(HOOK_JS, null)
+                        }
+
+                        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                            if (!request.isForMainFrame) return
+                            loading = false
+                            loadError = pageError(null)
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun onReceivedError(view: WebView, errorCode: Int, description: String?, failingUrl: String?) {
+                            loading = false
+                            loadError = pageError(null)
+                        }
+
+                        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: android.webkit.WebResourceResponse) {
+                            if (!request.isForMainFrame) return
+                            loading = false
+                            loadError = pageError(errorResponse.statusCode)
                         }
                     }
                     webChromeClient = object : WebChromeClient() {
@@ -199,7 +250,8 @@ fun AddonSiteConfig(
                 }
             },
             onRelease = { it.destroy() },
-        )
+            )
+        }
     }
 
     // ── Painel do link: link encontrado, colar e digitar ──
@@ -228,6 +280,9 @@ fun AddonSiteConfig(
                     }
                     BusyButton(if (sameSite) "Instalar" else "Instalar mesmo assim", busy, primary = sameSite) { onInstall(link) }
                 }
+            }
+            loadError?.let {
+                Text(it, color = LiveRed, fontSize = 12.5.sp, fontFamily = ManropeFontFamily, lineHeight = 17.sp)
             }
             note?.let { Text(it, color = LiveRed, fontSize = 12.sp, fontFamily = ManropeFontFamily) }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
