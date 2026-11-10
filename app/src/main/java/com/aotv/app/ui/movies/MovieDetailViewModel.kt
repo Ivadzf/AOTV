@@ -37,6 +37,7 @@ class MovieDetailViewModel @Inject constructor(
     private val trakt: com.aotv.app.data.remote.TraktService,
     private val debrid: com.aotv.app.data.debrid.DebridService,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
+    private val pluginService: com.aotv.app.data.plugins.PluginService,
 ) : ViewModel() {
 
     // URLs já mandadas pro teste. A lista é recriada a cada addon que responde, então o
@@ -325,6 +326,14 @@ class MovieDetailViewModel @Inject constructor(
                 val stremioId = if (resolvedEmbedId.startsWith("tt")) resolvedEmbedId else ""
                 val srcJobs = mutableListOf<kotlinx.coroutines.Job>()
                 val slots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(addons.size)
+                // Plugins do Nuvio (JS): mesmo slot por plugin, mesma lista de fontes.
+                // Os dois merges (addon e plugin) leem os dois arrays, senão um
+                // update apagaria as fontes do outro.
+                val plugins = if (tmdbId > 0) pluginService.enabledPlugins("movie") else emptyList()
+                val pluginSlots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(plugins.size)
+                fun mergedSources() = (slots.filterNotNull() + pluginSlots.filterNotNull())
+                    .flatMap { g -> g.sortedByDescending { it.qualityRank } }
+                fun sourcesPending() = slots.any { it == null } || pluginSlots.any { it == null }
                 if (addons.isNotEmpty() && (tmdbId > 0 || stremioId.isNotBlank())) {
                     // PROGRESSIVO por addon: cada um aparece assim que chega, na ORDEM dos addons
                     // (FrostStream 1º). Addon morto/lento preenche seu slot vazio no timeout, mas
@@ -336,9 +345,28 @@ class MovieDetailViewModel @Inject constructor(
                             slots[idx] = s
                             _uiState.update { st ->
                                 st.copy(
-                                    stremioStreams = dropUncached(prefs.sortStreams(slots.filterNotNull()
-                                        .flatMap { g -> g.sortedByDescending { it.qualityRank } }), st),
-                                    stremioLoading = slots.any { it == null },
+                                    stremioStreams = dropUncached(prefs.sortStreams(mergedSources()), st),
+                                    stremioLoading = sourcesPending(),
+                                )
+                            }
+                            verify(s)
+                        }
+                    }
+                }
+
+                if (plugins.isNotEmpty()) {
+                    // PROGRESSIVO por plugin, igual aos addons: cada provider aparece
+                    // assim que responde, com o nome dele como "addon" (o agrupamento
+                    // por addon da v1.0.1 mostra FSHD, Redeflix etc. como um grupo).
+                    _uiState.update { it.copy(stremioLoading = true) }
+                    plugins.forEachIndexed { idx, plugin ->
+                        srcJobs += launch {
+                            val s = pluginService.getStreamsForPlugin(plugin, tmdbId, "movie")
+                            pluginSlots[idx] = s
+                            _uiState.update { st ->
+                                st.copy(
+                                    stremioStreams = dropUncached(prefs.sortStreams(mergedSources()), st),
+                                    stremioLoading = sourcesPending(),
                                 )
                             }
                             verify(s)
@@ -391,7 +419,7 @@ class MovieDetailViewModel @Inject constructor(
                 launch {
                     srcJobs.joinAll()
                     // Resumo para os selos do pôster (4K, HDR, Dolby, DUB), igual ao webOS.
-                    if (srcJobs.isNotEmpty()) posterInfo.remember(com.aotv.app.domain.model.MediaType.MOVIE, tmdbId, slots.filterNotNull().flatten())
+                    if (srcJobs.isNotEmpty()) posterInfo.remember(com.aotv.app.domain.model.MediaType.MOVIE, tmdbId, mergedSources())
                     _uiState.update { it.copy(sourcesLoading = false) }
                 }
             } else {
@@ -529,7 +557,9 @@ class MovieDetailViewModel @Inject constructor(
         // Série não preenche state.item, então o tmdbId vem do stub que abriu a tela.
         val seriesTmdb = stubItem?.tmdbId ?: 0
         val addons = prefs.stremioAddonList()
-        val canSearch = (imdb.isNotBlank() || seriesTmdb > 0) && addons.isNotEmpty()
+        // Plugins do Nuvio (JS) precisam do id do TMDB (não usam IMDb).
+        val plugins = if (seriesTmdb > 0) pluginService.enabledPlugins("tv") else emptyList()
+        val canSearch = ((imdb.isNotBlank() || seriesTmdb > 0) && addons.isNotEmpty()) || plugins.isNotEmpty()
         _uiState.update {
             it.copy(
                 selectedEpisode = season to episode,
@@ -539,22 +569,45 @@ class MovieDetailViewModel @Inject constructor(
         }
         if (canSearch) {
             val slots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(addons.size)
+            val pluginSlots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(plugins.size)
+            fun mergedEpisodeSources() = (slots.filterNotNull() + pluginSlots.filterNotNull())
+                .flatMap { g -> g.sortedByDescending { it.qualityRank } }
+            fun episodePending() = slots.any { it == null } || pluginSlots.any { it == null }
+            fun maybeRememberPoster() {
+                if (slots.none { it == null } && pluginSlots.none { it == null }) {
+                    posterInfo.remember(com.aotv.app.domain.model.MediaType.SERIES, seriesTmdb, mergedEpisodeSources())
+                }
+            }
             addons.forEachIndexed { idx, addon ->
                 viewModelScope.launch {
                     val s = runCatching { stremio.getStreams(addon, "series", imdb, season, episode, seriesTmdb) }
                         .getOrDefault(emptyList())
                     slots[idx] = s
                     // Todos os addons responderam. O episódio também vale para o pôster da série.
-                    if (slots.none { it == null }) posterInfo.remember(com.aotv.app.domain.model.MediaType.SERIES, seriesTmdb, slots.filterNotNull().flatten())
+                    maybeRememberPoster()
                     if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
                     _uiState.update { st ->
                         if (st.selectedEpisode != (season to episode)) st
                         else st.copy(
                             // Ordem dos ADDONS (slots seguem o gerenciador) e, dentro de cada
                             // addon, maior qualidade primeiro.
-                            episodeStremioStreams = dropUncached(prefs.sortStreams(slots.filterNotNull()
-                                .flatMap { g -> g.sortedByDescending { it.qualityRank } }), st),
-                            episodeStremioLoading = slots.any { it == null },
+                            episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
+                            episodeStremioLoading = episodePending(),
+                        )
+                    }
+                }
+            }
+            plugins.forEachIndexed { idx, plugin ->
+                viewModelScope.launch {
+                    val s = pluginService.getStreamsForPlugin(plugin, seriesTmdb, "tv", season, episode)
+                    pluginSlots[idx] = s
+                    maybeRememberPoster()
+                    if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
+                    _uiState.update { st ->
+                        if (st.selectedEpisode != (season to episode)) st
+                        else st.copy(
+                            episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
+                            episodeStremioLoading = episodePending(),
                         )
                     }
                 }
