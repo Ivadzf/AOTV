@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.AccountCircle
@@ -65,6 +66,7 @@ import com.aotv.app.ui.theme.*
 @Composable
 fun SettingsScreen(
     onOpenAddons: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenHomeCustomize: () -> Unit = {},
     onOpenDebrid: () -> Unit = {},
@@ -234,6 +236,13 @@ fun SettingsScreen(
                     sub = (if (addonCount == 0) "Nenhum instalado" else "$addonCount instalado(s)") +
                         ". As fontes vêm dos addons. Instale, ordene e ative cada um.",
                     onClick = onOpenAddons,
+                )
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = Icons.Default.Code,
+                    iconTint = Accent,
+                    title = "Plugins do Nuvio",
+                    sub = "Scrapers JavaScript (ex.: os do seu repositório). Instale por manifest, ative cada um e ajuste o timeout.",
+                    onClick = onOpenPlugins,
                 )
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.Bolt,
