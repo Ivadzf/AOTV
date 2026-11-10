@@ -10,11 +10,9 @@ import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -24,6 +22,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -42,7 +41,11 @@ import javax.inject.Singleton
  * API usada aqui (create/evaluate/define/function/asyncFunction/close).
  * Limitação dela: NÃO tem setEvaluationTimeoutMillis/interruptEvaluation —
  * o timeout é aplicado no nível da coroutine (withTimeout); a avaliação JS
- * não é interrompida de verdade, só abandonada, e o close() é adiado.
+ * não é interrompida de verdade, só abandonada. Por isso o motor NUNCA é
+ * fechado quando o timeout (ou o cancelamento) pode ter deixado a avaliação
+ * rodando: fechar o runtime sob uma avaliação em andamento derruba o app
+ * (SIGSEGV em libquickjs.so). O motor abandonado vaza — melhor que o crash.
+ * Toda a execução roda numa thread dedicada por motor (nada de JS na Main).
  *
  * Diferenças para o Nuvio (o motivo do AOTV existir):
  * - fetch com cookie jar PERSISTENTE em disco por scraper (PluginCookieJar);
@@ -136,45 +139,51 @@ class PluginEngine @Inject constructor(
         cookieJar: PluginCookieJar,
         driver: suspend (QuickJs) -> T,
     ): T {
-        val qjs = QuickJs.create(Dispatchers.Default)
-        var timedOut = false
+        // Uma thread dedicada por motor: nenhum JS roda na Main (antes a cadeia
+        // viewModelScope/Main -> evaluate corria na Main, com risco de ANR) e
+        // cada instância do QuickJs tem sua thread (o motor exige uso
+        // single-thread por instância). O dispatcher é fechado ao fim; se a
+        // avaliação ficou presa, a thread termina sozinha quando ela acabar.
+        val engineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         try {
-            val cheerio = PluginCheerio()
-            val fetchClient = AppDns.mediaClient.newBuilder()
-                .cookieJar(cookieJar)
-                .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                .build()
-            defineBindings(qjs, cheerio, fetchClient)
-            qjs.evaluate<String>(PluginPrelude.build(prefs.tmdbApiKey) + "\n;'ok';")
-            readCryptoJsAsset()?.let { cryptoJs ->
-                qjs.evaluate<String>(cryptoJs + "\n;'ok';")
-                qjs.evaluate<String>(PluginPrelude.POST_CRYPTOJS)
-            }
-            qjs.evaluate<String>(code + "\n;'ok';")
-            // Sem interrupt nativo no motor alpha12: o timeout é aplicado aqui,
-            // no nível da coroutine (withTimeout). A avaliação JS em andamento
-            // NÃO é interrompida — ela termina sozinha na thread dela; por isso
-            // o close() no timeout é adiado (fechar o motor com a avaliação
-            // rodando poderia derrubar o app). Os 15 s extras são a margem p/
-            // o fetch em andamento devolver (callTimeout = timeoutMs).
-            return try {
-                withTimeout(timeoutMs + 15_000) { driver(qjs) }
-            } catch (e: TimeoutCancellationException) {
-                timedOut = true
-                throw e
+            return withContext(engineDispatcher) {
+                val qjs = QuickJs.create(engineDispatcher)
+                // Só true depois que o driver devolveu: só aí é seguro fechar.
+                var completedNormally = false
+                try {
+                    val cheerio = PluginCheerio()
+                    val fetchClient = AppDns.mediaClient.newBuilder()
+                        .cookieJar(cookieJar)
+                        .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                        .connectTimeout(15, TimeUnit.SECONDS)
+                        .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                        .build()
+                    defineBindings(qjs, cheerio, fetchClient)
+                    qjs.evaluate<String>(PluginPrelude.build(prefs.tmdbApiKey) + "\n;'ok';")
+                    readCryptoJsAsset()?.let { cryptoJs ->
+                        qjs.evaluate<String>(cryptoJs + "\n;'ok';")
+                        qjs.evaluate<String>(PluginPrelude.POST_CRYPTOJS)
+                    }
+                    qjs.evaluate<String>(code + "\n;'ok';")
+                    // Sem interrupt nativo no motor alpha12: o timeout é aplicado
+                    // aqui, no nível da coroutine (withTimeout). A avaliação JS
+                    // em andamento NÃO é interrompida — ela termina sozinha na
+                    // thread dela. Os 15 s extras são a margem p/ o fetch em
+                    // andamento devolver (callTimeout = timeoutMs).
+                    val result = withTimeout(timeoutMs + 15_000) { driver(qjs) }
+                    completedNormally = true
+                    result
+                } finally {
+                    // NUNCA fechar com a avaliação possivelmente rodando: no
+                    // timeout ou no cancelamento, completedNormally é false e
+                    // o motor é abandonado (vaza o runtime; fechar derrubaria
+                    // o app com SIGSEGV). Não há close adiado: nenhum close é
+                    // seguro depois que a avaliação escapou do nosso controle.
+                    if (completedNormally) runCatching { qjs.close() }
+                }
             }
         } finally {
-            if (timedOut) {
-                // Fecha depois, quando a avaliação já deve ter terminado.
-                CoroutineScope(Dispatchers.Default).launch {
-                    delay(60_000)
-                    runCatching { qjs.close() }
-                }
-            } else {
-                runCatching { qjs.close() }
-            }
+            engineDispatcher.close()
         }
     }
 
