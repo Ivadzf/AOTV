@@ -79,8 +79,9 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
     val player = remember {
         ExoPlayer.Builder(context).build().apply { playWhenReady = true }
     }
-    // Ao sair, solta o player e volta a tela para o automático (caso tenha travado em paisagem).
+    // Ao entrar, trava em paisagem; ao sair, solta o player e volta a tela para o automático.
     DisposableEffect(Unit) {
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         onDispose {
             player.release()
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
