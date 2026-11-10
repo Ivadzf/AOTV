@@ -61,6 +61,7 @@ private sealed class MoviesRoute(val route: String) {
     object Search   : MoviesRoute("movies_search")
     object Settings : MoviesRoute("movies_settings")
     object Addons : MoviesRoute("movies_addons")
+    object Plugins : MoviesRoute("movies_plugins")
     object AddonStore : MoviesRoute("movies_addon_store")
     object MinhaLista : MoviesRoute("movies_minha_lista")
     object Descobrir : MoviesRoute("movies_descobrir")
@@ -362,6 +363,7 @@ fun MoviesNavigation(
                         onBack            = { navController.popBackStack() },
                         onPlatformChanged = onRestartApp,
                         onOpenAddons      = { navController.navigate(MoviesRoute.Addons.route) },
+                        onOpenPlugins     = { navController.navigate(MoviesRoute.Plugins.route) },
                         onOpenProfiles    = { navController.navigate(MoviesRoute.Profiles.route) },
                         onOpenHomeCustomize = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                         onOpenDebrid = { navController.navigate(MoviesRoute.Debrid.route) },
@@ -384,6 +386,15 @@ fun MoviesNavigation(
                         onBack = { navController.popBackStack() },
                         onExplore = { navController.navigate(MoviesRoute.AddonStore.route) },
                         onCustomizeHome = { navController.navigate(MoviesRoute.HomeCustomize.route) },
+                    )
+                }
+            }
+
+            // Plugins do Nuvio (scrapers JS) — instala por manifest URL, liga/desliga e configura.
+            composable(MoviesRoute.Plugins.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.settings.PluginsScreen(
+                        onBack = { navController.popBackStack() },
                     )
                 }
             }
