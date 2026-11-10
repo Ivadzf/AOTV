@@ -131,8 +131,13 @@ dependencies {
     implementation("org.mozilla:rhino:1.7.14")   // deciframento de assinatura (JS) do YouTube
     implementation("org.jsoup:jsoup:1.17.2")
     // Motor JS dos plugins do Nuvio (QuickJS, mesmo lineage do Nuvio; async/await nativo,
-    // timeout por avaliação, bindings Kotlin). Rhino não parseia async/await (testado).
-    implementation("io.github.dokar3:quickjs-kt-android:1.0.18")
+    // bindings Kotlin). Rhino não parseia async/await (testado). Versão 1.0.0-alpha12
+    // DE PROPÓSITO: o projeto usa Kotlin 2.1.20 e toda a linha 1.0.x estável foi
+    // compilada com Kotlin 2.4 — o compilador 2.1.20 rejeita os metadados 2.4 e o
+    // build quebra (derrubou a primeira v1.0.2). A alpha12 (Kotlin 2.0.0) tem a
+    // mesma API usada pelo motor; a única falta é o timeout nativo de avaliação
+    // (o timeout é aplicado na coroutine — ver PluginEngine).
+    implementation("io.github.dokar3:quickjs-kt-android:1.0.0-alpha12")
 
     // Media3 (ExoPlayer HLS)
     implementation("androidx.media3:media3-exoplayer:1.6.0")
