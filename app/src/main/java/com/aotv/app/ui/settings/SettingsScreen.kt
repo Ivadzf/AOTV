@@ -302,11 +302,15 @@ fun SettingsScreen(
 
                 SettingsSection("TMDB")
                 val customTmdbKey by viewModel.customTmdbApiKey.collectAsStateWithLifecycle()
+                val hasTmdbKey by viewModel.hasTmdbKey.collectAsStateWithLifecycle()
                 var tmdbDraft by remember(customTmdbKey) { mutableStateOf(customTmdbKey) }
                 var tmdbVisible by remember(customTmdbKey) { mutableStateOf(false) }
                 Text(
-                    if (customTmdbKey.isBlank()) "Chave padrão do app em uso. Se preferir, informe sua própria chave abaixo."
-                    else "Chave pessoal em uso. Você pode trocar a chave ou restaurar o padrão do app.",
+                    when {
+                        customTmdbKey.isNotBlank() -> "Chave pessoal em uso. Você pode trocar a chave ou restaurar o padrão do app."
+                        hasTmdbKey -> "Chave padrão do app em uso. Se preferir, informe sua própria chave abaixo."
+                        else -> "Nenhuma chave configurada. Cole sua chave TMDB abaixo para liberar o catálogo, a busca e as fileiras."
+                    },
                     fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
