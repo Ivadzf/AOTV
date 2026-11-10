@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -103,7 +104,10 @@ fun MovieDetailScreen(
     val detailList = androidx.compose.foundation.lazy.rememberLazyListState()
     var primaryGotFocus by remember { mutableStateOf(false) }
 
-    val primary = rememberDetailPrimary(item, state, viewModel, onPlayEpisode, onPlayDirect)
+    // Item que chegou só com o id IMDb e teve o TMDB resolvido ao abrir: o resto da tela
+    // (temporadas, player) usa o id resolvido.
+    val detailItem = if (state.resolvedTmdbId > 0) item.copy(tmdbId = state.resolvedTmdbId) else item
+    val primary = rememberDetailPrimary(detailItem, state, viewModel, onPlayEpisode, onPlayDirect)
     val playerSources = primary.playerSources
     // Clique numa fonte: toca no ExoPlayer.
     fun playStremio(s: com.aotv.app.data.remote.StremioStream) {
@@ -615,7 +619,7 @@ fun MovieDetailScreen(
                             SeasonChip(
                                 label = "Temporada $season",
                                 selected = selected,
-                                onClick = { viewModel.loadSeason(item.tmdbId, season) },
+                                onClick = { viewModel.loadSeason(detailItem.tmdbId, season) },
                             )
                         }
                     }
@@ -631,7 +635,7 @@ fun MovieDetailScreen(
                         watching = state.watchingEpisode == "${ep.seasonNumber}:${ep.episodeNumber}",
                         modifier = Modifier.padding(horizontal = pad, vertical = 5.dp),
                         onPlay = {
-                            onPlayEpisode(item.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
+                            onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
                         },
                         // (A) tocar o card abre o painel de fontes/servidores do episódio
                         onSelect = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
@@ -837,11 +841,14 @@ private fun EpisodeServersSheet(
             .clickable(interactionSource = scrimSrc, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        // Card inferior — não fecha ao tocar dentro.
+        // Card inferior — não fecha ao tocar dentro. Altura limitada a 90% da tela e
+        // lista rolável: com muitas fontes o card crescia além da tela e o resto ficava
+        // inalcançável (sem rolagem, nem o "Mostrar mais" aparecia).
         val cardSrc = remember { MutableInteractionSource() }
         Column(
             Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.9f)
                 .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .background(BackgroundCard)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
@@ -895,7 +902,12 @@ private fun EpisodeServersSheet(
             }
             Spacer(Modifier.height(16.dp))
 
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 // Fontes dos addons, tocam no ExoPlayer.
                 SourceList(
                     streams = stremioStreams,
@@ -976,10 +988,31 @@ internal fun SourceList(
         if (wrongCount > 0) SeasonChip(if (showWrong) "Ocultar outro filme ($wrongCount)" else "Mostrar todas ($wrongCount de outro filme)", showWrong) { showWrong = !showWrong }
     }
     val best = facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url
-    filtered.take(limit).chunked(cols.coerceAtLeast(1)).forEach { row ->
+    // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
+    // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
+    fun playable(group: ReleaseGroup) =
+        group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
+    fun addonOf(group: ReleaseGroup) =
+        fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
+    // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
+    // O limite ("Mostrar mais") corta antes de agrupar, então ele continua valendo no total.
+    val shown = filtered.take(limit)
+    val sections = shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
+        gs.maxOf { fact(playable(it)).rank }
+    }
+    sections.forEach { (addon, gs) ->
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(addon, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily)
+            Text("${gs.size} ${if (gs.size == 1) "versão" else "versões"}", color = TextTertiary, fontSize = 12.5.sp, fontFamily = ManropeFontFamily)
+        }
+        gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             row.forEach { group ->
-                val source = group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
+                val source = playable(group)
                 val f = fact(source)
                 var info = releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
                 if (source.qualityRank == 0 && (f.probe?.height ?: 0) > 0) info = info.copy(quality = com.aotv.app.data.remote.heightLabel(f.probe!!.height))
@@ -998,6 +1031,7 @@ internal fun SourceList(
                 }
             }
             repeat(cols.coerceAtLeast(1) - row.size) { Spacer(Modifier.weight(1f)) }
+        }
         }
     }
     if (filtered.size > limit) com.aotv.app.ui.common.AotvButton("Mostrar mais (${filtered.size - limit})", { limit += 24 })
