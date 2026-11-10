@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder provisório (vetor) da marca AOTV: retângulo arredondado escuro
+     (#08090C, mesmo fundo do splash) com triângulo de play na cor Accent do
+     tema (#A7CAFF, ver Color.kt). Não é possível desenhar texto em vector
+     drawable, então a logomarca definitiva (com o wordmark AOTV) será trocada
+     depois — ver BUILD.md, seção "Push para o GitHub". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="180dp"
+    android:viewportWidth="240"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#08090C"
+        android:pathData="M12,0 L228,0 Q240,0 240,12 L240,168 Q240,180 228,180 L12,180 Q0,180 0,168 L0,12 Q0,0 12,0 Z" />
+    <path
+        android:fillColor="#A7CAFF"
+        android:pathData="M96,54 L162,90 L96,126 Z" />
+</vector>
