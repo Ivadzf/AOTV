@@ -902,6 +902,13 @@ private fun EpisodeServersSheet(
             }
             Spacer(Modifier.height(16.dp))
 
+            // Estado da lista (filtros/limite) lembrado aqui, na folha — a função
+            // auxiliar LazyListScope.sourceListItems não compilava (o compilador
+            // recusou chamar @Composable com receiver LazyListScope de dentro do
+            // conteúdo do LazyColumn), então os items ficam inline aqui.
+            val sourceData = rememberSourceListData(stremioStreams, facts)
+            val cols = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1
+
             // LazyColumn com keys estáveis: a posição do scroll sobrevive quando
             // fontes chegam e a lista cresce (com Column + verticalScroll, o
             // "Mostrar mais" voltava pro topo e as outras fontes não apareciam).
@@ -910,14 +917,32 @@ private fun EpisodeServersSheet(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 // Fontes dos addons, tocam no ExoPlayer.
-                sourceListItems(
-                    streams = stremioStreams,
-                    facts = facts,
-                    mediaTitle = "",
-                    onPlay = onPlayStremio,
-                    onDownload = { s -> if (isDownloadable(s.url)) ({ onDownloadStremio(s) }) else null },
-                    debridTag = debridTag,
-                )
+                if (sourceData.groups.isNotEmpty()) item(key = "count") {
+                    Text("${sourceData.groups.size} versões em ${sourceData.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
+                }
+                item(key = "filters") { SourceListFilters(sourceData) }
+                sourceData.sections.forEach { (addon, gs) ->
+                    item(key = "section-$addon") { SourceSectionHeader(addon, gs.size) }
+                    gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
+                        // Key = url do lead do 1º grupo da fileira (estável por grupo).
+                        item(key = "row-${row.first().lead.url}") {
+                            SourceCardRow(
+                                row, sourceData, "", onPlayStremio,
+                                { s -> if (isDownloadable(s.url)) ({ onDownloadStremio(s) }) else null },
+                                cols, debridTag,
+                            )
+                        }
+                    }
+                }
+                if (sourceData.filtered.size > sourceData.limit) item(key = "more") {
+                    com.aotv.app.ui.common.AotvButton("Mostrar mais (${sourceData.filtered.size - sourceData.limit})", { sourceData.onMore() })
+                }
+                if (sourceData.filtered.isEmpty() && stremioStreams.isNotEmpty()) item(key = "empty-list") {
+                    Text(
+                        if (sourceData.wrongCount > 0 && !sourceData.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
+                        else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
+                    )
+                }
                 if (stremioLoading) {
                     item(key = "loading") {
                         Text(
@@ -1136,47 +1161,6 @@ internal fun SourceList(
         if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
         else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
     )
-}
-
-/**
- * Versão em LazyColumn da lista de fontes, p/ a folha de episódio: items com keys
- * estáveis seguram a posição do scroll quando fontes chegam e a lista cresce —
- * com Column + verticalScroll, a posição se perdia (o "Mostrar mais" voltava
- * pro topo e as outras fontes não apareciam).
- */
-@Composable
-private fun androidx.compose.foundation.lazy.LazyListScope.sourceListItems(
-    streams: List<com.aotv.app.data.remote.StremioStream>,
-    facts: List<com.aotv.app.data.remote.SourceFacts>,
-    mediaTitle: String,
-    onPlay: (com.aotv.app.data.remote.StremioStream) -> Unit,
-    onDownload: (com.aotv.app.data.remote.StremioStream) -> (() -> Unit)?,
-    cols: Int = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1,
-    debridTag: String = "",
-) {
-    val data = rememberSourceListData(streams, facts)
-    if (data.groups.isNotEmpty()) item(key = "count") {
-        Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
-    }
-    item(key = "filters") { SourceListFilters(data) }
-    data.sections.forEach { (addon, gs) ->
-        item(key = "section-$addon") { SourceSectionHeader(addon, gs.size) }
-        gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
-            // Key = url do lead do 1º grupo da fileira (estável por grupo).
-            item(key = "row-${row.first().lead.url}") {
-                SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag)
-            }
-        }
-    }
-    if (data.filtered.size > data.limit) item(key = "more") {
-        com.aotv.app.ui.common.AotvButton("Mostrar mais (${data.filtered.size - data.limit})", { data.onMore() })
-    }
-    if (data.filtered.isEmpty() && streams.isNotEmpty()) item(key = "empty-list") {
-        Text(
-            if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
-            else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
-        )
-    }
 }
 
 // ── Meta dot separator ──────────────────────────────────────────────────────
