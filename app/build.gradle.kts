@@ -1,3 +1,4 @@
+import java.util.Base64
 import java.util.Properties
 
 plugins {
@@ -48,7 +49,7 @@ android {
     if (!debugKeystoreFile.exists()) {
         val b64 = file("debug.keystore.b64")
         if (b64.exists()) {
-            debugKeystoreFile.writeBytes(java.util.Base64.getDecoder().decode(b64.readText().trim()))
+            debugKeystoreFile.writeBytes(Base64.getDecoder().decode(b64.readText().trim()))
         }
     }
     signingConfigs {
