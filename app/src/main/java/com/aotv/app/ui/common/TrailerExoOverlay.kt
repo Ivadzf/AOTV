@@ -73,12 +73,12 @@ fun TrailerExoOverlay(
     val context = LocalContext.current
     val exo = rememberTrailerExo(videoUrl, audioUrl)
 
-    // Tela cheia de verdade: libera a rotação e esconde status bar e barra de navegação
+    // Tela cheia de verdade: trava em paisagem e esconde status bar e barra de navegação
     // enquanto o trailer está aberto. Ao fechar, devolve o estado anterior.
     val activity = remember(context) { context.findActivity() }
     DisposableEffect(activity) {
         val previousOrientation = activity?.requestedOrientation
-        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         val window = activity?.window
         val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
         controller?.apply {
