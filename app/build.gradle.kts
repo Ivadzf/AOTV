@@ -15,8 +15,8 @@ android {
         applicationId  = "com.aotv.app"
         minSdk         = 23
         targetSdk      = 35
-        versionCode    = 2
-        versionName    = "1.0.1"
+        versionCode    = 3
+        versionName    = "1.0.2"
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
         // fora do VCS. Sem ela, fica vazia e o usuário informa a própria chave em Configurações.
         val tmdbKey = (project.findProperty("TMDB_API_KEY") as String?) ?: ""
@@ -130,6 +130,9 @@ dependencies {
     implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.3")
     implementation("org.mozilla:rhino:1.7.14")   // deciframento de assinatura (JS) do YouTube
     implementation("org.jsoup:jsoup:1.17.2")
+    // Motor JS dos plugins do Nuvio (QuickJS, mesmo lineage do Nuvio; async/await nativo,
+    // timeout por avaliação, bindings Kotlin). Rhino não parseia async/await (testado).
+    implementation("io.github.dokar3:quickjs-kt-android:1.0.18")
 
     // Media3 (ExoPlayer HLS)
     implementation("androidx.media3:media3-exoplayer:1.6.0")
