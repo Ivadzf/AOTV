@@ -69,6 +69,9 @@ class PlatformPrefs @Inject constructor(
 
         /** Catálogos de addon que viram fileira na Início (JSON, na ordem em que foram marcados). */
         private const val KEY_HOME_CATALOGS = "home_catalogs_v1"
+
+        /** Vínculo perfil local -> índice do perfil do Nuvio (JSON id -> index). */
+        private const val KEY_NUVIO_PROFILE_LINKS = "nuvio_profile_links_v1"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -130,6 +133,7 @@ class PlatformPrefs @Inject constructor(
         val ed = prefs.edit()
         SCOPED_KEYS.forEach { ed.remove(scopedKey(it, id)) }
         ed.apply()
+        removeNuvioProfileLink(id)
         saveProfiles(list.filterNot { it.id == id })
         if (_profileId.value == id) selectProfile(_profiles.value.first().id)
         return true
@@ -140,6 +144,36 @@ class PlatformPrefs @Inject constructor(
         prefs.edit().putString("profile", id).apply()
         _profileId.value = id
         refreshLayout()
+    }
+
+    // ── Vínculo perfil local -> perfil do Nuvio ───────────────────────────────
+    // Quando a conta Nuvio conecta, os perfis dela viram perfis locais com o mesmo nome
+    // e cada um guarda aqui o índice do perfil do Nuvio, para a importação (addons, lista,
+    // progresso, debrid, coleções) usar o perfil certo do Nuvio.
+
+    /** Mapa perfil local -> índice do perfil do Nuvio. */
+    var nuvioProfileLinks: Map<String, Int>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(KEY_NUVIO_PROFILE_LINKS, null) ?: "{}")
+            o.keys().asSequence().associateWith { o.optInt(it, -1) }.filterValues { it >= 0 }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val o = org.json.JSONObject()
+            value.forEach { (k, v) -> o.put(k, v) }
+            prefs.edit().putString(KEY_NUVIO_PROFILE_LINKS, o.toString()).apply()
+        }
+
+    /** Índice do perfil do Nuvio vinculado ao perfil local. null = sem vínculo. */
+    fun nuvioProfileIndexFor(profileId: String): Int? = nuvioProfileLinks[profileId]
+
+    /** Vincula um perfil local a um perfil do Nuvio. */
+    fun setNuvioProfileLink(profileId: String, nuvioIndex: Int) {
+        nuvioProfileLinks = nuvioProfileLinks + (profileId to nuvioIndex)
+    }
+
+    /** Desfaz o vínculo de um perfil local. */
+    fun removeNuvioProfileLink(profileId: String) {
+        if (profileId in nuvioProfileLinks) nuvioProfileLinks = nuvioProfileLinks - profileId
     }
 
     // ── Reprodução (por perfil) ───────────────────────────────────────────────
