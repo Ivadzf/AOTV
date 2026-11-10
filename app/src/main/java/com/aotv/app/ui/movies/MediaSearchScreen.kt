@@ -90,14 +90,19 @@ class MediaSearchViewModel @Inject constructor(
 
     private var searchJob: Job? = null
 
+    /** Última busca abortada por falta de chave TMDB. A tela mostra o aviso no lugar do "Sem resultados". */
+    private val _noTmdbKey = MutableStateFlow(false)
+    val noTmdbKey: StateFlow<Boolean> = _noTmdbKey.asStateFlow()
+
     fun onQueryChange(q: String) {
         _query.value = q
         searchJob?.cancel()
-        if (q.isBlank()) { _results.value = emptyList(); return }
+        if (q.isBlank()) { _results.value = emptyList(); _noTmdbKey.value = false; return }
         searchJob = viewModelScope.launch {
             delay(400)
             val apiKey = prefs.tmdbApiKey
-            if (apiKey.isBlank()) return@launch
+            if (apiKey.isBlank()) { _noTmdbKey.value = true; return@launch }
+            _noTmdbKey.value = false
             _isLoading.value = true
             val results = runCatching {
                 tmdb.search(q, apiKey = apiKey).results
@@ -196,6 +201,7 @@ private fun ColumnScope.SearchBody(
 ) {
         // Barra fina de progresso: mantém o grid na tela enquanto rebusca (antes o spinner
         // de tela cheia apagava os resultados a cada tecla digitada).
+        val noTmdbKey by viewModel.noTmdbKey.collectAsStateWithLifecycle()
         if (isLoading && results.isNotEmpty()) {
             LinearProgressIndicator(
                 color = Accent,
@@ -223,11 +229,19 @@ private fun ColumnScope.SearchBody(
 
             results.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    AotvEmptyState(
-                        icon = Icons.Outlined.LocalMovies,
-                        title = "Sem resultados",
-                        message = "Não encontramos nada para \"$query\". Tente outro termo.",
-                    )
+                    if (noTmdbKey) {
+                        AotvEmptyState(
+                            icon = Icons.Outlined.LocalMovies,
+                            title = "Sem chave TMDB",
+                            message = "Adicione sua chave TMDB em Configurações → TMDB para buscar.",
+                        )
+                    } else {
+                        AotvEmptyState(
+                            icon = Icons.Outlined.LocalMovies,
+                            title = "Sem resultados",
+                            message = "Não encontramos nada para \"$query\". Tente outro termo.",
+                        )
+                    }
                 }
             }
 
