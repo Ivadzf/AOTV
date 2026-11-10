@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -902,14 +902,15 @@ private fun EpisodeServersSheet(
             }
             Spacer(Modifier.height(16.dp))
 
-            Column(
-                Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
+            // LazyColumn com keys estáveis: a posição do scroll sobrevive quando
+            // fontes chegam e a lista cresce (com Column + verticalScroll, o
+            // "Mostrar mais" voltava pro topo e as outras fontes não apareciam).
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 // Fontes dos addons, tocam no ExoPlayer.
-                SourceList(
+                sourceListItems(
                     streams = stremioStreams,
                     facts = facts,
                     mediaTitle = "",
@@ -918,17 +919,21 @@ private fun EpisodeServersSheet(
                     debridTag = debridTag,
                 )
                 if (stremioLoading) {
-                    Text(
-                        "Buscando em addons Stremio…",
-                        color = TextTertiary, fontSize = 12.sp,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
+                    item(key = "loading") {
+                        Text(
+                            "Buscando em addons Stremio…",
+                            color = TextTertiary, fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
                 } else if (stremioStreams.isEmpty()) {
-                    Text(
-                        "Nenhum addon tem este episódio.",
-                        color = TextTertiary, fontSize = 12.sp,
-                        modifier = Modifier.padding(vertical = 2.dp),
-                    )
+                    item(key = "empty") {
+                        Text(
+                            "Nenhum addon tem este episódio.",
+                            color = TextTertiary, fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
                 }
             }
         }
@@ -946,6 +951,156 @@ private val SRC_FILTERS = listOf<Triple<String, String, (com.aotv.app.data.remot
     Triple("hdr", "HDR") { com.aotv.app.data.remote.hasHdr(it.label) || com.aotv.app.data.remote.hasDolbyVision(it.label) },
     Triple("instant", "Instantâneo") { it.debrid >= 2 },
 )
+
+/**
+ * Estado + dados derivados da lista de fontes. Compartilhado entre o SourceList
+ * em Column (filme/TV) e a versão em LazyColumn da folha de episódio: o estado
+ * (filtros, limite) sobrevive à recriação com rememberSaveable, e a LazyColumn
+ * com keys estáveis segura a posição do scroll quando a lista cresce.
+ */
+private class SourceListData(
+    val groups: List<ReleaseGroup>,
+    val streamCount: Int,
+    val wrongCount: Int,
+    val visible: List<ReleaseGroup>,
+    val counts: Map<String, Int>,
+    /** Fontes presentes (nome, nº de grupos), na ordem das seções. */
+    val sources: List<Pair<String, Int>>,
+    val filtered: List<ReleaseGroup>,
+    val shown: List<ReleaseGroup>,
+    val sections: List<Map.Entry<String, List<ReleaseGroup>>>,
+    val best: String?,
+    val filter: String,
+    val onFilterChange: (String) -> Unit,
+    val showWrong: Boolean,
+    val onShowWrongChange: (Boolean) -> Unit,
+    val sourceFilter: String,
+    val onSourceFilterChange: (String) -> Unit,
+    val limit: Int,
+    val onMore: () -> Unit,
+    val fact: (com.aotv.app.data.remote.StremioStream) -> com.aotv.app.data.remote.SourceFacts,
+    val playable: (ReleaseGroup) -> com.aotv.app.data.remote.StremioStream,
+    val addonOf: (ReleaseGroup) -> String,
+)
+
+@Composable
+private fun rememberSourceListData(
+    streams: List<com.aotv.app.data.remote.StremioStream>,
+    facts: List<com.aotv.app.data.remote.SourceFacts>,
+): SourceListData {
+    var filter by rememberSaveable { mutableStateOf("all") }
+    var showWrong by rememberSaveable { mutableStateOf(false) }
+    // Filtro por fonte (""): "Todas" ou o nome do addon/provider.
+    var sourceFilter by rememberSaveable { mutableStateOf("") }
+    // O limite reseta quando qualquer filtro muda (comportamento antigo).
+    var limit by rememberSaveable(filter, showWrong, sourceFilter) { mutableStateOf(24) }
+    val groups = remember(streams) { groupReleases(streams) }
+    val byUrl = facts.associateBy { it.url }
+    fun fact(s: com.aotv.app.data.remote.StremioStream) = byUrl[s.url]
+        ?: com.aotv.app.data.remote.SourceFacts(s.url, s.addon, s.releaseText.ifBlank { s.label }, s.qualityRank)
+    val wrongCount = groups.count { g -> g.members.all { fact(it).wrongTitle } }
+    val visible = groups.filter { g -> showWrong || g.members.any { !fact(it).wrongTitle } }
+    val counts = SRC_FILTERS.associate { (k, _, fn) -> k to visible.count { g -> g.members.any { fn(fact(it)) } } }
+    val predicate = SRC_FILTERS.firstOrNull { it.first == filter }?.third ?: { true }
+    val langFiltered = visible.filter { g -> g.members.any { predicate(fact(it)) } }
+    // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
+    // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
+    fun playable(group: ReleaseGroup) =
+        group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
+    fun addonOf(group: ReleaseGroup) =
+        fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
+    // Fontes presentes (dentro do filtro de idioma), ordenadas pelo melhor stream.
+    val sources = langFiltered.groupBy(::addonOf).entries
+        .sortedByDescending { (_, gs) -> gs.maxOf { fact(playable(it)).rank } }
+        .map { it.key to it.value.size }
+    val filtered = if (sourceFilter.isEmpty()) langFiltered
+        else langFiltered.filter { addonOf(it) == sourceFilter }
+    // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
+    // O limite ("Mostrar mais") corta antes de agrupar, então ele continua valendo no total.
+    val shown = filtered.take(limit)
+    val sections = shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
+        gs.maxOf { fact(playable(it)).rank }
+    }
+    val best = facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url
+    return SourceListData(
+        groups = groups, streamCount = streams.size, wrongCount = wrongCount,
+        visible = visible, counts = counts, sources = sources,
+        filtered = filtered, shown = shown, sections = sections, best = best,
+        filter = filter, onFilterChange = { filter = it },
+        showWrong = showWrong, onShowWrongChange = { showWrong = it },
+        sourceFilter = sourceFilter, onSourceFilterChange = { sourceFilter = it },
+        limit = limit, onMore = { limit += 24 },
+        fact = { s -> fact(s) }, playable = { g -> playable(g) }, addonOf = { g -> addonOf(g) },
+    )
+}
+
+/** Cabeçalho de uma seção por fonte ("VêTela Brasil · 5 versões"). */
+@Composable
+private fun SourceSectionHeader(addon: String, count: Int) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(addon, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily)
+        Text("$count ${if (count == 1) "versão" else "versões"}", color = TextTertiary, fontSize = 12.5.sp, fontFamily = ManropeFontFamily)
+    }
+}
+
+/** Uma fileira de cards (1 ou 2 por linha, conforme cols). */
+@Composable
+private fun SourceCardRow(
+    row: List<ReleaseGroup>,
+    data: SourceListData,
+    mediaTitle: String,
+    onPlay: (com.aotv.app.data.remote.StremioStream) -> Unit,
+    onDownload: (com.aotv.app.data.remote.StremioStream) -> (() -> Unit)?,
+    cols: Int,
+    debridTag: String,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        row.forEach { group ->
+            val source = data.playable(group)
+            val f = data.fact(source)
+            var info = releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
+            if (source.qualityRank == 0 && (f.probe?.height ?: 0) > 0) info = info.copy(quality = com.aotv.app.data.remote.heightLabel(f.probe!!.height))
+            val note = when { f.wrongTitle -> "Parece ser outro filme com nome parecido"; f.dead -> "Não respondeu no teste agora"; else -> null }
+            val (tag, color) = when {
+                f.wrongTitle -> "OUTRO" to LiveRed
+                f.debrid >= 2 -> debridTag.ifBlank { "DEBRID" } to Ok
+                f.p2p -> "P2P" to TextSecondary
+                else -> "" to TextTertiary
+            }
+            Box(Modifier.weight(1f)) {
+                androidx.compose.runtime.key(source.url) {
+                    SourceCard(info, tag, color, onClick = { onPlay(source) }, onDownload = onDownload(source), note = note,
+                        suggested = group.members.any { it.url == data.best })
+                }
+            }
+        }
+        repeat(cols.coerceAtLeast(1) - row.size) { Spacer(Modifier.weight(1f)) }
+    }
+}
+
+/** Fileiras de filtros: por fonte (novo) e por idioma (existente). */
+@Composable
+private fun SourceListFilters(data: SourceListData) {
+    // Por fonte: um chip por addon/provider presente, com contagem. Só aparece
+    // quando há mais de 1 fonte — com uma só, a seção já diz tudo.
+    if (data.sources.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SeasonChip("Todas ${data.sources.sumOf { it.second }}", data.sourceFilter.isEmpty()) { data.onSourceFilterChange("") }
+        data.sources.forEach { (name, n) ->
+            SeasonChip("$name $n", data.sourceFilter == name) { data.onSourceFilterChange(name) }
+        }
+    }
+    if (data.groups.size > 4 || data.wrongCount > 0) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (data.groups.size > 4) SRC_FILTERS.forEach { (key, name, _) ->
+            val n = data.counts[key] ?: 0
+            if (key == "all" || n > 0) SeasonChip("$name $n", data.filter == key) { data.onFilterChange(key) }
+        }
+        if (data.wrongCount > 0) SeasonChip(if (data.showWrong) "Ocultar outro filme (${data.wrongCount})" else "Mostrar todas (${data.wrongCount} de outro filme)", data.showWrong) { data.onShowWrongChange(!data.showWrong) }
+    }
+}
 
 /**
  * Cartões das fontes (filme e episódio). Chips de filtro com contagem só do que está visível,
@@ -967,78 +1122,60 @@ internal fun SourceList(
         com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag) }
         return
     }
-    var filter by remember { mutableStateOf("all") }
-    var showWrong by remember { mutableStateOf(false) }
-    var limit by remember(filter, showWrong) { mutableIntStateOf(24) }
-    val groups = remember(streams) { groupReleases(streams) }
-    val byUrl = facts.associateBy { it.url }
-    fun fact(s: com.aotv.app.data.remote.StremioStream) = byUrl[s.url]
-        ?: com.aotv.app.data.remote.SourceFacts(s.url, s.addon, s.releaseText.ifBlank { s.label }, s.qualityRank)
-    val wrongCount = groups.count { g -> g.members.all { fact(it).wrongTitle } }
-    val visible = groups.filter { g -> showWrong || g.members.any { !fact(it).wrongTitle } }
-    val counts = SRC_FILTERS.associate { (k, _, fn) -> k to visible.count { g -> g.members.any { fn(fact(it)) } } }
-    val predicate = SRC_FILTERS.firstOrNull { it.first == filter }?.third ?: { true }
-    val filtered = visible.filter { g -> g.members.any { predicate(fact(it)) } }
-    if (groups.isNotEmpty()) Text("${groups.size} versões em ${streams.size} fontes", color = TextTertiary, fontSize = 13.sp)
-    if (groups.size > 4 || wrongCount > 0) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (groups.size > 4) SRC_FILTERS.forEach { (key, name, _) ->
-            val n = counts[key] ?: 0
-            if (key == "all" || n > 0) SeasonChip("$name $n", filter == key) { filter = key }
-        }
-        if (wrongCount > 0) SeasonChip(if (showWrong) "Ocultar outro filme ($wrongCount)" else "Mostrar todas ($wrongCount de outro filme)", showWrong) { showWrong = !showWrong }
-    }
-    val best = facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url
-    // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
-    // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
-    fun playable(group: ReleaseGroup) =
-        group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
-    fun addonOf(group: ReleaseGroup) =
-        fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
-    // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
-    // O limite ("Mostrar mais") corta antes de agrupar, então ele continua valendo no total.
-    val shown = filtered.take(limit)
-    val sections = shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
-        gs.maxOf { fact(playable(it)).rank }
-    }
-    sections.forEach { (addon, gs) ->
-        Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(addon, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily)
-            Text("${gs.size} ${if (gs.size == 1) "versão" else "versões"}", color = TextTertiary, fontSize = 12.5.sp, fontFamily = ManropeFontFamily)
-        }
+    val data = rememberSourceListData(streams, facts)
+    if (data.groups.isNotEmpty()) Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
+    SourceListFilters(data)
+    data.sections.forEach { (addon, gs) ->
+        SourceSectionHeader(addon, gs.size)
         gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            row.forEach { group ->
-                val source = playable(group)
-                val f = fact(source)
-                var info = releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
-                if (source.qualityRank == 0 && (f.probe?.height ?: 0) > 0) info = info.copy(quality = com.aotv.app.data.remote.heightLabel(f.probe!!.height))
-                val note = when { f.wrongTitle -> "Parece ser outro filme com nome parecido"; f.dead -> "Não respondeu no teste agora"; else -> null }
-                val (tag, color) = when {
-                    f.wrongTitle -> "OUTRO" to LiveRed
-                    f.debrid >= 2 -> debridTag.ifBlank { "DEBRID" } to Ok
-                    f.p2p -> "P2P" to TextSecondary
-                    else -> "" to TextTertiary
-                }
-                Box(Modifier.weight(1f)) {
-                    androidx.compose.runtime.key(source.url) {
-                        SourceCard(info, tag, color, onClick = { onPlay(source) }, onDownload = onDownload(source), note = note,
-                            suggested = group.members.any { it.url == best })
-                    }
-                }
-            }
-            repeat(cols.coerceAtLeast(1) - row.size) { Spacer(Modifier.weight(1f)) }
-        }
+            SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag)
         }
     }
-    if (filtered.size > limit) com.aotv.app.ui.common.AotvButton("Mostrar mais (${filtered.size - limit})", { limit += 24 })
-    if (filtered.isEmpty() && streams.isNotEmpty()) Text(
-        if (wrongCount > 0 && !showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
+    if (data.filtered.size > data.limit) com.aotv.app.ui.common.AotvButton("Mostrar mais (${data.filtered.size - data.limit})", { data.onMore() })
+    if (data.filtered.isEmpty() && streams.isNotEmpty()) Text(
+        if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
         else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
     )
+}
+
+/**
+ * Versão em LazyColumn da lista de fontes, p/ a folha de episódio: items com keys
+ * estáveis seguram a posição do scroll quando fontes chegam e a lista cresce —
+ * com Column + verticalScroll, a posição se perdia (o "Mostrar mais" voltava
+ * pro topo e as outras fontes não apareciam).
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.sourceListItems(
+    streams: List<com.aotv.app.data.remote.StremioStream>,
+    facts: List<com.aotv.app.data.remote.SourceFacts>,
+    mediaTitle: String,
+    onPlay: (com.aotv.app.data.remote.StremioStream) -> Unit,
+    onDownload: (com.aotv.app.data.remote.StremioStream) -> (() -> Unit)?,
+    cols: Int = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1,
+    debridTag: String = "",
+) {
+    val data = rememberSourceListData(streams, facts)
+    if (data.groups.isNotEmpty()) item(key = "count") {
+        Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
+    }
+    item(key = "filters") { SourceListFilters(data) }
+    data.sections.forEach { (addon, gs) ->
+        item(key = "section-$addon") { SourceSectionHeader(addon, gs.size) }
+        gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
+            // Key = url do lead do 1º grupo da fileira (estável por grupo).
+            item(key = "row-${row.first().lead.url}") {
+                SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag)
+            }
+        }
+    }
+    if (data.filtered.size > data.limit) item(key = "more") {
+        com.aotv.app.ui.common.AotvButton("Mostrar mais (${data.filtered.size - data.limit})", { data.onMore() })
+    }
+    if (data.filtered.isEmpty() && streams.isNotEmpty()) item(key = "empty-list") {
+        Text(
+            if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
+            else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
+        )
+    }
 }
 
 // ── Meta dot separator ──────────────────────────────────────────────────────
