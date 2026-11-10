@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.plugins.InstalledPlugin
+import com.aotv.app.data.plugins.PluginLastRun
 import com.aotv.app.data.plugins.PluginRepo
 import com.aotv.app.data.plugins.PluginService
 import com.aotv.app.data.plugins.PluginSettingDescriptor
@@ -39,6 +40,10 @@ class PluginsViewModel @Inject constructor(
         val installedNow: String? = null,
         val refreshing: Set<String> = emptySet(),
         val timeoutSec: Int = 60,
+        /** Último resultado de cada plugin (id -> PluginLastRun, p/ diagnóstico). */
+        val lastRun: Map<String, PluginLastRun> = emptyMap(),
+        /** Plugins com teste manual em andamento (id). */
+        val testing: Set<String> = emptySet(),
         /** Plugin aberto no diálogo de configurações (null = fechado). */
         val settingsPlugin: InstalledPlugin? = null,
         val settingsDescriptors: List<PluginSettingDescriptor> = emptyList(),
@@ -56,6 +61,9 @@ class PluginsViewModel @Inject constructor(
         }
         viewModelScope.launch {
             prefs.installedPlugins.collect { list -> _uiState.update { it.copy(plugins = list) } }
+        }
+        viewModelScope.launch {
+            prefs.pluginLastRuns.collect { map -> _uiState.update { it.copy(lastRun = map) } }
         }
         // Refresh automático dos repos vencidos (> 6 h), igual ao Nuvio.
         viewModelScope.launch { store.refreshDueRepos() }
@@ -126,6 +134,27 @@ class PluginsViewModel @Inject constructor(
     fun clearCookies() {
         store.clearAllCookies()
         _uiState.update { it.copy(installedNow = "Cookies dos plugins apagados") }
+    }
+
+    /**
+     * Testa UM plugin com um título fixo (Breaking Bad 1x1 p/ séries, Clube da
+     * Luta p/ filmes) e registra o resultado no diagnóstico — é o jeito de
+     * descobrir, no celular, se o plugin roda e o que ele devolve.
+     */
+    fun testPlugin(id: String) {
+        val plugin = _uiState.value.plugins.firstOrNull { it.id == id } ?: return
+        if (id in _uiState.value.testing) return
+        _uiState.update { it.copy(testing = it.testing + id) }
+        viewModelScope.launch {
+            runCatching {
+                if ("tv" in plugin.supportedTypes) {
+                    pluginService.getStreamsForPlugin(plugin, 1396, "tv", 1, 1)
+                } else {
+                    pluginService.getStreamsForPlugin(plugin, 550, "movie")
+                }
+            }
+            _uiState.update { it.copy(testing = it.testing - id) }
+        }
     }
 
     /** Abre o diálogo de configurações: roda onSettings() e mescla padrões + salvos. */
