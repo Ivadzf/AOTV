@@ -105,7 +105,10 @@ class PluginStore @Inject constructor(
             val code = downloadText(codeUrl) ?: continue
             val sha = sha256(code)
             val prev = prefs.installedPluginList.firstOrNull { it.id == scraper.id }
-            runCatching { codeFile(scraper.id).writeText(code) }.onFailure { continue }
+            // O `continue` não pode ficar dentro do lambda do onFailure
+            // ("break/continue in inline lambdas" só existe no Kotlin 2.2+;
+            // o projeto usa 2.1.20) — por isso o teste é feito fora do lambda.
+            if (runCatching { codeFile(scraper.id).writeText(code) }.isFailure) continue
             prefs.upsertPlugin(
                 InstalledPlugin(
                     id = scraper.id,
