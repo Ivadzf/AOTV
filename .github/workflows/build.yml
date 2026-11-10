@@ -37,9 +37,6 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Android SDK 35
-        uses: android-actions/setup-android@v3
-
       - name: Instalar pacotes do SDK
         run: |
           sdkmanager "cmdline-tools;latest" "platforms;android-35" "build-tools;35.0.0"
