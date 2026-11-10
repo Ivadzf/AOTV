@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder provisório (vetor) do logo de navegação: triângulo de play na
+     cor Accent do tema (#A7CAFF, ver Color.kt) sobre fundo transparente.
+     A logomarca definitiva será trocada depois — ver BUILD.md, seção
+     "Push para o GitHub". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="77dp"
+    android:height="96dp"
+    android:viewportWidth="77"
+    android:viewportHeight="96">
+    <path
+        android:fillColor="#A7CAFF"
+        android:pathData="M26,28 L56,48 L26,68 Z" />
+</vector>
