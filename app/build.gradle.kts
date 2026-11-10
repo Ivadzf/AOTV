@@ -52,8 +52,11 @@ android {
             debugKeystoreFile.writeBytes(Base64.getDecoder().decode(b64.readText().trim()))
         }
     }
+    // O AGP já cria uma SigningConfig "debug" por padrão; criar outra com
+    // create("debug") quebra a configuração ("already exists") — por isso
+    // se configura a existente com getByName.
     signingConfigs {
-        create("debug") {
+        getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
