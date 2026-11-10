@@ -10,8 +10,11 @@ import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -29,8 +32,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Motor JS dos plugins do Nuvio (QuickJS via dokar3/quickjs-kt-android 1.0.18,
- * mesmo lineage do motor do Nuvio).
+ * Motor JS dos plugins do Nuvio (QuickJS via dokar3/quickjs-kt-android
+ * 1.0.0-alpha12, mesmo lineage do motor do Nuvio).
+ *
+ * Por que alpha12 e não 1.0.18: o projeto usa Kotlin 2.1.20 e TODA a linha
+ * 1.0.x estável do quickjs-kt foi compilada com Kotlin 2.4 — o compilador
+ * 2.1.20 rejeita os metadados 2.4 e o build quebra (foi o que derrubou a
+ * primeira v1.0.2). A alpha12 foi compilada com Kotlin 2.0.0 e tem a mesma
+ * API usada aqui (create/evaluate/define/function/asyncFunction/close).
+ * Limitação dela: NÃO tem setEvaluationTimeoutMillis/interruptEvaluation —
+ * o timeout é aplicado no nível da coroutine (withTimeout); a avaliação JS
+ * não é interrompida de verdade, só abandonada, e o close() é adiado.
  *
  * Diferenças para o Nuvio (o motivo do AOTV existir):
  * - fetch com cookie jar PERSISTENTE em disco por scraper (PluginCookieJar);
@@ -125,8 +137,8 @@ class PluginEngine @Inject constructor(
         driver: suspend (QuickJs) -> T,
     ): T {
         val qjs = QuickJs.create(Dispatchers.Default)
+        var timedOut = false
         try {
-            qjs.setEvaluationTimeoutMillis(timeoutMs)
             val cheerio = PluginCheerio()
             val fetchClient = AppDns.mediaClient.newBuilder()
                 .cookieJar(cookieJar)
@@ -141,11 +153,28 @@ class PluginEngine @Inject constructor(
                 qjs.evaluate<String>(PluginPrelude.POST_CRYPTOJS)
             }
             qjs.evaluate<String>(code + "\n;'ok';")
-            // O timeout do motor corta o JS em timeoutMs; os 15 s extras são só
-            // a margem p/ o fetch em andamento devolver (callTimeout = timeoutMs).
-            return withTimeout(timeoutMs + 15_000) { driver(qjs) }
+            // Sem interrupt nativo no motor alpha12: o timeout é aplicado aqui,
+            // no nível da coroutine (withTimeout). A avaliação JS em andamento
+            // NÃO é interrompida — ela termina sozinha na thread dela; por isso
+            // o close() no timeout é adiado (fechar o motor com a avaliação
+            // rodando poderia derrubar o app). Os 15 s extras são a margem p/
+            // o fetch em andamento devolver (callTimeout = timeoutMs).
+            return try {
+                withTimeout(timeoutMs + 15_000) { driver(qjs) }
+            } catch (e: TimeoutCancellationException) {
+                timedOut = true
+                throw e
+            }
         } finally {
-            runCatching { qjs.close() }
+            if (timedOut) {
+                // Fecha depois, quando a avaliação já deve ter terminado.
+                CoroutineScope(Dispatchers.Default).launch {
+                    delay(60_000)
+                    runCatching { qjs.close() }
+                }
+            } else {
+                runCatching { qjs.close() }
+            }
         }
     }
 
