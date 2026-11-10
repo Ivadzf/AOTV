@@ -70,3 +70,20 @@ data class PluginStreamRaw(
     val title: String = "",
     val label: String = "",
 )
+
+/**
+ * Último resultado de uma execução de plugin (diagnóstico visível na tela de
+ * Plugins — sem ele, uma falha só aparece no logcat, que o usuário não vê).
+ */
+data class PluginLastRun(
+    /** "ok" | "empty" | "timeout" | "error". */
+    val status: String,
+    /** Quantos streams a execução devolveu (0 quando falhou). */
+    val streams: Int = 0,
+    /** Duração da execução em ms. */
+    val millis: Long = 0L,
+    /** Quando terminou (ms desde epoch). */
+    val at: Long = 0L,
+    /** Detalhe curto do erro (vazio em "ok"/"empty"). */
+    val detail: String = "",
+)
