@@ -15,8 +15,8 @@ android {
         applicationId  = "com.aotv.app"
         minSdk         = 23
         targetSdk      = 35
-        versionCode    = 3
-        versionName    = "1.0.2"
+        versionCode    = 4
+        versionName    = "1.0.3"
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
         // fora do VCS. Sem ela, fica vazia e o usuário informa a própria chave em Configurações.
         val tmdbKey = (project.findProperty("TMDB_API_KEY") as String?) ?: ""
@@ -36,6 +36,29 @@ android {
     val keystoreProps = Properties().apply {
         rootProject.file("../keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
     }
+    // Assinatura de DEBUG com keystore FIXO (app/debug.keystore, no repo).
+    // Sem isso, cada run do GitHub Actions gera uma chave debug diferente
+    // (runner efêmero) e o Android recusa instalar a nova versão por cima
+    // da antiga (INSTALL_FAILED_UPDATE_INCOMPATIBLE) — o usuário precisa
+    // desinstalar e perde os dados do app. A chave debug usa as credenciais
+    // padrão do Android Studio (android/android); NÃO é a chave de release.
+    // O binário não vai para o repo (o GitHub App não envia binário): vai o
+    // Base64 em app/debug.keystore.b64, decodificado aqui quando falta o .keystore.
+    val debugKeystoreFile = file("debug.keystore")
+    if (!debugKeystoreFile.exists()) {
+        val b64 = file("debug.keystore.b64")
+        if (b64.exists()) {
+            debugKeystoreFile.writeBytes(java.util.Base64.getDecoder().decode(b64.readText().trim()))
+        }
+    }
+    signingConfigs {
+        create("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     if (keystoreProps.containsKey("storeFile")) {
         signingConfigs {
             create("release") {
@@ -47,6 +70,9 @@ android {
         }
     }
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
