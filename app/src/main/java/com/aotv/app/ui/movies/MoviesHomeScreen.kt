@@ -422,6 +422,29 @@ private fun HomeSectionsTab(
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
+        // Sem chave TMDB as fileiras do sistema voltam vazias em silêncio — avisa no topo.
+        if (!state.hasTmdbKey) {
+            item(key = "no_tmdb_key") {
+                Box(
+                    Modifier
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(AccentSoft)
+                        .border(1.dp, Accent.copy(alpha = .35f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                ) {
+                    Text(
+                        "Configure sua chave TMDB em Configurações → TMDB para ver o catálogo e buscar.",
+                        fontSize = 12.sp,
+                        fontFamily = ManropeFontFamily,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary,
+                        lineHeight = 17.sp,
+                    )
+                }
+            }
+        }
         if (heroItems.isNotEmpty()) {
             item(key = "hero") {
                 // Trailer só com a Início no topo. Rolou, parou o trailer.
