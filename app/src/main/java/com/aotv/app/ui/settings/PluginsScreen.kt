@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.plugins.InstalledPlugin
+import com.aotv.app.data.plugins.PluginLastRun
 import com.aotv.app.data.plugins.PluginStore
 import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.PageHeader
@@ -206,9 +207,12 @@ fun PluginsScreen(
                 items(state.plugins, key = { it.id }) { plugin ->
                     PluginRow(
                         plugin = plugin,
+                        lastRun = state.lastRun[plugin.id],
+                        testing = plugin.id in state.testing,
                         onToggle = { viewModel.togglePlugin(plugin.id) },
                         onSettings = { viewModel.openSettings(plugin) },
                         onRemove = { viewModel.removePlugin(plugin.id) },
+                        onTest = { viewModel.testPlugin(plugin.id) },
                     )
                 }
             }
@@ -305,30 +309,73 @@ fun PluginsScreen(
 @Composable
 private fun PluginRow(
     plugin: InstalledPlugin,
+    lastRun: PluginLastRun?,
+    testing: Boolean,
     onToggle: () -> Unit,
     onSettings: () -> Unit,
     onRemove: () -> Unit,
+    onTest: () -> Unit,
 ) {
-    Row(
+    Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BackgroundCard)
             .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Extension, null, tint = Accent, modifier = Modifier.padding(end = 10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(plugin.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Extension, null, tint = Accent, modifier = Modifier.padding(end = 10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(plugin.name, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(
+                    (if (plugin.version.isNotBlank()) "v${plugin.version} · " else "") +
+                        plugin.supportedTypes.joinToString(" + ") { if (it == "movie") "filmes" else "séries" },
+                    color = TextSecondary, fontSize = 13.sp,
+                )
+            }
+            IconButton(onClick = onSettings) {
+                Icon(Icons.Default.Settings, "Configurações", tint = TextSecondary)
+            }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Delete, "Remover", tint = TextSecondary)
+            }
+            Switch(checked = plugin.enabled, onCheckedChange = { onToggle() })
+        }
+        // Diagnóstico da última execução + teste manual: sem isso, um plugin
+        // que não retorna nada é invisível (a falha só ia p/ o logcat).
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Text(
-                (if (plugin.version.isNotBlank()) "v${plugin.version} · " else "") +
-                    plugin.supportedTypes.joinToString(" + ") { if (it == "movie") "filmes" else "séries" },
-                color = TextSecondary, fontSize = 13.sp,
+                formatLastRun(lastRun),
+                color = TextSecondary, fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
             )
+            if (testing) {
+                CircularProgressIndicator(Modifier.size(18.dp))
+            } else {
+                TextButton(onClick = onTest) { Text("Testar", fontSize = 13.sp) }
+            }
         }
-        IconButton(onClick = onSettings) {
-            Icon(Icons.Default.Settings, "Configurações", tint = TextSecondary)
-        }
-        IconButton(onClick = onRemove) {
-            Icon(Icons.Default.Delete, "Remover", tint = TextSecondary)
-        }
-        Switch(checked = plugin.enabled, onCheckedChange = { onToggle() })
+    }
+}
+
+/** Linha curta do último resultado ("Último teste: 3 streams · há 2 min"). */
+private fun formatLastRun(run: PluginLastRun?): String = when {
+    run == null -> "Nunca testado"
+    run.status == "ok" -> "Último teste: ${run.streams} stream(s) · ${formatAgo(run.at)}"
+    run.status == "empty" -> "Último teste: nenhum stream · ${formatAgo(run.at)}"
+    run.status == "timeout" -> "Tempo esgotado (${run.millis / 1000}s) · ${formatAgo(run.at)}"
+    else -> "Erro: ${run.detail.ifBlank { "falha" }} · ${formatAgo(run.at)}"
+}
+
+private fun formatAgo(at: Long): String {
+    val min = ((System.currentTimeMillis() - at) / 60_000).coerceAtLeast(0)
+    return when {
+        min < 1 -> "agora"
+        min < 60 -> "há $min min"
+        else -> "há ${min / 60} h"
     }
 }
