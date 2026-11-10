@@ -413,7 +413,8 @@ class MoviesHomeViewModel @Inject constructor(
                 st.copy(addonRows = st.addonRows.map { r ->
                     if (r.ref.key != key) r
                     else r.copy(
-                        items = (r.items + items).distinctBy { it.tmdbId },
+                        // tmdbId 0 = item de addon com só o id IMDb; o embedId diferencia.
+                        items = (r.items + items).distinctBy { it.tmdbId to it.embedId },
                         skip = r.skip + page.size,
                         more = metas != null && metas.size >= ADDON_PAGE,
                         loading = false,
