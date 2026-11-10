@@ -106,6 +106,10 @@ class SettingsViewModel @Inject constructor(
     private val _customTmdbApiKey = MutableStateFlow(platformPrefs.customTmdbApiKey)
     val customTmdbApiKey: StateFlow<String> = _customTmdbApiKey.asStateFlow()
 
+    /** Alguma chave TMDB em uso (pessoal ou padrão do app). */
+    private val _hasTmdbKey = MutableStateFlow(platformPrefs.tmdbApiKey.isNotBlank())
+    val hasTmdbKey: StateFlow<Boolean> = _hasTmdbKey.asStateFlow()
+
     /** Addons instalados, reativo: instalar pela Loja já atualiza a contagem aqui sozinho. */
     val addons: StateFlow<List<com.aotv.app.data.local.AddonEntry>> = platformPrefs.addons
 
@@ -117,5 +121,6 @@ class SettingsViewModel @Inject constructor(
     fun setTmdbApiKey(key: String) {
         platformPrefs.customTmdbApiKey = key
         _customTmdbApiKey.value = platformPrefs.customTmdbApiKey
+        _hasTmdbKey.value = platformPrefs.tmdbApiKey.isNotBlank()
     }
 }
