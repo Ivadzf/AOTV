@@ -84,6 +84,9 @@ class PlatformPrefs @Inject constructor(
 
         /** Timeout de cada execução de plugin, em segundos (30–180, padrão 60). */
         private const val KEY_PLUGIN_TIMEOUT = "plugin_timeout_sec"
+
+        /** Último resultado de cada plugin (JSON id -> PluginLastRun, p/ diagnóstico). */
+        private const val KEY_PLUGIN_LAST_RUN = "plugin_last_run_v1"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -577,6 +580,37 @@ class PlatformPrefs @Inject constructor(
     var pluginTimeoutSec: Int
         get() = prefs.getInt(KEY_PLUGIN_TIMEOUT, 60).coerceIn(30, 180)
         set(value) { prefs.edit().putInt(KEY_PLUGIN_TIMEOUT, value.coerceIn(30, 180)).apply() }
+
+    /** Último resultado de cada plugin (id -> PluginLastRun, p/ diagnóstico). */
+    private fun readPluginLastRuns(): Map<String, com.aotv.app.data.plugins.PluginLastRun> = runCatching {
+        val o = org.json.JSONObject(prefs.getString(KEY_PLUGIN_LAST_RUN, null) ?: "{}")
+        o.keys().asSequence().associateWith { id ->
+            val r = o.optJSONObject(id) ?: org.json.JSONObject()
+            com.aotv.app.data.plugins.PluginLastRun(
+                status = r.optString("status", "error"),
+                streams = r.optInt("streams", 0),
+                millis = r.optLong("millis", 0L),
+                at = r.optLong("at", 0L),
+                detail = r.optString("detail", ""),
+            )
+        }
+    }.getOrDefault(emptyMap())
+
+    private val _pluginLastRuns = MutableStateFlow(readPluginLastRuns())
+    /** Último resultado por plugin, que avisa quem observa (tela de Plugins). */
+    val pluginLastRuns: StateFlow<Map<String, com.aotv.app.data.plugins.PluginLastRun>> =
+        _pluginLastRuns.asStateFlow()
+
+    fun setPluginLastRun(id: String, run: com.aotv.app.data.plugins.PluginLastRun) {
+        val map = _pluginLastRuns.value + (id to run)
+        val o = org.json.JSONObject()
+        map.forEach { (pid, r) ->
+            o.put(pid, org.json.JSONObject().put("status", r.status).put("streams", r.streams)
+                .put("millis", r.millis).put("at", r.at).put("detail", r.detail))
+        }
+        prefs.edit().putString(KEY_PLUGIN_LAST_RUN, o.toString()).apply()
+        _pluginLastRuns.value = map
+    }
 
     // ── Catálogo AOTV (o catálogo próprio do app, fixo e desligável como um addon) ──
     private val _catalogOn = MutableStateFlow(prefs.getBoolean("aotv_catalog_on", true))
