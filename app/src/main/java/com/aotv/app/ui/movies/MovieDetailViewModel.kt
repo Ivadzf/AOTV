@@ -125,6 +125,8 @@ class MovieDetailViewModel @Inject constructor(
     data class UiState(
         val item: MovieItem? = null,
         val series: SeriesItem? = null,
+        /** Id do TMDB resolvido ao abrir (item de addon que chegou só com o id IMDb). 0 = sem resolução. */
+        val resolvedTmdbId: Int = 0,
         val seasons: Map<Int, List<EpisodeItem>> = emptyMap(),
         val selectedSeason: Int = 1,
         // (B) Minha Lista — item salvo? (reativo via LibraryRepository.isSaved)
@@ -282,6 +284,22 @@ class MovieDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, sourcesLoading = true) }
             val apiKey = prefs.tmdbApiKey
+            // Item de catálogo de addon sem par no TMDB (chegou com o id IMDb): resolve aqui,
+            // agora que pode haver chave. Sem chave, o filme toca pelo id IMDb; a série fica
+            // sem a lista de episódios (que só o TMDB dá).
+            val tmdbId = if (tmdbId <= 0 && embedId.startsWith("tt") && apiKey.isNotBlank()) {
+                runCatching {
+                    val r = tmdb.findByImdb(embedId, apiKey = apiKey)
+                    (if (type == MediaType.SERIES) r.tvResults.firstOrNull() ?: r.movieResults.firstOrNull()
+                    else r.movieResults.firstOrNull() ?: r.tvResults.firstOrNull())?.id
+                }.getOrNull() ?: 0
+            } else tmdbId
+            // Item chegou só com o id IMDb e o TMDB foi resolvido agora: o resto da tela
+            // (temporadas, player, Minha Lista) precisa do id certo, não do 0.
+            if (embedId.startsWith("tt") && tmdbId > 0) {
+                stubItem = stubItem?.copy(tmdbId = tmdbId)
+                _uiState.update { it.copy(resolvedTmdbId = tmdbId) }
+            }
 
             if (type == MediaType.MOVIE) {
                 val addons = prefs.stremioAddonList()
@@ -307,7 +325,7 @@ class MovieDetailViewModel @Inject constructor(
                 val stremioId = if (resolvedEmbedId.startsWith("tt")) resolvedEmbedId else ""
                 val srcJobs = mutableListOf<kotlinx.coroutines.Job>()
                 val slots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(addons.size)
-                if (addons.isNotEmpty() && tmdbId > 0) {
+                if (addons.isNotEmpty() && (tmdbId > 0 || stremioId.isNotBlank())) {
                     // PROGRESSIVO por addon: cada um aparece assim que chega, na ORDEM dos addons
                     // (FrostStream 1º). Addon morto/lento preenche seu slot vazio no timeout, mas
                     // NÃO segura os que já carregaram (antes o awaitAll esperava todos).
