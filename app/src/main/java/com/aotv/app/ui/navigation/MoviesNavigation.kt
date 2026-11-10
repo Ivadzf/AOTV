@@ -92,8 +92,10 @@ private fun tvScale(isTV: Boolean, content: @Composable () -> Unit) {
 
 // Cache compartilhado — MovieItem e PlayerData sobrevivem à serialização do NavController.
 // Chave por tipo+tmdbId: filme e série têm IDs do TMDB em espaços separados e podem repetir.
+// Sem id do TMDB (item de addon com só o id IMDb), o embedId diferencia os itens.
 private val movieCache  = mutableMapOf<String, MovieItem>()
-private fun cacheKey(tmdbId: Int, type: MediaType) = "${type.name}:$tmdbId"
+private fun cacheKey(tmdbId: Int, type: MediaType, embedId: String = "") =
+    if (tmdbId > 0) "${type.name}:$tmdbId" else "${type.name}:imdb:${embedId.ifBlank { tmdbId.toString() }}"
 private typealias MoviePlayerSource = com.aotv.app.ui.movies.MoviePlayerSource
 private data class PlayerData(
     val embedUrl: String, val title: String,
@@ -173,7 +175,7 @@ fun MoviesNavigation(
 
             composable(MoviesRoute.Home.route) {
                 val openDetail: (MovieItem) -> Unit = { item ->
-                    movieCache[cacheKey(item.tmdbId, item.type)] = item
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                 }
                 // TV tem Início própria no desenho do webOS. Celular segue com a dele.
@@ -216,7 +218,7 @@ fun MoviesNavigation(
                 tvScale(isTV) { com.aotv.app.ui.collections.FolderScreen(
                     onBack = { navController.popBackStack() },
                     onItemClick = { item ->
-                        movieCache[cacheKey(item.tmdbId, item.type)] = item
+                        movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                         navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                     },
                 ) }
@@ -235,7 +237,7 @@ fun MoviesNavigation(
                 val mediaType = runCatching {
                     MediaType.valueOf(entry.arguments?.getString("type") ?: "MOVIE")
                 }.getOrDefault(MediaType.MOVIE)
-                val stub = movieCache[cacheKey(tmdbId, mediaType)] ?: MovieItem(
+                val stub = movieCache[cacheKey(tmdbId, mediaType, embedId)] ?: MovieItem(
                     tmdbId = tmdbId, embedId = embedId, title = "",
                     overview = "", posterUrl = "", backdropUrl = "",
                     year = "", rating = 0.0, type = mediaType,
@@ -260,7 +262,7 @@ fun MoviesNavigation(
                 }
                 val onBackCb: () -> Unit = { navController.popBackStack() }
                 val onRelatedCb: (MovieItem) -> Unit = { rel ->
-                    movieCache[cacheKey(rel.tmdbId, rel.type)] = rel
+                    movieCache[cacheKey(rel.tmdbId, rel.type, rel.embedId)] = rel
                     navController.navigate(MoviesRoute.Detail.create(rel.embedId, rel.tmdbId, rel.type))
                 }
                 KidsGate(tmdbId, mediaType.name, onBack = onBackCb) {
@@ -321,7 +323,7 @@ fun MoviesNavigation(
 
             composable(MoviesRoute.Search.route) {
                 val onSearchItem: (MovieItem) -> Unit = { item ->
-                    movieCache[cacheKey(item.tmdbId, item.type)] = item
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                 }
                 tvScale(isTV) {
@@ -334,7 +336,7 @@ fun MoviesNavigation(
 
             composable(MoviesRoute.Descobrir.route) {
                 val openItem: (MovieItem) -> Unit = { item ->
-                    movieCache[cacheKey(item.tmdbId, item.type)] = item
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                 }
                 if (isTV) com.aotv.app.ui.tv.TvDiscoverScreen(onItemClick = openItem)
@@ -347,10 +349,10 @@ fun MoviesNavigation(
 
             composable(MoviesRoute.MinhaLista.route) {
                 val onListItem: (MovieItem) -> Unit = { item ->
-                    movieCache[cacheKey(item.tmdbId, item.type)] = item
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                 }
-                if (isTV) com.aotv.app.ui.tv.TvMyListScreen(onItemClick = { onListItem(movieCache[cacheKey(it.tmdbId, it.type)] ?: it) })
+                if (isTV) com.aotv.app.ui.tv.TvMyListScreen(onItemClick = { onListItem(movieCache[cacheKey(it.tmdbId, it.type, it.embedId)] ?: it) })
                 else MinhaListaScreen(onItemClick = onListItem)
             }
 
