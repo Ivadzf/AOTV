@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder provisório (vetor): triângulo de play na cor Accent do tema
+     (#A7CAFF, ver Color.kt) sobre fundo transparente. O fundo escuro do ícone
+     adaptativo vem de ic_launcher_background.xml. O ícone definitivo do AOTV
+     será trocado depois — ver BUILD.md, seção "Push para o GitHub". -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#A7CAFF"
+        android:pathData="M40,32 L76,54 L40,76 Z" />
+</vector>
