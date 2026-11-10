@@ -53,12 +53,27 @@ class AccountsViewModel @Inject constructor(
     )
 
     private val local = MutableStateFlow(Ui(profileName = prefs.profile.name))
-    val ui: StateFlow<Ui> = combine(local, stremio.session, nuvio.session) { l, s, n -> l.copy(stremio = s, nuvio = n) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
+    val ui: StateFlow<Ui> = combine(local, stremio.session, nuvio.session, prefs.profileId, prefs.profiles) { l, s, n, pid, plist ->
+        l.copy(
+            stremio = s, nuvio = n,
+            // "Importa para" segue o perfil local ativo.
+            profileName = plist.firstOrNull { it.id == pid }?.name ?: l.profileName,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
     private var codeJob: Job? = null
 
-    init { if (nuvio.session.value != null) loadNuvioProfiles() }
+    init {
+        if (nuvio.session.value != null) loadNuvioProfiles()
+        // Troca de perfil local: a origem da importação segue o vínculo dele.
+        viewModelScope.launch {
+            prefs.profileId.collect { pid ->
+                prefs.nuvioProfileIndexFor(pid)?.let { linked ->
+                    local.update { it.copy(nuvioProfile = linked) }
+                }
+            }
+        }
+    }
 
     /** Roda uma ação de rede com o botão marcado e travado até a resposta. */
     private fun act(tag: String, block: suspend () -> String?) {
@@ -164,13 +179,27 @@ class AccountsViewModel @Inject constructor(
 
     private suspend fun fetchProfiles() {
         val list = nuvio.profiles().getOrThrow()
-        local.update { it.copy(nuvioProfiles = list, nuvioProfile = list.firstOrNull()?.index ?: 1) }
+        // Cria no app os perfis do Nuvio que ainda não existem (só o nome, com o vínculo
+        // para a importação). Nada é importado aqui e nenhum perfil local é apagado.
+        list.forEach { np ->
+            val existing = prefs.profiles.value.firstOrNull { it.name.equals(np.name, ignoreCase = true) }
+            val linked = existing ?: prefs.addProfile(np.name, kids = false)
+            if (linked != null) prefs.setNuvioProfileLink(linked.id, np.index)
+        }
+        val active = prefs.nuvioProfileIndexFor(prefs.profileId.value)
+        local.update { it.copy(nuvioProfiles = list, nuvioProfile = active ?: list.firstOrNull()?.index ?: 1) }
     }
 
-    fun pickNuvioProfile(index: Int) = local.update { it.copy(nuvioProfile = index) }
+    fun pickNuvioProfile(index: Int) {
+        // A escolha vira o vínculo do perfil local ativo (a importação segue o perfil).
+        prefs.setNuvioProfileLink(prefs.profileId.value, index)
+        local.update { it.copy(nuvioProfile = index) }
+    }
 
-    private fun nuvioProfile(): NuvioProfile =
-        local.value.nuvioProfiles.firstOrNull { it.index == local.value.nuvioProfile } ?: NuvioProfile(local.value.nuvioProfile, "Perfil", false)
+    private fun nuvioProfile(): NuvioProfile {
+        val index = prefs.nuvioProfileIndexFor(prefs.profileId.value) ?: local.value.nuvioProfile
+        return local.value.nuvioProfiles.firstOrNull { it.index == index } ?: NuvioProfile(index, "Perfil", false)
+    }
 
     fun nuvioImportAddons() = act("nuvio_addons") {
         val list = nuvio.addons(nuvioProfile()).getOrThrow()
