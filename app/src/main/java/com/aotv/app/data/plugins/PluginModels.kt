@@ -84,6 +84,6 @@ data class PluginLastRun(
     val millis: Long = 0L,
     /** Quando terminou (ms desde epoch). */
     val at: Long = 0L,
-    /** Detalhe curto do erro (vazio em "ok"/"empty"). */
+    /** Detalhe curto: mensagem do erro, ou "fetch: <status> · <duração>s" em ok/empty. */
     val detail: String = "",
 )
