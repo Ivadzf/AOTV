@@ -184,7 +184,7 @@ class KodiAddonStore @Inject constructor(
         return dirs.mapNotNull { dir ->
             val xml = File(dir, "addon.xml")
             if (!xml.isFile) return@mapNotNull null
-            parseAddonXml(dir, xml)?.copy(enabled = isEnabled(it.id))
+            parseAddonXml(dir, xml)?.let { addon -> addon.copy(enabled = isEnabled(addon.id)) }
         }.sortedBy { it.name.ifBlank { it.id }.lowercase() }
     }
 
