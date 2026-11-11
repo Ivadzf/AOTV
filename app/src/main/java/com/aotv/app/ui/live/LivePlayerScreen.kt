@@ -205,7 +205,7 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 "AO VIVO", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
-                                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(LiveRed).padding(horizontal = 7.dp, vertical = 2.dp),
+                                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(AccentSecondary).padding(horizontal = 7.dp, vertical = 2.dp),
                             )
                             Text(n?.title ?: "Sem guia para este canal", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
