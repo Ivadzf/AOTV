@@ -5,8 +5,8 @@ import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.domain.model.SeriesItem
 
-private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
-private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
+private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w342"
+private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 
 data class TmdbMovieDto(
     val id: Int,
@@ -233,7 +233,7 @@ fun TmdbImagesDto?.bestLogoUrl(): String {
         }
     }
     val best = logos.minByOrNull(rank) ?: return ""
-    return "https://image.tmdb.org/t/p/w500${best.filePath}"
+    return "https://image.tmdb.org/t/p/w342${best.filePath}"
 }
 
 data class TmdbGenreDto(val id: Int, val name: String)
