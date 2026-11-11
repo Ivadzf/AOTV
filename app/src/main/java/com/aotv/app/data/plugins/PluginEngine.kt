@@ -572,17 +572,33 @@ class PluginEngine @Inject constructor(
     }
 
     /**
-     * Cliente do fetch dos plugins — MESMA construção do cliente dos addons
-     * Stremio (StremioAddonService), que funciona no celular: builder limpo +
-     * DNS-over-HTTPS do AppDns. Antes era mediaClient.newBuilder() (o cliente
-     * compartilhado do Coil/player) e TODO plugin devolvia lista vazia.
+     * Cliente COMPARTILHADO do fetch dos plugins (mecanismo do JOTV v1.0.16:
+     * UM OkHttpClient para todos os plugins, em vez de um cliente novo por
+     * execução). O pool de conexões é compartilhado, então conexões keep-alive
+     * são reutilizadas entre execuções — antes, cada execução criava um
+     * cliente novo com pool próprio e refazia TCP+TLS do zero.
+     *
+     * NÃO é o mediaClient (Coil/player): mediaClient.newBuilder() já foi
+     * tentado e TODO plugin devolvia lista vazia. Este é um cliente limpo,
+     * construído só para os plugins (mesma construção do buildFetchClient
+     * anterior: builder limpo + DNS-over-HTTPS do AppDns).
+     *
+     * O cookie jar continua POR PLUGIN (PluginCookieJar, um arquivo por
+     * scraper — critério de aceite da v1): cada execução deriva um cliente
+     * do compartilhado via newBuilder() (que compartilha o pool e o
+     * dispatcher) e troca só o cookieJar e os timeouts.
      */
-    private fun buildFetchClient(cookieJar: PluginCookieJar, timeoutMs: Long): OkHttpClient =
+    private val sharedFetchClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .dns(AppDns.cloudflare)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun buildFetchClient(cookieJar: PluginCookieJar, timeoutMs: Long): OkHttpClient =
+        sharedFetchClient.newBuilder()
             .cookieJar(cookieJar)
             .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-            .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .build()
 
