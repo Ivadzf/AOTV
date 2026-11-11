@@ -67,6 +67,7 @@ import com.aotv.app.ui.theme.*
 fun SettingsScreen(
     onOpenAddons: () -> Unit = {},
     onOpenPlugins: () -> Unit = {},
+    onOpenKodiSpike: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenHomeCustomize: () -> Unit = {},
     onOpenDebrid: () -> Unit = {},
@@ -243,6 +244,13 @@ fun SettingsScreen(
                     title = "Plugins do Nuvio",
                     sub = "Scrapers JavaScript (ex.: os do seu repositório). Instale por manifest, ative cada um e ajuste o timeout.",
                     onClick = onOpenPlugins,
+                )
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = Icons.Default.Extension,
+                    iconTint = Accent,
+                    title = "Addons Kodi (spike)",
+                    sub = "Fase 0 da v1.1 — instala o ZIP do Vulgata e testa se o .so dele carrega sob o Python.",
+                    onClick = onOpenKodiSpike,
                 )
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.Bolt,
