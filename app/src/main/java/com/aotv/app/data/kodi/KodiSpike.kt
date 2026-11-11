@@ -30,6 +30,12 @@ import javax.inject.Singleton
  * que ele é o fator). Se o teste falhar com esse erro, o diagnóstico do
  * plano (§2.4) está confirmado e o erro exato do linker fica registrado.
  *
+ * Spike4: o shim já está no APK e os símbolos Py* resolvem, mas o teste
+ * continua falhando com "Protected execution failed" — o loader do Vulgata
+ * engole a causa real. O driver agora captura o erro BRUTO antes do
+ * main.py: CDLL do libkodi.so (por nome e pelo caminho absoluto) e carga
+ * direta do addon_core.so (ver aotv_spike.py).
+ *
  * O ZIP do Vulgata é PROPRIETÁRIO: nunca vai ao repo, nunca é embutido
  * como asset. O spike instala por ZIP escolhido pelo usuário (SAF) em
  * filesDir/kodi/addons/<id>/.
@@ -47,6 +53,10 @@ class KodiSpike @Inject constructor(
         val stubsOk: Boolean,
         val soLoaded: Boolean,
         val firstError: String?,
+        /** Erro bruto da carga direta do addon_core.so (spike4). */
+        val directSo: String?,
+        /** Erro bruto do CDLL do libkodi.so (spike4). */
+        val cdllLibkodi: String?,
         /** Repr do dict devolvido pelo Python (p/ exibir na tela). */
         val raw: String,
     )
@@ -137,6 +147,7 @@ class KodiSpike @Inject constructor(
                 pythonVersion = "", stage = "not_installed", stubsOk = false,
                 soLoaded = false,
                 firstError = "Vulgata não instalado — instale o ZIP primeiro.",
+                directSo = null, cdllLibkodi = null,
                 raw = "",
             )
         try {
@@ -145,13 +156,18 @@ class KodiSpike @Inject constructor(
             }
             val py = Python.getInstance()
             val res = py.getModule("aotv_spike")
-                .callAttr("run_load_test", addon.dir.absolutePath)
+                .callAttr(
+                    "run_load_test", addon.dir.absolutePath,
+                    context.applicationInfo.nativeLibraryDir,
+                )
             LoadTestResult(
                 pythonVersion = dictStr(res, "python_version"),
                 stage = dictStr(res, "stage"),
                 stubsOk = dictBool(res, "stubs_ok"),
                 soLoaded = dictBool(res, "so_loaded"),
                 firstError = dictStr(res, "first_error").ifBlank { null },
+                directSo = dictStr(res, "direct_so").ifBlank { null },
+                cdllLibkodi = dictStr(res, "cdll_libkodi").ifBlank { null },
                 raw = res.toString(),
             )
         } catch (e: Exception) {
@@ -159,6 +175,7 @@ class KodiSpike @Inject constructor(
                 pythonVersion = "", stage = "kotlin_error", stubsOk = false,
                 soLoaded = false,
                 firstError = "${e.javaClass.simpleName}: ${e.message}",
+                directSo = null, cdllLibkodi = null,
                 raw = "",
             )
         }
