@@ -80,8 +80,9 @@ fun KodiSpikeScreen(
 
         Text(
             "O teste tenta carregar o .so do Vulgata (plugin.video.vulgata). " +
-                "O resultado esperado agora é o erro \"libkodi.so não encontrado\" — " +
-                "é ele que confirma o diagnóstico e diz o que o shim precisa resolver.",
+                "O shim libkodi.so já está no APK; se o .so não carregar, os campos " +
+                "\"Carga direta do .so\" e \"CDLL libkodi.so\" mostram o erro bruto, " +
+                "sem o wrapper do Vulgata.",
             color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
         )
         Spacer(Modifier.height(16.dp))
