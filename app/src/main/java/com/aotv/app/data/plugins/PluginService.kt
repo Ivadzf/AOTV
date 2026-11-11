@@ -37,11 +37,13 @@ class PluginService @Inject constructor(
         private const val TAG = "AOTVPlugin"
 
         /** Máx. de plugins rodando ao mesmo tempo (igual ao teto do Nuvio). */
-        // v1.0.7: 10 por vez (era 5 na v1.0.4). A folha lança os 55 plugins de
-        // uma vez e o semáforo é o gargalo da fila: com 5, os lentos seguravam
-        // a vez e a folha levava muitos minutos p/ drenar. 10 era o valor da
-        // v1.0.2 e cabe no pool de motores (MAX_POOLED_ENGINES = 10).
-        private const val MAX_CONCURRENT_PLUGINS = 10
+        // v1.0.9: 5 por vez (era 10 na v1.0.7). A folha lança os 55 plugins de
+        // uma vez e o semáforo é o gargalo da fila; com 10, na internet lenta
+        // do Davi os 10 fetches disputavam a mesma conexão fina, estouravam o
+        // timeout e voltavam vazios (fetch: 0). Com 5, cada plugin tem mais
+        // banda e menos timeout — a folha drena em mais lotes, mas traz stream.
+        // O Testar manual não passa por aqui (lane própria, v1.0.9).
+        private const val MAX_CONCURRENT_PLUGINS = 5
     }
 
     /** Cada execução abre um contexto QuickJS; sem o semáforo, 55 plugins
@@ -62,6 +64,7 @@ class PluginService @Inject constructor(
         mediaType: String,
         season: Int? = null,
         episode: Int? = null,
+        fresh: Boolean = false,
     ): List<StremioStream> {
         if (tmdbId <= 0) return emptyList()
         // Leitura do arquivo do provider fora da Main (era I/O de disco na
@@ -70,12 +73,25 @@ class PluginService @Inject constructor(
         val timeoutMs = prefs.pluginTimeoutSec * 1000L
         val settings = store.pluginSettings(plugin.id)
         val started = System.currentTimeMillis()
-        val result = pluginSemaphore.withPermit {
+        // fresh = true (Testar manual): fora da fila da folha e num motor novo
+        // (v1.0.9). A folha lança 55 jobs que ocupam as 10 vagas por minutos e
+        // o Testar ficava esperando atrás deles (306s) e estourava o timeout
+        // vazio — o cronômetro aqui começa ANTES do semáforo, então a duração
+        // que aparece na tela é maioria espera, não execução.
+        val result = if (fresh) {
             engine.runGetStreams(
                 plugin = plugin, code = code, tmdbId = tmdbId, mediaType = mediaType,
                 season = season, episode = episode, settings = settings,
-                timeoutMs = timeoutMs, cookieJar = store.cookieJar(plugin.id),
+                timeoutMs = timeoutMs, cookieJar = store.cookieJar(plugin.id), fresh = true,
             )
+        } else {
+            pluginSemaphore.withPermit {
+                engine.runGetStreams(
+                    plugin = plugin, code = code, tmdbId = tmdbId, mediaType = mediaType,
+                    season = season, episode = episode, settings = settings,
+                    timeoutMs = timeoutMs, cookieJar = store.cookieJar(plugin.id),
+                )
+            }
         }
         val elapsed = System.currentTimeMillis() - started
         val raw = result.getOrElse { e ->
@@ -98,6 +114,20 @@ class PluginService @Inject constructor(
         )
         return streams
     }
+
+    /**
+     * Testar manual da tela de Plugins (v1.0.9): mesma execução do
+     * getStreamsForPlugin, mas fora da fila da folha e num motor novo
+     * (fresh = true). Sem isso, o Testar esperava atrás dos 55 jobs da folha
+     * e voltava vazio depois de 300s — parecia que o Teste estava quebrado.
+     */
+    suspend fun getStreamsForPluginTest(
+        plugin: InstalledPlugin,
+        tmdbId: Int,
+        mediaType: String,
+        season: Int? = null,
+        episode: Int? = null,
+    ): List<StremioStream> = getStreamsForPlugin(plugin, tmdbId, mediaType, season, episode, fresh = true)
 
     /**
      * Fetch de controle pelo motor dos plugins (diagnóstico de rede): devolve
