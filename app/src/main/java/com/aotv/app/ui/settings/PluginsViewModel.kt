@@ -50,6 +50,10 @@ class PluginsViewModel @Inject constructor(
         val settingsLoading: Boolean = false,
         /** Valores do diálogo (chave -> valor), já com os padrões do onSettings(). */
         val settingsValues: Map<String, Any?> = emptyMap(),
+        /** Teste de rede do motor em andamento. */
+        val networkTesting: Boolean = false,
+        /** Resultado do teste de rede ("Rede do motor: OK (200)" etc.). */
+        val networkTest: String? = null,
     )
 
     private val _uiState = MutableStateFlow(UiState(timeoutSec = prefs.pluginTimeoutSec))
@@ -133,7 +137,34 @@ class PluginsViewModel @Inject constructor(
     /** Apaga os cookies de todos os plugins (o próximo uso recria a sessão). */
     fun clearCookies() {
         store.clearAllCookies()
+        // Os runtimes em pool guardam o cookie jar na memória: sem descartá-los,
+        // os cookies apagados continuariam valendo dentro do motor.
+        pluginService.dropAllEngines()
         _uiState.update { it.copy(installedNow = "Cookies dos plugins apagados") }
+    }
+
+    /**
+     * Teste de rede do motor: busca o manifest do repo PELO MESMO fetch dos
+     * plugins e mostra o status HTTP. É o discriminador entre "o fetch do
+     * motor não funciona" (0) e "os providers devolvem vazio" (200).
+     */
+    fun testNetwork() {
+        if (_uiState.value.networkTesting) return
+        _uiState.update { it.copy(networkTesting = true, networkTest = null) }
+        viewModelScope.launch {
+            val result = pluginService.testNetwork()
+            val text = result.fold(
+                onSuccess = { status ->
+                    when {
+                        status in 200..299 -> "Rede do motor: OK ($status)"
+                        status == 0 -> "Rede do motor: falhou (0) — sem resposta"
+                        else -> "Rede do motor: HTTP $status"
+                    }
+                },
+                onFailure = { e -> "Rede do motor: erro: ${(e.message ?: e.javaClass.simpleName).take(80)}" },
+            )
+            _uiState.update { it.copy(networkTesting = false, networkTest = text) }
+        }
     }
 
     /**
