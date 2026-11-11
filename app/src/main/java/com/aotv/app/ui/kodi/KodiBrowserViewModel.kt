@@ -69,7 +69,11 @@ class KodiBrowserViewModel @Inject constructor(
     /** Raiz do addon (menu) — limpa a pilha. */
     fun openRoot() {
         crumbs.clear()
-        val name = addonStore.getAddon(addonId)?.name?.ifBlank { addonId } ?: addonId
+        val rawName = addonStore.getAddon(addonId)?.name?.ifBlank { addonId } ?: addonId
+        // O <name> do addon.xml traz tags de formatação do Kodi
+        // (ex.: "[B][COLOR deepskyblue]VULGATA[/COLOR][/B]") — limpar
+        // p/ exibir, como já é feito nos títulos dos itens.
+        val name = KodiPluginRunner.cleanKodiText(rawName).ifBlank { addonId }
         _uiState.update { it.copy(addonName = name, title = name) }
         load("", "", pushCrumb = null, loadingLabel = "Carregando…", playTitle = "")
     }

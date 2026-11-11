@@ -388,6 +388,42 @@ def run_plugin(addon_id, path="", query="", handle=1):
         return _run_plugin_inner(addon_id, path, query, handle)
 
 
+def _find_entry_run(lib):
+    """Devolve o run(argv) do módulo de entrada já carregado (ou None).
+
+    Addons com .so (ex.: Vulgata) registram o módulo de entrada em
+    sys.modules na 1ª execução, e o .so guarda o objeto do módulo em
+    cache (Cython): re-executar via runpy é no-op — a guarda de
+    re-inicialização impede o corpo do módulo de rodar de novo — e o
+    2º dispatch volta vazio, sem erro. O módulo em cache expõe
+    run(argv), a função de roteamento, que lê o argv novo e despacha
+    de novo. Addons Python puros não registram o módulo de entrada
+    (o runpy roda como __main__), então caem no runpy normal.
+    Só aceita run(argv) com exatamente 1 argumento posicional, e só
+    se o __file__ do módulo for a biblioteca deste addon.
+    """
+    try:
+        name = os.path.splitext(os.path.basename(lib))[0]
+        mod = sys.modules.get(name)
+        if mod is None:
+            return None
+        if os.path.realpath(getattr(mod, "__file__", "") or "") != \
+                os.path.realpath(lib):
+            return None
+        run = getattr(mod, "run", None)
+        if not callable(run):
+            return None
+        try:
+            argc = run.__code__.co_argcount
+        except Exception:
+            return None
+        if argc != 1:
+            return None
+        return run
+    except Exception:
+        return None
+
+
 def _run_plugin_inner(addon_id, path="", query="", handle=1):
     result = {"items": [], "resolved_url": "", "succeeded": False,
               "error": "", "handle": int(handle)}
@@ -402,7 +438,8 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         return result
     # sys.argv como o Kodi invoca um plugin de vídeo.
     url = "plugin://%s/%s" % (addon_id, path.lstrip("/"))
-    sys.argv = [url, str(handle), query or ""]
+    argv = [url, str(handle), query or ""]
+    sys.argv = argv
     set_current_addon(addon_id)
     if d not in sys.path:
         sys.path.insert(0, d)
@@ -414,8 +451,17 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         except Exception:
             pass
     try:
-        import runpy
-        runpy.run_path(lib, run_name="__main__")
+        entry_run = _find_entry_run(lib)
+        if entry_run is not None:
+            # Módulo de entrada já carregado com run(argv) reutilizável
+            # (addons com .so — ver _find_entry_run). Chamar run(argv)
+            # direto também evita o runpy, que sobrescreve sys.argv[0]
+            # com o caminho do arquivo (e o addon montava URLs de
+            # arquivo em vez de plugin:// no 1º dispatch).
+            entry_run(argv)
+        else:
+            import runpy
+            runpy.run_path(lib, run_name="__main__")
     except BaseException as e:
         import traceback
         result["error"] = "%s: %s\n%s" % (

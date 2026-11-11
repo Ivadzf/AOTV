@@ -79,6 +79,11 @@ class ListItem:
     def setResumePoint(self, time):
         self._resume_point = time
 
+    def setContentLookup(self, lookup):
+        # Kodi: liga/desliga a busca de conteúdo (capa/sinopse) p/ o
+        # item. O Vulgata chama na resolução do play; aqui só guarda.
+        self._content_lookup = bool(lookup)
+
     # -- getters (o aotv_kodi.py lê) ----------------------------------------
     def getLabel(self):
         return self._label
