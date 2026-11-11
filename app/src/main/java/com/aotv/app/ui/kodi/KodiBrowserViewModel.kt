@@ -47,6 +47,8 @@ class KodiBrowserViewModel @Inject constructor(
         val loadingLabel: String = "Carregando…",
         val error: String? = null,
         val empty: Boolean = false,
+        /** Diagnóstico do dispatch vazio (lookup do run) — p/ o print. */
+        val diag: String = "",
         val canGoBack: Boolean = false,
     )
 
@@ -121,7 +123,7 @@ class KodiBrowserViewModel @Inject constructor(
     ) {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, loadingLabel = loadingLabel, error = null, empty = false) }
+            _uiState.update { it.copy(loading = true, loadingLabel = loadingLabel, error = null, empty = false, diag = "") }
             when (val res = runner.open(addonId, path, query)) {
                 is KodiPluginRunner.KodiOpenResult.Listing -> {
                     if (pushCrumb != null) crumbs.addLast(pushCrumb)
@@ -140,7 +142,7 @@ class KodiBrowserViewModel @Inject constructor(
                     _playEvents.emit(PlayEvent(res.url, playTitle.ifBlank { _uiState.value.title }))
                 }
                 is KodiPluginRunner.KodiOpenResult.Empty -> {
-                    _uiState.update { it.copy(loading = false, items = emptyList(), empty = true) }
+                    _uiState.update { it.copy(loading = false, items = emptyList(), empty = true, diag = res.diag) }
                 }
                 is KodiPluginRunner.KodiOpenResult.Failed -> {
                     _uiState.update { it.copy(loading = false, error = res.error) }

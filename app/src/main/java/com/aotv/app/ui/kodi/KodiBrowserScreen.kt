@@ -131,6 +131,23 @@ fun KodiBrowserScreen(
                     "Algumas ações abrem diálogos do addon que ainda não existem no app (ex.: Configurações).",
                     color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
                 )
+                if (state.diag.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "Diagnóstico (manda o print):",
+                        color = TextTertiary, fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        state.diag,
+                        color = TextPrimary, fontSize = 12.sp, lineHeight = 17.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(BackgroundCard)
+                            .padding(12.dp),
+                    )
+                }
             }
             else -> {
                 LazyColumn(Modifier.fillMaxSize()) {

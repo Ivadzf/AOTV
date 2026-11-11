@@ -69,7 +69,7 @@ class KodiPluginRunner @Inject constructor(
         /** O plugin resolveu um stream — tocar esta URL no ExoPlayer. */
         data class Resolved(val url: String) : KodiOpenResult
         /** O plugin rodou mas não devolveu lista nem URL (ação sem retorno). */
-        data class Empty(val message: String) : KodiOpenResult
+        data class Empty(val message: String, val diag: String = "") : KodiOpenResult
         /** O dispatch falhou (addon ausente, erro do plugin, erro Python). */
         data class Failed(val error: String) : KodiOpenResult
     }
@@ -119,6 +119,10 @@ class KodiPluginRunner @Inject constructor(
         val resolved = dictStr(res, "resolved_url")
         val succeeded = dictBool(res, "succeeded")
         val items = parseItems(res)
+        // Diagnóstico do lookup do run(argv) (aotv_kodi.py) — vai p/
+        // a tela de estado vazio, p/ o Davi mandar o print quando o
+        // 2º nível voltar vazio no celular.
+        val diag = dictStr(res, "diag")
         return when {
             items.isNotEmpty() -> KodiOpenResult.Listing(items)
             resolved.isNotBlank() && succeeded -> KodiOpenResult.Resolved(resolved)
@@ -127,7 +131,7 @@ class KodiPluginRunner @Inject constructor(
             )
             error.isNotBlank() -> KodiOpenResult.Failed(shortError(error))
             else -> KodiOpenResult.Empty(
-                "O addon não devolveu itens para esta ação."
+                "O addon não devolveu itens para esta ação.", diag
             )
         }
     }

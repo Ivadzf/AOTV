@@ -388,7 +388,66 @@ def run_plugin(addon_id, path="", query="", handle=1):
         return _run_plugin_inner(addon_id, path, query, handle)
 
 
-def _find_entry_run(lib):
+def _run_arity(run):
+    """Confere se run aceita 1 arg posicional. Devolve (ok, nota).
+
+    Camadas, da mais estrita p/ a mais tolerante: __code__.co_argcount
+    (cyfunction de Cython 3 tem); inspect.signature (cobre builtins e
+    cyfunction sem __code__); se nenhuma introspecção funcionar, aceita
+    e deixa a chamada decidir — um TypeError vira erro visível no
+    resultado, não um vazio silencioso. Um .so arm64 compilado com
+    Cython antigo pode não expor __code__; rejeitar por isso era o
+    que deixava o 2º dispatch cair no runpy (no-op) sem erro.
+    """
+    try:
+        code = run.__code__
+    except Exception:
+        code = None
+    if code is not None:
+        try:
+            argc = code.co_argcount
+            return (argc == 1, "argc=%d" % argc)
+        except Exception:
+            pass
+    try:
+        import inspect
+        sig = inspect.signature(run)
+        params = [p for p in sig.parameters.values()
+                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        required = [p for p in params if p.default is p.empty]
+        has_varargs = any(p.kind == p.VAR_POSITIONAL
+                          for p in sig.parameters.values())
+        ok = len(required) <= 1 and (len(params) >= 1 or has_varargs)
+        return (ok, "sig=%s" % sig)
+    except Exception:
+        pass
+    return (True, "assinatura? (tentar)")
+
+
+def _entry_run_from_module(mod, lib_real, exact_file=True):
+    """Valida o run(argv) de um módulo candidato. Devolve (run, nota)."""
+    try:
+        f = getattr(mod, "__file__", None) or ""
+    except Exception:
+        return None, "sem __file__"
+    if exact_file:
+        try:
+            if os.path.realpath(f) != lib_real:
+                return None, "__file__=%s" % os.path.basename(f)
+        except Exception:
+            return None, "__file__?"
+    run = getattr(mod, "run", None)
+    if run is None:
+        return None, "sem run"
+    if not callable(run):
+        return None, "run nao-chamavel"
+    ok, note = _run_arity(run)
+    if not ok:
+        return None, "run %s" % note
+    return run, "%s %s" % (type(run).__name__, note)
+
+
+def _find_entry_run(lib, diag=None):
     """Devolve o run(argv) do módulo de entrada já carregado (ou None).
 
     Addons com .so (ex.: Vulgata) registram o módulo de entrada em
@@ -399,34 +458,85 @@ def _find_entry_run(lib):
     run(argv), a função de roteamento, que lê o argv novo e despacha
     de novo. Addons Python puros não registram o módulo de entrada
     (o runpy roda como __main__), então caem no runpy normal.
-    Só aceita run(argv) com exatamente 1 argumento posicional, e só
-    se o __file__ do módulo for a biblioteca deste addon.
+
+    O lookup é robusto e não depende de um único caminho (o .so
+    arm64 pode registrar o módulo com outro nome, ou o run pode não
+    expor __code__ se o .so foi compilado com Cython antigo):
+    1. nomes prováveis (basename do lib, "main", "default", "__main__")
+       com __file__ == lib e run(argv) válido;
+    2. varredura de sys.modules por qualquer módulo com
+       __file__ == lib e run(argv) válido;
+    3. fallback: módulo com nome de entrada dentro do diretório do
+       addon (mesmo que o __file__ não bata exatamente).
+    Só aceita run de módulo DESTE addon (__file__ dentro do dir do
+    addon), p/ nunca chamar o run de outro addon. Cada passo é
+    registrado em diag (lista, se fornecida) p/ o diagnóstico visível.
     """
-    try:
-        name = os.path.splitext(os.path.basename(lib))[0]
+    if diag is None:
+        diag = []
+    lib_real = os.path.realpath(lib or "")
+    base = os.path.splitext(os.path.basename(lib or ""))[0]
+    addon_dir = os.path.dirname(lib_real)
+    names = []
+    for n in (base, "main", "default", "__main__"):
+        if n and n not in names:
+            names.append(n)
+    for name in names:
         mod = sys.modules.get(name)
         if mod is None:
-            return None
-        if os.path.realpath(getattr(mod, "__file__", "") or "") != \
-                os.path.realpath(lib):
-            return None
-        run = getattr(mod, "run", None)
-        if not callable(run):
-            return None
+            continue
+        run, note = _entry_run_from_module(mod, lib_real)
+        if run is not None:
+            diag.append("mod=%s file=OK run=%s" % (name, note))
+            return run
+        diag.append("mod=%s: %s" % (name, note))
+    found = 0
+    for name, mod in list(sys.modules.items()):
+        if name in names:
+            continue
         try:
-            argc = run.__code__.co_argcount
+            f = getattr(mod, "__file__", None)
         except Exception:
-            return None
-        if argc != 1:
-            return None
-        return run
-    except Exception:
-        return None
+            continue
+        if not f:
+            continue
+        try:
+            if os.path.realpath(f) != lib_real:
+                continue
+        except Exception:
+            continue
+        found += 1
+        run, note = _entry_run_from_module(mod, lib_real)
+        if run is not None:
+            diag.append("sweep mod=%s file=OK run=%s" % (name, note))
+            return run
+        diag.append("sweep mod=%s: %s" % (name, note))
+    if found == 0:
+        diag.append("sweep: nenhum modulo com __file__==lib")
+    for name in names:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        try:
+            f = getattr(mod, "__file__", None) or ""
+            if not f:
+                continue
+            if os.path.commonpath((addon_dir, os.path.realpath(f))) != addon_dir:
+                continue
+        except Exception:
+            continue
+        run, note = _entry_run_from_module(mod, lib_real, exact_file=False)
+        if run is not None:
+            diag.append("fallback mod=%s file~dir run=%s" % (name, note))
+            return run
+        diag.append("fallback mod=%s: %s" % (name, note))
+    diag.append("sem run reutilizavel (procurou: %s)" % ", ".join(names))
+    return None
 
 
 def _run_plugin_inner(addon_id, path="", query="", handle=1):
     result = {"items": [], "resolved_url": "", "succeeded": False,
-              "error": "", "handle": int(handle)}
+              "error": "", "handle": int(handle), "diag": ""}
     _ensure_simplejson()
     d = find_addon_dir(addon_id)
     if not d:
@@ -450,16 +560,19 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
             mod.clear_handle(int(handle))
         except Exception:
             pass
+    diag = []
     try:
-        entry_run = _find_entry_run(lib)
+        entry_run = _find_entry_run(lib, diag)
         if entry_run is not None:
             # Módulo de entrada já carregado com run(argv) reutilizável
             # (addons com .so — ver _find_entry_run). Chamar run(argv)
             # direto também evita o runpy, que sobrescreve sys.argv[0]
             # com o caminho do arquivo (e o addon montava URLs de
             # arquivo em vez de plugin:// no 1º dispatch).
+            diag.append("via: run() direto")
             entry_run(argv)
         else:
+            diag.append("via: runpy (sem run)")
             import runpy
             runpy.run_path(lib, run_name="__main__")
     except BaseException as e:
@@ -467,6 +580,8 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         result["error"] = "%s: %s\n%s" % (
             type(e).__name__, e, traceback.format_exc(limit=12))
         _log("aotv_kodi.run_plugin", "ERRO %s: %s" % (addon_id, e))
+    # O diag vai sempre (mesmo com erro) — é ele que explica o vazio.
+    result["diag"] = "\n".join(diag)
     # Coleta o que o plugin devolveu (mesmo com erro parcial).
     if mod is not None:
         try:
