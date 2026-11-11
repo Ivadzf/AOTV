@@ -57,6 +57,8 @@ class KodiSpike @Inject constructor(
         val directSo: String?,
         /** Erro bruto do CDLL do libkodi.so (spike4). */
         val cdllLibkodi: String?,
+        /** Resumo das chamadas xbmc* (spike6): funções distintas + últimas. */
+        val xbmcCalls: String?,
         /** Repr do dict devolvido pelo Python (p/ exibir na tela). */
         val raw: String,
     )
@@ -147,7 +149,7 @@ class KodiSpike @Inject constructor(
                 pythonVersion = "", stage = "not_installed", stubsOk = false,
                 soLoaded = false,
                 firstError = "Vulgata não instalado — instale o ZIP primeiro.",
-                directSo = null, cdllLibkodi = null,
+                directSo = null, cdllLibkodi = null, xbmcCalls = null,
                 raw = "",
             )
         try {
@@ -168,6 +170,7 @@ class KodiSpike @Inject constructor(
                 firstError = dictStr(res, "first_error").ifBlank { null },
                 directSo = dictStr(res, "direct_so").ifBlank { null },
                 cdllLibkodi = dictStr(res, "cdll_libkodi").ifBlank { null },
+                xbmcCalls = dictStr(res, "xbmc_calls").ifBlank { null },
                 raw = res.toString(),
             )
         } catch (e: Exception) {
@@ -175,7 +178,7 @@ class KodiSpike @Inject constructor(
                 pythonVersion = "", stage = "kotlin_error", stubsOk = false,
                 soLoaded = false,
                 firstError = "${e.javaClass.simpleName}: ${e.message}",
-                directSo = null, cdllLibkodi = null,
+                directSo = null, cdllLibkodi = null, xbmcCalls = null,
                 raw = "",
             )
         }
