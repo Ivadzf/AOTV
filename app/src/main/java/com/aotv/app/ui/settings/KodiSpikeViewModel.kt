@@ -73,6 +73,9 @@ class KodiSpikeViewModel @Inject constructor(
         sb.appendLine("Estágio: ${res.stage}")
         sb.appendLine("Stubs xbmc*: ${if (res.stubsOk) "OK" else "FALHARAM"}")
         sb.appendLine(".so carregou: ${if (res.soLoaded) "SIM" else "NÃO"}")
+        // Spike4: erro bruto dos diagnósticos (antes do main.py).
+        sb.appendLine("Carga direta do .so: ${res.directSo ?: "—"}")
+        sb.appendLine("CDLL libkodi.so: ${res.cdllLibkodi ?: "—"}")
         if (res.firstError != null) {
             sb.appendLine()
             sb.appendLine("Primeiro erro:")
