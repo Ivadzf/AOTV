@@ -129,6 +129,15 @@ object HomeLayout {
         return SystemRow.HEAD.map { HomeRowPref(it.key) } + addonRows + SystemRow.TAIL.map { HomeRowPref(it.key) }
     }
 
+    /** "10 fileiras novas na Início." ou "10 de 40 fileiras na Início. Escolha outras em Fileiras." */
+    fun rowsText(on: Int, all: Int): String =
+        if (on >= all) (if (all == 1) "1 fileira nova" else "$all fileiras novas") + " na Início."
+        else "$on de $all fileiras na Início. Escolha outras em Fileiras."
+
+    /** Mensagem de addon instalado, a mesma na loja, no link e na importação. */
+    fun installText(name: String, on: Int, all: Int): String =
+        "$name instalado." + if (all > 0) " " + rowsText(on, all) else ""
+
     fun encode(list: List<HomeRowPref>): String {
         val arr = org.json.JSONArray()
         list.forEach { r ->
