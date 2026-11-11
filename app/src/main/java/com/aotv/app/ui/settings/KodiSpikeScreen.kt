@@ -88,7 +88,11 @@ fun KodiSpikeScreen(
 
         // 1. Instalar o ZIP do Vulgata.
         OutlinedButton(
-            onClick = { pickZip.launch(arrayOf("application/zip")) },
+            // Aceita qualquer arquivo (*/*): o filtro application/zip cinzenta
+            // ZIPs que o sistema salvou com outro MIME (o Vulgata e o repo do
+            // CineRoom não eram selecionáveis no celular do Davi). A validade
+            // do ZIP é conferida pelo conteúdo (magic PK) na instalação.
+            onClick = { pickZip.launch(arrayOf("*/*")) },
             enabled = !state.installing,
             modifier = Modifier.fillMaxWidth(),
         ) {
