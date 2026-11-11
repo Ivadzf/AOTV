@@ -32,6 +32,8 @@ import javax.inject.Singleton
 class PluginStore @Inject constructor(
     @ApplicationContext private val context: Context,
     private val prefs: PlatformPrefs,
+    /** Provider p/ invalidar o runtime em pool do plugin quando o código muda. */
+    private val engineProvider: javax.inject.Provider<PluginEngine>,
 ) {
 
     companion object {
@@ -109,6 +111,9 @@ class PluginStore @Inject constructor(
             // ("break/continue in inline lambdas" só existe no Kotlin 2.2+;
             // o projeto usa 2.1.20) — por isso o teste é feito fora do lambda.
             if (runCatching { codeFile(scraper.id).writeText(code) }.isFailure) continue
+            // Código novo: o runtime em pool desse plugin (se existir) tem o
+            // código velho — descarta p/ a próxima execução recriar.
+            if (prev?.sha256 != sha) runCatching { engineProvider.get().invalidate(scraper.id) }
             prefs.upsertPlugin(
                 InstalledPlugin(
                     id = scraper.id,
@@ -148,6 +153,7 @@ class PluginStore @Inject constructor(
 
     /** Remove um plugin (metadados, código e cookies). */
     fun removePlugin(pluginId: String) {
+        runCatching { engineProvider.get().invalidate(pluginId) }
         prefs.removePlugin(pluginId)
         runCatching { codeFile(pluginId).delete() }
         runCatching { File(cookieDir, "$pluginId.json").delete() }
