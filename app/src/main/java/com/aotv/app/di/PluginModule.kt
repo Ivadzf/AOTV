@@ -22,7 +22,8 @@ object PluginModule {
     fun providePluginStore(
         @ApplicationContext context: Context,
         prefs: PlatformPrefs,
-    ): PluginStore = PluginStore(context, prefs)
+        engine: javax.inject.Provider<PluginEngine>,
+    ): PluginStore = PluginStore(context, prefs, engine)
 
     @Provides
     @Singleton
