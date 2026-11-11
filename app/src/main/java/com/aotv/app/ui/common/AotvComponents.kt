@@ -32,6 +32,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -70,10 +71,16 @@ fun <T> aotvTween(ms: Int, reduced: Boolean): TweenSpec<T> = tween(if (reduced) 
 
 /** Escala de foco e de toque. Foco 1.06 (D-pad), toque 0.97, 160 ms como no webOS. */
 @Composable
-private fun pressFocusScale(pressed: Boolean, focused: Boolean, focusScale: Float = 1.06f): Float {
+private fun pressFocusScale(pressed: Boolean, focused: Boolean, focusScale: Float = 1.06f): State<Float> {
     val reduced = rememberReducedMotion()
     val target = if (reduced) 1f else if (focused) focusScale else if (pressed) 0.97f else 1f
-    return animateFloatAsState(target, aotvTween(160, reduced), label = "pf").value
+    return animateFloatAsState(target, aotvTween(160, reduced), label = "pf")
+}
+
+/** Escala na camada de renderização: a animação roda na thread de desenho sem recompor o componente. */
+private fun Modifier.layerScale(s: State<Float>): Modifier = graphicsLayer {
+    scaleX = s.value
+    scaleY = s.value
 }
 
 /** Ícone girando, usado no "Salvando…". Parado com animação reduzida. */
@@ -265,7 +272,7 @@ fun GlassCircleButton(
     val s = pressFocusScale(pressed, focused)
     Box(
         modifier
-            .scale(s)
+            .layerScale(s)
             .onFocusChanged { focused = it.isFocused }
             .size(size.coerceAtLeast(48.dp))
             .clip(CircleShape)
@@ -395,7 +402,7 @@ fun FilterChipPill(
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            Modifier.scale(s).heightIn(min = 48.dp).clip(RoundedCornerShape(999.dp)).background(bg).padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier.layerScale(s).heightIn(min = 48.dp).clip(RoundedCornerShape(999.dp)).background(bg).padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -427,7 +434,7 @@ fun MediaPosterCard(
     cleanPoster: Boolean = false,
     /** Espaço embaixo da imagem (faixa do pôster). A imagem termina onde ela começa. */
     imageBottom: Dp = 0.dp,
-    /** Recebe a imagem carregada sem bitmap de hardware, para tirar a cor do pôster. */
+    /** Avisa quando a imagem carregou (a cor do pôster sai de uma leitura separada de 8×12 px). */
     onImage: ((android.graphics.drawable.Drawable) -> Unit)? = null,
     /** Desenhado por cima da arte (etiqueta, faixa e selos do pôster). */
     decor: (@Composable BoxScope.() -> Unit)? = null,
@@ -439,7 +446,7 @@ fun MediaPosterCard(
     val shape = RoundedCornerShape(14.dp)
     Box(
         modifier
-            .scale(s)
+            .layerScale(s)
             .aspectRatio(aspectRatio)
             .shadow(if (focused) 18.dp else 0.dp, shape)
             .clip(shape)
@@ -459,10 +466,9 @@ fun MediaPosterCard(
             maxLines = 3, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.align(Alignment.Center).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 10.dp + imageBottom),
         )
-        val ctx = LocalContext.current
-        // Bitmap de software só para quem vai ler os pixels (o de hardware não deixa).
-        val model: Any? = if (onImage == null) imageUrl
-        else remember(imageUrl) { coil.request.ImageRequest.Builder(ctx).data(imageUrl).allowHardware(false).build() }
+        // A imagem exibida fica em bitmap de hardware (rápido p/ desenhar). A cor do pôster sai de
+        // uma leitura separada de 8×12 px (ver rememberPosterVisual), que nunca é desenhada.
+        val model: Any? = imageUrl
         AsyncImage(
             model = model, contentDescription = title, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().padding(bottom = imageBottom),
@@ -580,7 +586,7 @@ fun AotvButton(
     val shape = RoundedCornerShape(999.dp)
     Row(
         modifier
-            .scale(s)
+            .layerScale(s)
             .heightIn(min = if (compact) 48.dp else 52.dp)
             .clip(shape)
             .background(bg)
