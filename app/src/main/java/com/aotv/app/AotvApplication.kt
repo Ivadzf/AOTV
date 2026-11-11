@@ -8,6 +8,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.Dispatchers
 
 @HiltAndroidApp
 class AotvApplication : Application(), ImageLoaderFactory {
@@ -33,6 +34,11 @@ class AotvApplication : Application(), ImageLoaderFactory {
         return ImageLoader.Builder(this)
             // As imagens seguem o resolvedor do catálogo para evitar capas vazias por falha de DNS.
             .okHttpClient { com.aotv.app.data.remote.AppDns.mediaClient }
+            // v1.0.8 — no máximo 4 imagens baixando/decodificando ao mesmo tempo.
+            // Sem limite, a home disparava dezenas de downloads juntos e, em
+            // internet lenta, saturava a conexão e travava o app (o Davi achou
+            // que o travamento era dos pôsteres carregando — era).
+            .dispatcher(Dispatchers.IO.limitedParallelism(4))
             .crossfade(if (lowRam) 0 else 150)
             .allowRgb565(true)
             .memoryCachePolicy(CachePolicy.ENABLED)
