@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 21
-        versionName    = "1.0.13"
+        versionCode    = 22
+        versionName    = "1.1.0"
         // v1.1: só arm64-v8a (o celular do Davi é arm64; o APK fica ~20 MB menor).
         ndk { abiFilters += listOf("arm64-v8a") }
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
@@ -127,9 +127,13 @@ chaquopy {
         version = "3.11"
         buildPython("python3.11")
         pip {
-            // Spike: só o requests (o Vulgata também pede beautifulsoup4,
-            // six e kodi-six — entram nas fases seguintes, ver o plano).
+            // Fase 1: requests (Vulgata + BrazucaPlay), beautifulsoup4
+            // (Vulgata) e six (BrazucaPlay). kodi-six NÃO está no PyPI —
+            // vai vendored (app/src/main/python/kodi_six.py). simplejson
+            // não tem wheel Android — vai via shim p/ json (aotv_kodi.py).
             install("requests")
+            install("beautifulsoup4")
+            install("six")
         }
     }
 }
