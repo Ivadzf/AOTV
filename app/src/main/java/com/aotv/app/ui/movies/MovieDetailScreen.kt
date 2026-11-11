@@ -460,9 +460,10 @@ fun MovieDetailScreen(
 
                     // Erro de carregamento (TMDB falhou / load travou): nunca tela preta
                     // para sempre — mostra o erro e o retry.
-                    if (state.error != null && !state.isLoading) {
+                    val loadError = state.error
+                    if (loadError != null && !state.isLoading) {
                         Spacer(Modifier.height(14.dp))
-                        ErrorRetryCard(message = state.error, onRetry = { viewModel.retry() })
+                        ErrorRetryCard(message = loadError, onRetry = { viewModel.retry() })
                     }
 
                     // Série terminada → "Próximo seriado" (abre a 1ª série relacionada).
