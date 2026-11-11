@@ -4,6 +4,9 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import android.widget.Toast
+import androidx.compose.material.icons.filled.History
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -472,6 +475,32 @@ fun SettingsScreen(
                 }
                 } // if (match("TMDB")) — fecha a busca; abaixo fecha o !me.kids (Aparelho + TMDB)
                 } // !me.kids (Aparelho + TMDB)
+
+                if (match("Biblioteca", "Continuar assistindo", "Histórico", "Limpar")) {
+                    SettingsSection("Biblioteca")
+                    var confirmClear by remember { mutableStateOf(false) }
+                    val context = LocalContext.current
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.History,
+                        title = "Limpar Continuar assistindo",
+                        sub = "Apaga posições salvas de filmes e séries. Minha Lista continua",
+                        onClick = { confirmClear = true },
+                    )
+                    if (confirmClear) AlertDialog(
+                        onDismissRequest = { confirmClear = false },
+                        containerColor = BackgroundCard,
+                        title = { Text("Limpar Continuar assistindo?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+                        text = { Text("As posições salvas somem. Minha Lista continua.", color = TextSecondary) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.clearContinueWatching()
+                                confirmClear = false
+                                Toast.makeText(context, "Histórico limpo", Toast.LENGTH_SHORT).show()
+                            }) { Text("Limpar", color = DangerText) }
+                        },
+                        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
+                    )
+                }
                 below?.let { Spacer(Modifier.height(18.dp)); it() }
             }
         }
