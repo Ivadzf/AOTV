@@ -322,7 +322,7 @@ fun SectionHeader(
         Column(Modifier.weight(1f, fill = false)) {
             if (eyebrow != null) Eyebrow(eyebrow, Modifier.padding(bottom = 3.dp))
             Text(
-                title, color = TextPrimary, fontSize = 19.sp, lineHeight = 24.sp, fontWeight = FontWeight.Bold,
+                title, color = TextPrimary, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold,
                 fontFamily = Inter, letterSpacing = (-0.2).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -502,11 +502,11 @@ fun MediaPosterCard(
 @Composable
 fun PosterCaption(title: String, sub: String? = null, highlight: Boolean = false) {
     Text(
-        title, color = if (highlight) Accent else TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-        fontFamily = Inter, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 2.dp),
+        title, color = if (highlight) Accent else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+        fontFamily = Inter, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
     )
     if (!sub.isNullOrBlank()) Text(
-        sub, color = TextTertiary, fontSize = 12.sp, fontFamily = Inter, maxLines = 2,
+        sub, color = TextTertiary, fontSize = 11.sp, fontFamily = Inter, maxLines = 2,
         overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp, start = 2.dp, end = 2.dp),
     )
 }
@@ -714,7 +714,8 @@ fun SidePanel(
 
 /**
  * Linha de configuração (.set-row). Ícone em caixa, título, linha de baixo e algo à direita.
- * Com [busy] o ícone gira e o toque fica travado.
+ * Com [busy] o ícone gira e o toque fica travado. Dentro de um [SettingsGroup], use
+ * [grouped] (sem fundo próprio) e [divider] (divisória acima, menos na primeira linha).
  */
 @Composable
 fun SettingsRow(
@@ -726,32 +727,61 @@ fun SettingsRow(
     iconTint: Color = TextPrimary,
     trailing: (@Composable () -> Unit)? = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = TextTertiary) },
     onClick: (() -> Unit)? = null,
+    grouped: Boolean = false,
+    divider: Boolean = false,
 ) {
     val src = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(14.dp)
-    Row(
+    Column(modifier.fillMaxWidth()) {
+        if (grouped && divider) Box(Modifier.fillMaxWidth().padding(start = 70.dp).height(1.dp).background(BorderSubtle))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .then(
+                    if (grouped) {
+                        // Sem fundo próprio; só o foco acende (anel branco + fundo suave).
+                        if (focused) Modifier.clip(RoundedCornerShape(10.dp)).background(AccentSoft)
+                            .border(2.dp, Color.White, RoundedCornerShape(10.dp)) else Modifier
+                    } else {
+                        Modifier.clip(shape)
+                            .background(if (focused) AccentSoft else BackgroundCard2)
+                            .then(if (focused) Modifier.border(2.dp, Color.White, shape) else Modifier)
+                    }
+                )
+                .onFocusChanged { focused = it.isFocused }
+                .then(if (onClick != null) Modifier.pressScale(src, 0.98f).clickable(src, null, enabled = !busy, role = Role.Button, onClick = onClick) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+                if (busy) SpinningIcon(tint = iconTint, size = 22.dp) else Icon(icon, null, tint = iconTint, modifier = Modifier.size(22.dp))
+            }
+            Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                Text(title, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = Inter, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val s = if (busy) "Salvando…" else sub
+                if (!s.isNullOrBlank()) Text(s, color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp, fontFamily = Inter, modifier = Modifier.padding(top = 2.dp))
+            }
+            if (trailing != null) Box(Modifier.padding(start = 10.dp)) { trailing() }
+        }
+    }
+}
+
+/** Cartão agrupado das Configurações (estilo Nuvio): várias linhas num só cartão arredondado. */
+@Composable
+fun SettingsGroup(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .clip(shape)
-            .background(if (focused) AccentSoft else BackgroundCard2)
-            .then(if (focused) Modifier.border(2.dp, Color.White, shape) else Modifier)
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (onClick != null) Modifier.pressScale(src, 0.98f).clickable(src, null, enabled = !busy, role = Role.Button, onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(Surface2), contentAlignment = Alignment.Center) {
-            if (busy) SpinningIcon(tint = iconTint, size = 22.dp) else Icon(icon, null, tint = iconTint, modifier = Modifier.size(22.dp))
-        }
-        Column(Modifier.weight(1f).padding(start = 14.dp)) {
-            Text(title, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = Inter, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            val s = if (busy) "Salvando…" else sub
-            if (!s.isNullOrBlank()) Text(s, color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp, fontFamily = Inter, modifier = Modifier.padding(top = 2.dp))
-        }
-        if (trailing != null) Box(Modifier.padding(start = 10.dp)) { trailing() }
-    }
+            .clip(RoundedCornerShape(20.dp))
+            .background(BackgroundCard2)
+            .padding(vertical = 6.dp),
+        content = content,
+    )
 }
 
 /** Rótulo de grupo das configurações (.set-section). */
@@ -767,7 +797,7 @@ fun SummaryCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF18212C), Color(0xFF141414)), start = Offset(0f, 0f), end = Offset(600f, 900f)))
+            .background(Brush.linearGradient(listOf(AccentSoft, Color(0xFF141414)), start = Offset(0f, 0f), end = Offset(600f, 900f)))
             .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
             .padding(20.dp),
         content = content,
