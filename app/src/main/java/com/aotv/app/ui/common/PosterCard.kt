@@ -52,6 +52,7 @@ import com.aotv.app.data.local.posterKey
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.theme.Accent
+import com.aotv.app.ui.theme.Gold
 import com.aotv.app.ui.theme.Inter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -170,7 +171,7 @@ private fun posterHue(bmp: Bitmap): Int? = runCatching {
 // ── Cartão ──────────────────────────────────────────────────────────────────
 
 private val INK = Color(0xFF121316)
-private val TOP_INK = Color(0xFF0B1422)
+private val TOP_INK = Color(0xFF062019)
 private val CHIP = RoundedCornerShape(5.dp)
 private val TAG_SHAPE = RoundedCornerShape(bottomStart = 7.dp, bottomEnd = 7.dp)
 
@@ -215,7 +216,7 @@ fun PosterCard(
             imageBottom = unit * 22,
             onImage = visual.onImage,
         ) {
-            PosterDecorations(item, visual, unit = unit)
+            PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22)
         }
         if (caption != null) PosterCaption(caption, sub, highlight)
     }
@@ -277,10 +278,28 @@ internal fun BoxScope.PosterDecorations(
     visual: PosterVisual,
     unit: Dp = 1.dp,
     textUnit: TextUnit = 1.sp,
+    imageBottom: Dp = 0.dp,
 ) {
     visual.tag?.let { TagChip(it, visual.tint, Modifier.align(Alignment.TopCenter), unit, textUnit) }
     visual.quality?.let { QualityChips(it, Modifier.align(Alignment.TopEnd), unit, textUnit) }
+    if (item.rating > 0) RatingBadge(item.rating, Modifier.align(Alignment.BottomStart).padding(start = unit * 6, bottom = imageBottom + unit * 6), unit, textUnit)
     Strip(item, visual.tint, Modifier.align(Alignment.BottomCenter), unit, textUnit)
+}
+
+/** Selo de nota sobre o pôster (estilo Nuvio): estrela dourada + nota num chip escuro. */
+@Composable
+private fun RatingBadge(rating: Double, modifier: Modifier, unit: Dp, textUnit: TextUnit) {
+    Row(
+        modifier.background(Color.Black.copy(alpha = .72f), CHIP).padding(horizontal = unit * 6, vertical = unit * 2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Star, null, tint = Gold, modifier = Modifier.size(unit * 10))
+        Spacer(Modifier.width(unit * 3))
+        Text(
+            ratingText(rating), color = Color.White, fontSize = textUnit * 10.5f, lineHeight = textUnit * 12f,
+            fontWeight = FontWeight.ExtraBold, fontFamily = Inter,
+        )
+    }
 }
 
 @Composable
@@ -303,16 +322,10 @@ private fun Strip(item: MovieItem, tint: Color, modifier: Modifier, unit: Dp, te
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
-        // O ano não encolhe. O gênero encolhe com reticências para a nota sempre caber.
+        // O ano não encolhe. O gênero encolhe com reticências. A nota saiu para o selo sobre o pôster.
         stripParts(item).forEachIndexed { i, p ->
             if (i > 0) StripDot(unit, textUnit)
             StripText(p, if (i == 0) Modifier else Modifier.weight(1f, fill = false), textUnit)
-        }
-        if (item.rating > 0) {
-            StripDot(unit, textUnit)
-            Icon(Icons.Filled.Star, null, tint = INK, modifier = Modifier.size(unit * 10))
-            Spacer(Modifier.width(unit * 2))
-            StripText(ratingText(item.rating), Modifier, textUnit)
         }
     }
 }
