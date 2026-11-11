@@ -36,7 +36,18 @@ class AddonStoreViewModel @Inject constructor(
         /** URL do addon com instalação ou remoção em andamento. Trava o segundo clique. */
         val busy: String? = null,
         val message: String? = null,
+        /** URL do addon recém instalado. A ficha leva o foco a Escolher fileiras e depois solta. */
+        val justInstalled: String? = null,
+        /** Por base de addon, quantas fileiras dele aparecem na Início do perfil e quantas ele tem. */
+        val rowCounts: Map<String, AddonsViewModel.RowCount> = emptyMap(),
     ) {
+        fun entryOf(a: CommunityAddon): AddonEntry? =
+            installed.firstOrNull { it.url.equals(a.url, true) || (a.id.isNotBlank() && it.id == a.id) }
+
+        /** Fileiras do addon instalado, ou null quando ele não tem catálogo guardado. */
+        fun rowsOf(a: CommunityAddon): AddonsViewModel.RowCount? =
+            entryOf(a)?.let { rowCounts[com.aotv.app.data.remote.AddonLinks.baseOf(it.url)] }?.takeIf { it.all > 0 }
+
         fun isInstalled(a: CommunityAddon) =
             installed.any { it.url.equals(a.url, true) || (a.id.isNotBlank() && it.id == a.id) }
 
@@ -64,6 +75,16 @@ class AddonStoreViewModel @Inject constructor(
     init {
         load(false)
         viewModelScope.launch { prefs.addons.collect { l -> _ui.update { it.copy(installed = l) } } }
+        viewModelScope.launch {
+            prefs.homeLayoutFlow.collect { l ->
+                _ui.update {
+                    it.copy(
+                        rowCounts = l.filter { r -> r.ref != null }.groupBy { r -> r.ref!!.base }
+                            .mapValues { (_, rows) -> AddonsViewModel.RowCount(rows.count { r -> r.enabled }, rows.size) },
+                    )
+                }
+            }
+        }
     }
 
     fun load(force: Boolean) {
@@ -84,6 +105,8 @@ class AddonStoreViewModel @Inject constructor(
     fun setShow(s: Show) = _ui.update { it.copy(show = s) }
     fun select(a: CommunityAddon?) = _ui.update { it.copy(selectedUrl = if (it.selectedUrl == a?.url) null else a?.url) }
     fun clearMessage() = _ui.update { it.copy(message = null) }
+    fun clearJustInstalled() = _ui.update { it.copy(justInstalled = null) }
+    fun markHomeNew() { prefs.homeFocusNew = true }
 
     /** Lê o manifest antes de gravar. Addon que não responde não entra na lista. */
     fun install(a: CommunityAddon, url: String = a.url) {
@@ -95,8 +118,9 @@ class AddonStoreViewModel @Inject constructor(
                 _ui.update { it.copy(busy = null, message = "${a.name} não respondeu. Tente de novo em instantes.") }
                 return@launch
             }
-            prefs.installAddon(stremio.normalizeManifestUrl(url), a.id.ifBlank { m.id })
-            _ui.update { it.copy(busy = null, message = "${a.name} instalado. Ele entra no fim da fila de prioridade.") }
+            val real = stremio.normalizeManifestUrl(url)
+            prefs.installAddon(real, a.id.ifBlank { m.id })
+            _ui.update { it.copy(busy = null, message = prefs.installText(a.name, real), justInstalled = a.url) }
         }
     }
 
@@ -106,6 +130,7 @@ class AddonStoreViewModel @Inject constructor(
     }
 
     companion object {
-        fun worksHere(a: CommunityAddon) = "stream" in a.resources || "subtitles" in a.resources
+        /** O que funciona no AOTV: fontes, legendas e catálogos (viram fileira na Início). */
+        fun worksHere(a: CommunityAddon) = "stream" in a.resources || "subtitles" in a.resources || "catalog" in a.resources
     }
 }
