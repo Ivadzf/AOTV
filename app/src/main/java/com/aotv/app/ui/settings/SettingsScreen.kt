@@ -8,7 +8,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.ViewModule
 import com.aotv.app.data.local.SubLangs
@@ -90,6 +92,10 @@ fun SettingsScreen(
     // Verifica automaticamente ao abrir as Configurações (uma vez).
     LaunchedEffect(Unit) { if (sourceStatus.isEmpty()) viewModel.checkSourcesHealth() }
     val pad = com.aotv.app.ui.common.pagePadding()
+    // Busca das configurações (estilo Nuvio). Filtra as seções por título e descrição.
+    var query by remember { mutableStateOf("") }
+    val q = query.trim()
+    fun match(vararg texts: String) = q.isEmpty() || texts.any { it.contains(q, ignoreCase = true) }
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -103,6 +109,31 @@ fun SettingsScreen(
             }
             com.aotv.app.ui.common.PageHeader("Configurações", Modifier.weight(1f), sub = "Perfil, reprodução, addons e aparelho")
         }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("Buscar configurações...", color = TextTertiary) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary) },
+            trailingIcon = if (query.isNotEmpty()) ({
+                IconButton(onClick = { query = "" }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Close, "Limpar busca", tint = TextSecondary)
+                }
+            }) else null,
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Accent,
+                unfocusedBorderColor = Border,
+                focusedContainerColor = Surface2,
+                unfocusedContainerColor = Surface2,
+                focusedTextColor = TextPrimary,
+                unfocusedTextColor = TextPrimary,
+                focusedPlaceholderColor = TextTertiary,
+                unfocusedPlaceholderColor = TextTertiary,
+                cursorColor = Accent,
+            ),
+        )
         // Resumo à direita em tela larga, embaixo do conteúdo em tela estreita (.set-summary).
         val summary: @Composable () -> Unit = {
             SettingsSummary(
@@ -127,69 +158,85 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 // Perfil ativo. Tocar abre o "Quem está assistindo?" para trocar ou editar.
-                SettingsSection("Perfil")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Person,
-                    title = me.name,
-                    sub = (if (me.kids) "Infantil" else "Perfil") + " · trocar ou editar perfis",
-                    onClick = onOpenProfiles,
-                )
                 // PIN dos pais. Só mexe quem já está fora do infantil (sair do infantil já pede
                 // o PIN quando existe um, então chegar aqui com infantil ativo não rola).
-                if (!me.kids) {
-                    var showSetPin by remember { mutableStateOf(false) }
-                    val hasPin = viewModel.hasParentalPin
-                    com.aotv.app.ui.common.SettingsRow(
-                        icon = Icons.Default.Lock,
-                        title = if (hasPin) "Trocar PIN dos pais" else "Criar PIN dos pais",
-                        sub = "Trava sair do infantil e abrir Addons, TMDB e Aparelho com o infantil ativo",
-                        onClick = { showSetPin = true },
-                    )
-                    if (showSetPin) SetPinDialog(
-                        title = if (hasPin) "Trocar PIN dos pais" else "Criar PIN dos pais",
-                        onSet = { pin -> viewModel.setParentalPin(pin); showSetPin = false },
-                        onDismiss = { showSetPin = false },
-                    )
+                var showSetPin by remember { mutableStateOf(false) }
+                val hasPin = viewModel.hasParentalPin
+                if (match(me.name, "Perfil", "trocar", "editar", "PIN", "pais")) {
+                    SettingsSection("Perfil")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Person,
+                            title = me.name,
+                            sub = (if (me.kids) "Infantil" else "Perfil") + " · trocar ou editar perfis",
+                            onClick = onOpenProfiles,
+                            grouped = true,
+                        )
+                        if (!me.kids) {
+                            com.aotv.app.ui.common.SettingsRow(
+                                icon = Icons.Default.Lock,
+                                title = if (hasPin) "Trocar PIN dos pais" else "Criar PIN dos pais",
+                                sub = "Trava sair do infantil e abrir Addons, TMDB e Aparelho com o infantil ativo",
+                                onClick = { showSetPin = true },
+                                grouped = true,
+                                divider = true,
+                            )
+                        }
+                    }
                 }
+                if (showSetPin) SetPinDialog(
+                    title = if (hasPin) "Trocar PIN dos pais" else "Criar PIN dos pais",
+                    onSet = { pin -> viewModel.setParentalPin(pin); showSetPin = false },
+                    onDismiss = { showSetPin = false },
+                )
 
                 // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
-                SettingsSection("Reprodução")
-                val audio by viewModel.audioPref.collectAsStateWithLifecycle()
-                val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
-                val heroTrailer by viewModel.heroTrailer.collectAsStateWithLifecycle()
-                SettingsCard {
-                    PrefRow("Áudio preferido", listOf("any" to "Qualquer", "dub" to "Dublado", "leg" to "Legendado"), audio, viewModel::setAudio)
-                    Spacer(Modifier.height(14.dp))
-                    PrefRow("Qualidade máxima", listOf(0 to "Sem limite", 2160 to "4K", 1080 to "1080p", 720 to "720p"), maxQ, viewModel::setMaxQuality)
+                if (match("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma")) {
+                    SettingsSection("Reprodução")
+                    val audio by viewModel.audioPref.collectAsStateWithLifecycle()
+                    val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
+                    val heroTrailer by viewModel.heroTrailer.collectAsStateWithLifecycle()
+                    SettingsCard {
+                        PrefRow("Áudio preferido", listOf("any" to "Qualquer", "dub" to "Dublado", "leg" to "Legendado"), audio, viewModel::setAudio)
+                        Spacer(Modifier.height(14.dp))
+                        PrefRow("Qualidade máxima", listOf(0 to "Sem limite", 2160 to "4K", 1080 to "1080p", 720 to "720p"), maxQ, viewModel::setMaxQuality)
+                    }
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Movie,
+                            title = "Trailer no destaque",
+                            sub = "Toca sem som depois de 5 s parado num título da Início",
+                            // A linha liga e desliga. O Switch fica fora do caminho do controle.
+                            trailing = { Switch(checked = heroTrailer, onCheckedChange = { viewModel.setHeroTrailer(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                            onClick = { viewModel.setHeroTrailer(!heroTrailer) },
+                            grouped = true,
+                        )
+                        // Legenda do perfil. Ligada ao abrir e o idioma em que ela liga sozinha no player.
+                        val subOn by viewModel.subOn.collectAsStateWithLifecycle()
+                        val subLang by viewModel.subLang.collectAsStateWithLifecycle()
+                        var pickLang by remember { mutableStateOf(false) }
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.ClosedCaption,
+                            title = "Legenda ao abrir",
+                            sub = if (subOn) "Liga sozinha em ${SubLangs.label(subLang)} quando o título tiver" else "Desligada. Dá para ligar no player, em Legendas",
+                            trailing = { Switch(checked = subOn, onCheckedChange = { viewModel.setSubOn(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                            onClick = { viewModel.setSubOn(!subOn) },
+                            grouped = true,
+                            divider = true,
+                        )
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Translate,
+                            title = "Idioma da legenda",
+                            sub = SubLangs.label(subLang) + ". Também aparece primeiro na lista do player",
+                            onClick = { pickLang = true },
+                            grouped = true,
+                            divider = true,
+                        )
+                        if (pickLang) SubLangDialog(subLang, onPick = { viewModel.setSubLang(it); pickLang = false }, onDismiss = { pickLang = false })
+                    }
                 }
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Movie,
-                    title = "Trailer no destaque",
-                    sub = "Toca sem som depois de 5 s parado num título da Início",
-                    // A linha liga e desliga. O Switch fica fora do caminho do controle.
-                    trailing = { Switch(checked = heroTrailer, onCheckedChange = { viewModel.setHeroTrailer(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                    onClick = { viewModel.setHeroTrailer(!heroTrailer) },
-                )
-                // Legenda do perfil. Ligada ao abrir e o idioma em que ela liga sozinha no player.
-                val subOn by viewModel.subOn.collectAsStateWithLifecycle()
-                val subLang by viewModel.subLang.collectAsStateWithLifecycle()
-                var pickLang by remember { mutableStateOf(false) }
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.ClosedCaption,
-                    title = "Legenda ao abrir",
-                    sub = if (subOn) "Liga sozinha em ${SubLangs.label(subLang)} quando o título tiver" else "Desligada. Dá para ligar no player, em Legendas",
-                    trailing = { Switch(checked = subOn, onCheckedChange = { viewModel.setSubOn(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                    onClick = { viewModel.setSubOn(!subOn) },
-                )
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Translate,
-                    title = "Idioma da legenda",
-                    sub = SubLangs.label(subLang) + ". Também aparece primeiro na lista do player",
-                    onClick = { pickLang = true },
-                )
-                if (pickLang) SubLangDialog(subLang, onPick = { viewModel.setSubLang(it); pickLang = false }, onDismiss = { pickLang = false })
 
-                if (viewModel.traktConfigured) {
+                if (viewModel.traktConfigured && match("Trakt")) {
                     SettingsSection("Trakt")
                     SettingsCard { TraktSection(viewModel) }
                 }
@@ -197,127 +244,170 @@ fun SettingsScreen(
                 // Addons, Aparelho e TMDB somem no perfil infantil — só quem já passou pelo PIN
                 // pra sair do infantil mexe nisso (ver ProfilesScreen).
                 if (!me.kids) {
-                SettingsSection("Contas")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.AccountCircle,
-                    iconTint = Accent,
-                    title = "Stremio e Nuvio",
-                    sub = "Entre na sua conta e traga addons, Minha Lista, progresso e debrid.",
-                    onClick = onOpenAccounts,
-                )
-                SettingsSection("TV ao vivo")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.LiveTv,
-                    iconTint = Accent,
-                    title = "Canais ao vivo",
-                    sub = "Listas M3U e contas Xtream, com guia de programação.",
-                    onClick = onOpenLive,
-                )
-                SettingsSection("Início")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Dashboard,
-                    iconTint = Accent,
-                    title = "Personalizar Início",
-                    sub = "Liga, desliga, ordena e renomeia as fileiras. Escolhe o destaque e o catálogo AOTV.",
-                    onClick = onOpenHomeCustomize,
-                )
-                // Coleções saem primeiro no celular. A TV ganha a tela dela na etapa seguinte.
-                if (!com.aotv.app.ui.common.LocalIsTv.current) com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.ViewModule,
-                    iconTint = Accent,
-                    title = "Coleções",
-                    sub = "Pastas de estúdios, streamings, franquias e catálogos na Início. Importa e exporta no formato do Nuvio.",
-                    onClick = onOpenCollections,
-                )
-                SettingsSection("Addons")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Extension,
-                    iconTint = Accent,
-                    title = "Gerenciar addons",
-                    sub = (if (addonCount == 0) "Nenhum instalado" else "$addonCount instalado(s)") +
-                        ". As fontes vêm dos addons. Instale, ordene e ative cada um.",
-                    onClick = onOpenAddons,
-                )
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Code,
-                    iconTint = Accent,
-                    title = "Plugins do Nuvio",
-                    sub = "Scrapers JavaScript (ex.: os do seu repositório). Instale por manifest, ative cada um e ajuste o timeout.",
-                    onClick = onOpenPlugins,
-                )
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Extension,
-                    iconTint = Accent,
-                    title = "Addons Kodi (spike)",
-                    sub = "Fase 0 da v1.1 — instala o ZIP do Vulgata e testa se o .so dele carrega sob o Python.",
-                    onClick = onOpenKodiSpike,
-                )
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Bolt,
-                    iconTint = Accent,
-                    title = "Debrid",
-                    sub = "Real-Debrid, TorBox ou Premiumize. Torrent toca na hora por link direto.",
-                    onClick = onOpenDebrid,
-                )
+                if (match("Contas", "Stremio", "Nuvio")) {
+                    SettingsSection("Contas")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.AccountCircle,
+                            iconTint = Accent,
+                            title = "Stremio e Nuvio",
+                            sub = "Entre na sua conta e traga addons, Minha Lista, progresso e debrid.",
+                            onClick = onOpenAccounts,
+                            grouped = true,
+                        )
+                    }
+                }
+                if (match("TV ao vivo", "Canais", "M3U", "Xtream", "guia")) {
+                    SettingsSection("TV ao vivo")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.LiveTv,
+                            iconTint = Accent,
+                            title = "Canais ao vivo",
+                            sub = "Listas M3U e contas Xtream, com guia de programação.",
+                            onClick = onOpenLive,
+                            grouped = true,
+                        )
+                    }
+                }
+                if (match("Início", "Personalizar", "fileiras", "Coleções", "pastas")) {
+                    SettingsSection("Início")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Dashboard,
+                            iconTint = Accent,
+                            title = "Personalizar Início",
+                            sub = "Liga, desliga, ordena e renomeia as fileiras. Escolhe o destaque e o catálogo AOTV.",
+                            onClick = onOpenHomeCustomize,
+                            grouped = true,
+                        )
+                        // Coleções saem primeiro no celular. A TV ganha a tela dela na etapa seguinte.
+                        if (!com.aotv.app.ui.common.LocalIsTv.current) com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.ViewModule,
+                            iconTint = Accent,
+                            title = "Coleções",
+                            sub = "Pastas de estúdios, streamings, franquias e catálogos na Início. Importa e exporta no formato do Nuvio.",
+                            onClick = onOpenCollections,
+                            grouped = true,
+                            divider = true,
+                        )
+                    }
+                }
+                if (match("Addons", "Gerenciar", "Plugins", "Kodi", "Debrid", "Real-Debrid", "TorBox", "Premiumize")) {
+                    SettingsSection("Addons")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Extension,
+                            iconTint = Accent,
+                            title = "Gerenciar addons",
+                            sub = (if (addonCount == 0) "Nenhum instalado" else "$addonCount instalado(s)") +
+                                ". As fontes vêm dos addons. Instale, ordene e ative cada um.",
+                            onClick = onOpenAddons,
+                            grouped = true,
+                        )
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Code,
+                            iconTint = Accent,
+                            title = "Plugins do Nuvio",
+                            sub = "Scrapers JavaScript (ex.: os do seu repositório). Instale por manifest, ative cada um e ajuste o timeout.",
+                            onClick = onOpenPlugins,
+                            grouped = true,
+                            divider = true,
+                        )
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Extension,
+                            iconTint = Accent,
+                            title = "Addons Kodi (spike)",
+                            sub = "Fase 0 da v1.1 — instala o ZIP do Vulgata e testa se o .so dele carrega sob o Python.",
+                            onClick = onOpenKodiSpike,
+                            grouped = true,
+                            divider = true,
+                        )
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Bolt,
+                            iconTint = Accent,
+                            title = "Debrid",
+                            sub = "Real-Debrid, TorBox ou Premiumize. Torrent toca na hora por link direto.",
+                            onClick = onOpenDebrid,
+                            grouped = true,
+                            divider = true,
+                        )
+                    }
+                }
                 }
 
                 // Status das fontes. Chama a rede, então gira e trava enquanto verifica.
-                SettingsSection("Status das fontes")
-                com.aotv.app.ui.common.SettingsRow(
-                    icon = Icons.Default.Refresh,
-                    title = if (checkingHealth) "Verificando…" else "Verificar fontes agora",
-                    sub = "Confere se o TMDB e os addons estão online (DNS Cloudflare)",
-                    busy = checkingHealth,
-                    trailing = null,
-                    onClick = { viewModel.checkSourcesHealth() },
-                )
-                if (sourceStatus.isNotEmpty()) SettingsCard {
-                    sourceStatus.forEach { s ->
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Box(Modifier.size(10.dp).clip(RoundedCornerShape(999.dp)).background(if (s.online) Ok else Danger))
-                            Text(s.name, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1)
-                            Text(
-                                if (s.online) "${s.latencyMs} ms" else s.detail,
-                                color = if (s.online) TextTertiary else DangerText, fontSize = 13.sp, maxLines = 1,
-                            )
+                if (match("Status", "fontes", "Verificar", "online")) {
+                    SettingsSection("Status das fontes")
+                    com.aotv.app.ui.common.SettingsGroup {
+                        com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Refresh,
+                            title = if (checkingHealth) "Verificando…" else "Verificar fontes agora",
+                            sub = "Confere se o TMDB e os addons estão online (DNS Cloudflare)",
+                            busy = checkingHealth,
+                            trailing = null,
+                            onClick = { viewModel.checkSourcesHealth() },
+                            grouped = true,
+                        )
+                    }
+                    if (sourceStatus.isNotEmpty()) SettingsCard {
+                        sourceStatus.forEach { s ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Box(Modifier.size(10.dp).clip(RoundedCornerShape(999.dp)).background(if (s.online) Ok else Danger))
+                                Text(s.name, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1)
+                                Text(
+                                    if (s.online) "${s.latencyMs} ms" else s.detail,
+                                    color = if (s.online) TextTertiary else DangerText, fontSize = 13.sp, maxLines = 1,
+                                )
+                            }
                         }
                     }
                 }
 
                 // Plataforma
                 if (!me.kids) {
-                SettingsSection("Aparelho")
-                Text(
-                    "Layout atual ${deviceLayout.label}. O modo automático reconhece TV e adapta celular e tablet ao espaço disponível.",
-                    fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-                )
-                PlatformOption(
-                    selected = currentMode == PlatformMode.AUTO,
-                    title = "Automático",
-                    subtitle = "Reconhece TV, tablet e celular e acompanha o tamanho da janela",
-                    icon = Icons.Default.Devices,
-                    onClick = { viewModel.setPlatformMode(PlatformMode.AUTO); onPlatformChanged() },
-                )
-                PlatformOption(
-                    selected = currentMode == PlatformMode.TV,
-                    title = "Forçar TV",
-                    subtitle = "Layout de controle remoto com menu lateral",
-                    icon = Icons.Default.Tv,
-                    onClick = { viewModel.setPlatformMode(PlatformMode.TV); onPlatformChanged() },
-                )
-                PlatformOption(
-                    selected = currentMode == PlatformMode.PHONE,
-                    title = "Celular ou tablet",
-                    subtitle = "Layout de toque adaptado ao espaço disponível",
-                    icon = Icons.Default.PhoneAndroid,
-                    onClick = { viewModel.setPlatformMode(PlatformMode.PHONE); onPlatformChanged() },
-                )
+                if (match("Aparelho", "Automático", "TV", "Celular", "tablet", "Layout")) {
+                    SettingsSection("Aparelho")
+                    Text(
+                        "Layout atual ${deviceLayout.label}. O modo automático reconhece TV e adapta celular e tablet ao espaço disponível.",
+                        fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+                    )
+                    com.aotv.app.ui.common.SettingsGroup {
+                        PlatformOption(
+                            selected = currentMode == PlatformMode.AUTO,
+                            title = "Automático",
+                            subtitle = "Reconhece TV, tablet e celular e acompanha o tamanho da janela",
+                            icon = Icons.Default.Devices,
+                            onClick = { viewModel.setPlatformMode(PlatformMode.AUTO); onPlatformChanged() },
+                            grouped = true,
+                        )
+                        PlatformOption(
+                            selected = currentMode == PlatformMode.TV,
+                            title = "Forçar TV",
+                            subtitle = "Layout de controle remoto com menu lateral",
+                            icon = Icons.Default.Tv,
+                            onClick = { viewModel.setPlatformMode(PlatformMode.TV); onPlatformChanged() },
+                            grouped = true,
+                            divider = true,
+                        )
+                        PlatformOption(
+                            selected = currentMode == PlatformMode.PHONE,
+                            title = "Celular ou tablet",
+                            subtitle = "Layout de toque adaptado ao espaço disponível",
+                            icon = Icons.Default.PhoneAndroid,
+                            onClick = { viewModel.setPlatformMode(PlatformMode.PHONE); onPlatformChanged() },
+                            grouped = true,
+                            divider = true,
+                        )
+                    }
+                }
 
-                SettingsSection("TMDB")
+                if (match("TMDB", "chave")) {
+                    SettingsSection("TMDB")
                 val customTmdbKey by viewModel.customTmdbApiKey.collectAsStateWithLifecycle()
                 val hasTmdbKey by viewModel.hasTmdbKey.collectAsStateWithLifecycle()
                 var tmdbDraft by remember(customTmdbKey) { mutableStateOf(customTmdbKey) }
@@ -380,6 +470,7 @@ fun SettingsScreen(
                         compact = true,
                     )
                 }
+                } // if (match("TMDB")) — fecha a busca; abaixo fecha o !me.kids (Aparelho + TMDB)
                 } // !me.kids (Aparelho + TMDB)
                 below?.let { Spacer(Modifier.height(18.dp)); it() }
             }
@@ -555,7 +646,7 @@ private fun <T> PrefRow(title: String, options: List<Pair<T, String>>, value: T,
     }
 }
 
-/** Opção de aparelho. Selecionada em azul suave com a borda azul e o check. */
+/** Opção de aparelho. Selecionada em turquesa com o check. Dentro de um grupo, sem borda própria. */
 @Composable
 private fun PlatformOption(
     selected: Boolean,
@@ -563,14 +654,18 @@ private fun PlatformOption(
     subtitle: String,
     icon: ImageVector,
     onClick: () -> Unit,
+    grouped: Boolean = false,
+    divider: Boolean = false,
 ) {
     com.aotv.app.ui.common.SettingsRow(
         icon = icon,
         title = title,
         sub = subtitle,
         iconTint = if (selected) Accent else TextSecondary,
-        modifier = if (selected) Modifier.border(1.dp, Accent.copy(alpha = 0.6f), RoundedCornerShape(14.dp)) else Modifier,
+        modifier = if (selected && !grouped) Modifier.border(1.dp, Accent.copy(alpha = 0.6f), RoundedCornerShape(14.dp)) else Modifier,
         trailing = if (selected) ({ Icon(Icons.Default.CheckCircle, "Selecionado", tint = Accent) }) else null,
         onClick = onClick,
+        grouped = grouped,
+        divider = divider,
     )
 }
