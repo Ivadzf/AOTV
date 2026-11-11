@@ -26,3 +26,10 @@ class Addon:
 
     def openSettings(self):
         _log("xbmcaddon.Addon.openSettings", self._id)
+
+# Spike6: registra cada chamada xbmcaddon* (nome, args, retorno) no log de
+# chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
+from _aotv_kodi_log import traced as _traced
+
+for _m in ("getSetting", "getAddonInfo", "openSettings"):
+    setattr(Addon, _m, _traced("xbmcaddon.Addon." + _m, getattr(Addon, _m)))
