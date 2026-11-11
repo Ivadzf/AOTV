@@ -76,6 +76,8 @@ class KodiSpikeViewModel @Inject constructor(
         // Spike4: erro bruto dos diagnósticos (antes do main.py).
         sb.appendLine("Carga direta do .so: ${res.directSo ?: "—"}")
         sb.appendLine("CDLL libkodi.so: ${res.cdllLibkodi ?: "—"}")
+        // Spike6: resumo das chamadas xbmc* (o que o init do .so pediu).
+        sb.appendLine("Chamadas xbmc*: ${res.xbmcCalls ?: "—"}")
         if (res.firstError != null) {
             sb.appendLine()
             sb.appendLine("Primeiro erro:")
