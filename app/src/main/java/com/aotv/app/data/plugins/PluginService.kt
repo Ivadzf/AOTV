@@ -37,7 +37,11 @@ class PluginService @Inject constructor(
         private const val TAG = "AOTVPlugin"
 
         /** Máx. de plugins rodando ao mesmo tempo (igual ao teto do Nuvio). */
-        private const val MAX_CONCURRENT_PLUGINS = 5
+        // v1.0.7: 10 por vez (era 5 na v1.0.4). A folha lança os 55 plugins de
+        // uma vez e o semáforo é o gargalo da fila: com 5, os lentos seguravam
+        // a vez e a folha levava muitos minutos p/ drenar. 10 era o valor da
+        // v1.0.2 e cabe no pool de motores (MAX_POOLED_ENGINES = 10).
+        private const val MAX_CONCURRENT_PLUGINS = 10
     }
 
     /** Cada execução abre um contexto QuickJS; sem o semáforo, 55 plugins
