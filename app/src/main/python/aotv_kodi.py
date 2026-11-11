@@ -27,6 +27,7 @@ Decisões do Davi (§9) aplicadas aqui:
 import os
 import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
 
 from _aotv_kodi_log import log as _log
@@ -60,6 +61,207 @@ _FORCED_SETTINGS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Sonda HTTP (v1.2.4) — o que o addon buscou na rede durante o dispatch.
+# ---------------------------------------------------------------------------
+# O diag da v1.2.3 provou que o roteamento começa (Carregando...) mas o
+# fetch volta vazio sem erro e sem guarda, no Destaques E na TV (a TV dá
+# 12 itens na VM). O addon usa requests (script.module.requests, com
+# timeout (10, 25) e UA de Chrome — provado na VM) e ENGLOBE qualquer
+# exceção do fetch: ConnectTimeout, SSLError, ConnectionError ou 403
+# viram "0 itens, endDir=falso, sem erro" — idêntico ao sintoma do
+# celular (probes /tmp/probe_http_fail.py e /tmp/probe_http_sel.py).
+# O .so não deixa ver o erro por dentro; a única forma de distinguir
+# as causas no celular é observar as chamadas HTTP por fora: o
+# Chaquopy tem UM interpretador, então envolver
+# requests.Session.request (e urllib.request.urlopen) em configure()
+# intercepta também as chamadas do addon. A sonda registra método,
+# URL, status ou tipo da exceção, tamanho e tempo — e nunca levanta
+# (um erro na sonda não pode quebrar o fetch do addon).
+#
+# A mesma sonda aplica um piso de timeout nos fetches de conteúdo:
+# as páginas têm 330–600 KB e levam 1,1–1,8 s num link rápido; na
+# internet lenta do Davi, o (10, 25) do addon pode estourar por
+# stalls (o read timeout é por leitura, não total — basta uma pausa
+# > 25 s entre pacotes). O piso (30, 60) só vale p/ timeouts já
+# "longos" (o fetch de conteúdo); o check rápido (1,5, 2) do gist
+# continua rápido. O Kotlin não tem timeout na chamada Python
+# (KodiPluginRunner usa withContext sem withTimeout), então o piso
+# não é cortado pelo app.
+# ---------------------------------------------------------------------------
+
+_http_calls = []          # (método, url, resultado, ms) — últimas 30
+_HTTP_MAX_CALLS = 30
+_HTTP_TIMEOUT_FLOOR = (30, 60)   # (connect, read) p/ fetches de conteúdo
+_HTTP_MIN_CONNECT = 5            # a partir daqui é "fetch de conteúdo"
+_HTTP_MIN_READ = 10
+_http_probe_state = {"requests": "?", "urllib": "?"}
+
+
+def _http_record(method, url, outcome, ms):
+    """Guarda uma chamada HTTP (nunca levanta)."""
+    try:
+        _http_calls.append((method, url, outcome, int(ms)))
+        if len(_http_calls) > _HTTP_MAX_CALLS:
+            del _http_calls[:len(_http_calls) - _HTTP_MAX_CALLS]
+    except Exception:
+        pass
+
+
+def _http_floor_timeout(timeout):
+    """Piso de timeout p/ fetches de conteúdo. Devolve o timeout a usar.
+
+    Só mexe em tupla (connect, read) já "longa" (connect >= 5 ou
+    read >= 10 — o (10, 25) do conteúdo); timeout curto (o (1,5, 2)
+    do check de update), número único ou None passam intactos.
+    Nunca levanta: qualquer dúvida, devolve o timeout original.
+    """
+    try:
+        if isinstance(timeout, (tuple, list)) and len(timeout) == 2:
+            c, r = timeout
+            if (c is not None and c >= _HTTP_MIN_CONNECT) or \
+               (r is not None and r >= _HTTP_MIN_READ):
+                nc = max(c, _HTTP_TIMEOUT_FLOOR[0]) if c is not None else c
+                nr = max(r, _HTTP_TIMEOUT_FLOOR[1]) if r is not None else r
+                return (nc, nr)
+    except Exception:
+        pass
+    return timeout
+
+
+def _install_http_probe():
+    """Instala a sonda HTTP (idempotente, com marcador no wrapper).
+
+    Envolve requests.Session.request e urllib.request.urlopen. Se o
+    requests não estiver instalado, registra o estado e continua só
+    com o urllib (o diag mostra "requests ausente").
+
+    Cada wrapper é criado por uma fábrica própria: sem ela, os dois
+    fechariam sobre a MESMA variável `orig` do escopo desta função
+    (rebinding tardio — o wrapper do requests passaria a chamar o
+    urlopen).
+    """
+    import functools
+
+    def _wrap_session_request(orig):
+        @functools.wraps(orig)
+        def _probed_request(self, method, url, **kwargs):
+            t0 = time.monotonic()
+            try:
+                kwargs["timeout"] = _http_floor_timeout(
+                    kwargs.get("timeout", None))
+            except Exception:
+                pass
+            try:
+                resp = orig(self, method, url, **kwargs)
+                ms = (time.monotonic() - t0) * 1000
+                try:
+                    # _content já está em memória p/ respostas
+                    # não-streaming (é o caso do addon); False
+                    # significa streaming — não dispara download.
+                    body = getattr(resp, "_content", None)
+                    if body is None or body is False:
+                        kb = "?"
+                    else:
+                        n = len(body)
+                        kb = ("%dKB" % (n // 1024)) if n >= 1024 \
+                            else ("%dB" % n)
+                except Exception:
+                    kb = "?"
+                _http_record(method, url,
+                             "%s %s" % (resp.status_code, kb), ms)
+                return resp
+            except BaseException as e:
+                ms = (time.monotonic() - t0) * 1000
+                _http_record(method, url,
+                             "ERRO %s" % type(e).__name__, ms)
+                raise
+
+        _probed_request._aotv_http_probe = True
+        return _probed_request
+
+    def _wrap_urlopen(orig):
+        @functools.wraps(orig)
+        def _probed_urlopen(url, *args, **kwargs):
+            t0 = time.monotonic()
+            u = url if isinstance(url, str) else getattr(
+                url, "full_url", str(url))
+            try:
+                r = orig(url, *args, **kwargs)
+                ms = (time.monotonic() - t0) * 1000
+                try:
+                    st = getattr(r, "status", "?")
+                except Exception:
+                    st = "?"
+                _http_record("urllib", u, "%s" % st, ms)
+                return r
+            except BaseException as e:
+                ms = (time.monotonic() - t0) * 1000
+                _http_record("urllib", u,
+                             "ERRO %s" % type(e).__name__, ms)
+                raise
+
+        _probed_urlopen._aotv_http_probe = True
+        return _probed_urlopen
+
+    # --- requests (o Vulgata e o BrazucaPlay usam) ---
+    try:
+        import requests.sessions
+        cur = requests.sessions.Session.request
+        if not getattr(cur, "_aotv_http_probe", False):
+            requests.sessions.Session.request = \
+                _wrap_session_request(cur)
+            _http_probe_state["requests"] = "ok"
+        else:
+            _http_probe_state["requests"] = "ok"
+    except Exception as e:
+        _http_probe_state["requests"] = "ausente: %s" % type(e).__name__
+    # --- urllib (rede de segurança; ex.: BrazucaPlay) ---
+    try:
+        import urllib.request
+        cur = urllib.request.urlopen
+        if not getattr(cur, "_aotv_http_probe", False):
+            urllib.request.urlopen = _wrap_urlopen(cur)
+            _http_probe_state["urllib"] = "ok"
+        else:
+            _http_probe_state["urllib"] = "ok"
+    except Exception as e:
+        _http_probe_state["urllib"] = "ausente: %s" % type(e).__name__
+
+
+def _http_summary(n0):
+    """Resumo das chamadas HTTP durante um dispatch (p/ o diag).
+
+    Por chamada: "GET host/path STATUS TAM MS" ou
+    "GET host/path ERRO Tipo MS". Sem chamadas: "nenhuma" (+ aviso
+    se o requests estiver ausente — aí o fetch nem aconteceu por
+    falta da biblioteca). Nunca levanta.
+    """
+    try:
+        calls = _http_calls[n0:] if len(_http_calls) >= n0 \
+            else list(_http_calls)
+    except Exception:
+        return "http: ?"
+    if not calls:
+        extra = ""
+        try:
+            if _http_probe_state.get("requests", "?") != "ok":
+                extra = " (requests %s)" % _http_probe_state["requests"]
+        except Exception:
+            pass
+        return "http: nenhuma%s" % extra
+    parts = []
+    for method, url, outcome, ms in calls:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(url)
+            short = (p.netloc + p.path)[:64]
+        except Exception:
+            short = (url or "")[:64]
+        parts.append("%s %s %s %dms" % (method, short, outcome, ms))
+    return "http: " + "; ".join(parts)
+
+
 def configure(files_dir, cache_dir):
     """Define as raízes special:// a partir dos dirs do app (Kotlin)."""
     global _addons_dir
@@ -74,6 +276,11 @@ def configure(files_dir, cache_dir):
             os.makedirs(d, exist_ok=True)
         except Exception:
             pass
+    # Sonda HTTP (v1.2.4): intercepta os fetches dos addons p/ o diag
+    # (e aplica o piso de timeout nos fetches de conteúdo). O Kotlin
+    # chama configure() logo após o Python.start, antes de qualquer
+    # dispatch — o addon importa o requests depois, já sondado.
+    _install_http_probe()
     _log("aotv_kodi.configure", "home=%s temp=%s" % (home, _roots["temp"]))
 
 
@@ -592,6 +799,10 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
     result = {"items": [], "resolved_url": "", "succeeded": False,
               "error": "", "handle": int(handle), "diag": ""}
     _ensure_simplejson()
+    # Sonda HTTP (v1.2.4): garante instalada mesmo se configure() não
+    # foi chamado (idempotente — reinstalar não duplica o wrapper).
+    _install_http_probe()
+    t_start = time.monotonic()
     d = find_addon_dir(addon_id)
     if not d:
         result["error"] = "addon não instalado: %s" % addon_id
@@ -628,6 +839,11 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         n0 = len(_lm._calls)
     except Exception:
         n0 = None
+    # Índice das chamadas HTTP no início deste dispatch (sonda v1.2.4).
+    try:
+        n_http0 = len(_http_calls)
+    except Exception:
+        n_http0 = None
     run_exc = None
     try:
         entry_run = _find_entry_run(lib, diag)
@@ -665,6 +881,16 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
     # adicionou itens que se perderam na coleta.
     if n0 is not None:
         diag.append(_dispatch_call_summary(n0))
+    # Tempo total do dispatch + resultado do fetch (sonda v1.2.4): é
+    # ele que distingue, no celular, "fetch falhou" (timeout/SSL/
+    # DNS/403, com o tempo gasto) de "fetch nem aconteceu" (nenhuma
+    # chamada HTTP) e de "fetch OK mas parse vazio" (200 + 0 itens).
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    if n_http0 is not None:
+        diag.append(_http_summary(n_http0))
     if run_exc is not None:
         diag.append("run levantou: %s: %s" % (type(run_exc).__name__, run_exc))
     # O diag vai sempre (mesmo com erro) — é ele que explica o vazio.
