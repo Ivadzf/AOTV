@@ -61,6 +61,8 @@ jobs:
           python-version: "3.11"
       - name: Compilar shim libkodi.so
         run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/lib/android-sdk}"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           sdkmanager "ndk;27.0.12077973"
           NDK="$ANDROID_HOME/ndk/27.0.12077973"
           CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
