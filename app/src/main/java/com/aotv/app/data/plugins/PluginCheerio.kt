@@ -16,12 +16,20 @@ import org.jsoup.select.Elements
  * filter, html, parent, children, length. Nada de get() com índice, .data(),
  * .val() ou manipulação de DOM — nenhum provider usa.
  *
- * Uma instância por execução de plugin; morre junto com o contexto QuickJS.
+ * Uma instância por runtime pooled; os handles só valem dentro de UMA execução
+ * (o lado JS descarta os objetos ao fim dela) — por isso [clear] é chamado
+ * entre execuções, senão o mapa de Documentos/Elementos cresceria para sempre.
  */
 class PluginCheerio {
 
     private var nextHandle = 1
     private val handles = HashMap<Int, Any>()
+
+    /** Limpa os handles da execução anterior (ver KDoc). */
+    fun clear() {
+        handles.clear()
+        nextHandle = 1
+    }
 
     private fun store(value: Any): Int {
         val h = nextHandle++
