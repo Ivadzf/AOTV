@@ -15,8 +15,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -124,6 +126,14 @@ class PluginEngine @Inject constructor(
 
     /** Fechamento de runtimes descartados (nunca na thread de quem chamou). */
     private val bgScope = CoroutineScope(Dispatchers.Default)
+
+    /**
+     * Escopo supervisor só para os drivers dos plugins (v1.0.8): o driver
+     * roda como async destacado nele, para poder ser abandonado no timeout.
+     * Sem o SupervisorJob, um driver que falha cancelaria o Job pai e
+     * quebraria os próximos drivers.
+     */
+    private val driverScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private var cachedCryptoJs: String? = null
 
@@ -352,16 +362,32 @@ class PluginEngine @Inject constructor(
             // Diagnóstico da execução atual começa zerado.
             pooled.lastConsoleError = null
             pooled.lastBodyPreview = null
-            val result = withContext(pooled.dispatcher) {
+            // v1.0.8 — o driver roda como async destacado no dispatcher do
+            // motor e o chamador aguarda com timeout. Antes, o withTimeout
+            // envolvia o evaluate JNI direto: uma avaliação JS travada (loop
+            // infinito, await que nunca resolve) NÃO responde a cancelamento,
+            // então o job ficava preso para sempre segurando a vaga do
+            // semáforo e a fila parava (v1.0.7: contador parado em 13/52).
+            // Agora, no estouro, o chamador volta (libera a vaga e marca
+            // timeout) e o motor travado é descartado — a thread JNI vaza,
+            // mas a fila anda. A próxima execução do plugin cria um motor novo.
+            val deferred = driverScope.async(pooled.dispatcher) {
                 val qjs = pooled.qjs ?: throw IllegalStateException("motor sem runtime")
                 val keyJson = prefs.tmdbApiKey.takeIf { it.isNotBlank() }?.let { JSONObject.quote(it) } ?: "undefined"
                 qjs.evaluate<String>("TMDB_API_KEY = $keyJson; globalThis.TMDB_API_KEY = $keyJson; 'ok';")
-                // Sem interrupt nativo no motor alpha12: o timeout é aplicado
-                // aqui, no nível da coroutine (withTimeout). A avaliação JS
-                // em andamento NÃO é interrompida — ela termina sozinha na
-                // thread dela. Os 15 s extras são a margem p/ o fetch em
-                // andamento devolver (callTimeout = timeoutMs).
-                withTimeout(timeoutMs + 15_000) { driver(qjs) }
+                driver(qjs)
+            }
+            val result = try {
+                // Os 15 s extras são a margem p/ o fetch em andamento devolver
+                // (callTimeout = timeoutMs).
+                withTimeout(timeoutMs + 15_000) { deferred.await() }
+            } catch (e: CancellationException) {
+                // Timeout ou cancelamento do chamador: desacopla o driver. Se
+                // ele estava só lento (em delay), o cancel para ele; se estava
+                // travado no JNI, a thread fica presa, mas o chamador volta e
+                // o motor é descartado no catch abaixo.
+                deferred.cancel()
+                throw e
             }
             pooled.lastUsedAt = System.currentTimeMillis()
             synchronized(poolLock) { pool[pluginId] } // touch p/ LRU (get em access-order)
