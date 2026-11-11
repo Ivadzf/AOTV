@@ -415,6 +415,17 @@ class PlatformPrefs @Inject constructor(
         addonEntries = addonEntries.filterIndexed { idx, _ -> idx != i }
     }
 
+    /** Mensagem de addon instalado, a mesma na loja, no link e na importação das contas. */
+    fun installText(name: String, url: String): String {
+        val rows = homeLayout.filter { it.ref?.base == baseOf(url) }
+        return HomeLayout.installText(name, rows.count { it.enabled }, rows.size)
+    }
+
+    /** A Minha Início deve rolar até as fileiras novas do addon recém instalado. */
+    var homeFocusNew: Boolean
+        get() = prefs.getBoolean("home_focus_new", false)
+        set(value) { prefs.edit().putBoolean("home_focus_new", value).apply() }
+
     private fun baseOf(url: String) = url.trim().removeSuffix("/manifest.json").trimEnd('/')
 
     /**
@@ -456,6 +467,7 @@ class PlatformPrefs @Inject constructor(
             com.aotv.app.data.plugins.PluginRepo(
                 url = o.optString("url"), name = o.optString("name"),
                 version = o.optString("version"), updatedAt = o.optLong("updatedAt", 0L),
+                enabled = o.optBoolean("enabled", true),
             )
         }
     }.getOrDefault(emptyList())
@@ -470,7 +482,8 @@ class PlatformPrefs @Inject constructor(
             val arr = org.json.JSONArray()
             value.forEach { r ->
                 arr.put(org.json.JSONObject().put("url", r.url).put("name", r.name)
-                    .put("version", r.version).put("updatedAt", r.updatedAt))
+                    .put("version", r.version).put("updatedAt", r.updatedAt)
+                    .put("enabled", r.enabled))
             }
             prefs.edit().putString(KEY_PLUGIN_REPOS, arr.toString()).apply()
             _pluginRepos.value = value
@@ -485,6 +498,18 @@ class PlatformPrefs @Inject constructor(
 
     fun removePluginRepo(url: String) {
         pluginRepoList = pluginRepoList.filterNot { it.url.equals(url, true) }
+    }
+
+    /** Pausa/retoma um repositório (os plugins dele param de rodar nas fontes). */
+    fun setPluginRepoEnabled(url: String, enabled: Boolean) {
+        pluginRepoList = pluginRepoList.map { if (it.url.equals(url, true)) it.copy(enabled = enabled) else it }
+    }
+
+    /** Liga/desliga todos os plugins de um repositório de uma vez. */
+    fun setPluginsOfRepoEnabled(repoUrl: String, enabled: Boolean) {
+        installedPluginList = installedPluginList.map {
+            if (it.repoUrl.equals(repoUrl, true)) it.copy(enabled = enabled) else it
+        }
     }
 
     private fun readPlugins(): List<com.aotv.app.data.plugins.InstalledPlugin> = runCatching {
@@ -580,6 +605,24 @@ class PlatformPrefs @Inject constructor(
     var pluginTimeoutSec: Int
         get() = prefs.getInt(KEY_PLUGIN_TIMEOUT, 60).coerceIn(30, 180)
         set(value) { prefs.edit().putInt(KEY_PLUGIN_TIMEOUT, value.coerceIn(30, 180)).apply() }
+
+    /** Pausa global: desligado, nenhum plugin roda nas fontes (botão "Pausar plugins"). */
+    var pluginGlobalEnabled: Boolean
+        get() = prefs.getBoolean("plugin_global_enabled", true)
+        set(value) { prefs.edit().putBoolean("plugin_global_enabled", value).apply() }
+
+    /** Atualização automática dos repositórios vencidos ao abrir a tela de Plugins. */
+    var pluginAutoUpdate: Boolean
+        get() = prefs.getBoolean("plugin_auto_update", true)
+        set(value) { prefs.edit().putBoolean("plugin_auto_update", value).apply() }
+
+    /**
+     * Plugins rodando ao mesmo tempo na folha de fontes (1–32, padrão 10, o teto da v1.0.11).
+     * 32 é o do JOTV ("Buscar em paralelo"); 1 é "Um de cada vez".
+     */
+    var pluginConcurrency: Int
+        get() = prefs.getInt("plugin_concurrency", 10).coerceIn(1, 32)
+        set(value) { prefs.edit().putInt("plugin_concurrency", value.coerceIn(1, 32)).apply() }
 
     /** Último resultado de cada plugin (id -> PluginLastRun, p/ diagnóstico). */
     private fun readPluginLastRuns(): Map<String, com.aotv.app.data.plugins.PluginLastRun> = runCatching {
@@ -679,6 +722,12 @@ class PlatformPrefs @Inject constructor(
             if (cur.any { it.key == key }) cur.map { if (it.key == key) it.copy(enabled = on) else it }
             else if (ref != null) cur + HomeRowPref(key, on, "", ref) else cur
         )
+    }
+
+    /** Liga ou desliga várias fileiras de uma vez (Marcar/Desmarcar todas do painel). */
+    fun setHomeRowsEnabled(keys: Set<String>, on: Boolean) {
+        val cur = homeLayout
+        saveLayout(cur.map { if (it.key in keys) it.copy(enabled = on) else it })
     }
 
     /** Dá outro nome à fileira. Vazio volta ao nome original. */
