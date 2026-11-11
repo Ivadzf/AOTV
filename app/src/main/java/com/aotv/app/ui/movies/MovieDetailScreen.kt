@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -456,6 +458,13 @@ fun MovieDetailScreen(
                         )
                     }
 
+                    // Erro de carregamento (TMDB falhou / load travou): nunca tela preta
+                    // para sempre — mostra o erro e o retry.
+                    if (state.error != null && !state.isLoading) {
+                        Spacer(Modifier.height(14.dp))
+                        ErrorRetryCard(message = state.error, onRetry = { viewModel.retry() })
+                    }
+
                     // Série terminada → "Próximo seriado" (abre a 1ª série relacionada).
                     if (nextSeries != null) {
                         Spacer(Modifier.height(10.dp))
@@ -640,6 +649,33 @@ fun MovieDetailScreen(
                         // (A) tocar o card abre o painel de fontes/servidores do episódio
                         onSelect = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
                     )
+                }
+
+                // Temporada sem episódios carregados e sem erro: avisa e oferece retry
+                // em vez de deixar a lista vazia sem explicação.
+                if (episodes.isEmpty() && !state.isLoading && state.error == null) {
+                    item {
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "Nenhum episódio carregado nesta temporada.",
+                                color = TextSecondary,
+                                fontSize = 14.sp,
+                                fontFamily = ManropeFontFamily,
+                            )
+                            Text(
+                                "Tentar novamente",
+                                color = Accent,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = ManropeFontFamily,
+                                modifier = Modifier.clickable { viewModel.retry() }.padding(8.dp),
+                            )
+                        }
+                    }
                 }
 
                 item { Spacer(Modifier.height(28.dp)) }
@@ -1636,5 +1672,39 @@ private fun SaveListButton(saved: Boolean, onClick: () -> Unit) {
             tint = if (saved) Accent else TextPrimary,
             modifier = Modifier.size(21.dp),
         )
+    }
+}
+
+/**
+ * Cartão de erro do detalhe: mensagem + "Tentar novamente". É o que impede a tela
+ * de ficar preta para sempre quando o TMDB falha ou o load trava.
+ */
+@Composable
+private fun ErrorRetryCard(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(BackgroundCard2)
+            .border(1.dp, LiveRed.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            message,
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontFamily = ManropeFontFamily,
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 20.sp,
+        )
+        Button(
+            onClick = onRetry,
+            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+            shape = RoundedCornerShape(999.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+        ) {
+            Text("Tentar novamente", fontWeight = FontWeight.Bold, fontSize = 14.sp, fontFamily = ManropeFontFamily)
+        }
     }
 }
