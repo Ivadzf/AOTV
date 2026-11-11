@@ -188,7 +188,7 @@ class CollectionSourceResolver @Inject constructor(
         try { block() } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
     }
 
-    private fun img(path: String?) = path?.takeIf { it.isNotBlank() }?.let { "https://image.tmdb.org/t/p/w500$it" }
+    private fun img(path: String?) = path?.takeIf { it.isNotBlank() }?.let { "https://image.tmdb.org/t/p/w342$it" }
 
     private companion object {
         /** Itens lidos por página de catálogo de addon (igual à Início). */
