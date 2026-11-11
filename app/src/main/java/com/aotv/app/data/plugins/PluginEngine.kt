@@ -124,6 +124,10 @@ class PluginEngine @Inject constructor(
     private val pool = LinkedHashMap<String, PooledEngine>(16, 0.75f, true)
     private val poolLock = Any()
 
+    /** Diagnóstico da última execução FORA do pool (Testar manual) por plugin. */
+    private data class FreshDiag(val fetchStatus: Int, val consoleError: String?, val bodyPreview: String?)
+    private val freshDiag = HashMap<String, FreshDiag>()
+
     /** Fechamento de runtimes descartados (nunca na thread de quem chamou). */
     private val bgScope = CoroutineScope(Dispatchers.Default)
 
@@ -163,6 +167,7 @@ class PluginEngine @Inject constructor(
         settings: Map<String, Any?>,
         timeoutMs: Long,
         cookieJar: PluginCookieJar,
+        fresh: Boolean = false,
     ): Result<List<PluginStreamRaw>> = runCatching {
         val settingsJson = JSONObject().apply {
             settings.forEach { (k, v) ->
@@ -173,22 +178,28 @@ class PluginEngine @Inject constructor(
                 }
             }
         }.toString()
-        val json = execute(
-            pluginId = plugin.id,
-            code = code,
-            codeSha = plugin.sha256.ifBlank { code.hashCode().toString() },
-            timeoutMs = timeoutMs,
-            cookieJar = cookieJar,
-        ) { qjs ->
-            // O retorno do evaluate é ignorado de propósito: o alpha12
-            // devolve a string "Promise" em vez do JSON resolvido (provado
-            // na v1.0.5 pelo Testar rede — era isso que zerava TODOS os
-            // plugins). O driver grava o resultado no global e o Kotlin lê
-            // por polling — mesmo padrão do testNetworkFetch.
+        // O retorno do evaluate é ignorado de propósito: o alpha12
+        // devolve a string "Promise" em vez do JSON resolvido (provado
+        // na v1.0.5 pelo Testar rede — era isso que zerava TODOS os
+        // plugins). O driver grava o resultado no global e o Kotlin lê
+        // por polling — mesmo padrão do testNetworkFetch.
+        val driver: suspend (QuickJs) -> String = { qjs ->
             qjs.evaluate<String>(
                 PluginPrelude.getStreamsDriver(tmdbId, mediaType, season, episode, settingsJson),
             )
             pollGlobal(qjs, "__aotvStreamsResult", timeoutMs)
+        }
+        val codeSha = plugin.sha256.ifBlank { code.hashCode().toString() }
+        val json = if (fresh) {
+            executeFresh(
+                pluginId = plugin.id, code = code, codeSha = codeSha,
+                timeoutMs = timeoutMs, cookieJar = cookieJar, driver = driver,
+            )
+        } else {
+            execute(
+                pluginId = plugin.id, code = code, codeSha = codeSha,
+                timeoutMs = timeoutMs, cookieJar = cookieJar, driver = driver,
+            )
         }
         parseStreams(json)
     }
@@ -217,15 +228,15 @@ class PluginEngine @Inject constructor(
 
     /** Status HTTP do último fetch do plugin (-1 = nenhum fetch ainda). */
     fun lastFetchStatus(pluginId: String): Int =
-        synchronized(poolLock) { pool[pluginId]?.lastFetchStatus ?: -1 }
+        synchronized(poolLock) { pool[pluginId]?.lastFetchStatus ?: freshDiag[pluginId]?.fetchStatus ?: -1 }
 
     /** Última mensagem de console.error da execução atual do plugin. */
     fun lastConsoleError(pluginId: String): String? =
-        synchronized(poolLock) { pool[pluginId]?.lastConsoleError }
+        synchronized(poolLock) { pool[pluginId]?.lastConsoleError ?: freshDiag[pluginId]?.consoleError }
 
     /** Prévia do corpo da última resposta de fetch da execução atual. */
     fun lastBodyPreview(pluginId: String): String? =
-        synchronized(poolLock) { pool[pluginId]?.lastBodyPreview }
+        synchronized(poolLock) { pool[pluginId]?.lastBodyPreview ?: freshDiag[pluginId]?.bodyPreview }
 
     /**
      * Descarta o runtime em pool do plugin (código reinstalado/removido).
@@ -352,16 +363,70 @@ class PluginEngine @Inject constructor(
             // (timeout de outra execução): não roda num motor abandonado.
             val current = synchronized(poolLock) { pool[pluginId] }
             if (current !== pooled) throw IllegalStateException("motor do plugin foi descartado")
-            // Cliente com o timeout atual + chave TMDB atual (podem ter mudado
-            // desde a criação do runtime; o prelude só roda na criação).
-            pooled.fetchClient = buildFetchClient(cookieJar, timeoutMs)
-            // Handles do Cheerio da execução anterior não valem mais (o JS da
-            // execução passada foi descartado); sem limpar, o mapa cresceria
-            // para sempre no runtime reutilizado.
-            pooled.cheerio.clear()
-            // Diagnóstico da execução atual começa zerado.
-            pooled.lastConsoleError = null
-            pooled.lastBodyPreview = null
+            val result = runOnEngine(pooled, pluginId, timeoutMs, cookieJar, driver, fresh = false)
+            synchronized(poolLock) { pool[pluginId] } // touch p/ LRU (get em access-order)
+            return result
+        } catch (e: CancellationException) {
+            // Timeout ou cancelamento: remove do pool SEM fechar o runtime — a
+            // avaliação pode ainda estar rodando e fechar derrubaria o app
+            // (SIGSEGV). O runtime vaza; a próxima execução cria um novo.
+            dropEngine(pluginId, pooled)
+            throw e
+        } finally {
+            pooled.mutex.unlock()
+        }
+    }
+
+    /**
+     * Roda o driver num motor temporário, fora do pool (v1.0.9 — lane do Testar
+     * manual). O Testar não espera o semáforo da folha nem o mutex de um motor
+     * que a folha está usando: cria um motor novo, roda, e descarta. No sucesso
+     * fecha o runtime em background; no timeout/cancelamento abandona sem fechar
+     * (regra anti-SIGSEGV) — a thread JNI vaza, mas o teste volta.
+     */
+    suspend fun <T> executeFresh(
+        pluginId: String,
+        code: String,
+        codeSha: String,
+        timeoutMs: Long,
+        cookieJar: PluginCookieJar,
+        driver: suspend (QuickJs) -> T,
+    ): T {
+        val pooled = createEngine(pluginId, code, codeSha, cookieJar, timeoutMs)
+        pooled.mutex.lock()
+        var abandoned = false
+        try {
+            return runOnEngine(pooled, pluginId, timeoutMs, cookieJar, driver, fresh = true)
+        } catch (e: CancellationException) {
+            abandoned = true
+            dropEngine(pluginId, pooled)
+            throw e
+        } finally {
+            pooled.mutex.unlock()
+            if (!abandoned) closeInBackground(pooled)
+        }
+    }
+
+    /** Corpo da execução num motor já adquirido (do pool ou temporário). */
+    private suspend fun <T> runOnEngine(
+        pooled: PooledEngine,
+        pluginId: String,
+        timeoutMs: Long,
+        cookieJar: PluginCookieJar,
+        driver: suspend (QuickJs) -> T,
+        fresh: Boolean,
+    ): T {
+        // Cliente com o timeout atual + chave TMDB atual (podem ter mudado
+        // desde a criação do runtime; o prelude só roda na criação).
+        pooled.fetchClient = buildFetchClient(cookieJar, timeoutMs)
+        // Handles do Cheerio da execução anterior não valem mais (o JS da
+        // execução passada foi descartado); sem limpar, o mapa cresceria
+        // para sempre no runtime reutilizado.
+        pooled.cheerio.clear()
+        // Diagnóstico da execução atual começa zerado.
+        pooled.lastConsoleError = null
+        pooled.lastBodyPreview = null
+        try {
             // v1.0.8 — o driver roda como async destacado no dispatcher do
             // motor e o chamador aguarda com timeout. Antes, o withTimeout
             // envolvia o evaluate JNI direto: uma avaliação JS travada (loop
@@ -390,16 +455,15 @@ class PluginEngine @Inject constructor(
                 throw e
             }
             pooled.lastUsedAt = System.currentTimeMillis()
-            synchronized(poolLock) { pool[pluginId] } // touch p/ LRU (get em access-order)
             return result
-        } catch (e: CancellationException) {
-            // Timeout ou cancelamento: remove do pool SEM fechar o runtime — a
-            // avaliação pode ainda estar rodando e fechar derrubaria o app
-            // (SIGSEGV). O runtime vaza; a próxima execução cria um novo.
-            dropEngine(pluginId, pooled)
-            throw e
         } finally {
-            pooled.mutex.unlock()
+            // Execução fora do pool: o diagnóstico vive no motor temporário,
+            // então copia para o mapa (é o que os getters leem no Testar).
+            if (fresh) {
+                synchronized(poolLock) {
+                    freshDiag[pluginId] = FreshDiag(pooled.lastFetchStatus, pooled.lastConsoleError, pooled.lastBodyPreview)
+                }
+            }
         }
     }
 
