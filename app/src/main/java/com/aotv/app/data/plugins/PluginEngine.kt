@@ -10,9 +10,12 @@ import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -21,6 +24,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -55,6 +59,18 @@ import javax.inject.Singleton
  * entre execuções além dos cookies (disco) — sem localStorage, sem WebSocket
  * (fica p/ v1.1), sem WASM (stub, como no Nuvio).
  *
+ * v1.0.4 — POOL DE MOTORES: criar um runtime por execução custava caro (prelude
+ * + crypto-js 219 KB + provider avaliados toda vez) e, somado ao abandono em
+ * timeout, inflava a RAM (o app chegava a 2,5 GB). Agora cada plugin tem UM
+ * runtime reutilizável no pool (máx. 10, LRU): prelude + crypto-js + código
+ * são avaliados UMA vez, na criação; as execuções seguintes só avaliam o
+ * driver getStreams. A chave TMDB e o timeout do fetch são atualizados a cada
+ * execução (podem ter mudado desde a criação). Em timeout/cancelamento o
+ * runtime é REMOVIDO do pool sem fechar (mesma regra anti-SIGSEGV de antes);
+ * na reinstalação/remoção do plugin o runtime é invalidado (PluginStore).
+ * Cada runtime pooled continua com sua thread dedicada (o motor exige uso
+ * single-thread por instância) e um mutex: uma execução por vez por runtime.
+ *
  * O Rhino foi descartado: testado localmente, nem 1.7.14 nem 1.8.1 parseiam
  * `async function` — e 49 dos 55 providers usam `async function getStreams`.
  */
@@ -70,7 +86,35 @@ class PluginEngine @Inject constructor(
         /** UA de browser: vários hosts bloqueiam UA vazio ou de app. */
         private const val BROWSER_UA =
             "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+
+        /** Máx. de runtimes residentes no pool (LRU). */
+        private const val MAX_POOLED_ENGINES = 10
+
+        /** Id reservado do runtime usado pelo teste de rede (sem provider). */
+        private const val NETWORK_TEST_ID = "__network_test__"
+        private const val NETWORK_TEST_SHA = "net-test-v1"
     }
+
+    /** Um runtime QuickJS reutilizável (um por plugin). */
+    private class PooledEngine(
+        val id: String,
+        val dispatcher: ExecutorCoroutineDispatcher,
+        @Volatile var fetchClient: OkHttpClient,
+        val codeSha: String,
+    ) {
+        @Volatile var qjs: QuickJs? = null
+        /** Ponte do Cheerio (reutilizada; limpa entre execuções — ver PluginCheerio.clear). */
+        val cheerio: PluginCheerio = PluginCheerio()
+        /** Uma execução por vez por runtime (o QuickJS exige uso single-thread). */
+        val mutex: Mutex = Mutex()
+        /** Status HTTP do último fetch feito neste runtime (-1 = nenhum). */
+        @Volatile var lastFetchStatus: Int = -1
+        @Volatile var lastUsedAt: Long = System.currentTimeMillis()
+    }
+
+    /** Pool de runtimes (LinkedHashMap access-order = LRU). Guardado por poolLock. */
+    private val pool = LinkedHashMap<String, PooledEngine>(16, 0.75f, true)
+    private val poolLock = Any()
 
     private var cachedCryptoJs: String? = null
 
@@ -110,7 +154,13 @@ class PluginEngine @Inject constructor(
                 }
             }
         }.toString()
-        val json = execute(code, timeoutMs, cookieJar) { qjs ->
+        val json = execute(
+            pluginId = plugin.id,
+            code = code,
+            codeSha = plugin.sha256.ifBlank { code.hashCode().toString() },
+            timeoutMs = timeoutMs,
+            cookieJar = cookieJar,
+        ) { qjs ->
             qjs.evaluate<String>(
                 PluginPrelude.getStreamsDriver(tmdbId, mediaType, season, episode, settingsJson),
             )
@@ -125,69 +175,235 @@ class PluginEngine @Inject constructor(
         timeoutMs: Long,
         cookieJar: PluginCookieJar,
     ): Result<List<PluginSettingDescriptor>> = runCatching {
-        val json = execute(code, timeoutMs, cookieJar) { qjs ->
+        val json = execute(
+            pluginId = plugin.id,
+            code = code,
+            codeSha = plugin.sha256.ifBlank { code.hashCode().toString() },
+            timeoutMs = timeoutMs,
+            cookieJar = cookieJar,
+        ) { qjs ->
             qjs.evaluate<String>(PluginPrelude.ON_SETTINGS_DRIVER)
         }
         parseSettings(json)
     }
 
+    /** Status HTTP do último fetch do plugin (-1 = nenhum fetch ainda). */
+    fun lastFetchStatus(pluginId: String): Int =
+        synchronized(poolLock) { pool[pluginId]?.lastFetchStatus ?: -1 }
+
+    /**
+     * Descarta o runtime em pool do plugin (código reinstalado/removido).
+     * Fecha o runtime SÓ se estiver ocioso; se estiver rodando, não fecha
+     * (regra anti-SIGSEGV) — o runtime vaza e a próxima execução cria um novo.
+     */
+    fun invalidate(pluginId: String) {
+        val pooled = synchronized(poolLock) { pool.remove(pluginId) } ?: return
+        if (pooled.mutex.tryLock()) {
+            try {
+                runCatching { pooled.qjs?.close() }
+                pooled.dispatcher.close()
+            } finally {
+                pooled.mutex.unlock()
+            }
+        }
+    }
+
+    /** Descarta todos os runtimes do pool (ex.: cookies apagados). */
+    fun invalidateAll() {
+        val ids = synchronized(poolLock) { pool.keys.toList() }
+        ids.forEach { invalidate(it) }
+    }
+
+    /**
+     * Fetch de controle pelo MESMO motor/fetch dos plugins: busca o manifest
+     * do repo e devolve o status HTTP. É o discriminador, no celular, entre
+     * "o fetch do motor não funciona" (0) e "os providers devolvem vazio" (200).
+     */
+    suspend fun testNetworkFetch(timeoutMs: Long = 30_000L): Result<Int> = runCatching {
+        val url = PluginStore.DEFAULT_REPO_URL
+        val json = execute(
+            pluginId = NETWORK_TEST_ID,
+            code = "",
+            codeSha = NETWORK_TEST_SHA,
+            timeoutMs = timeoutMs,
+            cookieJar = PluginCookieJar(File(context.filesDir, "plugin-cookies/$NETWORK_TEST_ID.json")),
+        ) { qjs ->
+            qjs.evaluate<String>(
+                "(async function () { var r = await fetch(" + JSONObject.quote(url) + "); " +
+                    "var t = await r.text(); return JSON.stringify({status: r.status, len: t.length}); })()",
+            )
+        }
+        JSONObject(json).optInt("status", 0)
+    }
+
     // ── Execução ──────────────────────────────────────────────────────────────
 
     private suspend fun <T> execute(
+        pluginId: String,
         code: String,
+        codeSha: String,
         timeoutMs: Long,
         cookieJar: PluginCookieJar,
         driver: suspend (QuickJs) -> T,
     ): T {
-        // Uma thread dedicada por motor: nenhum JS roda na Main (antes a cadeia
-        // viewModelScope/Main -> evaluate corria na Main, com risco de ANR) e
-        // cada instância do QuickJs tem sua thread (o motor exige uso
-        // single-thread por instância). O dispatcher é fechado ao fim; se a
-        // avaliação ficou presa, a thread termina sozinha quando ela acabar.
-        val engineDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val pooled = acquireEngine(pluginId, code, codeSha, cookieJar, timeoutMs)
+        pooled.mutex.lock()
         try {
-            return withContext(engineDispatcher) {
-                val qjs = QuickJs.create(engineDispatcher)
-                // Só true depois que o driver devolveu: só aí é seguro fechar.
-                var completedNormally = false
-                try {
-                    val cheerio = PluginCheerio()
-                    val fetchClient = AppDns.mediaClient.newBuilder()
-                        .cookieJar(cookieJar)
-                        .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                        .connectTimeout(15, TimeUnit.SECONDS)
-                        .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-                        .build()
-                    defineBindings(qjs, cheerio, fetchClient)
-                    qjs.evaluate<String>(PluginPrelude.build(prefs.tmdbApiKey) + "\n;'ok';")
-                    readCryptoJsAsset()?.let { cryptoJs ->
-                        qjs.evaluate<String>(cryptoJs + "\n;'ok';")
-                        qjs.evaluate<String>(PluginPrelude.POST_CRYPTOJS)
-                    }
-                    qjs.evaluate<String>(code + "\n;'ok';")
-                    // Sem interrupt nativo no motor alpha12: o timeout é aplicado
-                    // aqui, no nível da coroutine (withTimeout). A avaliação JS
-                    // em andamento NÃO é interrompida — ela termina sozinha na
-                    // thread dela. Os 15 s extras são a margem p/ o fetch em
-                    // andamento devolver (callTimeout = timeoutMs).
-                    val result = withTimeout(timeoutMs + 15_000) { driver(qjs) }
-                    completedNormally = true
-                    result
-                } finally {
-                    // NUNCA fechar com a avaliação possivelmente rodando: no
-                    // timeout ou no cancelamento, completedNormally é false e
-                    // o motor é abandonado (vaza o runtime; fechar derrubaria
-                    // o app com SIGSEGV). Não há close adiado: nenhum close é
-                    // seguro depois que a avaliação escapou do nosso controle.
-                    if (completedNormally) runCatching { qjs.close() }
-                }
+            // O runtime pode ter sido descartado enquanto aguardava o lock
+            // (timeout de outra execução): não roda num motor abandonado.
+            val current = synchronized(poolLock) { pool[pluginId] }
+            if (current !== pooled) throw IllegalStateException("motor do plugin foi descartado")
+            // Cliente com o timeout atual + chave TMDB atual (podem ter mudado
+            // desde a criação do runtime; o prelude só roda na criação).
+            pooled.fetchClient = buildFetchClient(cookieJar, timeoutMs)
+            // Handles do Cheerio da execução anterior não valem mais (o JS da
+            // execução passada foi descartado); sem limpar, o mapa cresceria
+            // para sempre no runtime reutilizado.
+            pooled.cheerio.clear()
+            val result = withContext(pooled.dispatcher) {
+                val qjs = pooled.qjs ?: throw IllegalStateException("motor sem runtime")
+                val keyJson = prefs.tmdbApiKey.takeIf { it.isNotBlank() }?.let { JSONObject.quote(it) } ?: "undefined"
+                qjs.evaluate<String>("TMDB_API_KEY = $keyJson; globalThis.TMDB_API_KEY = $keyJson; 'ok';")
+                // Sem interrupt nativo no motor alpha12: o timeout é aplicado
+                // aqui, no nível da coroutine (withTimeout). A avaliação JS
+                // em andamento NÃO é interrompida — ela termina sozinha na
+                // thread dela. Os 15 s extras são a margem p/ o fetch em
+                // andamento devolver (callTimeout = timeoutMs).
+                withTimeout(timeoutMs + 15_000) { driver(qjs) }
             }
+            pooled.lastUsedAt = System.currentTimeMillis()
+            synchronized(poolLock) { pool[pluginId] } // touch p/ LRU (get em access-order)
+            return result
+        } catch (e: CancellationException) {
+            // Timeout ou cancelamento: remove do pool SEM fechar o runtime — a
+            // avaliação pode ainda estar rodando e fechar derrubaria o app
+            // (SIGSEGV). O runtime vaza; a próxima execução cria um novo.
+            dropEngine(pluginId, pooled)
+            throw e
         } finally {
-            engineDispatcher.close()
+            pooled.mutex.unlock()
         }
     }
 
-    private fun defineBindings(qjs: QuickJs, cheerio: PluginCheerio, fetchClient: OkHttpClient) {
+    /**
+     * Devolve o runtime do plugin, criando-o preguiçosamente na primeira
+     * execução (prelude + crypto-js + código avaliados UMA vez). Evict LRU
+     * quando o pool está cheio (só ociosos — fechar runtime em uso é proibido).
+     */
+    private suspend fun acquireEngine(
+        id: String,
+        code: String,
+        codeSha: String,
+        cookieJar: PluginCookieJar,
+        timeoutMs: Long,
+    ): PooledEngine {
+        synchronized(poolLock) {
+            val existing = pool[id]
+            if (existing != null) {
+                if (existing.codeSha == codeSha) return existing
+                // Código mudou sem passar pela invalidação: descarta o velho.
+                pool.remove(id)
+                if (existing.mutex.tryLock()) {
+                    try {
+                        runCatching { existing.qjs?.close() }
+                        existing.dispatcher.close()
+                    } finally {
+                        existing.mutex.unlock()
+                    }
+                }
+                // Se estiver rodando, o runtime velho vaza (1x); a invalidação
+                // normal (install/remove) já cobre o caso comum.
+            }
+        }
+        val created = createEngine(id, code, codeSha, cookieJar, timeoutMs)
+        synchronized(poolLock) {
+            val raced = pool[id]
+            if (raced != null && raced !== created) {
+                if (raced.codeSha == codeSha) {
+                    // Outra coroutine criou primeiro: o criado nunca rodou, fechar é seguro.
+                    runCatching { created.qjs?.close() }
+                    created.dispatcher.close()
+                    return raced
+                }
+                // Corrida com código novo: o registrado é o velho — troca pelo criado.
+                pool.remove(id)
+                // (o velho pode estar em uso; descartado sem fechar, vaza 1x)
+            }
+            // Evict LRU até caber.
+            val candidates = pool.entries.toList()
+            for (victim in candidates) {
+                if (pool.size < MAX_POOLED_ENGINES) break
+                if (victim.key == id) continue
+                if (!victim.value.mutex.tryLock()) continue
+                try {
+                    if (pool.remove(victim.key, victim.value)) {
+                        runCatching { victim.value.qjs?.close() }
+                        victim.value.dispatcher.close()
+                    }
+                } finally {
+                    victim.value.mutex.unlock()
+                }
+            }
+            pool[id] = created
+            return created
+        }
+    }
+
+    /** Cria um runtime (thread dedicada + bindings + prelude + crypto-js + código). */
+    private suspend fun createEngine(
+        id: String,
+        code: String,
+        codeSha: String,
+        cookieJar: PluginCookieJar,
+        timeoutMs: Long,
+    ): PooledEngine {
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val pooled = PooledEngine(id, dispatcher, buildFetchClient(cookieJar, timeoutMs), codeSha)
+        try {
+            withContext(dispatcher) {
+                val qjs = QuickJs.create(dispatcher)
+                pooled.qjs = qjs
+                defineBindings(qjs, pooled)
+                qjs.evaluate<String>(PluginPrelude.build(prefs.tmdbApiKey) + "\n;'ok';")
+                readCryptoJsAsset()?.let { cryptoJs ->
+                    qjs.evaluate<String>(cryptoJs + "\n;'ok';")
+                    qjs.evaluate<String>(PluginPrelude.POST_CRYPTOJS)
+                }
+                if (code.isNotBlank()) qjs.evaluate<String>(code + "\n;'ok';")
+            }
+            return pooled
+        } catch (e: Exception) {
+            // Criação falhou (código inválido etc.): o runtime nunca rodou, fechar é seguro.
+            runCatching { pooled.qjs?.close() }
+            dispatcher.close()
+            throw e
+        }
+    }
+
+    /** Remove o runtime do pool SEM fechar o QuickJs (regra anti-SIGSEGV). */
+    private fun dropEngine(id: String, pooled: PooledEngine) {
+        synchronized(poolLock) { if (pool[id] === pooled) pool.remove(id) }
+        // NÃO fecha o qjs (a avaliação pode ainda estar rodando). O dispatcher
+        // pode fechar: a tarefa em andamento termina sozinha e a thread morre.
+        pooled.dispatcher.close()
+    }
+
+    /**
+     * Cliente do fetch dos plugins — MESMA construção do cliente dos addons
+     * Stremio (StremioAddonService), que funciona no celular: builder limpo +
+     * DNS-over-HTTPS do AppDns. Antes era mediaClient.newBuilder() (o cliente
+     * compartilhado do Coil/player) e TODO plugin devolvia lista vazia.
+     */
+    private fun buildFetchClient(cookieJar: PluginCookieJar, timeoutMs: Long): OkHttpClient =
+        OkHttpClient.Builder()
+            .dns(AppDns.cloudflare)
+            .cookieJar(cookieJar)
+            .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+            .build()
+
+    private fun defineBindings(qjs: QuickJs, pooled: PooledEngine) {
         qjs.define("console") {
             function("log") { args -> pluginLog("D", args); 0 }
             function("info") { args -> pluginLog("I", args); 0 }
@@ -204,23 +420,27 @@ class PluginEngine @Inject constructor(
             delay(argLong(args, 0).coerceAtLeast(0))
             1
         }
-        qjs.asyncFunction("__nativeFetch") { args -> nativeFetch(args, fetchClient) }
+        qjs.asyncFunction("__nativeFetch") { args ->
+            // Cliente e status lidos do runtime pooled no momento da chamada
+            // (o cliente é refeito a cada execução, com o timeout atual).
+            nativeFetch(args, pooled.fetchClient) { pooled.lastFetchStatus = it }
+        }
         qjs.function("__parseUrl") { args -> parseUrl(argStr(args, 0), argNullableStr(args, 1)) }
         qjs.function("__aesGcmDecrypt") { args ->
             aesGcmDecrypt(argStr(args, 0), argStr(args, 1), argStr(args, 2))
         }
-        qjs.function("__cheerioLoad") { args -> cheerio.load(argStr(args, 0)) }
-        qjs.function("__cheerioSelect") { args -> cheerio.select(argInt(args, 0), argStr(args, 1)) }
-        qjs.function("__cheerioText") { args -> cheerio.text(argInt(args, 0)) }
-        qjs.function("__cheerioAttr") { args -> cheerio.attr(argInt(args, 0), argStr(args, 1)) }
-        qjs.function("__cheerioHtml") { args -> cheerio.html(argInt(args, 0)) }
-        qjs.function("__cheerioCount") { args -> cheerio.count(argInt(args, 0)) }
-        qjs.function("__cheerioElement") { args -> cheerio.element(argInt(args, 0), argInt(args, 1)) }
-        qjs.function("__cheerioChildren") { args -> cheerio.children(argInt(args, 0)) }
-        qjs.function("__cheerioParent") { args -> cheerio.parent(argInt(args, 0)) }
-        qjs.function("__cheerioFilter") { args -> cheerio.filter(argInt(args, 0), argStr(args, 1)) }
-        qjs.function("__cheerioCombine") { args -> cheerio.combine(argStr(args, 0)) }
-        qjs.function("__cheerioParseFragment") { args -> cheerio.parseFragment(argStr(args, 0)) }
+        qjs.function("__cheerioLoad") { args -> pooled.cheerio.load(argStr(args, 0)) }
+        qjs.function("__cheerioSelect") { args -> pooled.cheerio.select(argInt(args, 0), argStr(args, 1)) }
+        qjs.function("__cheerioText") { args -> pooled.cheerio.text(argInt(args, 0)) }
+        qjs.function("__cheerioAttr") { args -> pooled.cheerio.attr(argInt(args, 0), argStr(args, 1)) }
+        qjs.function("__cheerioHtml") { args -> pooled.cheerio.html(argInt(args, 0)) }
+        qjs.function("__cheerioCount") { args -> pooled.cheerio.count(argInt(args, 0)) }
+        qjs.function("__cheerioElement") { args -> pooled.cheerio.element(argInt(args, 0), argInt(args, 1)) }
+        qjs.function("__cheerioChildren") { args -> pooled.cheerio.children(argInt(args, 0)) }
+        qjs.function("__cheerioParent") { args -> pooled.cheerio.parent(argInt(args, 0)) }
+        qjs.function("__cheerioFilter") { args -> pooled.cheerio.filter(argInt(args, 0), argStr(args, 1)) }
+        qjs.function("__cheerioCombine") { args -> pooled.cheerio.combine(argStr(args, 0)) }
+        qjs.function("__cheerioParseFragment") { args -> pooled.cheerio.parseFragment(argStr(args, 0)) }
     }
 
     // ── Bindings: HTTP ────────────────────────────────────────────────────────
@@ -231,7 +451,9 @@ class PluginEngine @Inject constructor(
      * vira status 0 (o provider decide pelo res.ok) em vez de rejeitar a
      * Promise — um fetch que falha não pode travar a execução inteira.
      */
-    private suspend fun nativeFetch(args: Array<Any?>, client: OkHttpClient): String {
+    private suspend fun nativeFetch(
+        args: Array<Any?>, client: OkHttpClient, onStatus: ((Int) -> Unit)? = null,
+    ): String {
         val url = argStr(args, 0)
         val opts = runCatching { JSONObject(argStr(args, 1)) }.getOrNull() ?: JSONObject()
         val method = opts.optString("method", "GET").uppercase().ifBlank { "GET" }
@@ -252,6 +474,7 @@ class PluginEngine @Inject constructor(
             reqBuilder.method(method, requestBody)
             withContext(Dispatchers.IO) {
                 client.newCall(reqBuilder.build()).execute().use { res ->
+                    onStatus?.invoke(res.code)
                     val headersJson = JSONObject()
                     res.headers.forEach { (name, value) ->
                         val key = name.lowercase()
@@ -267,6 +490,7 @@ class PluginEngine @Inject constructor(
                 }
             }
         } catch (e: Exception) {
+            onStatus?.invoke(0)
             JSONObject()
                 .put("status", 0)
                 .put("statusText", e.message ?: "network error")
