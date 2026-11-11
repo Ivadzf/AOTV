@@ -398,6 +398,8 @@ fun MoviesNavigation(
                 tvScale(isTV) {
                     com.aotv.app.ui.settings.PluginsScreen(
                         onBack = { navController.popBackStack() },
+                        onAddons = { navController.navigate(MoviesRoute.Addons.route) },
+                        onLive = { navController.navigate(MoviesRoute.LiveSources.route) },
                     )
                 }
             }
@@ -454,7 +456,12 @@ fun MoviesNavigation(
 
             // Explorar addons do catálogo da comunidade (celular). A tela de TV fica para a etapa 7.
             composable(MoviesRoute.AddonStore.route) {
-                tvScale(isTV) { com.aotv.app.ui.settings.AddonStoreScreen(onBack = { navController.popBackStack() }) }
+                tvScale(isTV) {
+                    com.aotv.app.ui.settings.AddonStoreScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenHome = { navController.popBackStack(MoviesRoute.Home.route, inclusive = false) },
+                    )
+                }
             }
 
             composable(MoviesRoute.Downloads.route) {
