@@ -36,14 +36,23 @@ class PluginService @Inject constructor(
     companion object {
         private const val TAG = "AOTVPlugin"
 
+        /**
+         * Timeout da FOLHA de fontes (v1.0.10): 60s, igual ao do Nuvio. O do
+         * Testar manual continua sendo o da configuração do Davi (100s).
+         * Com 100s na folha, cada lote levava ~2 min e 53 plugins levariam
+         * ~20 min p/ drenar; com 60s, o contador anda 2x mais rápido e os
+         * providers que prestam (FSHD 1s, BRFlix 0-15s, MegaEmbed 18s) voltam
+         * bem dentro do prazo.
+         */
+        const val SHEET_TIMEOUT_MS = 60_000L
+
         /** Máx. de plugins rodando ao mesmo tempo (igual ao teto do Nuvio). */
-        // v1.0.9: 5 por vez (era 10 na v1.0.7). A folha lança os 55 plugins de
-        // uma vez e o semáforo é o gargalo da fila; com 10, na internet lenta
-        // do Davi os 10 fetches disputavam a mesma conexão fina, estouravam o
-        // timeout e voltavam vazios (fetch: 0). Com 5, cada plugin tem mais
-        // banda e menos timeout — a folha drena em mais lotes, mas traz stream.
-        // O Testar manual não passa por aqui (lane própria, v1.0.9).
-        private const val MAX_CONCURRENT_PLUGINS = 5
+        // v1.0.10: 10 por vez (era 5 na v1.0.9). A v1.0.9 baixou p/ 5 p/
+        // reduzir a saturação, mas o dreno ficou lento demais (cada lote
+        // ~2 min, 53 plugins = ~20 min). O Nuvio usa 10 + 60s e mostra
+        // 18 providers no mesmo celular/rede — com o abandono da v1.0.8,
+        // os travados liberam a vaga no timeout e a fila anda.
+        private const val MAX_CONCURRENT_PLUGINS = 10
     }
 
     /** Cada execução abre um contexto QuickJS; sem o semáforo, 55 plugins
@@ -65,12 +74,13 @@ class PluginService @Inject constructor(
         season: Int? = null,
         episode: Int? = null,
         fresh: Boolean = false,
+        timeoutMsOverride: Long? = null,
     ): List<StremioStream> {
         if (tmdbId <= 0) return emptyList()
         // Leitura do arquivo do provider fora da Main (era I/O de disco na
         // thread de UI a cada execução — um dos travamentos da v1.0.4).
         val code = withContext(Dispatchers.IO) { store.readCode(plugin.id) } ?: return emptyList()
-        val timeoutMs = prefs.pluginTimeoutSec * 1000L
+        val timeoutMs = timeoutMsOverride ?: prefs.pluginTimeoutSec * 1000L
         val settings = store.pluginSettings(plugin.id)
         val started = System.currentTimeMillis()
         // fresh = true (Testar manual): fora da fila da folha e num motor novo
