@@ -20,9 +20,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @HiltViewModel
@@ -244,6 +248,18 @@ class MovieDetailViewModel @Inject constructor(
     private var stubItem: MovieItem? = null
     // Garante que os coletores reativos (isSaved / watchedEpisodes) só sejam abertos 1x.
     private var observersStarted = false
+    // Job do load() em curso: um load novo cancela o anterior (sem dois loads
+    // concorrentes disputando o state) e o seq invalida o cão de guarda velho.
+    private var loadJob: Job? = null
+    private var loadSeq = 0
+
+    companion object {
+        // Cão de guarda do load(): aconteça o que acontecer, a tela NUNCA fica presa
+        // em "Carregando fontes…" para sempre — em 120s ela destrava e mostra erro.
+        private const val LOAD_WATCHDOG_MS = 120_000L
+        private const val LOAD_ERROR_MSG = "Não foi possível carregar os detalhes. Verifique a conexão e toque em Tentar novamente."
+        private const val LOAD_TIMEOUT_MSG = "O carregamento demorou demais. Toque em Tentar novamente."
+    }
 
     /**
      * Inicializa a tela. Guarda o [stub] (p/ salvar na lista e registrar histórico),
@@ -253,9 +269,13 @@ class MovieDetailViewModel @Inject constructor(
     fun load(stub: MovieItem) {
         stubItem = stub
         startLibraryObservers(stub.tmdbId, stub.type)
-        // Continuar assistindo: lê progresso salvo (posição + última fonte + episódio)
+        // Continuar assistindo: lê progresso salvo (posição + última fonte + episódio).
+        // withTimeoutOrNull: a leitura local do histórico NUNCA pode segurar o botão
+        // "Assistir" — se o Room travar, assume sem progresso e libera em 3s.
         viewModelScope.launch {
-            val pb = runCatching { library.getPlayback(stub.tmdbId, stub.type.name) }.getOrNull()
+            val pb = withTimeoutOrNull(3_000) {
+                runCatching { library.getPlayback(stub.tmdbId, stub.type.name) }.getOrNull()
+            }
             if (pb == null) {
                 _uiState.update { it.copy(resumeLoaded = true) }
             } else {
@@ -310,8 +330,24 @@ class MovieDetailViewModel @Inject constructor(
     }
 
     fun load(embedId: String, tmdbId: Int, type: MediaType) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, sourcesLoading = true) }
+        loadJob?.cancel()
+        val seq = ++loadSeq
+        loadJob = viewModelScope.launch {
+            // Cão de guarda: se este load não destravar as flags em 120s (await que
+            // não volta, joinAll que não retorna), força o destrave + erro/retry.
+            viewModelScope.launch {
+                delay(LOAD_WATCHDOG_MS)
+                if (seq == loadSeq) {
+                    _uiState.update {
+                        if (it.isLoading || it.sourcesLoading || it.stremioLoading) it.copy(
+                            isLoading = false, sourcesLoading = false, stremioLoading = false,
+                            error = it.error ?: LOAD_TIMEOUT_MSG,
+                        ) else it
+                    }
+                }
+            }
+            try {
+                _uiState.update { it.copy(isLoading = true, sourcesLoading = true, error = null) }
             val apiKey = prefs.tmdbApiKey
             // Item de catálogo de addon sem par no TMDB (chegou com o id IMDb): resolve aqui,
             // agora que pode haver chave. Sem chave, o filme toca pelo id IMDb; a série fica
@@ -411,7 +447,7 @@ class MovieDetailViewModel @Inject constructor(
                 // Mostra o filme JÁ (hero). As fontes dos addons entram conforme chegam.
                 val trailer = detailDto?.videos.bestTrailerKey()
                 val trailers = detailDto?.videos.trailerKeys()
-                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false) }
+                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
                 // Franquia (Harry Potter, Velozes…): carrega em paralelo e ordena por data de
                 // lançamento, que é a ordem cronológica que o usuário espera assistir.
@@ -463,9 +499,11 @@ class MovieDetailViewModel @Inject constructor(
                         else -> null
                     }
                 }
+                // null = a chamada FALHOU (diferente de lista vazia): o erro aparece
+                // na tela em vez da lista de episódios sumir em silêncio.
                 val episodesD = async {
                     if (apiKey.isNotBlank() && tmdbId > 0)
-                        runCatching { tmdb.getSeason(tmdbId, 1, apiKey = apiKey).episodes.map { it.toDomain() } }.getOrDefault(emptyList())
+                        runCatching { tmdb.getSeason(tmdbId, 1, apiKey = apiKey).episodes.map { it.toDomain() } }.getOrNull()
                     else emptyList()
                 }
                 val detailDto = detailDtoD.await()
@@ -485,10 +523,15 @@ class MovieDetailViewModel @Inject constructor(
                         related = relatedList,
                         trailerKey = trailer,
                         trailerKeys = trailers,
-                        seasons = if (episodes.isNotEmpty()) mapOf(1 to episodes) else emptyMap(),
+                        seasons = if (episodes?.isNotEmpty() == true) mapOf(1 to episodes) else emptyMap(),
                         seriesImdbId = seriesImdb,
                         isLoading = false,
                         sourcesLoading = false,
+                        error = when {
+                            detailDto == null && apiKey.isNotBlank() && tmdbId > 0 -> LOAD_ERROR_MSG
+                            episodes == null && apiKey.isNotBlank() && tmdbId > 0 -> "Não foi possível carregar os episódios. Verifique a conexão e toque em Tentar novamente."
+                            else -> null
+                        },
                     )
                 }
                 // Logo do título: TMDB (PT-BR) principal, metahub fallback.
@@ -502,7 +545,25 @@ class MovieDetailViewModel @Inject constructor(
                     if (logo.isNotBlank()) _uiState.update { it.copy(logoUrl = logo) }
                 }
             }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Qualquer exceção fora dos runCatching (ex. mapeamento de DTO) antes
+                // travava a tela no estado inicial para sempre, sem erro e sem retry.
+                _uiState.update {
+                    it.copy(isLoading = false, sourcesLoading = false, stremioLoading = false, error = LOAD_ERROR_MSG)
+                }
+            }
         }
+    }
+
+    /**
+     * Reexecuta o carregamento do detalhe (botão "Tentar novamente" do cartão de
+     * erro). Usa o stub guardado em [load].
+     */
+    fun retry() {
+        _uiState.update { it.copy(error = null) }
+        stubItem?.let { load(it) }
     }
 
     // ───────────────────────── (B) MINHA LISTA ─────────────────────────
@@ -704,8 +765,14 @@ class MovieDetailViewModel @Inject constructor(
             _uiState.update { it.copy(selectedSeason = season) }
             val episodes = runCatching {
                 tmdb.getSeason(tmdbId, season, apiKey = apiKey).episodes.map { it.toDomain() }
-            }.getOrDefault(emptyList())
-            _uiState.update { it.copy(seasons = it.seasons + (season to episodes)) }
+            }.getOrNull()
+            if (episodes != null) {
+                _uiState.update { it.copy(seasons = it.seasons + (season to episodes)) }
+            } else {
+                // Antes a falha sobrescrevia a temporada com lista vazia e não avisava
+                // nada — os episódios sumiam sem explicação.
+                _uiState.update { it.copy(error = "Não foi possível carregar a Temporada $season. Toque em Tentar novamente.") }
+            }
         }
     }
 }
