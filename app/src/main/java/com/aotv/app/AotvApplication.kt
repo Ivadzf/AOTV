@@ -34,11 +34,13 @@ class AotvApplication : Application(), ImageLoaderFactory {
         return ImageLoader.Builder(this)
             // As imagens seguem o resolvedor do catálogo para evitar capas vazias por falha de DNS.
             .okHttpClient { com.aotv.app.data.remote.AppDns.mediaClient }
-            // v1.0.8 — no máximo 4 imagens baixando/decodificando ao mesmo tempo.
-            // Sem limite, a home disparava dezenas de downloads juntos e, em
-            // internet lenta, saturava a conexão e travava o app (o Davi achou
-            // que o travamento era dos pôsteres carregando — era).
-            .dispatcher(Dispatchers.IO.limitedParallelism(4))
+            // v1.0.9 — no máximo 8 imagens baixando/decodificando ao mesmo tempo
+            // (era 4 na v1.0.8). Com 4, o catálogo demorava demais pra encher
+            // depois que a troca de tamanho invalidou o cache. O OkHttp já
+            // limita image.tmdb.org a 5 conexões por host, então 8 é limitado
+            // na prática — e sem limite, a home disparava dezenas de downloads
+            // juntos e saturava a conexão em internet lenta.
+            .dispatcher(Dispatchers.IO.limitedParallelism(8))
             .crossfade(if (lowRam) 0 else 150)
             .allowRgb565(true)
             .memoryCachePolicy(CachePolicy.ENABLED)
