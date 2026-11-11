@@ -36,11 +36,16 @@ class AddonsViewModel @Inject constructor(
         val installedNow: String? = null,
         /** Chaves (base|tipo|id) dos catálogos que viram fileira na Início. */
         val homeCatalogKeys: Set<String> = emptySet(),
+        /** Por base de addon, quantas fileiras dele aparecem na Início do perfil e quantas ele tem. */
+        val rowCounts: Map<String, RowCount> = emptyMap(),
         /** Catálogo AOTV (addon fixo do app) ligado. */
         val catalogOn: Boolean = true,
         /** Quantas fileiras do catálogo AOTV o perfil deixou ligadas. */
         val aotvRowsOn: Int = 0,
     )
+
+    /** Fileiras de um addon. [on] aparecem na Início deste perfil, de [all] que o manifest oferece. */
+    data class RowCount(val on: Int, val all: Int)
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -60,6 +65,8 @@ class AddonsViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         homeCatalogKeys = l.filter { r -> r.enabled && r.ref != null }.mapTo(HashSet()) { r -> r.key },
+                        rowCounts = l.filter { r -> r.ref != null }.groupBy { r -> r.ref!!.base }
+                            .mapValues { (_, rows) -> RowCount(rows.count { r -> r.enabled }, rows.size) },
                         aotvRowsOn = l.count { r -> r.enabled && r.system?.catalog == true },
                     )
                 }
@@ -133,7 +140,7 @@ class AddonsViewModel @Inject constructor(
                     manifests = it.manifests + (url to m),
                     offline = it.offline - url,
                     installedNow = if (replacing) "Já tinha esse addon com outro endereço. Troquei para ${m.name.ifBlank { url }}"
-                    else m.name.ifBlank { url },
+                    else prefs.installText(m.name.ifBlank { url }, url),
                 )
             }
         }
