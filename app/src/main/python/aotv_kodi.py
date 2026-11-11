@@ -534,6 +534,60 @@ def _find_entry_run(lib, diag=None):
     return None
 
 
+def _dispatch_call_summary(n0):
+    """Resumo das chamadas xbmc* feitas durante um dispatch.
+
+    Lê o log em memória (_aotv_kodi_log._calls) e resume o que o
+    addon fez DURANTE este dispatch — é ele que distingue os três
+    motivos de um 2º nível vazio sem erro:
+    - guarda do addon ("Aguarde, essa ação já foi recebida"): o run
+      recusou a ação repetida — só checks do loader + endOfDirectory
+      ok=False, sem "Carregando..." e sem addDirectoryItem;
+    - falha de rede/servidor: "Carregando..." + setContent, mas nenhum
+      addDirectoryItem (o fetch não devolveu nada);
+    - sucesso: vários addDirectoryItem.
+    Nunca levanta (o diagnóstico não pode quebrar o dispatch).
+    """
+    try:
+        import _aotv_kodi_log as _lm
+        calls = _lm._calls
+    except Exception:
+        return "chamadas: ?"
+    try:
+        n = len(calls)
+        new = calls[n0:] if n >= n0 else calls[-100:]
+    except Exception:
+        return "chamadas: ?"
+    try:
+        n_add = 0
+        end_ok = None
+        notes = []
+        for name, args, _result in new:
+            if name == "xbmcplugin.addDirectoryItem":
+                n_add += 1
+            elif name == "xbmcplugin.endOfDirectory":
+                # args: repr dos args (handle, succeeded, ...) ou kwargs.
+                if "succeeded=False" in args or "succeeded = False" in args:
+                    end_ok = False
+                else:
+                    parts = [p.strip() for p in args.split(",")]
+                    if len(parts) >= 2:
+                        end_ok = (parts[1] != "False")
+                    else:
+                        end_ok = True
+            elif name == "xbmcgui.Dialog.notification":
+                # args traz heading e message em repr.
+                if "Aguarde" in args:
+                    notes.append("guarda!")
+                elif "Carregando" in args:
+                    notes.append("carregando")
+        end_s = "?" if end_ok is None else ("ok" if end_ok else "falso")
+        note_s = (" " + ",".join(notes)) if notes else ""
+        return "chamadas: addDir=%d endDir=%s%s" % (n_add, end_s, note_s)
+    except Exception:
+        return "chamadas: ?"
+
+
 def _run_plugin_inner(addon_id, path="", query="", handle=1):
     result = {"items": [], "resolved_url": "", "succeeded": False,
               "error": "", "handle": int(handle), "diag": ""}
@@ -561,6 +615,20 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         except Exception:
             pass
     diag = []
+    # Diagnóstico profundo (v1.2.3): o que EXATAMENTE foi passado ao
+    # run e o que ele fez durante o dispatch. O diag da v1.2.2 provou
+    # que o lookup funciona (mod=main, via run() direto) mas o 2º
+    # nível volta vazio sem erro — sem o argv exato, sem saber se o
+    # sys.argv global bate com o parâmetro, e sem as chamadas xbmc*
+    # durante o dispatch, não dá p/ distinguir a guarda do addon
+    # ("Aguarde, essa ação já foi recebida") de falha de rede/servidor.
+    diag.append("argv=[%s | %s | %s]" % (url, handle, (query or "")[:120]))
+    try:
+        import _aotv_kodi_log as _lm
+        n0 = len(_lm._calls)
+    except Exception:
+        n0 = None
+    run_exc = None
     try:
         entry_run = _find_entry_run(lib, diag)
         if entry_run is not None:
@@ -570,6 +638,16 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
             # com o caminho do arquivo (e o addon montava URLs de
             # arquivo em vez de plugin:// no 1º dispatch).
             diag.append("via: run() direto")
+            # O run lê o argv do PARÂMETRO (provado na VM: param=raiz
+            # com sys.argv=browse devolve o menu raiz, não o browse).
+            # Conferir se o global bate com o parâmetro no momento
+            # da chamada — se algo o trocou no meio do caminho, o
+            # run pode estar recebendo outro argv. Reafirmar o global
+            # aqui (é a mesma lista; no-op se nada o trocou) p/ o
+            # run que porventura leia o sys.argv global em vez do
+            # parâmetro.
+            diag.append("sys.argv==argv: %s" % (list(sys.argv) == list(argv)))
+            sys.argv = argv
             entry_run(argv)
         else:
             diag.append("via: runpy (sem run)")
@@ -577,9 +655,18 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
             runpy.run_path(lib, run_name="__main__")
     except BaseException as e:
         import traceback
+        run_exc = e
         result["error"] = "%s: %s\n%s" % (
             type(e).__name__, e, traceback.format_exc(limit=12))
         _log("aotv_kodi.run_plugin", "ERRO %s: %s" % (addon_id, e))
+    # Resumo das chamadas xbmc* DURANTE este dispatch (ver
+    # _dispatch_call_summary): é ele que diz se o roteamento nem
+    # começou (guarda), se começou e travou no fetch (rede), ou se
+    # adicionou itens que se perderam na coleta.
+    if n0 is not None:
+        diag.append(_dispatch_call_summary(n0))
+    if run_exc is not None:
+        diag.append("run levantou: %s: %s" % (type(run_exc).__name__, run_exc))
     # O diag vai sempre (mesmo com erro) — é ele que explica o vazio.
     result["diag"] = "\n".join(diag)
     # Coleta o que o plugin devolveu (mesmo com erro parcial).
