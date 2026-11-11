@@ -166,6 +166,18 @@ fun PluginsScreen(
                     OutlinedButton(onClick = { viewModel.clearCookies() }) {
                         Text("Limpar cookies dos plugins")
                     }
+                    // Teste de rede do motor: o fetch dos plugins busca o manifest
+                    // do repo pela mesma rota dos providers. Se der (0), o fetch
+                    // do motor não funciona no aparelho; se der OK (200), os
+                    // providers é que estão devolvendo vazio.
+                    OutlinedButton(
+                        onClick = { viewModel.testNetwork() },
+                        enabled = !state.networkTesting,
+                    ) {
+                        if (state.networkTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        else Text("Testar rede")
+                    }
+                    state.networkTest?.let { Text(it, color = TextSecondary, fontSize = 13.sp) }
                 }
             }
 
@@ -362,11 +374,15 @@ private fun PluginRow(
     }
 }
 
-/** Linha curta do último resultado ("Último teste: 3 streams · há 2 min"). */
+/** Linha curta do último resultado ("Último teste: 3 streams · fetch: 200 · 2s · há 2 min"). */
 private fun formatLastRun(run: PluginLastRun?): String = when {
     run == null -> "Nunca testado"
-    run.status == "ok" -> "Último teste: ${run.streams} stream(s) · ${formatAgo(run.at)}"
-    run.status == "empty" -> "Último teste: nenhum stream · ${formatAgo(run.at)}"
+    run.status == "ok" -> "Último teste: ${run.streams} stream(s)" +
+        run.detail.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() +
+        " · ${formatAgo(run.at)}"
+    run.status == "empty" -> "Último teste: nenhum stream" +
+        run.detail.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty() +
+        " · ${formatAgo(run.at)}"
     run.status == "timeout" -> "Tempo esgotado (${run.millis / 1000}s) · ${formatAgo(run.at)}"
     else -> "Erro: ${run.detail.ifBlank { "falha" }} · ${formatAgo(run.at)}"
 }
