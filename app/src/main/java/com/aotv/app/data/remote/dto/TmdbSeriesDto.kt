@@ -4,8 +4,8 @@ import com.google.gson.annotations.SerializedName
 import com.aotv.app.domain.model.EpisodeItem
 import com.aotv.app.domain.model.SeriesItem
 
-private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
-private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
+private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w342"
+private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w780"
 
 data class TmdbSeriesDetailDto(
     val id: Int,
