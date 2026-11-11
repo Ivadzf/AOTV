@@ -727,6 +727,8 @@ fun MovieDetailScreen(
                 facts = state.episodeFacts(),
                 debridTag = state.debridTag,
                 stremioLoading = state.episodeStremioLoading,
+                pluginDone = state.episodePluginDone,
+                pluginTotal = state.episodePluginTotal,
                 onDismiss = { viewModel.clearSelectedEpisode() },
                 onPlayStremio = { s ->
                     // Não marca "visto" ao clicar — só ao passar de 90% no player.
@@ -827,6 +829,11 @@ private fun EpisodeServersSheet(
     facts: List<com.aotv.app.data.remote.SourceFacts>,
     debridTag: String = "",
     stremioLoading: Boolean,
+    // v1.0.7 — progresso dos plugins do Nuvio (quantos já responderam de
+    // quantos); o rodapé mostra "Buscando em plugins… X/55" enquanto houver
+    // pendente, para não parecer travado.
+    pluginDone: Int = 0,
+    pluginTotal: Int = 0,
     onDismiss: () -> Unit,
     onPlayStremio: (com.aotv.app.data.remote.StremioStream) -> Unit,
     isDownloadable: (String) -> Boolean = { false },
@@ -955,6 +962,18 @@ private fun EpisodeServersSheet(
                     item(key = "empty") {
                         Text(
                             "Nenhum addon tem este episódio.",
+                            color = TextTertiary, fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                }
+                // v1.0.7 — progresso dos plugins do Nuvio: enquanto houver
+                // plugin sem responder, mostra quantos já voltaram, para não
+                // parecer que a folha travou (a fila leva minutos).
+                if (pluginTotal > 0 && pluginDone < pluginTotal) {
+                    item(key = "loading-plugins") {
+                        Text(
+                            "Buscando em plugins… $pluginDone/$pluginTotal",
                             color = TextTertiary, fontSize = 12.sp,
                             modifier = Modifier.padding(vertical = 2.dp),
                         )
