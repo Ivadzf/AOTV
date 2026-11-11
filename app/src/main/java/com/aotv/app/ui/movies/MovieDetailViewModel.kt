@@ -59,11 +59,26 @@ class MovieDetailViewModel @Inject constructor(
 
     /**
      * Jobs dos plugins do episódio selecionado. São cancelados ao trocar de
-     * episódio ou fechar a folha — sem isso, os 55 jobs continuavam rodando
-     * até o timeout (100 s) mesmo com a folha fechada, segurando motores,
-     * threads e rede. (Os jobs dos addons são curtos e se encerram sozinhos.)
+     * episódio — mas NÃO ao fechar a folha (v1.0.7): antes, fechar cancelava
+     * os 55 jobs e reabrir relançava tudo do zero, então a fila (55 plugins,
+     * 10 por vez, até 100 s cada) nunca drenava. Agora os jobs terminam em
+     * segundo plano e o resultado fica no cache do episódio.
      */
     private var episodePluginJobs = mutableListOf<kotlinx.coroutines.Job>()
+
+    /**
+     * Cache dos resultados de plugin por episódio (v1.0.7): a chave é
+     * (season, episode); os slots guardam o resultado de cada plugin
+     * (null = ainda não respondeu) e [episodePluginCacheIds] os ids dos
+     * plugins daquela rodada. Reabrir o mesmo episódio restaura os streams
+     * já encontrados e só lança jobs para os slots ainda vazios — sem
+     * relançar o que já terminou nem o que já está rodando
+     * ([episodePluginJobRunning]).
+     */
+    private var episodePluginCacheKey: Pair<Int, Int>? = null
+    private var episodePluginCacheIds: List<String> = emptyList()
+    private var episodePluginCacheSlots: Array<List<com.aotv.app.data.remote.StremioStream>?> = emptyArray()
+    private var episodePluginJobRunning = BooleanArray(0)
 
     /**
      * Pergunta ao debrid quais torrents ele tem prontos. Espera os addons pararem de chegar
@@ -151,6 +166,11 @@ class MovieDetailViewModel @Inject constructor(
         // Streams Stremio (HTTP/4K) do episódio selecionado
         val episodeStremioStreams: List<com.aotv.app.data.remote.StremioStream> = emptyList(),
         val episodeStremioLoading: Boolean = false,
+        // Progresso dos plugins do Nuvio no episódio: quantos já responderam
+        // de quantos. O rodapé da folha mostra "Buscando em plugins… X/55"
+        // enquanto houver pendente (v1.0.7).
+        val episodePluginDone: Int = 0,
+        val episodePluginTotal: Int = 0,
         // Streams de addons Stremio (só HTTP direto)
         val stremioStreams: List<com.aotv.app.data.remote.StremioStream> = emptyList(),
         val stremioLoading: Boolean = false,
@@ -558,10 +578,6 @@ class MovieDetailViewModel @Inject constructor(
 
     /** Busca nos addons as fontes do episódio selecionado, para o painel de fontes. */
     fun selectEpisode(season: Int, episode: Int) {
-        // A folha do episódio anterior fechou (ou trocou): os plugins dela
-        // param aqui — eles só rodam enquanto a folha está aberta.
-        episodePluginJobs.forEach { it.cancel() }
-        episodePluginJobs.clear()
         // Stremio do episódio (HTTP/4K) — PROGRESSIVO por addon: cada um aparece assim que
         // responde, na ordem dos addons. Addon lento/morto não segura os que já chegaram
         // (antes o awaitAll esperava todos → até 10s de tela vazia ao trocar de episódio).
@@ -571,24 +587,42 @@ class MovieDetailViewModel @Inject constructor(
         val addons = prefs.stremioAddonList()
         // Plugins do Nuvio (JS) precisam do id do TMDB (não usam IMDb).
         val plugins = if (seriesTmdb > 0) pluginService.enabledPlugins("tv") else emptyList()
-        val canSearch = ((imdb.isNotBlank() || seriesTmdb > 0) && addons.isNotEmpty()) || plugins.isNotEmpty()
-        _uiState.update {
-            it.copy(
-                selectedEpisode = season to episode,
-                episodeStremioStreams = emptyList(),
-                episodeStremioLoading = canSearch,
-            )
+        val pluginIds = plugins.map { it.id }
+        val key = season to episode
+        // v1.0.7 — troca de episódio (ou da lista de plugins): descarta a rodada
+        // anterior. Reabrir o MESMO episódio reaproveita o cache: os jobs que
+        // ainda rodam continuam, os que já terminaram não relançam.
+        if (key != episodePluginCacheKey || pluginIds != episodePluginCacheIds) {
+            episodePluginJobs.forEach { it.cancel() }
+            episodePluginJobs.clear()
+            episodePluginCacheKey = key
+            episodePluginCacheIds = pluginIds
+            episodePluginCacheSlots = arrayOfNulls(plugins.size)
+            episodePluginJobRunning = BooleanArray(plugins.size)
         }
+        val pluginSlots = episodePluginCacheSlots
+        val canSearch = ((imdb.isNotBlank() || seriesTmdb > 0) && addons.isNotEmpty()) || plugins.isNotEmpty()
         if (canSearch) {
             val slots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(addons.size)
-            val pluginSlots = arrayOfNulls<List<com.aotv.app.data.remote.StremioStream>>(plugins.size)
             fun mergedEpisodeSources() = (slots.filterNotNull() + pluginSlots.filterNotNull())
                 .flatMap { g -> g.sortedByDescending { it.qualityRank } }
             fun episodePending() = slots.any { it == null } || pluginSlots.any { it == null }
+            fun pluginDone() = pluginSlots.count { it != null }
             fun maybeRememberPoster() {
                 if (slots.none { it == null } && pluginSlots.none { it == null }) {
                     posterInfo.remember(com.aotv.app.domain.model.MediaType.SERIES, seriesTmdb, mergedEpisodeSources())
                 }
+            }
+            _uiState.update {
+                it.copy(
+                    selectedEpisode = season to episode,
+                    // Restaura os streams de plugin já encontrados (cache); os
+                    // addons recomeçam (são rápidos) e entram à medida que respondem.
+                    episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), it),
+                    episodeStremioLoading = episodePending(),
+                    episodePluginDone = pluginDone(),
+                    episodePluginTotal = plugins.size,
+                )
             }
             addons.forEachIndexed { idx, addon ->
                 viewModelScope.launch {
@@ -610,31 +644,55 @@ class MovieDetailViewModel @Inject constructor(
                 }
             }
             plugins.forEachIndexed { idx, plugin ->
+                // Já tem resultado (cache) ou já está rodando: não relança.
+                if (pluginSlots[idx] != null || episodePluginJobRunning.getOrElse(idx) { false }) return@forEachIndexed
+                episodePluginJobRunning[idx] = true
                 episodePluginJobs += viewModelScope.launch {
-                    val s = pluginService.getStreamsForPlugin(plugin, seriesTmdb, "tv", season, episode)
-                    pluginSlots[idx] = s
-                    maybeRememberPoster()
-                    if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
-                    _uiState.update { st ->
-                        if (st.selectedEpisode != (season to episode)) st
-                        else st.copy(
-                            episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
-                            episodeStremioLoading = episodePending(),
-                        )
+                    try {
+                        val s = pluginService.getStreamsForPlugin(plugin, seriesTmdb, "tv", season, episode)
+                        pluginSlots[idx] = s
+                        maybeRememberPoster()
+                        if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
+                        _uiState.update { st ->
+                            if (st.selectedEpisode != (season to episode)) st
+                            else st.copy(
+                                episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
+                                episodeStremioLoading = episodePending(),
+                                episodePluginDone = pluginDone(),
+                                episodePluginTotal = plugins.size,
+                            )
+                        }
+                    } finally {
+                        episodePluginJobRunning[idx] = false
                     }
                 }
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    selectedEpisode = season to episode,
+                    episodeStremioStreams = emptyList(),
+                    episodeStremioLoading = false,
+                    episodePluginDone = 0,
+                    episodePluginTotal = 0,
+                )
             }
         }
     }
 
     /** Fecha o painel de servidores do episódio selecionado. */
     fun clearSelectedEpisode() {
-        episodePluginJobs.forEach { it.cancel() }
-        episodePluginJobs.clear()
+        // v1.0.7: fechar a folha NÃO cancela mais os jobs de plugin — eles
+        // terminam em segundo plano e o resultado fica no cache do episódio;
+        // reabrir o mesmo episódio restaura tudo sem recomeçar a fila.
+        // (Antes, fechar cancelava os 55 jobs e reabrir relançava tudo do
+        // zero, então a fila nunca drenava.) Os jobs morrem sozinhos ao
+        // trocar de episódio (selectEpisode) ou ao sair da tela (ViewModel).
         _uiState.update {
             it.copy(
                 selectedEpisode = null,
                 episodeStremioStreams = emptyList(), episodeStremioLoading = false,
+                episodePluginDone = 0, episodePluginTotal = 0,
             )
         }
     }
