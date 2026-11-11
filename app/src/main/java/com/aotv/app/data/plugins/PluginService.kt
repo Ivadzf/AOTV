@@ -35,7 +35,7 @@ class PluginService @Inject constructor(
         private const val TAG = "AOTVPlugin"
 
         /** Máx. de plugins rodando ao mesmo tempo (igual ao teto do Nuvio). */
-        private const val MAX_CONCURRENT_PLUGINS = 10
+        private const val MAX_CONCURRENT_PLUGINS = 5
     }
 
     /** Cada execução abre um contexto QuickJS; sem o semáforo, 55 plugins
@@ -75,21 +75,37 @@ class PluginService @Inject constructor(
             Log.w(TAG, "plugin ${plugin.id} falhou: ${e.message}")
             return emptyList()
         }
+        val fetchStatus = engine.lastFetchStatus(plugin.id)
         val streams = raw.mapNotNull { normalize(it, plugin.name) }
             .distinctBy { it.url }
             .sortedByDescending { it.qualityRank }
-        recordLastRun(plugin.id, null, streams.size, elapsed)
+        recordLastRun(plugin.id, null, streams.size, elapsed, fetchStatus)
         return streams
     }
+
+    /**
+     * Fetch de controle pelo motor dos plugins (diagnóstico de rede): devolve
+     * o status HTTP do manifest do repo, ou falha com a mensagem do erro.
+     */
+    suspend fun testNetwork(): Result<Int> = engine.testNetworkFetch()
+
+    /** Descarta todos os runtimes do pool (ex.: cookies apagados). */
+    fun dropAllEngines() = engine.invalidateAll()
 
     /**
      * Registra o resultado da execução p/ o diagnóstico da tela de Plugins.
      * Nunca lança nem atrasa o retorno: uma falha aqui não pode derrubar
      * a lista de fontes.
      */
-    private fun recordLastRun(pluginId: String, error: Throwable?, count: Int, millis: Long) {
+    private fun recordLastRun(
+        pluginId: String, error: Throwable?, count: Int, millis: Long, fetchStatus: Int = -1,
+    ) {
         runCatching {
             val now = System.currentTimeMillis()
+            // "fetch: 200 · 3s": o status HTTP do último fetch da execução + a
+            // duração. É o que separa "o provider não tem o título" (fetch 200
+            // e vazio) de "o fetch do motor não funciona" (fetch 0 e vazio).
+            val fetchDetail = if (fetchStatus >= 0) "fetch: $fetchStatus · ${millis / 1000}s" else "${millis / 1000}s"
             val run = when {
                 error is TimeoutCancellationException -> PluginLastRun(
                     status = "timeout", millis = millis, at = now,
@@ -99,8 +115,8 @@ class PluginService @Inject constructor(
                     status = "error", millis = millis, at = now,
                     detail = (error.message ?: error.javaClass.simpleName).take(120),
                 )
-                count > 0 -> PluginLastRun(status = "ok", streams = count, millis = millis, at = now)
-                else -> PluginLastRun(status = "empty", millis = millis, at = now)
+                count > 0 -> PluginLastRun(status = "ok", streams = count, millis = millis, at = now, detail = fetchDetail)
+                else -> PluginLastRun(status = "empty", millis = millis, at = now, detail = fetchDetail)
             }
             prefs.setPluginLastRun(pluginId, run)
         }
