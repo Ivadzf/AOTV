@@ -234,8 +234,8 @@ class MoviesHomeViewModel @Inject constructor(
                     val seen = last != null && library.isEpisodeWatched(id, last.season, last.episode)
                     val item = MovieItem(
                         tmdbId = id, embedId = id.toString(), title = title.ifBlank { d.name }, overview = d.overview.orEmpty(),
-                        posterUrl = poster.ifBlank { d.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }.orEmpty() },
-                        backdropUrl = d.backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }.orEmpty(),
+                        posterUrl = poster.ifBlank { d.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }.orEmpty() },
+                        backdropUrl = d.backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }.orEmpty(),
                         year = "", rating = d.voteAverage, type = MediaType.SERIES,
                     )
                     newEpisodeOf(item, last, d.nextEpisodeToAir, seen, now)
@@ -388,7 +388,7 @@ class MoviesHomeViewModel @Inject constructor(
                         title = item.title,
                         videoKey = v.key,
                         videoName = v.name,
-                        backdropUrl = "https://image.tmdb.org/t/p/w780${dto.backdropPath}",
+                        backdropUrl = "https://image.tmdb.org/t/p/w500${dto.backdropPath}",
                         posterUrl = item.posterUrl,
                     )
                 }
@@ -579,7 +579,7 @@ class MoviesHomeViewModel @Inject constructor(
         if (apiKey.isBlank()) return
         _uiState.update { it.copy(heroBackdrops = it.heroBackdrops + (tmdbId to "")) }
         viewModelScope.launch {
-            val base = "https://image.tmdb.org/t/p/w1280"
+            val base = "https://image.tmdb.org/t/p/w780"
             val url = runCatching {
                 if (isSeries) tmdb.getSeriesDetail(tmdbId, apiKey = apiKey).backdropPath?.let { "$base$it" }
                 else tmdb.getMovieDetail(tmdbId, apiKey = apiKey).backdropPath?.let { "$base$it" }
