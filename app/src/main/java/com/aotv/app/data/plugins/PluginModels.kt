@@ -31,6 +31,8 @@ data class PluginRepo(
     val version: String = "",
     /** Última atualização dos códigos desse repo (ms desde epoch). Refresh a cada 6h. */
     val updatedAt: Long = 0L,
+    /** Pausado: os plugins dele não rodam nas fontes (igual a pausar o repositório no JOTV). */
+    val enabled: Boolean = true,
 )
 
 /**
@@ -69,6 +71,13 @@ data class PluginStreamRaw(
     val url: String,
     val title: String = "",
     val label: String = "",
+)
+
+/** Resultado de um restore de backup: quantos repos voltaram, quantos falharam e quantos plugins tiveram o estado aplicado. */
+data class PluginRestoreResult(
+    val reposOk: Int,
+    val reposFail: Int,
+    val pluginsOk: Int,
 )
 
 /**
