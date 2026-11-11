@@ -20,6 +20,15 @@ existe; a função real é PyInit_addon_core). O nome da carga direta agora
 Se a carga direta passar, o main.py é pulado (o .so já está inicializado
 e o loader tropeçaria no guarda de re-inicialização do Cython).
 
+Spike6: o .so carrega e o PyInit existe, mas o init recusa com
+"Protected execution failed" sem frames Python (o raise é em C). O .so
+contém "System.BuildVersion" — o init provavelmente chama funções xbmc*
+e verifica o resultado. Por isso os stubs agora registram cada chamada
+(nome, args, retorno) em filesDir/kodi/xbmc_calls.log (ver
+_aotv_kodi_log) e o resultado traz o resumo em "xbmc_calls". Como 1ª
+hipótese, xbmc.getInfoLabel('System.BuildVersion') devolve "21.0-Omega"
+em vez de "".
+
 Chamado do Kotlin (KodiSpike) via Chaquopy:
     Python.getInstance().getModule("aotv_spike").callAttr(
         "run_load_test", addon_dir, native_lib_dir)
@@ -41,8 +50,20 @@ def run_load_test(addon_dir, native_lib_dir=""):
         # Spike4: erro bruto dos diagnósticos ("" = não rodado).
         "direct_so": "",
         "cdll_libkodi": "",
+        # Spike6: resumo das chamadas xbmc* ("" = nenhuma registrada).
+        "xbmc_calls": "",
     }
     try:
+        # Spike6: liga o log de chamadas xbmc* — filesDir/kodi/
+        # xbmc_calls.log (truncado a cada teste). O caminho deriva do
+        # addon_dir (filesDir/kodi/addons/<id>/). O .so do Vulgata chama
+        # as funções xbmc* via C API; o resumo vai para "xbmc_calls".
+        import os as _os
+        import _aotv_kodi_log
+        _aotv_kodi_log.set_log_file(_os.path.join(
+            _os.path.dirname(_os.path.dirname(addon_dir.rstrip("/"))),
+            "xbmc_calls.log"))
+
         # 1. Stubs xbmc* importam? (O Chaquopy já os põe no sys.path via
         # app/src/main/python; se um deles falhar, o problema é nosso, não
         # do addon.)
@@ -155,4 +176,12 @@ def run_load_test(addon_dir, native_lib_dir=""):
             result["stage"] = "path_failed"
         else:
             result["stage"] = "main_failed"
+    finally:
+        # Spike6: resumo das chamadas xbmc* — roda em todos os retornos
+        # (inclusive o return antecipado do direct_ok), pois o dict é mutável.
+        try:
+            import _aotv_kodi_log
+            result["xbmc_calls"] = _aotv_kodi_log.calls_summary()
+        except Exception:
+            pass
     return result
