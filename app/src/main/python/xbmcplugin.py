@@ -46,3 +46,11 @@ def setResolvedUrl(handle, succeeded, listitem):
 
 def setPluginCategory(handle, category):
     _log("xbmcplugin.setPluginCategory", "handle=%s cat=%s" % (handle, category))
+
+# Spike6: registra cada chamada xbmcplugin* (nome, args, retorno) no log de
+# chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
+from _aotv_kodi_log import traced as _traced
+
+for _fn in ("addDirectoryItem", "endOfDirectory", "setContent",
+            "addSortMethod", "setResolvedUrl", "setPluginCategory"):
+    globals()[_fn] = _traced("xbmcplugin." + _fn, globals()[_fn])
