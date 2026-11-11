@@ -96,10 +96,26 @@ class MediaSearchViewModel @Inject constructor(
 
     fun onQueryChange(q: String) {
         _query.value = q
+        if (q.isBlank()) { searchJob?.cancel(); _results.value = emptyList(); _noTmdbKey.value = false; return }
+        launchSearch(q, SEARCH_DEBOUNCE_MS)
+    }
+
+    /**
+     * Busca IMEDIATA com a query atual (botão de busca do teclado): cancela o
+     * debounce e busca na hora, sem esperar. É o que faz a busca parecer "ao
+     * vivo" igual à do Nuvio — sem isso, na internet lenta, os resultados só
+     * apareciam depois de enviar.
+     */
+    fun searchNow() {
+        val q = _query.value
+        if (q.isBlank()) return
+        launchSearch(q, 0)
+    }
+
+    private fun launchSearch(q: String, delayMs: Long) {
         searchJob?.cancel()
-        if (q.isBlank()) { _results.value = emptyList(); _noTmdbKey.value = false; return }
         searchJob = viewModelScope.launch {
-            delay(400)
+            if (delayMs > 0) delay(delayMs)
             val apiKey = prefs.tmdbApiKey
             if (apiKey.isBlank()) { _noTmdbKey.value = true; return@launch }
             _noTmdbKey.value = false
@@ -122,6 +138,11 @@ class MediaSearchViewModel @Inject constructor(
             }
         }
     }
+
+    companion object {
+        /** Pausa após a última tecla antes de buscar (250 ms — ao vivo, sem afogar a rede). */
+        private const val SEARCH_DEBOUNCE_MS = 250L
+    }
 }
 
 @Composable
@@ -142,7 +163,7 @@ fun MediaSearchScreen(
         androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(150); runCatching { firstKey.requestFocus() } }
         Row(Modifier.fillMaxSize().background(Background).padding(top = 28.dp)) {
             Column(Modifier.width(400.dp).padding(start = 28.dp, end = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = true)
+                SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = true, onSearch = viewModel::searchNow)
                 com.aotv.app.ui.common.TvKeyboard(
                     onKey = { viewModel.onQueryChange(com.aotv.app.ui.common.typeKey(query, it)) },
                     onBackspace = { viewModel.onQueryChange(query.dropLast(1)) },
@@ -183,6 +204,7 @@ fun MediaSearchScreen(
                 value = query,
                 onValueChange = viewModel::onQueryChange,
                 modifier = Modifier.weight(1f),
+                onSearch = viewModel::searchNow,
             )
         }
         SearchBody(query, results, isLoading, recents, viewModel, onItemClick)
@@ -314,6 +336,8 @@ private fun SearchPill(
     modifier: Modifier = Modifier,
     /** Só mostra o texto (TV, digitado pelo teclado na tela). Fica fora do caminho do foco. */
     readOnly: Boolean = false,
+    /** Busca imediata (botão de busca do teclado). */
+    onSearch: (() -> Unit)? = null,
 ) {
     val src = remember { MutableInteractionSource() }
     val focused by src.collectIsFocusedAsState()
@@ -359,6 +383,9 @@ private fun SearchPill(
                 ),
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                     imeAction = ImeAction.Search,
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onSearch = { onSearch?.invoke() },
                 ),
                 readOnly = readOnly,
                 modifier = Modifier.fillMaxWidth()
