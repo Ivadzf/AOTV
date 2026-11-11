@@ -99,3 +99,19 @@ class Window:
 
 class Control:
     pass
+
+# Spike6: registra cada chamada xbmcgui* (nome, args, retorno) no log de
+# chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
+from _aotv_kodi_log import traced as _traced
+
+for _cls, _methods in (
+    (ListItem, ("setArt", "setInfo", "setProperty", "getProperty",
+                "setLabel", "setLabel2", "setMimeType",
+                "addContextMenuItems", "isFolder")),
+    (Dialog, ("notification", "input", "select", "ok")),
+    (DialogProgress, ("create", "update", "iscanceled", "close")),
+    (Window, ("getProperty", "setProperty", "clearProperty")),
+):
+    for _m in _methods:
+        setattr(_cls, _m, _traced(
+            "xbmcgui.%s.%s" % (_cls.__name__, _m), getattr(_cls, _m)))
