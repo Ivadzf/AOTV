@@ -29,6 +29,7 @@ object KodiPlayerBridge {
 
     /** Arquivo em reprodução (URL do stream) — vazio quando nada toca. */
     @Volatile
+    @JvmStatic
     var playingFile: String = ""
         private set
 
@@ -65,9 +66,6 @@ object KodiPlayerBridge {
 
     @JvmStatic
     fun isPlayingVideo(): Boolean = isPlaying()
-
-    @JvmStatic
-    fun getPlayingFile(): String = playingFile
 
     @JvmStatic
     fun getTitle(): String = playingTitle
