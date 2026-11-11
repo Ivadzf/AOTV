@@ -162,8 +162,9 @@ class PosterInfo @Inject constructor(
 
     /**
      * Cartão que ficou parado na tela. Entra na fila de leitura das fontes quando o resumo está
-     * velho. Fila de 10 (sai o mais antigo) e duas leituras por vez, como o webOS faz com o
-     * cartão em foco e os vizinhos. Rede medida (dados móveis) fica de fora, o detalhe ainda grava.
+     * velho. Fila de 10 (sai o mais antigo) e uma leitura por vez (v1.0.9 — eram duas; cada
+     * leitura dispara 1 requisição por addon e competia com os downloads dos pôsteres na
+     * internet lenta). Rede medida (dados móveis) fica de fora, o detalhe ainda grava.
      */
     fun want(item: MovieItem) {
         val key = posterKey(item)
@@ -187,7 +188,7 @@ class PosterInfo @Inject constructor(
     private fun pump() {
         while (true) {
             val item = synchronized(lock) {
-                if (running.size >= 2) return
+                if (running.size >= 1) return
                 queue.removeFirstOrNull()?.also { running += posterKey(it) } ?: return
             }
             scope.launch {
