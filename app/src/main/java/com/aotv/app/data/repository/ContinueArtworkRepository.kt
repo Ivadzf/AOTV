@@ -51,7 +51,7 @@ class ContinueArtworkRepository @Inject constructor(
                 }.getOrNull() else null
                 ContinueArtwork(
                     title = detail?.title.orEmpty(), posterUrl = detail?.posterUrl.orEmpty(),
-                    imageUrl = ep?.stillPath?.takeIf { it.isNotBlank() }?.let { "https://image.tmdb.org/t/p/w780$it" }
+                    imageUrl = ep?.stillPath?.takeIf { it.isNotBlank() }?.let { "https://image.tmdb.org/t/p/w500$it" }
                         ?: detail?.backdropUrl.orEmpty(),
                     episodeName = ep?.name.orEmpty(), overview = ep?.overview.orEmpty(),
                 )
