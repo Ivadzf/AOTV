@@ -37,9 +37,16 @@ class PluginsViewModel @Inject constructor(
         val plugins: List<InstalledPlugin> = emptyList(),
         val installing: Boolean = false,
         val error: String? = null,
-        val installedNow: String? = null,
+        /** Mensagem curta do último resultado (instalação, teste, restore, cache). */
+        val message: String? = null,
         val refreshing: Set<String> = emptySet(),
         val timeoutSec: Int = 60,
+        /** Pausa global (nenhum plugin roda) — botão "Pausar plugins". */
+        val globalEnabled: Boolean = true,
+        /** Atualização automática dos repos vencidos ao abrir a tela. */
+        val autoUpdate: Boolean = true,
+        /** Plugins rodando ao mesmo tempo na folha (1–32, padrão 10). */
+        val concurrency: Int = 10,
         /** Último resultado de cada plugin (id -> PluginLastRun, p/ diagnóstico). */
         val lastRun: Map<String, PluginLastRun> = emptyMap(),
         /** Plugins com teste manual em andamento (id). */
@@ -56,7 +63,14 @@ class PluginsViewModel @Inject constructor(
         val networkTest: String? = null,
     )
 
-    private val _uiState = MutableStateFlow(UiState(timeoutSec = prefs.pluginTimeoutSec))
+    private val _uiState = MutableStateFlow(
+        UiState(
+            timeoutSec = prefs.pluginTimeoutSec,
+            globalEnabled = prefs.pluginGlobalEnabled,
+            autoUpdate = prefs.pluginAutoUpdate,
+            concurrency = prefs.pluginConcurrency,
+        ),
+    )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     init {
@@ -69,8 +83,8 @@ class PluginsViewModel @Inject constructor(
         viewModelScope.launch {
             prefs.pluginLastRuns.collect { map -> _uiState.update { it.copy(lastRun = map) } }
         }
-        // Refresh automático dos repos vencidos (> 6 h), igual ao Nuvio.
-        viewModelScope.launch { store.refreshDueRepos() }
+        // Refresh automático dos repos vencidos (> 6 h), igual ao Nuvio — salvo quando desligado.
+        viewModelScope.launch { if (prefs.pluginAutoUpdate) store.refreshDueRepos() }
     }
 
     /** Instala um repositório por URL de manifest (o manifest.json do repo). */
@@ -84,7 +98,7 @@ class PluginsViewModel @Inject constructor(
             _uiState.update { it.copy(error = "Esse repositório já está instalado") }
             return
         }
-        _uiState.update { it.copy(installing = true, error = null, installedNow = null) }
+        _uiState.update { it.copy(installing = true, error = null, message = null) }
         viewModelScope.launch {
             val repo = store.installRepo(url)
             if (repo == null) {
@@ -95,7 +109,7 @@ class PluginsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     installing = false,
-                    installedNow = "${repo.name.ifBlank { url }} — $count plugin(s) instalado(s)",
+                    message = "${repo.name.ifBlank { url }} — $count plugin(s) instalado(s)",
                 )
             }
         }
@@ -127,6 +141,69 @@ class PluginsViewModel @Inject constructor(
         store.setPluginEnabled(id, !p.enabled)
     }
 
+    /** Pausa/retoma um repositório (os plugins dele param de rodar nas fontes). */
+    fun toggleRepo(url: String) {
+        val r = _uiState.value.repos.firstOrNull { it.url.equals(url, true) } ?: return
+        store.setRepoEnabled(url, !r.enabled)
+    }
+
+    /** Liga/desliga todos os plugins de um repositório de uma vez. */
+    fun toggleAllPlugins(repoUrl: String, enabled: Boolean) = store.setAllPluginsEnabled(repoUrl, enabled)
+
+    /** Sobe (direction = -1) ou desce (+1) um repositório na ordem de prioridade. */
+    fun moveRepo(url: String, direction: Int) = store.moveRepo(url, direction)
+
+    /** Sobe (direction = -1) ou desce (+1) um plugin na ordem de prioridade dentro do repositório dele. */
+    fun movePlugin(id: String, direction: Int) = store.movePlugin(id, direction)
+
+    /** Pausa global: desligado, nenhum plugin roda nas fontes. */
+    fun setGlobalEnabled(enabled: Boolean) {
+        prefs.pluginGlobalEnabled = enabled
+        _uiState.update { it.copy(globalEnabled = enabled) }
+    }
+
+    /** Atualização automática dos repos vencidos ao abrir a tela. */
+    fun setAutoUpdate(enabled: Boolean) {
+        prefs.pluginAutoUpdate = enabled
+        _uiState.update { it.copy(autoUpdate = enabled) }
+    }
+
+    /** Plugins rodando ao mesmo tempo na folha (1–32, padrão 10). */
+    fun setConcurrency(n: Int) {
+        val v = n.coerceIn(1, 32)
+        prefs.pluginConcurrency = v
+        _uiState.update { it.copy(concurrency = v) }
+    }
+
+    /** Limpa o cache dos provedores (cookies + runtimes em pool). */
+    fun clearCache() {
+        store.clearCache()
+        pluginService.dropAllEngines()
+        _uiState.update { it.copy(message = "Cache dos provedores limpo.") }
+    }
+
+    /** Exporta o backup sem senhas (repos, habilitados, ordem, timeout e concorrência). */
+    fun backup(): String = store.backup()
+
+    /** Restaura um backup JSON (do AOTV ou do JOTV). */
+    fun restore(json: String) {
+        viewModelScope.launch {
+            val r = store.restore(json)
+            _uiState.update {
+                it.copy(
+                    message = if (r.reposFail > 0)
+                        "Backup restaurado: ${r.reposOk} repositório(s), ${r.reposFail} falha(s)."
+                    else
+                        "Backup restaurado: ${r.reposOk} repositório(s), ${r.pluginsOk} plugin(s).",
+                    timeoutSec = prefs.pluginTimeoutSec,
+                    concurrency = prefs.pluginConcurrency,
+                    autoUpdate = prefs.pluginAutoUpdate,
+                    globalEnabled = prefs.pluginGlobalEnabled,
+                )
+            }
+        }
+    }
+
     /** Timeout de cada execução de plugin (30–180 s, padrão 60). */
     fun setTimeoutSec(sec: Int) {
         val v = sec.coerceIn(30, 180)
@@ -140,7 +217,7 @@ class PluginsViewModel @Inject constructor(
         // Os runtimes em pool guardam o cookie jar na memória: sem descartá-los,
         // os cookies apagados continuariam valendo dentro do motor.
         pluginService.dropAllEngines()
-        _uiState.update { it.copy(installedNow = "Cookies dos plugins apagados") }
+        _uiState.update { it.copy(message = "Cookies dos plugins apagados") }
     }
 
     /**
@@ -188,6 +265,31 @@ class PluginsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * "Testar fontes para um título": roda UM plugin com o TMDB que o usuário digitou
+     * (filme ou série + temporada/episódio) e mostra quantas fontes voltaram. O teste
+     * não ativa o provedor.
+     */
+    fun testSources(id: String, tmdbId: Int, isSeries: Boolean, season: Int?, episode: Int?) {
+        val plugin = _uiState.value.plugins.firstOrNull { it.id == id } ?: return
+        if (id in _uiState.value.testing) return
+        _uiState.update { it.copy(testing = it.testing + id, message = null) }
+        viewModelScope.launch {
+            val count = runCatching {
+                pluginService.getStreamsForPluginTest(
+                    plugin, tmdbId, if (isSeries) "tv" else "movie", season, episode,
+                ).size
+            }.getOrDefault(0)
+            _uiState.update {
+                it.copy(
+                    testing = it.testing - id,
+                    message = if (count > 0) "$count fontes encontradas."
+                    else "Nenhuma fonte para este título. Confira as configurações do provedor.",
+                )
+            }
+        }
+    }
+
     /** Abre o diálogo de configurações: roda onSettings() e mescla padrões + salvos. */
     fun openSettings(plugin: InstalledPlugin) {
         _uiState.update {
@@ -231,9 +333,9 @@ class PluginsViewModel @Inject constructor(
     fun saveSettings() {
         val plugin = _uiState.value.settingsPlugin ?: return
         store.setPluginSettings(plugin.id, _uiState.value.settingsValues)
-        _uiState.update { it.copy(installedNow = "Configurações de ${plugin.name} salvas") }
+        _uiState.update { it.copy(message = "Configurações de ${plugin.name} salvas") }
         closeSettings()
     }
 
-    fun clearError() = _uiState.update { it.copy(error = null, installedNow = null) }
+    fun clearError() = _uiState.update { it.copy(error = null, message = null) }
 }
