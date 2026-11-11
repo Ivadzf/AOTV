@@ -83,15 +83,11 @@ fun TvSideMenu(
     val dockHeight = (1.4f + entries.size * 4.4f + sectionGap).r
     val pillY by animateDpAsState((.95f + index * 4.4f + if (index >= main.size) sectionGap else 0f).r,
         tween(if (reduced) 0 else 250), label = "menuSelection")
-    val labelSlide = .6.r
     Box(Modifier.fillMaxHeight().width(if (open) 21.25.r else TvMenuClosed)) {
+        // Marca AOTV (wordmark). O texto "AOTV" ao lado saiu: o wordmark já traz o nome.
         Row(Modifier.align(Alignment.TopStart).padding(top = 2.4.r, start = 1.6.r)
             .wrapContentWidth(Alignment.Start, unbounded = true).width(20.r).height(3.6.r), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.aotv_nav_logo), "AOTV", Modifier.size(3.25.r))
-            Text("AOTV", color = TextPrimary, fontSize = 1.7.rs, fontWeight = FontWeight.Bold, fontFamily = DisplayFont,
-                letterSpacing = (-.068).rs, modifier = Modifier.padding(start = 1.r).graphicsLayer {
-                    alpha = progress.value; translationX = -labelSlide.toPx() * (1f - progress.value)
-                })
         }
         Box(Modifier.align(Alignment.CenterStart).padding(start = .875.r).width(dockWidth).height(dockHeight)
             .clip(RoundedCornerShape(2.6.r)).background(Color(0xF7191919))
