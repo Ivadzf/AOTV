@@ -170,9 +170,15 @@ class PluginEngine @Inject constructor(
             timeoutMs = timeoutMs,
             cookieJar = cookieJar,
         ) { qjs ->
+            // O retorno do evaluate é ignorado de propósito: o alpha12
+            // devolve a string "Promise" em vez do JSON resolvido (provado
+            // na v1.0.5 pelo Testar rede — era isso que zerava TODOS os
+            // plugins). O driver grava o resultado no global e o Kotlin lê
+            // por polling — mesmo padrão do testNetworkFetch.
             qjs.evaluate<String>(
                 PluginPrelude.getStreamsDriver(tmdbId, mediaType, season, episode, settingsJson),
             )
+            pollGlobal(qjs, "__aotvStreamsResult", timeoutMs)
         }
         parseStreams(json)
     }
@@ -191,7 +197,10 @@ class PluginEngine @Inject constructor(
             timeoutMs = timeoutMs,
             cookieJar = cookieJar,
         ) { qjs ->
+            // Mesmo padrão do getStreams (v1.0.6): o retorno do evaluate é
+            // ignorado, o driver grava no global e o Kotlin lê por polling.
             qjs.evaluate<String>(PluginPrelude.ON_SETTINGS_DRIVER)
+            pollGlobal(qjs, "__aotvSettingsResult", timeoutMs)
         }
         parseSettings(json)
     }
@@ -292,6 +301,28 @@ class PluginEngine @Inject constructor(
         val err = obj.optString("error").takeIf { it.isNotBlank() }
         if (err != null) throw IllegalStateException(err)
         obj.optInt("status", 0)
+    }
+
+    /**
+     * Lê um global de resultado por polling (mesmo padrão do Testar rede da
+     * v1.0.5, extraído p/ reutilizar no getStreams e no onSettings): o
+     * evaluate do QuickJS alpha12 devolve a string "Promise" em vez do valor
+     * resolvido do IIFE, então o driver grava o resultado num global e o
+     * Kotlin lê até ele aparecer ou o prazo acabar. Devolve "" se o prazo
+     * acabar (quem chama trata como lista vazia).
+     * O delay() fica fora do runCatching para o cancelamento (timeout)
+     * continuar propagando e cair no dropEngine anti-SIGSEGV.
+     */
+    private suspend fun pollGlobal(qjs: QuickJs, name: String, timeoutMs: Long): String {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val cur = runCatching {
+                qjs.evaluate<String>("typeof globalThis.$name === 'string' ? globalThis.$name : ''")
+            }.getOrNull().orEmpty()
+            if (cur.isNotEmpty()) return cur
+            delay(250)
+        }
+        return ""
     }
 
     // ── Execução ──────────────────────────────────────────────────────────────
