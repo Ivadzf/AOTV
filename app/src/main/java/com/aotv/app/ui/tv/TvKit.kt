@@ -313,7 +313,7 @@ fun TvPoster(
                 image, title, Modifier.fillMaxSize().padding(bottom = 2.09.r), contentScale = ContentScale.Crop,
                 onSuccess = { visual.onImage?.invoke(it.result.drawable) },
             )
-            PosterDecorations(item, visual, unit = 0.095.r, textUnit = 0.095.rs)
+            PosterDecorations(item, visual, unit = 0.095.r, textUnit = 0.095.rs, imageBottom = 2.09.r)
             if (order > 0) Box(
                 Modifier.align(Alignment.TopStart).padding(0.6.r).size(2.r).clip(CircleShape)
                     .background(if (current) Accent else Color.Black.copy(alpha = .72f)),
