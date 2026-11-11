@@ -12,6 +12,14 @@ nativo) e (b) carregar o addon_core.so diretamente
 (spec_from_file_location + exec_module), capturando o erro BRUTO dos
 dois. O fluxo do teste principal (runpy do main.py) não mudou.
 
+Spike5: o erro bruto do spike4 revelou que o CDLL do libkodi.so passa
+(OK) e que a "carga direta" falhava só por causa do NOME do módulo de
+teste ("aotv_direct_addon_core" → PyInit_aotv_direct_addon_core, que não
+existe; a função real é PyInit_addon_core). O nome da carga direta agora
+é "_re005f0d31a6b3889.addon_core", o mesmo que o loader do Vulgata usa.
+Se a carga direta passar, o main.py é pulado (o .so já está inicializado
+e o loader tropeçaria no guarda de re-inicialização do Cython).
+
 Chamado do Kotlin (KodiSpike) via Chaquopy:
     Python.getInstance().getModule("aotv_spike").callAttr(
         "run_load_test", addon_dir, native_lib_dir)
@@ -76,25 +84,45 @@ def run_load_test(addon_dir, native_lib_dir=""):
 
         # (b) Carga direta do addon_core.so: o mesmo dlopen que o loader do
         # Vulgata faz, mas sem o wrapper "Protected execution failed".
-        # NOTA: se esta carga passar, o .so fica inicializado no processo;
-        # o loader do Vulgata pode então tropeçar no guarda de
-        # re-inicialização do Cython — nesse caso este campo é o sinal
-        # autoritativo (o .so carrega), não o estágio do main.py.
+        # Spike5: o nome do módulo tem que ser o mesmo que o loader usa
+        # ("_re005f0d31a6b3889.addon_core") — no spike4 o nome era
+        # "aotv_direct_addon_core" e o Python procurava PyInit_ com esse
+        # nome, que não existe no .so (a função real é PyInit_addon_core).
+        # O dlopen em si passava; a falha era no create_module, depois dele.
         so_path = addon_dir.rstrip("/") + \
             "/resources/lib/android_arm64/addon_core.so"
+        direct_ok = False
         try:
             import importlib.util
             spec = importlib.util.spec_from_file_location(
-                "aotv_direct_addon_core", so_path)
+                "_re005f0d31a6b3889.addon_core", so_path)
             if spec is None or spec.loader is None:
                 raise ImportError(
                     "spec_from_file_location devolveu None p/ %s" % so_path)
             direct_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(direct_mod)
-            result["direct_so"] = "OK — carregou (%s)" % so_path
+            sys.modules["_re005f0d31a6b3889.addon_core"] = direct_mod
+            try:
+                spec.loader.exec_module(direct_mod)
+            except BaseException:
+                sys.modules.pop("_re005f0d31a6b3889.addon_core", None)
+                raise
+            direct_ok = True
+            result["direct_so"] = "OK — carregou e inicializou (%s)" % so_path
         except BaseException as e:
             result["direct_so"] = "%s: %s\n%s" % (
                 type(e).__name__, e, traceback.format_exc(limit=8))
+
+        # Spike5: se a carga direta passou, o .so já está inicializado no
+        # processo — rodar o main.py depois faria o loader do Vulgata
+        # tropeçar no guarda de re-inicialização do Cython. Pula o main.py
+        # e registra que o .so carregou e inicializou bem.
+        if direct_ok:
+            result["stage"] = "direct_ok"
+            result["so_loaded"] = True
+            result["direct_so"] += (
+                "\nmain.py pulado: .so já inicializado pela carga direta "
+                "(guard de re-inicialização do Cython).")
+            return result
 
         # 2. Addon no sys.path (o main.py faz
         # `from _re005f0d31a6b3889 import __run__`).
