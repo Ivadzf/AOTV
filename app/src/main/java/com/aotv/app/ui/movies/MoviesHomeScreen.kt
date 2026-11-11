@@ -707,7 +707,8 @@ private fun HeroCarousel(
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        com.aotv.app.ui.common.AotvPrimaryButton(text = "Assistir", onClick = { onItemClick(item) })
+                        // "Ver Detalhes" abre o detalhe (é o que o onItemClick faz); sem ícone de play.
+                        com.aotv.app.ui.common.AotvPrimaryButton(text = "Ver Detalhes", onClick = { onItemClick(item) }, icon = null)
                         // Indicador da página atual.
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             repeat(items.size) { i ->
