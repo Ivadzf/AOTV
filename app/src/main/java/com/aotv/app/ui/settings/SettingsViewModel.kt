@@ -16,6 +16,7 @@ class SettingsViewModel @Inject constructor(
     private val platformPrefs: PlatformPrefs,
     private val healthChecker: com.aotv.app.data.remote.SourceHealthChecker,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    private val history: com.aotv.app.data.local.dao.MovieHistoryDao,
 ) : ViewModel() {
 
     // ── Trakt (só aparece com as chaves no local.properties) ──
@@ -55,6 +56,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun traktLogout() { trakt.logout(); _traktUser.value = null }
+
+    /** Limpar Continuar assistindo: apaga as posições salvas do perfil ativo. Minha Lista continua. */
+    fun clearContinueWatching() {
+        viewModelScope.launch { history.clear(profileId.value) }
+    }
 
     // ── Status das fontes (health-check) ──
     private val _sourceStatus = MutableStateFlow<List<com.aotv.app.data.remote.SourceStatus>>(emptyList())
