@@ -233,7 +233,7 @@ private fun InstallCard(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF18212C), Color(0xFF141414))))
+            .background(Brush.linearGradient(listOf(AccentSoft, Color(0xFF141414))))
             .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
