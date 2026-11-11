@@ -8,9 +8,11 @@ import com.aotv.app.data.remote.hasDolbyVision
 import com.aotv.app.data.remote.hasHdr
 import com.aotv.app.data.remote.ptAudio
 import com.aotv.app.data.remote.qualityRankOf
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,7 +60,9 @@ class PluginService @Inject constructor(
         episode: Int? = null,
     ): List<StremioStream> {
         if (tmdbId <= 0) return emptyList()
-        val code = store.readCode(plugin.id) ?: return emptyList()
+        // Leitura do arquivo do provider fora da Main (era I/O de disco na
+        // thread de UI a cada execução — um dos travamentos da v1.0.4).
+        val code = withContext(Dispatchers.IO) { store.readCode(plugin.id) } ?: return emptyList()
         val timeoutMs = prefs.pluginTimeoutSec * 1000L
         val settings = store.pluginSettings(plugin.id)
         val started = System.currentTimeMillis()
@@ -71,7 +75,12 @@ class PluginService @Inject constructor(
         }
         val elapsed = System.currentTimeMillis() - started
         val raw = result.getOrElse { e ->
-            recordLastRun(plugin.id, e, 0, elapsed)
+            recordLastRun(
+                plugin.id, e, 0, elapsed,
+                engine.lastFetchStatus(plugin.id),
+                engine.lastConsoleError(plugin.id),
+                engine.lastBodyPreview(plugin.id),
+            )
             Log.w(TAG, "plugin ${plugin.id} falhou: ${e.message}")
             return emptyList()
         }
@@ -79,7 +88,10 @@ class PluginService @Inject constructor(
         val streams = raw.mapNotNull { normalize(it, plugin.name) }
             .distinctBy { it.url }
             .sortedByDescending { it.qualityRank }
-        recordLastRun(plugin.id, null, streams.size, elapsed, fetchStatus)
+        recordLastRun(
+            plugin.id, null, streams.size, elapsed, fetchStatus,
+            engine.lastConsoleError(plugin.id), engine.lastBodyPreview(plugin.id),
+        )
         return streams
     }
 
@@ -99,6 +111,7 @@ class PluginService @Inject constructor(
      */
     private fun recordLastRun(
         pluginId: String, error: Throwable?, count: Int, millis: Long, fetchStatus: Int = -1,
+        consoleError: String? = null, bodyPreview: String? = null,
     ) {
         runCatching {
             val now = System.currentTimeMillis()
@@ -106,6 +119,13 @@ class PluginService @Inject constructor(
             // duração. É o que separa "o provider não tem o título" (fetch 200
             // e vazio) de "o fetch do motor não funciona" (fetch 0 e vazio).
             val fetchDetail = if (fetchStatus >= 0) "fetch: $fetchStatus · ${millis / 1000}s" else "${millis / 1000}s"
+            // O erro do console do provider e a prévia do corpo são o que
+            // explica o "nenhum stream" com fetch 200: o provider engole o
+            // erro no try/catch dele e devolve [] sem deixar rastro.
+            val extras = buildString {
+                if (!consoleError.isNullOrBlank()) append(" · erro: ${consoleError.take(100)}")
+                if (!bodyPreview.isNullOrBlank()) append(" · body: ${bodyPreview.take(60)}")
+            }
             val run = when {
                 error is TimeoutCancellationException -> PluginLastRun(
                     status = "timeout", millis = millis, at = now,
@@ -113,10 +133,10 @@ class PluginService @Inject constructor(
                 )
                 error != null -> PluginLastRun(
                     status = "error", millis = millis, at = now,
-                    detail = (error.message ?: error.javaClass.simpleName).take(120),
+                    detail = ((error.message ?: error.javaClass.simpleName).take(120) + extras),
                 )
                 count > 0 -> PluginLastRun(status = "ok", streams = count, millis = millis, at = now, detail = fetchDetail)
-                else -> PluginLastRun(status = "empty", millis = millis, at = now, detail = fetchDetail)
+                else -> PluginLastRun(status = "empty", millis = millis, at = now, detail = fetchDetail + extras)
             }
             prefs.setPluginLastRun(pluginId, run)
         }
@@ -124,7 +144,7 @@ class PluginService @Inject constructor(
 
     /** Descritores de onSettings() (p/ a tela de Plugins). Vazio se não exportar. */
     suspend fun loadSettingDescriptors(plugin: InstalledPlugin): List<PluginSettingDescriptor> {
-        val code = store.readCode(plugin.id) ?: return emptyList()
+        val code = withContext(Dispatchers.IO) { store.readCode(plugin.id) } ?: return emptyList()
         val timeoutMs = prefs.pluginTimeoutSec * 1000L
         return engine.runOnSettings(
             plugin = plugin, code = code,
