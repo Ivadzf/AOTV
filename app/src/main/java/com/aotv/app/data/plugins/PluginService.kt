@@ -36,19 +36,31 @@ class PluginService @Inject constructor(
     companion object {
         private const val TAG = "AOTVPlugin"
 
-        /** Máx. de plugins rodando ao mesmo tempo (igual ao teto do Nuvio). */
-        // v1.0.11: 10 por vez mantidos. O timeout de 60s da folha da v1.0.10
+        // v1.0.11: 10 por vez mantidos como padrão. O timeout de 60s da folha da v1.0.10
         // foi revertido: sob contenção, plugins lentos mas bons (MegaEmbed
         // 18s sozinho no Testar) passavam de 60s e morriam no timeout; a
         // folha volta a usar o timeout da configuração do Davi (100s), igual
         // ao Testar. O dreno rápido da v1.0.10 veio dos 10 por vez + abandono
         // da v1.0.8, não do timeout curto.
-        private const val MAX_CONCURRENT_PLUGINS = 10
+        // v1.0.13: o limite virou configuração ("Provedores simultâneos", 1–32,
+        // padrão 10) — o semáforo é recriado quando o valor muda.
     }
 
     /** Cada execução abre um contexto QuickJS; sem o semáforo, 55 plugins
      * habilitados abririam 55 motores ao mesmo tempo no celular. */
-    private val pluginSemaphore = Semaphore(MAX_CONCURRENT_PLUGINS)
+    private val semaphoreLock = Any()
+    private var pluginSemaphore = Semaphore(prefs.pluginConcurrency)
+    private var semaphoreConcurrency = prefs.pluginConcurrency
+
+    /** Semáforo do limite atual; recriado quando a configuração muda. */
+    private fun currentSemaphore(): Semaphore = synchronized(semaphoreLock) {
+        val want = prefs.pluginConcurrency
+        if (want != semaphoreConcurrency) {
+            pluginSemaphore = Semaphore(want)
+            semaphoreConcurrency = want
+        }
+        pluginSemaphore
+    }
 
     /** Plugins habilitados p/ o tipo ("movie" ou "tv"). */
     fun enabledPlugins(mediaType: String): List<InstalledPlugin> = store.enabledPlugins(mediaType)
@@ -85,7 +97,7 @@ class PluginService @Inject constructor(
                 timeoutMs = timeoutMs, cookieJar = store.cookieJar(plugin.id), fresh = true,
             )
         } else {
-            pluginSemaphore.withPermit {
+            currentSemaphore().withPermit {
                 engine.runGetStreams(
                     plugin = plugin, code = code, tmdbId = tmdbId, mediaType = mediaType,
                     season = season, episode = episode, settings = settings,
