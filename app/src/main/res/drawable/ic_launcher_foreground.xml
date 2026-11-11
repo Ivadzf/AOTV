@@ -1,14 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Placeholder provisório (vetor): triângulo de play na cor Accent do tema
-     (#A7CAFF, ver Color.kt) sobre fundo transparente. O fundo escuro do ícone
-     adaptativo vem de ic_launcher_background.xml. O ícone definitivo do AOTV
-     será trocado depois — ver BUILD.md, seção "Push para o GitHub". -->
+<!-- Wordmark AOTV (vermelho escuro + turquesa) tracado do PNG aprovado.
+     Sombra suave do turquesa aproximada por um deslocamento de 1.5dp. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <group
+        android:translateX="1.5"
+        android:translateY="1.5">
+        <path
+            android:fillColor="#000000"
+            android:fillAlpha="0.35"
+            android:fillType="evenOdd"
+            android:pathData="M59.9,34.7L61.3,47.3L68.4,47.5L68.4,55L62.2,55.2L64,70.1L64.5,72.9L92.9,54.9L85.3,50.1L70.8,59.6L68.9,40.2Z M31.1,56.3L27.7,56.7L25.2,57.6L21.4,59.8L18.7,62.4L17.1,64.8L15.8,67.7L15.1,71.3L15.1,74.6L15.8,78.1L17,80.9L19.5,84.3L21.3,86L23.9,87.7L27.1,89L30.1,89.6L33.3,89.6L36.6,88.9L40,87.4L42,86L44.1,84.1L46.1,81.3L47.4,78.7L48.2,75.4L48.4,72.4L47.9,68.9L47.2,66.6L45.5,63.5L43.4,61L40.7,58.9L38,57.5L34.9,56.5Z M30.8,63.8L29.3,64.1L27.4,64.9L25.8,66L24.6,67.3L23.8,68.5L23,70.5L22.7,72L22.7,73.8L23,75.3L23.7,77.2L24.6,78.5L26.1,80.1L27.5,81L29.4,81.8L32.3,82.1L33.7,81.9L35.7,81.1L37.3,80.1L38.7,78.7L39.5,77.5L40.4,75.5L40.7,74.1L40.7,71.7L40.3,70L39.5,68.2L37.2,65.7L36.3,65L34.1,64.1L32.6,63.8Z" />
+    </group>
     <path
-        android:fillColor="#A7CAFF"
-        android:pathData="M40,32 L76,54 L40,76 Z" />
+        android:fillColor="#810000"
+        android:fillType="evenOdd"
+        android:pathData="M32,18.4L33.7,18.8L57.9,33.5L59.4,45.3L51.6,45.3L47.3,41.3L46.8,41.3L32.8,45.5L35.1,37.2L41.1,35.3L34.1,28.7L27.1,54.8L24.8,55.6L21.4,57.5L18.1,60.5L16.7,62.4L17.9,57.8L29,20.5L30.1,19.2Z M39.4,47.3L61.2,47.3L68.3,47.6L68.1,55L57.3,55.2L57.3,77.3L50.4,81.9L50.2,81.8L50.3,55.5L50.1,55.1L39.3,55.1Z" />
+    <path
+        android:fillColor="#01DED3"
+        android:fillType="evenOdd"
+        android:pathData="M59.9,34.7L61.3,47.3L68.4,47.5L68.4,55L62.2,55.2L64,70.1L64.5,72.9L92.9,54.9L85.3,50.1L70.8,59.6L68.9,40.2Z M31.1,56.3L27.7,56.7L25.2,57.6L21.4,59.8L18.7,62.4L17.1,64.8L15.8,67.7L15.1,71.3L15.1,74.6L15.8,78.1L17,80.9L19.5,84.3L21.3,86L23.9,87.7L27.1,89L30.1,89.6L33.3,89.6L36.6,88.9L40,87.4L42,86L44.1,84.1L46.1,81.3L47.4,78.7L48.2,75.4L48.4,72.4L47.9,68.9L47.2,66.6L45.5,63.5L43.4,61L40.7,58.9L38,57.5L34.9,56.5Z M30.8,63.8L29.3,64.1L27.4,64.9L25.8,66L24.6,67.3L23.8,68.5L23,70.5L22.7,72L22.7,73.8L23,75.3L23.7,77.2L24.6,78.5L26.1,80.1L27.5,81L29.4,81.8L32.3,82.1L33.7,81.9L35.7,81.1L37.3,80.1L38.7,78.7L39.5,77.5L40.4,75.5L40.7,74.1L40.7,71.7L40.3,70L39.5,68.2L37.2,65.7L36.3,65L34.1,64.1L32.6,63.8Z" />
 </vector>
