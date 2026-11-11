@@ -17,8 +17,11 @@ import androidx.compose.runtime.setValue
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.ui.common.DeviceLayout
+import com.aotv.app.ui.common.LocalPosterQuality
+import com.aotv.app.ui.common.LocalPosterRanks
 import com.aotv.app.ui.common.currentDeviceLayout
 import com.aotv.app.ui.navigation.MoviesNavigation
 import com.aotv.app.ui.theme.AotvTheme
@@ -63,7 +66,16 @@ class MainActivity : ComponentActivity() {
                     }
                     return@AotvTheme
                 }
-                androidx.compose.runtime.CompositionLocalProvider(com.aotv.app.ui.common.LocalPosterInfo provides posterInfo) {
+                // Ranking e resumo das fontes, lidos uma vez aqui e entregues aos cartões por
+                // CompositionLocal — antes cada pôster abria dois coletores e uma tela cheia
+                // recompunha todos os cartões a cada resumo novo de qualquer título.
+                val posterRanks = posterInfo.ranks.collectAsStateWithLifecycle()
+                val posterQuality = posterInfo.quality.collectAsStateWithLifecycle()
+                androidx.compose.runtime.CompositionLocalProvider(
+                    com.aotv.app.ui.common.LocalPosterInfo provides posterInfo,
+                    LocalPosterRanks provides posterRanks,
+                    LocalPosterQuality provides posterQuality,
+                ) {
                     MoviesNavigation(
                         deviceLayout = deviceLayout,
                         onRestartApp = { restartApp() },
