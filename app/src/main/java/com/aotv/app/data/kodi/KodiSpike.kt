@@ -78,6 +78,17 @@ class KodiSpike @Inject constructor(
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     tmpZip.outputStream().use { output -> input.copyTo(output) }
                 } ?: error("Não consegui abrir o ZIP escolhido.")
+                // Valida pelo conteúdo (magic PK), não pelo MIME/extensão:
+                // o seletor aceita qualquer arquivo (o filtro application/zip
+                // cinzentava o Vulgata no celular do Davi) e só aqui se prova
+                // que é ZIP de verdade.
+                val magic = ByteArray(4)
+                FileInputStream(tmpZip).use { it.read(magic) }
+                require(
+                    magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) ||
+                        magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x05, 0x06)) ||
+                        magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x07, 0x08)),
+                ) { "O arquivo escolhido não é um ZIP válido." }
                 // Extrai com proteção contra zip-slip.
                 val extractDir = File(tmpDir, "extracted").apply { mkdirs() }
                 ZipInputStream(FileInputStream(tmpZip)).use { zip ->
