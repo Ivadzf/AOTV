@@ -64,3 +64,12 @@ class File:
 
     def close(self):
         self._f.close()
+
+# Spike6: registra cada chamada xbmcvfs* (nome, args, retorno) no log de
+# chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
+from _aotv_kodi_log import traced as _traced
+
+for _fn in ("translatePath", "exists", "mkdir", "delete", "rename"):
+    globals()[_fn] = _traced("xbmcvfs." + _fn, globals()[_fn])
+for _m in ("read", "write", "size", "close"):
+    setattr(File, _m, _traced("xbmcvfs.File." + _m, getattr(File, _m)))
