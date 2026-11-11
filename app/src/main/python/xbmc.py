@@ -65,7 +65,16 @@ def getInfoLabel(cLine):
         return "21.0"
     if cLine == "System.AddonVersion":
         return ""
-    # Sem vídeo tocando, as chaves de Player/VideoPlayer são vazias.
+    # Chaves de playback (Fase 2): refletem o ExoPlayer via ponte; sem
+    # nada tocando, são vazias (como num Kodi sem vídeo).
+    if cLine in ("Player.Filenameandpath", "Player.FilenameAndPath"):
+        return _playing_file()
+    if cLine == "Player.Filename":
+        f = _playing_file()
+        return f.rsplit("/", 1)[-1] if f else ""
+    if cLine in ("Player.Title", "VideoPlayer.Title"):
+        return _playing_title()
+    # Sem vídeo tocando, as demais chaves de Player/VideoPlayer são vazias.
     return ""
 
 
@@ -162,40 +171,146 @@ class Monitor:
 
 
 class Player:
-    """Player mínimo da Fase 1 (ação + estado neutro). A 2ª camada de
-    legendas (a4kSubtitles, Fase 2+) retroalimenta este Player com o
-    estado real do ExoPlayer (getVideoInfoTag, getAvailableSubtitleStreams,
-    setSubtitleStream) — aqui ele só não mente: nada tocando."""
+    """Player da Fase 2: reflete o ExoPlayer de verdade via KodiPlayerBridge.
+
+    A ponte (Kotlin, `object` com métodos @JvmStatic) é importada do
+    Python pelo Chaquopy; sem ela (teste local, sem Android), tudo
+    devolve o valor neutro — o mesmo comportamento da Fase 1. O addon
+    acompanha o playback (isPlaying/getTime/seek/pause) e o play/stop
+    do addon operam no player do app. A 2ª camada de legendas
+    (a4kSubtitles) ainda precisa de getVideoInfoTag/getAvailableSubtitleStreams/
+    setSubtitleStream — fora da Fase 2.
+    """
 
     def play(self, item=None, listitem=None, windowed=False, startpos=-1):
         _log("xbmc.Player.play", str(item))
+        bridge = _player_bridge()
+        if bridge is None:
+            return
+        try:
+            path = ""
+            if isinstance(item, str):
+                path = item
+            elif listitem is not None:
+                try:
+                    path = listitem.getPath()
+                except Exception:
+                    path = ""
+            if path:
+                bridge.update(path, "")
+            bridge.play()
+        except Exception:
+            pass
 
     def stop(self):
         _log("xbmc.Player.stop", "")
+        bridge = _player_bridge()
+        if bridge is None:
+            return
+        try:
+            bridge.stop()
+        except Exception:
+            pass
 
     def isPlaying(self):
+        bridge = _player_bridge()
+        if bridge is not None:
+            try:
+                return bool(bridge.isPlaying())
+            except Exception:
+                pass
         return False
 
     def isPlayingVideo(self):
+        bridge = _player_bridge()
+        if bridge is not None:
+            try:
+                return bool(bridge.isPlayingVideo())
+            except Exception:
+                pass
         return False
 
     def isPlayingAudio(self):
         return False
 
     def getPlayingFile(self):
-        return ""
+        return _playing_file()
 
     def getTime(self):
+        bridge = _player_bridge()
+        if bridge is not None:
+            try:
+                return float(bridge.getTime())
+            except Exception:
+                pass
         return 0.0
 
     def getTotalTime(self):
+        bridge = _player_bridge()
+        if bridge is not None:
+            try:
+                return float(bridge.getTotalTime())
+            except Exception:
+                pass
         return 0.0
 
     def seekTime(self, seekTime):
-        pass
+        bridge = _player_bridge()
+        if bridge is None:
+            return
+        try:
+            bridge.seekTime(float(seekTime))
+        except Exception:
+            pass
 
     def pause(self):
-        pass
+        bridge = _player_bridge()
+        if bridge is None:
+            return
+        try:
+            bridge.pause()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Ponte de playback (KodiPlayerBridge, Kotlin) — memoizada; None sem Android.
+# ---------------------------------------------------------------------------
+
+_player_bridge_cache = {"tried": False, "bridge": None}
+
+
+def _player_bridge():
+    """A ponte Kotlin (None sem Chaquopy — teste local)."""
+    if _player_bridge_cache["tried"]:
+        return _player_bridge_cache["bridge"]
+    _player_bridge_cache["tried"] = True
+    try:
+        from com.aotv.app.data.kodi import KodiPlayerBridge
+        _player_bridge_cache["bridge"] = KodiPlayerBridge
+    except Exception:
+        _player_bridge_cache["bridge"] = None
+    return _player_bridge_cache["bridge"]
+
+
+def _playing_file():
+    bridge = _player_bridge()
+    if bridge is not None:
+        try:
+            return bridge.getPlayingFile() or ""
+        except Exception:
+            pass
+    return ""
+
+
+def _playing_title():
+    bridge = _player_bridge()
+    if bridge is not None:
+        try:
+            return bridge.getTitle() or ""
+        except Exception:
+            pass
+    return ""
 
 
 # Registra cada chamada xbmc* (nome, args, retorno) no log de

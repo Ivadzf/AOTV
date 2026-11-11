@@ -194,6 +194,15 @@ fun MoviePlayerScreen(
     }
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
+    // Fase 2 (Kodi): o xbmc.Player reflete o ExoPlayer de verdade — o addon
+    // acompanha o playback (isPlaying/getTime/seek/pause) via KodiPlayerBridge.
+    DisposableEffect(s) {
+        com.aotv.app.data.kodi.KodiPlayerBridge.attach(s.exoPlayer, embedUrl, title)
+        onDispose { com.aotv.app.data.kodi.KodiPlayerBridge.detach() }
+    }
+    LaunchedEffect(s.activeUrl, s.displayTitle) {
+        com.aotv.app.data.kodi.KodiPlayerBridge.update(s.activeUrl, s.displayTitle)
+    }
     PlayerSourceEffects(s)
     PlayerPlaybackEffects(s)
     PlayerScreenContent(s)

@@ -53,6 +53,7 @@ import com.aotv.app.ui.theme.TextTertiary
 @Composable
 fun KodiSpikeScreen(
     onBack: () -> Unit,
+    onOpenVulgata: () -> Unit = {},
     viewModel: KodiSpikeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -143,6 +144,23 @@ fun KodiSpikeScreen(
                     .padding(12.dp),
             )
         }
+        Spacer(Modifier.height(16.dp))
+
+        // 3. Abrir o Vulgata (v1.2, Fase 2) — navega no menu do addon e
+        // toca os streams no player do app. Só aparece a entrada; o
+        // teste de carga acima continua igual.
+        OutlinedButton(
+            onClick = onOpenVulgata,
+            enabled = state.installedId != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Abrir Vulgata")
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Navega no catálogo do Vulgata (RedeCanais) e toca no ExoPlayer.",
+            color = TextTertiary, fontSize = 13.sp,
+        )
         Spacer(Modifier.height(24.dp))
     }
 }

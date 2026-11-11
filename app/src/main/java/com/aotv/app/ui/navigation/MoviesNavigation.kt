@@ -64,6 +64,10 @@ private sealed class MoviesRoute(val route: String) {
     object Addons : MoviesRoute("movies_addons")
     object Plugins : MoviesRoute("movies_plugins")
     object KodiSpike : MoviesRoute("movies_kodi_spike")
+    // Navegação de addon Kodi (v1.2, Fase 2) — addonId é o id do addon instalado.
+    object KodiBrowser : MoviesRoute("movies_kodi_browser/{addonId}") {
+        fun create(addonId: String) = "movies_kodi_browser/$addonId"
+    }
     object AddonStore : MoviesRoute("movies_addon_store")
     object MinhaLista : MoviesRoute("movies_minha_lista")
     object Descobrir : MoviesRoute("movies_descobrir")
@@ -410,6 +414,31 @@ fun MoviesNavigation(
                 tvScale(isTV) {
                     com.aotv.app.ui.settings.KodiSpikeScreen(
                         onBack = { navController.popBackStack() },
+                        onOpenVulgata = {
+                            navController.navigate(MoviesRoute.KodiBrowser.create("plugin.video.vulgata"))
+                        },
+                    )
+                }
+            }
+
+            // Navegação de addon Kodi (v1.2, Fase 2) — menu do addon; item
+            // jogável resolve e toca no player do app (mesmo ExoPlayer).
+            composable(
+                MoviesRoute.KodiBrowser.route,
+                arguments = listOf(navArgument("addonId") { type = NavType.StringType }),
+            ) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.kodi.KodiBrowserScreen(
+                        onBack = { navController.popBackStack() },
+                        onPlay = { url, title, addonId ->
+                            navigateToPlayer(
+                                embedUrl = url,
+                                title = title,
+                                sources = listOf(
+                                    MoviePlayerSource(label = title, url = url, addon = addonId),
+                                ),
+                            )
+                        },
                     )
                 }
             }
