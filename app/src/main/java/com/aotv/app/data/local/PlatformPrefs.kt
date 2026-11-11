@@ -28,8 +28,8 @@ data class HomeCatalogRef(val base: String, val type: String, val id: String, va
 /** Perfil de quem assiste. [color] é o índice em [PROFILE_COLORS]. */
 data class Profile(val id: String, val name: String, val color: Int = 0, val kids: Boolean = false)
 
-/** Cores dos perfis, as mesmas do webOS. */
-val PROFILE_COLORS = listOf(0xFF2E8BFF, 0xFFE5484D, 0xFF3DDC84, 0xFFF5A524, 0xFFA970FF, 0xFFFF6FB5)
+/** Cores dos perfis, nas cores do AOTV (turquesa e vermelho escuro). */
+val PROFILE_COLORS = listOf(0xFF00C2B8, 0xFF9E1B1B, 0xFF3DDC84, 0xFFF5A524, 0xFFA970FF, 0xFFFF6FB5)
 const val MAX_PROFILES = 5
 const val MAIN_PROFILE = "main"
 
