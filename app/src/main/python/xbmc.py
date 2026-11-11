@@ -33,6 +33,10 @@ def sleep(milliseconds):
 
 def getInfoLabel(cLine):
     _log("xbmc.getInfoLabel", cLine)
+    # Spike6: o .so lê "System.BuildVersion" (strings do addon_core.so) e
+    # provavelmente verifica a versão do Kodi; "" faria o check em C recusar.
+    if cLine == "System.BuildVersion":
+        return "21.0-Omega"
     return ""
 
 
@@ -78,3 +82,20 @@ class Player:
 
     def getPlayingFile(self):
         return ""
+
+# Spike6: registra cada chamada xbmc* (nome, args, retorno) no log de
+# chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
+# O .so do Vulgata chama essas funções via C API; o log mostra o que o
+# init dele pede (ex.: getInfoLabel('System.BuildVersion')).
+from _aotv_kodi_log import traced as _traced
+
+for _fn in ("log", "sleep", "getInfoLabel", "getCondVisibility",
+            "executebuiltin", "translatePath"):
+    globals()[_fn] = _traced("xbmc." + _fn, globals()[_fn])
+for _cls, _methods in (
+    (Monitor, ("abortRequested", "waitForAbort")),
+    (Player, ("play", "stop", "isPlaying", "isPlayingVideo", "getPlayingFile")),
+):
+    for _m in _methods:
+        setattr(_cls, _m, _traced(
+            "xbmc.%s.%s" % (_cls.__name__, _m), getattr(_cls, _m)))
