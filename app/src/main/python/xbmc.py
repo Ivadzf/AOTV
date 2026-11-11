@@ -41,9 +41,15 @@ def getInfoLabel(cLine):
 
 
 def getCondVisibility(condition):
-    # Spike: tudo False — inclusive System.HasAddon(inputstream.ffmpegdirect),
-    # para o addon cair no fallback do player Kodi (ver plano §2.5).
+    # Spike7: num Kodi de verdade, a condição 'true' é sempre verdadeira —
+    # o init do .so do Vulgata chama getCondVisibility('true') e recusa
+    # quando devolve False (teste do spike6). 'false' devolve False; tudo
+    # o resto continua False — inclusive System.HasAddon(inputstream.
+    # ffmpegdirect), para o addon cair no fallback do player Kodi (plano §2.5).
     _log("xbmc.getCondVisibility", condition)
+    cond = str(condition).strip().lower() if condition is not None else ""
+    if cond == "true":
+        return True
     return False
 
 
