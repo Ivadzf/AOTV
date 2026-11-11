@@ -59,6 +59,19 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Compilar shim libkodi.so
+        run: |
+          sdkmanager "ndk;27.0.12077973"
+          NDK="$ANDROID_HOME/ndk/27.0.12077973"
+          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+          mkdir -p /tmp/chaquopy-stub app/src/main/jniLibs/arm64-v8a
+          printf 'void aotv_python3_stub(void) {}\n' > /tmp/chaquopy-stub/python3-stub.c
+          "$CLANG" -shared -Wl,-soname,libpython3.so \
+            -o /tmp/chaquopy-stub/libpython3.so /tmp/chaquopy-stub/python3-stub.c
+          "$CLANG" -shared -Wl,--no-as-needed \
+            -o app/src/main/jniLibs/arm64-v8a/libkodi.so \
+            app/src/main/cpp/libkodi-stub.c -L/tmp/chaquopy-stub -lpython3
+          readelf -d app/src/main/jniLibs/arm64-v8a/libkodi.so
 
       - name: Compilar debug
         run: gradle assembleDebug --stacktrace
