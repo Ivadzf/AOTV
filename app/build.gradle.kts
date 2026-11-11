@@ -7,6 +7,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
+    // Runtime Python dos addons Kodi (v1.1, Fase 0 — spike). Chaquopy 17.2.0.
+    id("com.chaquo.python")
 }
 
 android {
@@ -14,10 +16,13 @@ android {
     compileSdk  = 35
     defaultConfig {
         applicationId  = "com.aotv.app"
-        minSdk         = 23
+        // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
+        minSdk         = 24
         targetSdk      = 35
-        versionCode    = 12
-        versionName    = "1.0.11"
+        versionCode    = 13
+        versionName    = "1.1.0-spike"
+        // v1.1: só arm64-v8a (o celular do Davi é arm64; o APK fica ~20 MB menor).
+        ndk { abiFilters += listOf("arm64-v8a") }
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
         // fora do VCS. Sem ela, fica vazia e o usuário informa a própria chave em Configurações.
         val tmdbKey = (project.findProperty("TMDB_API_KEY") as String?) ?: ""
@@ -110,6 +115,23 @@ android {
     }
     // Nativo do torrent comprimido no APK (sem isso o APK cresce uns 27 MB).
     packaging { jniLibs { useLegacyPackaging = true } }
+}
+
+// Runtime Python dos addons Kodi (v1.1, Fase 0 — spike). Chaquopy 17.2.0.
+// Python 3.11 casa exato com o CPython 3.11 do Kodi Omega (xbmc.python 3.0.0).
+// buildPython("python3.11") exige o Python 3.11 de build no CI — o passo
+// actions/setup-python 3.11 no workflow (.github/workflows/build.yml) é do
+// Davi via web; sem ele o build do CI falha (o python3 do runner é 3.12+).
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        buildPython("python3.11")
+        pip {
+            // Spike: só o requests (o Vulgata também pede beautifulsoup4,
+            // six e kodi-six — entram nas fases seguintes, ver o plano).
+            install("requests")
+        }
+    }
 }
 
 dependencies {
