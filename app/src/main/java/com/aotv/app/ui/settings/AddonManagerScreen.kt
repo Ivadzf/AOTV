@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.TravelExplore
@@ -193,6 +194,7 @@ fun AddonManagerScreen(
                     onToggleCatalog = { c ->
                         viewModel.toggleHomeCatalog(addon.url, state.manifests[addon.url]?.name.orEmpty(), c)
                     },
+                    rows = state.rowCounts[com.aotv.app.data.remote.AddonLinks.baseOf(addon.url)],
                 )
             }
 
@@ -331,6 +333,7 @@ private fun AddonCard(
     onConfigureSite: () -> Unit,
     homeKeys: Set<String>,
     onToggleCatalog: (com.aotv.app.data.remote.AddonCatalog) -> Unit,
+    rows: AddonsViewModel.RowCount? = null,
 ) {
     var showCatalogs by remember(addon.url) { mutableStateOf(false) }
     val catalogs = manifest?.catalogs.orEmpty()
@@ -344,7 +347,23 @@ private fun AddonCard(
             onDismiss = { showCatalogs = false },
         )
     }
+    // Fileiras do addon no mesmo painel das outras portas (Minha Início e a ficha da loja).
+    var showRows by remember(addon.url) { mutableStateOf(false) }
+    val shownName = manifest?.name?.takeIf { it.isNotBlank() }
+        ?: runCatching { java.net.URI(addon.url).host }.getOrNull().orEmpty().ifBlank { "Addon" }
+    if (showRows) AddonRowsPanel(url = addon.url, name = shownName, onDismiss = { showRows = false })
     var confirmRemove by remember(addon.url) { mutableStateOf(false) }
+    if (confirmRemove) CatalogConfirm(
+        title = "Remover $shownName?",
+        body = when (val n = rows?.on ?: 0) {
+            0 -> "Dá para instalar de novo depois pelo link."
+            1 -> "A fileira dele sai da Início."
+            else -> "As ${catNum(n)} fileiras dele saem da Início."
+        },
+        confirm = "Remover", danger = true,
+        onConfirm = { confirmRemove = false; onRemove() },
+        onDismiss = { confirmRemove = false },
+    )
     // Edição da URL aberta? Guarda o texto em andamento.
     var editing by remember(addon.url) { mutableStateOf(false) }
     var editText by remember(addon.url) { mutableStateOf(addon.url) }
@@ -487,6 +506,15 @@ private fun AddonCard(
                     modifier = Modifier.size(19.dp),
                 )
             }
+            if (rows != null && rows.all > 0) {
+                Spacer(Modifier.width(6.dp))
+                com.aotv.app.ui.common.AotvButton(
+                    "Fileiras ${catNum(rows.on)} de ${catNum(rows.all)}", { showRows = true },
+                    icon = Icons.Default.GridView,
+                    tone = if (rows.on > 0) com.aotv.app.ui.common.ButtonTone.ON else com.aotv.app.ui.common.ButtonTone.SECONDARY,
+                    compact = true,
+                )
+            }
             if (catalogs.isNotEmpty()) {
                 val on = catalogs.count { "${com.aotv.app.data.remote.AddonLinks.baseOf(addon.url)}|${it.type}|${it.id}" in homeKeys }
                 Text(
@@ -501,38 +529,16 @@ private fun AddonCard(
             }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            if (confirmRemove) {
-                Text(
-                    "Cancelar",
-                    color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    fontFamily = ManropeFontFamily,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { confirmRemove = false }
-                        .padding(horizontal = 12.dp, vertical = 13.dp),
-                )
-                Text(
-                    "Remover mesmo",
-                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold,
-                    fontFamily = ManropeFontFamily,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(LiveRed)
-                        .clickable { onRemove() }
-                        .padding(horizontal = 14.dp, vertical = 13.dp),
-                )
-            } else {
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { confirmRemove = true }
-                        .padding(horizontal = 12.dp, vertical = 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Default.Delete, null, tint = LiveRed, modifier = Modifier.size(16.dp))
-                    Text("Remover", color = LiveRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily)
-                }
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { confirmRemove = true }
+                    .padding(horizontal = 12.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(Icons.Default.Delete, null, tint = LiveRed, modifier = Modifier.size(16.dp))
+                Text("Remover", color = LiveRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily)
             }
             Box(
                 Modifier
