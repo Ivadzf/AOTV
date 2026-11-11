@@ -58,6 +58,14 @@ class MovieDetailViewModel @Inject constructor(
     private var debridJob: kotlinx.coroutines.Job? = null
 
     /**
+     * Jobs dos plugins do episódio selecionado. São cancelados ao trocar de
+     * episódio ou fechar a folha — sem isso, os 55 jobs continuavam rodando
+     * até o timeout (100 s) mesmo com a folha fechada, segurando motores,
+     * threads e rede. (Os jobs dos addons são curtos e se encerram sozinhos.)
+     */
+    private var episodePluginJobs = mutableListOf<kotlinx.coroutines.Job>()
+
+    /**
      * Pergunta ao debrid quais torrents ele tem prontos. Espera os addons pararem de chegar
      * (1,2 s), porque o Real-Debrid confere tentando resolver e só vale gastar com os melhores.
      */
@@ -550,6 +558,10 @@ class MovieDetailViewModel @Inject constructor(
 
     /** Busca nos addons as fontes do episódio selecionado, para o painel de fontes. */
     fun selectEpisode(season: Int, episode: Int) {
+        // A folha do episódio anterior fechou (ou trocou): os plugins dela
+        // param aqui — eles só rodam enquanto a folha está aberta.
+        episodePluginJobs.forEach { it.cancel() }
+        episodePluginJobs.clear()
         // Stremio do episódio (HTTP/4K) — PROGRESSIVO por addon: cada um aparece assim que
         // responde, na ordem dos addons. Addon lento/morto não segura os que já chegaram
         // (antes o awaitAll esperava todos → até 10s de tela vazia ao trocar de episódio).
@@ -598,7 +610,7 @@ class MovieDetailViewModel @Inject constructor(
                 }
             }
             plugins.forEachIndexed { idx, plugin ->
-                viewModelScope.launch {
+                episodePluginJobs += viewModelScope.launch {
                     val s = pluginService.getStreamsForPlugin(plugin, seriesTmdb, "tv", season, episode)
                     pluginSlots[idx] = s
                     maybeRememberPoster()
@@ -617,6 +629,8 @@ class MovieDetailViewModel @Inject constructor(
 
     /** Fecha o painel de servidores do episódio selecionado. */
     fun clearSelectedEpisode() {
+        episodePluginJobs.forEach { it.cancel() }
+        episodePluginJobs.clear()
         _uiState.update {
             it.copy(
                 selectedEpisode = null,
