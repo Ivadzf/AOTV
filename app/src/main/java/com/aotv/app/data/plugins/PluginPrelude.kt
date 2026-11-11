@@ -374,27 +374,52 @@ function __patchCryptoJS() {
     ): String {
         val seasonArg = season?.toString() ?: "null"
         val episodeArg = episode?.toString() ?: "null"
+        // v1.0.6 — o evaluate do QuickJS alpha12 devolve a string "Promise"
+        // em vez do valor resolvido do IIFE (provado na v1.0.5 pelo Testar
+        // rede). Por isso o driver NÃO devolve nada: grava o JSON no global
+        // __aotvStreamsResult (e o erro em __aotvStreamsError) e o Kotlin lê
+        // por polling — mesmo padrão do testNetworkFetch.
         return """
+            globalThis.__aotvStreamsResult = '';
+            globalThis.__aotvStreamsError = '';
             (async function () {
-              var exp = (typeof module !== 'undefined' && module.exports) ? module.exports : null;
-              var fn = (exp && exp.getStreams) || (typeof exp === 'function' ? exp : null) || globalThis.getStreams;
-              if (typeof fn !== 'function') return '[]';
-              var out = await fn($tmdbId, '$mediaType', $seasonArg, $episodeArg, $settingsJson);
-              if (!out) return '[]';
-              return JSON.stringify(out);
+              try {
+                var exp = (typeof module !== 'undefined' && module.exports) ? module.exports : null;
+                var fn = (exp && exp.getStreams) || (typeof exp === 'function' ? exp : null) || globalThis.getStreams;
+                if (typeof fn !== 'function') { globalThis.__aotvStreamsResult = '[]'; return; }
+                var out = await fn($tmdbId, '$mediaType', $seasonArg, $episodeArg, $settingsJson);
+                if (!out) { globalThis.__aotvStreamsResult = '[]'; return; }
+                globalThis.__aotvStreamsResult = JSON.stringify(out);
+              } catch (e) {
+                var msg = String(e && e.message || e);
+                globalThis.__aotvStreamsError = msg;
+                if (typeof console !== 'undefined' && console.error) console.error(msg);
+                globalThis.__aotvStreamsResult = '[]';
+              }
             })()
         """.trimIndent()
     }
 
-    /** Driver do onSettings(): devolve os descritores como JSON string (ou '[]'). */
+    // v1.0.6 — mesmo padrão do getStreamsDriver: o resultado vai para o
+    // global __aotvSettingsResult (erro em __aotvSettingsError) e o Kotlin
+    // lê por polling, porque o evaluate devolve "Promise" em vez do valor.
     const val ON_SETTINGS_DRIVER = """
+        globalThis.__aotvSettingsResult = '';
+        globalThis.__aotvSettingsError = '';
         (async function () {
-          var exp = (typeof module !== 'undefined' && module.exports) ? module.exports : null;
-          var fn = (exp && exp.onSettings) || globalThis.onSettings;
-          if (typeof fn !== 'function') return '[]';
-          var out = await fn();
-          if (!out) return '[]';
-          return JSON.stringify(out);
+          try {
+            var exp = (typeof module !== 'undefined' && module.exports) ? module.exports : null;
+            var fn = (exp && exp.onSettings) || globalThis.onSettings;
+            if (typeof fn !== 'function') { globalThis.__aotvSettingsResult = '[]'; return; }
+            var out = await fn();
+            if (!out) { globalThis.__aotvSettingsResult = '[]'; return; }
+            globalThis.__aotvSettingsResult = JSON.stringify(out);
+          } catch (e) {
+            var msg = String(e && e.message || e);
+            globalThis.__aotvSettingsError = msg;
+            if (typeof console !== 'undefined' && console.error) console.error(msg);
+            globalThis.__aotvSettingsResult = '[]';
+          }
         })()
     """
 }
