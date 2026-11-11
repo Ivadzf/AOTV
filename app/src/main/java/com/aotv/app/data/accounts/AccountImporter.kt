@@ -115,7 +115,7 @@ class AccountImporter @Inject constructor(
             if (series) tmdb.getSeriesDetail(id, append = "", apiKey = apiKey).let { d ->
                 com.aotv.app.domain.model.MovieItem(
                     tmdbId = d.id, embedId = d.id.toString(), title = d.name, overview = d.overview.orEmpty(),
-                    posterUrl = d.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }.orEmpty(), backdropUrl = "",
+                    posterUrl = d.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }.orEmpty(), backdropUrl = "",
                     year = d.firstAirDate.orEmpty().take(4), rating = d.voteAverage, type = MediaType.SERIES,
                 )
             } else tmdb.getMovieDetail(id, append = "", apiKey = apiKey).toMovieItem()
