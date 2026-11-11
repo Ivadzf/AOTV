@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusProperties
@@ -747,14 +748,18 @@ private fun MoviesBottomBar(
     val primary = items.filter { it.route in primaryRoutes }.take(primaryCount)
     val extra = items.filter { it !in primary }
     val moreSelected = currentRoute == settingsRoute || extra.any { it.route == currentRoute }
+    // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
+    // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
+    // próprio conteúdo (ícones inclusos), não o que está atrás da barra.
     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
-        .clip(androidx.compose.foundation.shape.RoundedCornerShape(32.dp)).background(com.aotv.app.ui.theme.BackgroundElevated)
+        .shadow(16.dp, androidx.compose.foundation.shape.RoundedCornerShape(32.dp))
+        .clip(androidx.compose.foundation.shape.RoundedCornerShape(32.dp)).background(com.aotv.app.ui.theme.GlassBg)
         .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, androidx.compose.foundation.shape.RoundedCornerShape(32.dp))
         .padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         primary.forEach { item ->
             MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
         }
-        MoviesBottomBarItem(Icons.Default.MoreHoriz, "Mais opções", moreSelected || more, { more = true }, Modifier.weight(1f))
+        MoviesBottomBarItem(Icons.Default.MoreHoriz, "Mais", moreSelected || more, { more = true }, Modifier.weight(1f), contentDescription = "Mais opções")
     }
     if (more) ModalBottomSheet(onDismissRequest = { more = false }, containerColor = com.aotv.app.ui.theme.BackgroundElevated,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -790,14 +795,20 @@ private fun MoviesBottomBarItem(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    contentDescription: String? = null,
 ) {
-    Box(modifier.heightIn(min = 52.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(26.dp))
-        .background(if (selected) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Transparent)
+    Column(modifier.heightIn(min = 56.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+        .background(if (selected) androidx.compose.ui.graphics.Color.White.copy(alpha = .10f) else androidx.compose.ui.graphics.Color.Transparent)
         .semantics { this.selected = selected }
-        .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick), contentAlignment = Alignment.Center) {
-        Icon(icon, contentDescription = label,
-            tint = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary,
-            modifier = Modifier.size(26.dp))
+        .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
+        .padding(horizontal = 4.dp, vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Icon(icon, contentDescription = contentDescription ?: label,
+            tint = if (selected) androidx.compose.ui.graphics.Color.White else com.aotv.app.ui.theme.TextSecondary,
+            modifier = Modifier.size(22.dp))
+        Text(label, color = if (selected) androidx.compose.ui.graphics.Color.White else com.aotv.app.ui.theme.TextSecondary,
+            fontSize = 10.sp, lineHeight = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            fontFamily = com.aotv.app.ui.theme.Inter, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }
 
