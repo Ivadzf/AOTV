@@ -179,9 +179,9 @@ class PluginsViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 if ("tv" in plugin.supportedTypes) {
-                    pluginService.getStreamsForPlugin(plugin, 1396, "tv", 1, 1)
+                    pluginService.getStreamsForPluginTest(plugin, 1396, "tv", 1, 1)
                 } else {
-                    pluginService.getStreamsForPlugin(plugin, 550, "movie")
+                    pluginService.getStreamsForPluginTest(plugin, 550, "movie")
                 }
             }
             _uiState.update { it.copy(testing = it.testing - id) }
