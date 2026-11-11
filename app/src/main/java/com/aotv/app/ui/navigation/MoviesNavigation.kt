@@ -62,6 +62,7 @@ private sealed class MoviesRoute(val route: String) {
     object Settings : MoviesRoute("movies_settings")
     object Addons : MoviesRoute("movies_addons")
     object Plugins : MoviesRoute("movies_plugins")
+    object KodiSpike : MoviesRoute("movies_kodi_spike")
     object AddonStore : MoviesRoute("movies_addon_store")
     object MinhaLista : MoviesRoute("movies_minha_lista")
     object Descobrir : MoviesRoute("movies_descobrir")
@@ -364,6 +365,7 @@ fun MoviesNavigation(
                         onPlatformChanged = onRestartApp,
                         onOpenAddons      = { navController.navigate(MoviesRoute.Addons.route) },
                         onOpenPlugins     = { navController.navigate(MoviesRoute.Plugins.route) },
+                        onOpenKodiSpike   = { navController.navigate(MoviesRoute.KodiSpike.route) },
                         onOpenProfiles    = { navController.navigate(MoviesRoute.Profiles.route) },
                         onOpenHomeCustomize = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                         onOpenDebrid = { navController.navigate(MoviesRoute.Debrid.route) },
@@ -394,6 +396,16 @@ fun MoviesNavigation(
             composable(MoviesRoute.Plugins.route) {
                 tvScale(isTV) {
                     com.aotv.app.ui.settings.PluginsScreen(
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+            }
+
+            // Spike Kodi (Fase 0, v1.1) — instala o ZIP do Vulgata por SAF e
+            // testa se o .so dele carrega sob o Python do Chaquopy.
+            composable(MoviesRoute.KodiSpike.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.settings.KodiSpikeScreen(
                         onBack = { navController.popBackStack() },
                     )
                 }
