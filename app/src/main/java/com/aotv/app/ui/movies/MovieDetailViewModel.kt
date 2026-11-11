@@ -389,7 +389,10 @@ class MovieDetailViewModel @Inject constructor(
                     _uiState.update { it.copy(stremioLoading = true) }
                     plugins.forEachIndexed { idx, plugin ->
                         srcJobs += launch {
-                            val s = pluginService.getStreamsForPlugin(plugin, tmdbId, "movie")
+                            val s = pluginService.getStreamsForPlugin(
+                                plugin, tmdbId, "movie",
+                                timeoutMsOverride = com.aotv.app.data.plugins.PluginService.SHEET_TIMEOUT_MS,
+                            )
                             pluginSlots[idx] = s
                             _uiState.update { st ->
                                 st.copy(
@@ -649,7 +652,10 @@ class MovieDetailViewModel @Inject constructor(
                 episodePluginJobRunning[idx] = true
                 episodePluginJobs += viewModelScope.launch {
                     try {
-                        val s = pluginService.getStreamsForPlugin(plugin, seriesTmdb, "tv", season, episode)
+                        val s = pluginService.getStreamsForPlugin(
+                            plugin, seriesTmdb, "tv", season, episode,
+                            timeoutMsOverride = com.aotv.app.data.plugins.PluginService.SHEET_TIMEOUT_MS,
+                        )
                         pluginSlots[idx] = s
                         maybeRememberPoster()
                         if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
