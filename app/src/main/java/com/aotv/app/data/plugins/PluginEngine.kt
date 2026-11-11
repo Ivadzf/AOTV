@@ -11,10 +11,12 @@ import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -109,12 +111,19 @@ class PluginEngine @Inject constructor(
         val mutex: Mutex = Mutex()
         /** Status HTTP do último fetch feito neste runtime (-1 = nenhum). */
         @Volatile var lastFetchStatus: Int = -1
+        /** Última mensagem de console.error da execução atual (diagnóstico). */
+        @Volatile var lastConsoleError: String? = null
+        /** Prévia do corpo da última resposta de fetch da execução atual. */
+        @Volatile var lastBodyPreview: String? = null
         @Volatile var lastUsedAt: Long = System.currentTimeMillis()
     }
 
     /** Pool de runtimes (LinkedHashMap access-order = LRU). Guardado por poolLock. */
     private val pool = LinkedHashMap<String, PooledEngine>(16, 0.75f, true)
     private val poolLock = Any()
+
+    /** Fechamento de runtimes descartados (nunca na thread de quem chamou). */
+    private val bgScope = CoroutineScope(Dispatchers.Default)
 
     private var cachedCryptoJs: String? = null
 
@@ -191,20 +200,37 @@ class PluginEngine @Inject constructor(
     fun lastFetchStatus(pluginId: String): Int =
         synchronized(poolLock) { pool[pluginId]?.lastFetchStatus ?: -1 }
 
+    /** Última mensagem de console.error da execução atual do plugin. */
+    fun lastConsoleError(pluginId: String): String? =
+        synchronized(poolLock) { pool[pluginId]?.lastConsoleError }
+
+    /** Prévia do corpo da última resposta de fetch da execução atual. */
+    fun lastBodyPreview(pluginId: String): String? =
+        synchronized(poolLock) { pool[pluginId]?.lastBodyPreview }
+
     /**
      * Descarta o runtime em pool do plugin (código reinstalado/removido).
      * Fecha o runtime SÓ se estiver ocioso; se estiver rodando, não fecha
      * (regra anti-SIGSEGV) — o runtime vaza e a próxima execução cria um novo.
+     * O fechamento roda em background: fechar um runtime na thread de quem
+     * chamou (Main, nas ações de UI) travava o app na v1.0.4.
      */
     fun invalidate(pluginId: String) {
         val pooled = synchronized(poolLock) { pool.remove(pluginId) } ?: return
         if (pooled.mutex.tryLock()) {
-            try {
-                runCatching { pooled.qjs?.close() }
-                pooled.dispatcher.close()
-            } finally {
-                pooled.mutex.unlock()
-            }
+            // Nada rodando (o tryLock provou) e nada novo pode começar (fora
+            // do pool; quem estiver esperando aborta na checagem do pool) —
+            // fechar em background é seguro.
+            pooled.mutex.unlock()
+            closeInBackground(pooled)
+        }
+    }
+
+    /** Fecha um runtime ocioso em background (nunca na thread de quem chamou). */
+    private fun closeInBackground(pooled: PooledEngine) {
+        bgScope.launch {
+            runCatching { pooled.qjs?.close() }
+            pooled.dispatcher.close()
         }
     }
 
@@ -218,22 +244,54 @@ class PluginEngine @Inject constructor(
      * Fetch de controle pelo MESMO motor/fetch dos plugins: busca o manifest
      * do repo e devolve o status HTTP. É o discriminador, no celular, entre
      * "o fetch do motor não funciona" (0) e "os providers devolvem vazio" (200).
+     *
+     * v1.0.5 — o teste antigo avaliava uma IIFE async e fazia parse do valor
+     * devolvido por evaluate<String>: em algum caminho o evaluate devolve a
+     * string literal "Promise" em vez do JSON resolvido, e JSONObject("Promise")
+     * lança "Value Promise of type java.lang.String cannot be converted to
+     * JSONObject" no Android. O teste agora GRAVA o resultado num global e o
+     * Kotlin o lê por polling — funciona devolva o evaluate uma Promise ou não.
+     * O valor devolvido pelo evaluate do disparo é ignorado de propósito.
      */
     suspend fun testNetworkFetch(timeoutMs: Long = 30_000L): Result<Int> = runCatching {
         val url = PluginStore.DEFAULT_REPO_URL
-        val json = execute(
+        val found = execute(
             pluginId = NETWORK_TEST_ID,
             code = "",
             codeSha = NETWORK_TEST_SHA,
             timeoutMs = timeoutMs,
             cookieJar = PluginCookieJar(File(context.filesDir, "plugin-cookies/$NETWORK_TEST_ID.json")),
         ) { qjs ->
+            qjs.evaluate<String>("globalThis.__netTestResult = ''; 'ok';")
+            // Dispara o fetch; o retorno é ignorado (pode vir como "Promise").
             qjs.evaluate<String>(
-                "(async function () { var r = await fetch(" + JSONObject.quote(url) + "); " +
-                    "var t = await r.text(); return JSON.stringify({status: r.status, len: t.length}); })()",
+                "(async function(){ try { var r = await fetch(" + JSONObject.quote(url) + "); " +
+                    "var t = await r.text(); globalThis.__netTestResult = JSON.stringify({status: r.status, len: t.length}); } " +
+                    "catch (e) { globalThis.__netTestResult = JSON.stringify({status: 0, error: String(e && e.message || e)}); } })()",
             )
+            // Polling do global: lê até o fetch terminar ou o prazo acabar.
+            // O delay() fica FORA do runCatching para o cancelamento (timeout)
+            // continuar propagando e cair no dropEngine anti-SIGSEGV.
+            var result = ""
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline) {
+                val cur = runCatching {
+                    qjs.evaluate<String>(
+                        "typeof globalThis.__netTestResult === 'string' ? globalThis.__netTestResult : ''",
+                    )
+                }.getOrNull().orEmpty()
+                if (cur.isNotEmpty()) {
+                    result = cur
+                    break
+                }
+                delay(250)
+            }
+            result
         }
-        JSONObject(json).optInt("status", 0)
+        val obj = JSONObject(found)
+        val err = obj.optString("error").takeIf { it.isNotBlank() }
+        if (err != null) throw IllegalStateException(err)
+        obj.optInt("status", 0)
     }
 
     // ── Execução ──────────────────────────────────────────────────────────────
@@ -260,6 +318,9 @@ class PluginEngine @Inject constructor(
             // execução passada foi descartado); sem limpar, o mapa cresceria
             // para sempre no runtime reutilizado.
             pooled.cheerio.clear()
+            // Diagnóstico da execução atual começa zerado.
+            pooled.lastConsoleError = null
+            pooled.lastBodyPreview = null
             val result = withContext(pooled.dispatcher) {
                 val qjs = pooled.qjs ?: throw IllegalStateException("motor sem runtime")
                 val keyJson = prefs.tmdbApiKey.takeIf { it.isNotBlank() }?.let { JSONObject.quote(it) } ?: "undefined"
@@ -297,6 +358,7 @@ class PluginEngine @Inject constructor(
         cookieJar: PluginCookieJar,
         timeoutMs: Long,
     ): PooledEngine {
+        var stale: PooledEngine? = null
         synchronized(poolLock) {
             val existing = pool[id]
             if (existing != null) {
@@ -304,49 +366,49 @@ class PluginEngine @Inject constructor(
                 // Código mudou sem passar pela invalidação: descarta o velho.
                 pool.remove(id)
                 if (existing.mutex.tryLock()) {
-                    try {
-                        runCatching { existing.qjs?.close() }
-                        existing.dispatcher.close()
-                    } finally {
-                        existing.mutex.unlock()
-                    }
+                    // Ocioso (o tryLock provou) e fora do pool: fechar é seguro,
+                    // mas em background — fechar runtime na Main travava o app.
+                    existing.mutex.unlock()
+                    stale = existing
                 }
                 // Se estiver rodando, o runtime velho vaza (1x); a invalidação
                 // normal (install/remove) já cobre o caso comum.
             }
         }
+        stale?.let { closeInBackground(it) }
         val created = createEngine(id, code, codeSha, cookieJar, timeoutMs)
-        synchronized(poolLock) {
+        val toClose = mutableListOf<PooledEngine>()
+        val result: PooledEngine = synchronized(poolLock) {
             val raced = pool[id]
             if (raced != null && raced !== created) {
                 if (raced.codeSha == codeSha) {
-                    // Outra coroutine criou primeiro: o criado nunca rodou, fechar é seguro.
-                    runCatching { created.qjs?.close() }
-                    created.dispatcher.close()
-                    return raced
+                    // Outra coroutine criou primeiro: o criado nunca atendeu
+                    // execução; fechar é seguro (em background).
+                    toClose += created
+                    return@synchronized raced
                 }
                 // Corrida com código novo: o registrado é o velho — troca pelo criado.
                 pool.remove(id)
                 // (o velho pode estar em uso; descartado sem fechar, vaza 1x)
             }
-            // Evict LRU até caber.
+            // Evict LRU até caber (só ociosos — fechar runtime em uso é
+            // proibido). A remoção é síncrona; o fechamento é em background.
             val candidates = pool.entries.toList()
             for (victim in candidates) {
                 if (pool.size < MAX_POOLED_ENGINES) break
                 if (victim.key == id) continue
                 if (!victim.value.mutex.tryLock()) continue
                 try {
-                    if (pool.remove(victim.key, victim.value)) {
-                        runCatching { victim.value.qjs?.close() }
-                        victim.value.dispatcher.close()
-                    }
+                    if (pool.remove(victim.key, victim.value)) toClose += victim.value
                 } finally {
                     victim.value.mutex.unlock()
                 }
             }
             pool[id] = created
-            return created
+            created
         }
+        toClose.forEach { closeInBackground(it) }
+        return result
     }
 
     /** Cria um runtime (thread dedicada + bindings + prelude + crypto-js + código). */
@@ -408,7 +470,13 @@ class PluginEngine @Inject constructor(
             function("log") { args -> pluginLog("D", args); 0 }
             function("info") { args -> pluginLog("I", args); 0 }
             function("warn") { args -> pluginLog("W", args); 0 }
-            function("error") { args -> pluginLog("E", args); 0 }
+            function("error") { args ->
+                // O erro do provider (ex.: "[BRFlix] Erro: tag GCM inválida")
+                // é o diagnóstico do "nenhum stream": vai para a tela de Plugins.
+                pooled.lastConsoleError = args.joinToString(" ") { it?.toString().orEmpty() }.take(160)
+                pluginLog("E", args)
+                0
+            }
         }
         qjs.function("__atob") { args ->
             runCatching { atob(argStr(args, 0)) }.getOrElse { throw IllegalArgumentException("atob: entrada inválida") }
@@ -423,7 +491,17 @@ class PluginEngine @Inject constructor(
         qjs.asyncFunction("__nativeFetch") { args ->
             // Cliente e status lidos do runtime pooled no momento da chamada
             // (o cliente é refeito a cada execução, com o timeout atual).
-            nativeFetch(args, pooled.fetchClient) { pooled.lastFetchStatus = it }
+            nativeFetch(
+                args,
+                pooled.fetchClient,
+                onStatus = { pooled.lastFetchStatus = it },
+                onBody = { body ->
+                    // Prévia do corpo da ÚLTIMA resposta (o que o provider
+                    // parseou por último antes de devolver []): distingue JSON
+                    // real de página de bloqueio/desafio com status 200.
+                    pooled.lastBodyPreview = body.replace(Regex("\\s+"), " ").take(80)
+                },
+            )
         }
         qjs.function("__parseUrl") { args -> parseUrl(argStr(args, 0), argNullableStr(args, 1)) }
         qjs.function("__aesGcmDecrypt") { args ->
@@ -453,6 +531,7 @@ class PluginEngine @Inject constructor(
      */
     private suspend fun nativeFetch(
         args: Array<Any?>, client: OkHttpClient, onStatus: ((Int) -> Unit)? = null,
+        onBody: ((String) -> Unit)? = null,
     ): String {
         val url = argStr(args, 0)
         val opts = runCatching { JSONObject(argStr(args, 1)) }.getOrNull() ?: JSONObject()
@@ -481,11 +560,13 @@ class PluginEngine @Inject constructor(
                         val arr = headersJson.optJSONArray(key) ?: JSONArray().also { headersJson.put(key, it) }
                         arr.put(value)
                     }
+                    val body = res.body?.string().orEmpty()
+                    onBody?.invoke(body)
                     JSONObject()
                         .put("status", res.code)
                         .put("statusText", res.message)
                         .put("headers", headersJson)
-                        .put("body", res.body?.string().orEmpty())
+                        .put("body", body)
                         .toString()
                 }
             }
