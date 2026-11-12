@@ -447,10 +447,17 @@ object KodiLocalProxy {
         val res = Python.getInstance().getModule("aotv_kodi")
             .callAttr("proxy_fetch", target.url, target.headers, range ?: "")
         val status = res.callAttr("__getitem__", "status").toInt()
-        val headersObj = res.callAttr("__getitem__", "headers")
-        @Suppress("UNCHECKED_CAST")
-        val headers = (headersObj.toJava(Map::class.java) as Map<*, *>)
-            .entries.associate { (k, v) -> k.toString() to v.toString() }
+        // Headers como texto "K: V\n..." — o toJava(Map) do Chaquopy
+        // falha no celular (v1.2.9: "Cannot convert dict object to
+        // java.util.Map"), então o Python devolve texto e o parse é
+        // aqui (só toString(), padrão dictStr, provado). O header é
+        // separado no primeiro ": " (o valor pode conter ": ").
+        val headersTxt = res.callAttr("__getitem__", "headers").toString()
+        val headers = headersTxt.lineSequence()
+            .mapNotNull { line ->
+                val idx = line.indexOf(": ")
+                if (idx <= 0) null else line.substring(0, idx) to line.substring(idx + 2)
+            }.toMap()
         val stream = res.callAttr("__getitem__", "stream")
         val body = PyObjectInputStream(stream)
         return Upstream(status, headers, body, via = "py") { body.close() }

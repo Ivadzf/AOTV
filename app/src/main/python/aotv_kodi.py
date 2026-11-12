@@ -1428,9 +1428,9 @@ def proxy_fetch(url, headers, range_header=""):
     falha de conexão). No celular o fetch sai pelo mesmo egresso WARP
     da resolução, então o token vale.
 
-    Retorna dict {"status": int, "headers": {str: str},
+    Retorna dict {"status": int, "headers": str ("K: V\n..."),
     "stream": _ProxyFetchResult} — o Kotlin lê via Chaquopy (mesmo
-    padrão do parseResult: __getitem__ + toJava). Levanta na falha
+    padrão do parseResult: __getitem__ + toString()). Levanta na falha
     (o Kotlin cai p/ o 502 e registra no diag). NÃO usa o _run_lock:
     o run do addon já terminou quando o player toca; o fetch é uma
     chamada separada e não pode travar contra o dispatch.
@@ -1498,8 +1498,16 @@ def proxy_fetch(url, headers, range_header=""):
                 cur_url = urljoin(cur_url, loc)
                 continue
             break
+        # Headers como texto "K: V\n..." — o Kotlin lê via toString()
+        # (padrão dictStr, provado). NÃO devolver dict: o toJava(Map)
+        # do Chaquopy falha no celular (v1.2.9: "Cannot convert dict
+        # object to java.util.Map"), e os headers são essenciais
+        # (Content-Length/Content-Range/Content-Type), então o
+        # fallback vazio do dictStrMap não serve aqui.
+        headers_txt = "\n".join(
+            f"{k}: {v}" for k, v in resp.headers.items())
         return {"status": int(resp.status_code),
-                "headers": {str(k): str(v) for k, v in resp.headers.items()},
+                "headers": headers_txt,
                 "stream": _ProxyFetchResult(resp)}
     finally:
         _proxy_fetch_tls.active = False
