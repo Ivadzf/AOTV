@@ -88,6 +88,20 @@ _FORCED_SETTINGS = {
 # continua rápido. O Kotlin não tem timeout na chamada Python
 # (KodiPluginRunner usa withContext sem withTimeout), então o piso
 # não é cortado pelo app.
+#
+# v1.2.5 — o play falhou com SSLError no celular (VPN ligada, browse
+# funcionando, mesmo host, mesma lib, mesma sessão). Descoberta: o
+# addon passa verify=False em TODAS as chamadas (provado na VM,
+# probe /tmp/probe_play_ssl.py) — então a verificação de certificado
+# NÃO acontece e o CA store (certifi vs sistema) é irrelevante p/
+# os fetches do addon. Um SSLError com verify=False só pode ser
+# falha no handshake: WRONG_VERSION_NUMBER (o servidor responde
+# HTTP puro na porta 443 — middlebox/bloqueio da operadora) ou EOF
+# (a conexão é derrubada no handshake). Por isso o diag agora
+# mostra o MOTIVO exato do SSLError (_http_error_detail) — é o que
+# separa interceptação de problema de certificado. E o wrapper
+# tenta 1x de novo um GET que falhe com SSLError (transitório —
+# a VPN oscilando, ou a rota mudando entre o browse e o play).
 # ---------------------------------------------------------------------------
 
 _http_calls = []          # (método, url, resultado, ms) — últimas 30
@@ -106,6 +120,62 @@ def _http_record(method, url, outcome, ms):
             del _http_calls[:len(_http_calls) - _HTTP_MAX_CALLS]
     except Exception:
         pass
+
+
+def _http_error_detail(exc, url):
+    """Detalhe curto de um erro HTTP p/ o diag (nunca levanta).
+
+    Ex.: "SSLError:WRONG_VERSION_NUMBER",
+    "SSLError:CERTIFICATE_VERIFY_FAILED",
+    "SSLError:EOF@outro-host" (o host que falhou não é o pedido —
+    ex.: redirect p/ outro host),
+    "ConnectionError" (sem detalhe útil).
+
+    O motivo exato separa interceptação da operadora (o servidor
+    responde HTTP puro na porta 443 -> WRONG_VERSION_NUMBER; a
+    conexão é derrubada no handshake -> EOF) de problema de
+    certificado (CERTIFICATE_VERIFY_FAILED). Importante: o addon
+    passa verify=False em TODAS as chamadas (provado na VM, probe
+    /tmp/probe_play_ssl.py), então a verificação de certificado
+    NÃO acontece — um CERTIFICATE_VERIFY_FAILED significaria outro
+    caminho de fetch (ou um .so arm64 diferente), e o CA store
+    (certifi vs sistema) é irrelevante p/ os fetches do addon.
+    """
+    import re
+    name = type(exc).__name__
+    try:
+        msg = str(exc)
+    except Exception:
+        return name
+    reason = ""
+    try:
+        m = re.search(r"\[SSL:\s*([A-Z0-9_]+)\]", msg)
+        if m:
+            reason = m.group(1)
+        elif "certificate verify failed" in msg:
+            reason = "CERTIFICATE_VERIFY_FAILED"
+        elif "self-signed certificate" in msg:
+            reason = "SELF_SIGNED"
+        elif "hostname" in msg and "match" in msg:
+            reason = "HOSTNAME_MISMATCH"
+        elif "EOF occurred" in msg:
+            reason = "EOF"
+    except Exception:
+        reason = ""
+    host = ""
+    try:
+        from urllib.parse import urlparse
+        # hostname sem porta: o PoolError traz o host sem porta
+        # (netloc traria a porta e o sufixo apareceria sempre).
+        want = urlparse(url).hostname if isinstance(url, str) else ""
+        m2 = re.search(r"host='([^']+)'", msg)
+        if m2 and m2.group(1) and m2.group(1) != want:
+            host = "@" + m2.group(1)
+    except Exception:
+        host = ""
+    if reason:
+        return "%s:%s%s" % (name, reason, host)
+    return name + host
 
 
 def _http_floor_timeout(timeout):
@@ -144,6 +214,8 @@ def _install_http_probe():
     import functools
 
     def _wrap_session_request(orig):
+        import requests.exceptions as _rexc
+
         @functools.wraps(orig)
         def _probed_request(self, method, url, **kwargs):
             t0 = time.monotonic()
@@ -152,30 +224,51 @@ def _install_http_probe():
                     kwargs.get("timeout", None))
             except Exception:
                 pass
-            try:
-                resp = orig(self, method, url, **kwargs)
-                ms = (time.monotonic() - t0) * 1000
+            # Retry (v1.2.5): um SSLError no handshake é transitório
+            # (a operadora interceptando, ou a VPN oscilando) — o
+            # browse funciona e o play falha no mesmo host, mesma
+            # lib, mesma sessão. Uma 2a tentativa, só p/ GET
+            # (idempotente) e só 1x, pode atravessar. O addon vê só
+            # o resultado final; as duas tentativas ficam no diag.
+            # Só SSLError (não ConnectionError: o addon já tenta
+            # vários hosts-proxy e esses falham de propósito).
+            max_tries = 2 if str(method).upper() == "GET" else 1
+            attempt = 0
+            while True:
+                attempt += 1
+                t1 = time.monotonic()
                 try:
-                    # _content já está em memória p/ respostas
-                    # não-streaming (é o caso do addon); False
-                    # significa streaming — não dispara download.
-                    body = getattr(resp, "_content", None)
-                    if body is None or body is False:
+                    resp = orig(self, method, url, **kwargs)
+                    ms = (time.monotonic() - t1) * 1000
+                    try:
+                        # _content já está em memória p/ respostas
+                        # não-streaming (é o caso do addon); False
+                        # significa streaming — não dispara download.
+                        body = getattr(resp, "_content", None)
+                        if body is None or body is False:
+                            kb = "?"
+                        else:
+                            n = len(body)
+                            kb = ("%dKB" % (n // 1024)) if n >= 1024 \
+                                else ("%dB" % n)
+                    except Exception:
                         kb = "?"
-                    else:
-                        n = len(body)
-                        kb = ("%dKB" % (n // 1024)) if n >= 1024 \
-                            else ("%dB" % n)
-                except Exception:
-                    kb = "?"
-                _http_record(method, url,
-                             "%s %s" % (resp.status_code, kb), ms)
-                return resp
-            except BaseException as e:
-                ms = (time.monotonic() - t0) * 1000
-                _http_record(method, url,
-                             "ERRO %s" % type(e).__name__, ms)
-                raise
+                    _http_record(method, url,
+                                 "%s %s" % (resp.status_code, kb), ms)
+                    return resp
+                except BaseException as e:
+                    ms = (time.monotonic() - t1) * 1000
+                    _http_record(method, url,
+                                 "ERRO %s" % _http_error_detail(e, url),
+                                 ms)
+                    if attempt < max_tries and \
+                            isinstance(e, _rexc.SSLError):
+                        try:
+                            time.sleep(1.5)
+                        except Exception:
+                            pass
+                        continue
+                    raise
 
         _probed_request._aotv_http_probe = True
         return _probed_request
@@ -198,7 +291,7 @@ def _install_http_probe():
             except BaseException as e:
                 ms = (time.monotonic() - t0) * 1000
                 _http_record("urllib", u,
-                             "ERRO %s" % type(e).__name__, ms)
+                             "ERRO %s" % _http_error_detail(e, u), ms)
                 raise
 
         _probed_urlopen._aotv_http_probe = True
