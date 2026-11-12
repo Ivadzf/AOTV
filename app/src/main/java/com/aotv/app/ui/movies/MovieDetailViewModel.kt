@@ -4,7 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.local.PlatformPrefs
-import com.aotv.app.data.remote.TmdbApiServiceimport com.aotv.app.data.remote.dto.bestLogoUrl
+import com.aotv.app.data.remote.TmdbApiService
+import com.aotv.app.data.remote.dto.bestLogoUrl
 import com.aotv.app.data.remote.dto.bestTrailerKey
 import com.aotv.app.data.remote.dto.trailerKeys
 import com.aotv.app.data.remote.dto.toCastMember
