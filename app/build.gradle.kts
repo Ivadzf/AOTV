@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 30
-        versionName    = "1.2.7"
+        versionCode    = 31
+        versionName    = "1.2.8"
         // v1.1: só arm64-v8a (o celular do Davi é arm64; o APK fica ~20 MB menor).
         ndk { abiFilters += listOf("arm64-v8a") }
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),

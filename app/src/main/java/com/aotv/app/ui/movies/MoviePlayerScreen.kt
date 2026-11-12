@@ -82,6 +82,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.aotv.app.data.kodi.kodiProxyHostnameVerifier
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.data.torrent.TorrentMagnet
 import com.aotv.app.data.torrent.Torrents
@@ -126,27 +127,7 @@ private fun audioTrackLabel(group: androidx.media3.common.Tracks.Group, index: I
 
 /** Fonte de mídia com DNS da Cloudflare, Referer e arquivos locais (downloads). */
 @OptIn(UnstableApi::class)
-/**
- * v1.2.7 — Verificação de hostname relaxada SÓ p/ os hosts proxy do Vulgata
- * (`*.null-null.shop`). O proxy devolve um certificado válido p/
- * `*.null-null.shop`, mas o hostname real é um rótulo punycode com
- * underscores (`xn--l...null-null.shop`) que a verificação estrita de
- * hostname rejeita ("Hostname mismatch", provado na VM com verify=ON) —
- * o addon contorna isso com `verify=False` em todos os fetches. Aqui só
- * o CHECK DE NOME é relaxado p/ esses hosts; a cadeia de certificados
- * continua sendo verificada (o trust manager padrão do OkHttp não é
- * tocado). Qualquer outro host usa o verificador padrão do Android.
- * Limite conhecido: se o OkHttp rejeitar a URL ainda no parse (o host
- * tem underscores), o erro aparece antes do TLS e este verificador não
- * alcança — o diag na tela de erro do player vai mostrar qual foi o
- * erro, e o próximo passo seria o proxy local (127.0.0.1).
- */
-private val kodiProxyHostnameVerifier = javax.net.ssl.HostnameVerifier { hostname, session ->
-    if (hostname.endsWith(".null-null.shop", ignoreCase = true)) true
-    else javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
-}
-
-/** Cliente do ExoPlayer com o HostnameVerifier acima (só o player usa). */
+/** Cliente do ExoPlayer com o kodiProxyHostnameVerifier (ver KodiLocalProxy; só o player usa). */
 private val kodiMediaClient by lazy {
     com.aotv.app.data.remote.AppDns.mediaClient.newBuilder()
         .hostnameVerifier(kodiProxyHostnameVerifier)
@@ -393,7 +374,18 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             // v1.2.6 — headers do sufixo Kodi `|...` (ex.: Accept-Language
             // da TV do Vulgata) vão p/ a factory; a URI limpa vai p/ o item.
             val (cleanPlay, playHeaders) = splitKodiStreamHeaders(play)
-            exoPlayer.setMediaSource(mediaSourceFactory(context, playHeaders).createMediaSource(mediaItemFor(context, cleanPlay)))
+            // v1.2.8 — stream Kodi (diag presente) passa pelo proxy local
+            // (127.0.0.1): o ExoPlayer nunca vê o hostname punycode com
+            // underscores, que o OkHttp rejeita no parse (STD 3 ASCII).
+            // O proxy busca o upstream (java.net.URL, sem validação
+            // STD3) com os headers do sufixo Kodi e repassa Range/206.
+            // Só Kodi — Nuvio JS e torrent seguem o caminho normal.
+            val (playUrl, factoryHeaders) = if (kodiDiag.isNotBlank()) {
+                com.aotv.app.data.kodi.KodiLocalProxy.proxyUrl(cleanPlay, playHeaders)
+            } else {
+                cleanPlay to playHeaders
+            }
+            exoPlayer.setMediaSource(mediaSourceFactory(context, factoryHeaders).createMediaSource(mediaItemFor(context, playUrl)))
             exoPlayer.prepare()
             if (!didSeek && pendingSeekMs > 0) { exoPlayer.seekTo(pendingSeekMs); didSeek = true }
             // Transmitindo: mantém o player local MUDO (o Cast recebe a fonte em efeito próprio).
@@ -601,6 +593,8 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     DisposableEffect(Unit) {
         onDispose {
             extSync?.release(); exoPlayer.release(); mediaSession.release(); ScrubThumbnailer.release()
+            // v1.2.8: para o proxy local do Kodi (a porta e os tokens morrem com o player).
+            com.aotv.app.data.kodi.KodiLocalProxy.stop()
             // Saiu do player, o aparelho para de baixar e de compartilhar o torrent.
             Torrents.ifStarted()?.let { e -> Thread { e.stopAll() }.start() }
         }
@@ -1135,7 +1129,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
 
         // Todas as fontes falharam: aviso central (o efeito acima volta ao detalhe em ~2.5s,
         // exceto no play Kodi — v1.2.7 — que fica na tela p/ o Davi ler o diagnóstico).
-        if (sourceFailed) SourceFailedOverlay(diag = kodiDiag, playerError = playerError, onBack = onBack)
+        if (sourceFailed) SourceFailedOverlay(diag = kodiDiag + proxyDiagLine(), playerError = playerError, onBack = onBack)
 
         if (syncBarOpen && extUrl != null && !inPip) {
             SyncBar(
@@ -1291,6 +1285,9 @@ internal class PlayerSession(
     fun noteTimeout(msg: String = "Timeout: o stream não iniciou em 12s (sem erro do player)") {
         if (playerError == null) playerError = msg
     }
+    /** v1.2.8: linha do proxy p/ o diag da tela de erro ("" se o proxy
+     *  nunca buscou — o diag original já cobre o resto). */
+    fun proxyDiagLine(): String = com.aotv.app.data.kodi.KodiLocalProxy.lastDiag()
     // Nenhuma fonte tocável (todas falharam/mortas) → overlay + volta ao detalhe (não trava no preto).
     var sourceFailed by run { mutableStateOf(false) }
     // URL que chegou em STATE_READY por último. Dispara a checagem de duração e a subida de qualidade.
