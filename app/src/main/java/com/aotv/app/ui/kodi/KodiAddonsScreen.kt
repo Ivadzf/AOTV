@@ -49,6 +49,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.kodi.KodiPluginRunner
+import com.aotv.app.data.kodi.KodiSettingsStore
 import com.aotv.app.ui.common.AotvButton
 import com.aotv.app.ui.common.PageHeader
 import com.aotv.app.ui.common.pagePadding
