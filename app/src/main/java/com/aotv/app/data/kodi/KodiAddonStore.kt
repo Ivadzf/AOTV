@@ -12,6 +12,7 @@ import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
 import java.io.FileInputStream
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -66,13 +67,9 @@ class KodiAddonStore @Inject constructor(
     // Módulos Python providos pelo app (pip em build-time) — a dependência
     // é considerada satisfeita mesmo sem addon instalado. simplejson é
     // o shim p/ json do aotv_kodi.py (Fase 3) — o BrazucaPlay o exige.
-    private val pipModules = setOf(
-        "script.module.requests",
-        "script.module.beautifulsoup4",
-        "script.module.six",
-        "script.module.kodi-six",
-        "script.module.simplejson",
-    )
+    // Fonte única: KodiRepository.PIP_MODULES (o instalador de
+    // repositório usa a mesma lista p/ pular esses módulos).
+    private val pipModules: Set<String> = KodiRepository.PIP_MODULES
 
     // Download de ZIP por URL (v1.4, Fase 4): mesmos timeouts do
     // PluginStore, DNS padrão (a URL do ZIP pode estar em qualquer
@@ -160,7 +157,8 @@ class KodiAddonStore @Inject constructor(
 
     /**
      * Instala um addon a partir de um ZIP já em disco (v1.4, Fase 4 —
-     * caminho comum do installZip (SAF) e do installFromUrl): valida
+     * caminho comum do installZip (SAF), do resolveInstallUrl e do
+     * installFromIndex (v1.5, repositório): valida
      * pelo conteúdo (magic PK), extrai com proteção contra zip-slip,
      * acha o addon.xml e move para filesDir/kodi/addons/<id>/, intacto
      * (substitui instalação anterior).
@@ -181,23 +179,7 @@ class KodiAddonStore @Inject constructor(
             try {
                 // Extrai com proteção contra zip-slip.
                 val extractDir = File(tmpDir, "extracted").apply { mkdirs() }
-                ZipInputStream(FileInputStream(zipFile)).use { zip ->
-                    var entry = zip.nextEntry
-                    while (entry != null) {
-                        val out = File(extractDir, entry.name)
-                        require(out.canonicalPath.startsWith(extractDir.canonicalPath)) {
-                            "Entrada inválida no ZIP: ${entry.name}"
-                        }
-                        if (entry.isDirectory) {
-                            out.mkdirs()
-                        } else {
-                            out.parentFile?.mkdirs()
-                            out.outputStream().use { output -> zip.copyTo(output) }
-                        }
-                        zip.closeEntry()
-                        entry = zip.nextEntry
-                    }
-                }
+                extractZipTo(zipFile, extractDir)
                 val addonDir = findAddonDir(extractDir)
                     ?: error("addon.xml não encontrado dentro do ZIP.")
                 val xml = File(addonDir, "addon.xml")
@@ -216,51 +198,255 @@ class KodiAddonStore @Inject constructor(
         }
     }
 
+    /** Resultado da resolução de uma URL de instalação (v1.5, repositório). */
+    sealed interface UrlResolution {
+        /** ZIP direto instalado (ou repo com um único plugin, instalado direto). */
+        data class Installed(
+            val addon: KodiAddon,
+            val summary: KodiRepository.InstallSummary? = null,
+        ) : UrlResolution
+
+        /** Índice de repositório resolvido — a UI pergunta qual addon instalar. */
+        data class NeedsChoice(val index: KodiRepository.RepoIndex) : UrlResolution
+    }
+
     /**
-     * Instala um addon por URL (v1.4, Fase 4 — pedido do Davi, igual ao
-     * Kodi original): baixa o ZIP direto da URL e instala pelo mesmo
-     * caminho do installZip. A URL é um link direto p/ um ZIP; um
-     * índice de repositório (addons.xml) é fora de escopo.
-     * Erros claros: URL inválida, falha de rede, HTTP != 200, ZIP
-     * maior que o teto, ZIP inválido, addon.xml ausente.
+     * Baixa um arquivo p/ o disco (teto de 256 MB). Erros claros:
+     * falha de rede, HTTP != 200, resposta vazia, acima do teto.
      */
-    suspend fun installFromUrl(url: String): Result<KodiAddon> = withContext(Dispatchers.IO) {
+    private suspend fun downloadToFile(url: String, dest: File): File {
+        val request = Request.Builder().url(url).build()
+        val response = runCatching { urlClient.newCall(request).execute() }.getOrElse {
+            error("Falha de rede ao baixar: ${it.message}")
+        }
+        response.use { resp ->
+            if (!resp.isSuccessful) error("O servidor devolveu HTTP ${resp.code}.")
+            val body = resp.body ?: error("Resposta vazia do servidor.")
+            var total = 0L
+            body.byteStream().use { input ->
+                dest.outputStream().use { output ->
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > maxDownloadBytes) {
+                            error("O arquivo é maior que ${maxDownloadBytes / (1024 * 1024)} MB — download cancelado.")
+                        }
+                        output.write(buf, 0, n)
+                    }
+                }
+            }
+        }
+        return dest
+    }
+
+    /** Baixa um texto (addons.xml); descompacta gzip quando pedido. */
+    private suspend fun downloadText(url: String, gunzip: Boolean): String {
+        val tmpRoot = File(context.filesDir, "kodi/addons-tmp").apply { mkdirs() }
+        val tmpDir = File(tmpRoot, "text-${System.currentTimeMillis()}").apply { mkdirs() }
+        try {
+            val file = downloadToFile(url, File(tmpDir, "download"))
+            val input = if (gunzip) GZIPInputStream(FileInputStream(file)) else FileInputStream(file)
+            return input.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } finally {
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    /** Extrai um ZIP p/ um diretório, com proteção contra zip-slip. */
+    private fun extractZipTo(zipFile: File, dest: File) {
+        dest.mkdirs()
+        ZipInputStream(FileInputStream(zipFile)).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val out = File(dest, entry.name)
+                require(out.canonicalPath.startsWith(dest.canonicalPath)) {
+                    "Entrada inválida no ZIP: ${entry.name}"
+                }
+                if (entry.isDirectory) {
+                    out.mkdirs()
+                } else {
+                    out.parentFile?.mkdirs()
+                    out.outputStream().use { output -> zip.copyTo(output) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+    }
+
+    /**
+     * Resolve uma URL de instalação (v1.5, suporte a repositório —
+     * pedido do Davi, igual ao Kodi original): ZIP direto de addon,
+     * ZIP de repositório, página HTML de repositório ou addons.xml
+     * direto. ZIP direto instala na hora; índice resolvido volta
+     * [UrlResolution.NeedsChoice] p/ a UI escolher o addon.
+     * Erros claros em português em cada etapa.
+     */
+    suspend fun resolveInstallUrl(url: String): Result<UrlResolution> = withContext(Dispatchers.IO) {
         runCatching {
             val trimmed = url.trim()
             require(trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
                 "A URL precisa começar com http:// ou https://"
             }
             val tmpRoot = File(context.filesDir, "kodi/addons-tmp").apply { mkdirs() }
-            val tmpDir = File(tmpRoot, "download-${System.currentTimeMillis()}").apply { mkdirs() }
+            val tmpDir = File(tmpRoot, "resolve-${System.currentTimeMillis()}").apply { mkdirs() }
             try {
-                val tmpZip = File(tmpDir, "addon.zip")
-                val request = Request.Builder().url(trimmed).build()
-                val response = runCatching { urlClient.newCall(request).execute() }.getOrElse {
-                    error("Falha de rede ao baixar: ${it.message}")
-                }
-                response.use { resp ->
-                    if (!resp.isSuccessful) error("O servidor devolveu HTTP ${resp.code}.")
-                    val body = resp.body ?: error("Resposta vazia do servidor.")
-                    var total = 0L
-                    body.byteStream().use { input ->
-                        tmpZip.outputStream().use { output ->
-                            val buf = ByteArray(8192)
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                total += n
-                                if (total > maxDownloadBytes) {
-                                    error("O arquivo é maior que ${maxDownloadBytes / (1024 * 1024)} MB — download cancelado.")
-                                }
-                                output.write(buf, 0, n)
-                            }
-                        }
-                    }
-                }
-                installZipFile(tmpZip).getOrThrow()
+                val file = downloadToFile(trimmed, File(tmpDir, "download"))
+                resolveDownloaded(file, trimmed, tmpDir, depth = 0)
             } finally {
                 tmpDir.deleteRecursively()
             }
+        }
+    }
+
+    /** Classifica o conteúdo baixado (ZIP, HTML ou XML) e resolve. */
+    private suspend fun resolveDownloaded(
+        file: File,
+        sourceUrl: String,
+        tmpDir: File,
+        depth: Int,
+    ): UrlResolution {
+        require(depth <= 2) { "Redirecionamento de repositório muito profundo." }
+        val magic = ByteArray(4)
+        FileInputStream(file).use { it.read(magic) }
+        val isZip = magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) ||
+            magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x05, 0x06)) ||
+            magic.contentEquals(byteArrayOf(0x50, 0x4B, 0x07, 0x08))
+        if (isZip) return resolveZip(file, tmpDir, depth)
+        val text = runCatching { file.readText(Charsets.UTF_8) }.getOrElse { "" }
+        val trimmed = text.trimStart()
+        if (trimmed.startsWith("<")) {
+            val root = KodiRepository.rootElementName(trimmed)
+            if (root == "addons") {
+                val index = KodiRepository.parseIndex(
+                    trimmed, KodiRepository.dirOfUrl(sourceUrl), sourceUrl,
+                ) ?: error("Não consegui ler o índice addons.xml.")
+                return UrlResolution.NeedsChoice(index)
+            }
+            if (root == "addon") {
+                error("A URL aponta para um addon.xml único, não para um índice de repositório.")
+            }
+            if (trimmed.contains("<html", ignoreCase = true)) {
+                return resolveHtml(trimmed, sourceUrl, tmpDir, depth)
+            }
+        }
+        error("O conteúdo da URL não é um ZIP, uma página de repositório nem um índice (addons.xml).")
+    }
+
+    /** ZIP baixado: addon normal instala; repositório vira índice. */
+    private suspend fun resolveZip(file: File, tmpDir: File, depth: Int): UrlResolution {
+        val extractDir = File(tmpDir, "zip-${System.currentTimeMillis()}").apply { mkdirs() }
+        extractZipTo(file, File(extractDir, "extracted"))
+        val addonDir = findAddonDir(File(extractDir, "extracted"))
+            ?: error("addon.xml não encontrado dentro do ZIP.")
+        val parsed = parseAddonXml(addonDir, File(addonDir, "addon.xml"))
+            ?: error("addon.xml sem id/versão.")
+        val isRepo = parsed.extensionPoints.any { (point, _) -> point == "xbmc.addon.repository" }
+        if (!isRepo) {
+            // ZIP normal de addon — instala como antes.
+            return UrlResolution.Installed(installZipFile(file).getOrThrow())
+        }
+        val xmlText = File(addonDir, "addon.xml").readText(Charsets.UTF_8)
+        val dirs = KodiRepository.parseRepoDirs(xmlText)
+        val dir = KodiRepository.chooseDirForKodi(dirs)
+            ?: error("O repositório não tem índice para o Kodi 21.")
+        val indexText = downloadText(dir.infoUrl, dir.infoCompressed)
+        val index = KodiRepository.parseIndex(indexText, dir.datadir.trimEnd('/'), dir.infoUrl)
+            ?: error("Não consegui ler o índice do repositório.")
+        return UrlResolution.NeedsChoice(index)
+    }
+
+    /** Página HTML: prefere repository.*.zip, depois addons.xml, depois ZIP direto. */
+    private suspend fun resolveHtml(
+        html: String,
+        pageUrl: String,
+        tmpDir: File,
+        depth: Int,
+    ): UrlResolution {
+        val links = KodiRepository.extractRepoLinks(html, pageUrl)
+        val repoZip = links.repoZips.firstOrNull()
+        if (repoZip != null) {
+            val file = downloadToFile(repoZip, File(tmpDir, "repo-${System.currentTimeMillis()}.zip"))
+            return resolveDownloaded(file, repoZip, tmpDir, depth + 1)
+        }
+        val indexUrl = links.indexXmls.firstOrNull()
+        if (indexUrl != null) {
+            val text = downloadText(indexUrl, gunzip = indexUrl.lowercase().endsWith(".gz"))
+            val index = KodiRepository.parseIndex(text, KodiRepository.dirOfUrl(pageUrl), indexUrl)
+                ?: error("Não consegui ler o índice addons.xml.")
+            return UrlResolution.NeedsChoice(index)
+        }
+        val directZip = links.directZips.firstOrNull()
+        if (directZip != null) {
+            val file = downloadToFile(directZip, File(tmpDir, "addon-${System.currentTimeMillis()}.zip"))
+            return resolveDownloaded(file, directZip, tmpDir, depth + 1)
+        }
+        error("A página não tem link de repositório (repository.*.zip) nem de addons.xml.")
+    }
+
+    /**
+     * Instala um addon do índice + as dependências dele, recursivamente
+     * (v1.5, repositório): o plano vem de [KodiRepository.planInstall]
+     * (dependências antes do addon; pula embutidas, binárias e já
+     * instaladas). Cada ZIP é validado (magic PK + addon.xml com o id
+     * esperado) antes de instalar pelo caminho comum [installZipFile].
+     * `onProgress` recebe "Baixando X… (i/n)".
+     */
+    suspend fun installFromIndex(
+        index: KodiRepository.RepoIndex,
+        addonId: String,
+        onProgress: (String) -> Unit = {},
+    ): Result<KodiRepository.InstallSummary> = withContext(Dispatchers.IO) {
+        runCatching {
+            val plan = KodiRepository.planInstall(index, addonId) { id -> getAddon(id)?.version }
+            val total = plan.toInstall.size
+            val installed = mutableListOf<KodiAddon>()
+            val tmpRoot = File(context.filesDir, "kodi/addons-tmp").apply { mkdirs() }
+            for ((i, entry) in plan.toInstall.withIndex()) {
+                val display = KodiPluginRunner.cleanKodiText(entry.name.ifBlank { entry.id })
+                onProgress("Baixando $display… (${i + 1}/$total)")
+                val zipUrl = index.zipUrlFor(entry)
+                val tmpDir = File(tmpRoot, "dep-${System.currentTimeMillis()}-$i").apply { mkdirs() }
+                try {
+                    val zipFile = downloadToFile(zipUrl, File(tmpDir, "addon.zip"))
+                    if (!validateZipAddonId(zipFile, entry.id)) {
+                        error("O ZIP baixado para ${entry.id} não é o addon esperado.")
+                    }
+                    installed += installZipFile(zipFile).getOrThrow()
+                } catch (e: Exception) {
+                    throw IllegalStateException(
+                        "Falha ao instalar ${entry.id} (${installed.size} de $total já instalados): ${e.message}",
+                        e,
+                    )
+                } finally {
+                    tmpDir.deleteRecursively()
+                }
+            }
+            KodiRepository.InstallSummary(
+                root = index.byId[addonId] ?: error("Addon $addonId não encontrado no índice."),
+                installed = installed,
+                skipped = plan.skipped,
+            )
+        }
+    }
+
+    /** Confere se o ZIP contém um addon.xml com o id esperado (antes de instalar). */
+    private fun validateZipAddonId(zipFile: File, expectedId: String): Boolean {
+        return try {
+            val tmpRoot = File(context.filesDir, "kodi/addons-tmp").apply { mkdirs() }
+            val checkDir = File(tmpRoot, "check-${System.currentTimeMillis()}").apply { mkdirs() }
+            try {
+                extractZipTo(zipFile, File(checkDir, "extracted"))
+                val addonDir = findAddonDir(File(checkDir, "extracted")) ?: return false
+                val parsed = parseAddonXml(addonDir, File(addonDir, "addon.xml")) ?: return false
+                parsed.id == expectedId
+            } finally {
+                checkDir.deleteRecursively()
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 

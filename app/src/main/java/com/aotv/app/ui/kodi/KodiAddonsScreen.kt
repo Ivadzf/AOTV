@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,6 +50,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.kodi.KodiPluginRunner
+import com.aotv.app.data.kodi.KodiRepository
 import com.aotv.app.data.kodi.KodiSettingsStore
 import com.aotv.app.ui.common.AotvButton
 import com.aotv.app.ui.common.PageHeader
@@ -63,12 +65,13 @@ import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
 
 /**
- * Tela "Addons Kodi" (v1.4, Fase 4).
+ * Tela "Addons Kodi" (v1.4, Fase 4; repositório na v1.5).
  *
  * Gerencia os addons Kodi instalados: instala por ZIP (SAF) ou por
- * URL (download direto do ZIP, igual ao Kodi original), lista,
- * liga/desliga, abre o addon, edita os settings e mostra o
- * diagnóstico (dependências, service.py). Remover também está aqui.
+ * URL (ZIP direto, página de repositório ou addons.xml — com
+ * dependências), lista, liga/desliga, abre o addon, edita os
+ * settings e mostra o diagnóstico (dependências, service.py).
+ * Remover também está aqui.
  *
  * O Vulgata é Proprietary — nunca é embutido: entra sempre por
  * ZIP/URL escolhido pelo usuário, intacto.
@@ -139,7 +142,8 @@ fun KodiAddonsScreen(
                 ) {
                     CircularProgressIndicator(Modifier.size(24.dp), color = Accent)
                     Text(
-                        if (state.installing) "Instalando…" else "Baixando o ZIP…",
+                        if (state.installing) "Instalando…"
+                        else state.installProgress ?: "Baixando o ZIP…",
                         color = TextSecondary,
                     )
                 }
@@ -155,7 +159,8 @@ fun KodiAddonsScreen(
                         Text("Nenhum addon Kodi instalado", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         Text(
                             "Instale um ZIP pelo botão acima — o Vulgata e o BrazucaPlay entram por aqui. " +
-                                "Por URL, cole o link direto do ZIP do addon.",
+                                "Por URL, cole o link direto do ZIP, da página do repositório ou do addons.xml — " +
+                                "o app resolve as dependências.",
                             color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
                         )
                     }
@@ -177,6 +182,14 @@ fun KodiAddonsScreen(
         busy = state.installingUrl,
         onClose = { showUrlDialog = false },
         onInstall = { url -> showUrlDialog = false; viewModel.installFromUrl(url) },
+    )
+    val installIndex = state.installIndex
+    if (installIndex != null) KodiRepoPickerDialog(
+        index = installIndex,
+        filter = state.installFilter,
+        onFilterChange = viewModel::setInstallFilter,
+        onPick = { id -> viewModel.installFromIndex(installIndex, id) },
+        onClose = { viewModel.closeInstallIndex() },
     )
     menuAddon?.let { addon ->
         KodiAddonMenuDialog(
@@ -279,11 +292,11 @@ private fun KodiInstallUrlDialog(
         title = { Text("Instalar por URL") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Cole o link direto do ZIP do addon (ex.: https://…/plugin.video.x.zip). Índices de repositório (addons.xml) não são suportados.")
+                Text("Cole o link direto do ZIP do addon, da página do repositório ou do addons.xml. Se for um repositório, você escolhe qual addon instalar — as dependências vêm junto.")
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it.take(2048) },
-                    label = { Text("URL do ZIP") },
+                    label = { Text("URL do ZIP ou do repositório") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -297,6 +310,63 @@ private fun KodiInstallUrlDialog(
         },
         dismissButton = {
             TextButton(onClick = onClose) { Text("Cancelar") }
+        },
+        containerColor = BackgroundCard, titleContentColor = TextPrimary, textContentColor = TextSecondary,
+    )
+}
+
+@Composable
+private fun KodiRepoPickerDialog(
+    index: KodiRepository.RepoIndex,
+    filter: String,
+    onFilterChange: (String) -> Unit,
+    onPick: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    val videos = index.videoPlugins()
+    val shown = if (filter.isBlank()) videos else videos.filter {
+        it.name.contains(filter, ignoreCase = true) || it.id.contains(filter, ignoreCase = true)
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Escolher addon") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Repositório com ${videos.size} addons de vídeo. Toque no que você quer instalar — as dependências vêm junto.")
+                OutlinedTextField(
+                    value = filter,
+                    onValueChange = onFilterChange,
+                    label = { Text("Buscar") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(shown, key = { it.id }) { entry ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onPick(entry.id) }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                        ) {
+                            Text(
+                                KodiPluginRunner.cleanKodiText(entry.name.ifBlank { entry.id }),
+                                color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                            )
+                            Text("${entry.id} · v${entry.version}", color = TextSecondary, fontSize = 13.sp)
+                        }
+                    }
+                    if (shown.isEmpty()) item {
+                        Text("Nenhum addon com esse nome.", color = TextSecondary)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClose) { Text("Fechar") }
         },
         containerColor = BackgroundCard, titleContentColor = TextPrimary, textContentColor = TextSecondary,
     )

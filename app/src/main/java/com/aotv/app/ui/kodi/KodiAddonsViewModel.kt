@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.kodi.KodiPluginRunner
+import com.aotv.app.data.kodi.KodiRepository
 import com.aotv.app.data.kodi.KodiServiceRunner
 import com.aotv.app.data.kodi.KodiSettingsStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -42,6 +43,12 @@ class KodiAddonsViewModel @Inject constructor(
         val installingUrl: Boolean = false,
         val message: String? = null,
         val error: String? = null,
+        /** Índice de repositório resolvido, aguardando a escolha do addon. */
+        val installIndex: KodiRepository.RepoIndex? = null,
+        /** Filtro de busca do seletor de addon do repositório. */
+        val installFilter: String = "",
+        /** Progresso da instalação por repositório ("Baixando X… (2/6)"). */
+        val installProgress: String? = null,
         /** Addon com o diálogo de configurações aberto (null = fechado). */
         val settingsAddon: KodiAddonStore.KodiAddon? = null,
         val settingsDefs: List<KodiSettingsStore.SettingDefinition> = emptyList(),
@@ -100,14 +107,82 @@ class KodiAddonsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Instala por URL (v1.5, repositório): resolve a URL — ZIP direto
+     * instala na hora; índice de repositório abre o seletor de addon
+     * (ou instala direto se houver um único addon de vídeo).
+     */
     fun installFromUrl(url: String) {
         viewModelScope.launch {
-            _uiState.update { it.copy(installingUrl = true, message = null, error = null) }
-            val res = addonStore.installFromUrl(url)
             _uiState.update {
                 it.copy(
-                    installingUrl = false,
-                    message = res.getOrNull()?.let { a -> "${displayName(a)} v${a.version} instalado." },
+                    installingUrl = true, message = null, error = null,
+                    installIndex = null, installFilter = "", installProgress = null,
+                )
+            }
+            val res = addonStore.resolveInstallUrl(url)
+            res.onSuccess { resolution ->
+                when (resolution) {
+                    is KodiAddonStore.UrlResolution.Installed -> {
+                        val summary = resolution.summary
+                        _uiState.update {
+                            it.copy(
+                                installingUrl = false,
+                                message = summary?.format()
+                                    ?: resolution.addon.let { a ->
+                                        "${displayName(a)} v${a.version} instalado."
+                                    },
+                            )
+                        }
+                        refresh()
+                    }
+                    is KodiAddonStore.UrlResolution.NeedsChoice -> {
+                        val videos = resolution.index.videoPlugins()
+                        when {
+                            videos.size == 1 -> installFromIndex(resolution.index, videos[0].id)
+                            videos.isEmpty() -> _uiState.update {
+                                it.copy(
+                                    installingUrl = false,
+                                    error = "O repositório não tem nenhum addon de vídeo.",
+                                )
+                            }
+                            else -> _uiState.update {
+                                it.copy(installingUrl = false, installIndex = resolution.index)
+                            }
+                        }
+                    }
+                }
+            }.onFailure { e ->
+                _uiState.update { it.copy(installingUrl = false, error = e.message) }
+            }
+        }
+    }
+
+    fun setInstallFilter(text: String) {
+        _uiState.update { it.copy(installFilter = text) }
+    }
+
+    fun closeInstallIndex() {
+        _uiState.update { it.copy(installIndex = null, installFilter = "") }
+    }
+
+    /** Instala o addon escolhido do índice + as dependências (v1.5). */
+    fun installFromIndex(index: KodiRepository.RepoIndex, addonId: String) {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    installingUrl = true, installProgress = "Preparando…",
+                    message = null, error = null,
+                )
+            }
+            val res = addonStore.installFromIndex(index, addonId) { progress ->
+                _uiState.update { it.copy(installProgress = progress) }
+            }
+            _uiState.update {
+                it.copy(
+                    installingUrl = false, installProgress = null,
+                    installIndex = null, installFilter = "",
+                    message = res.getOrNull()?.format(),
                     error = res.exceptionOrNull()?.message,
                 )
             }

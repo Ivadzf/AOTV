@@ -16,7 +16,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.net.URLEncoder
 import javax.inject.Inject
+
+/** v1.5 — busca automática na folha: só o Vulgata tem a busca por `query=` provada. */
+private const val VULGATA_ADDON_ID = "plugin.video.vulgata"
 
 /**
  * Navegação de um addon Kodi (v1.2, Fase 2).
@@ -70,7 +74,12 @@ class KodiBrowserViewModel @Inject constructor(
     private var loadJob: Job? = null
 
     init {
-        openRoot()
+        // v1.5 — busca automática (folha de fontes): se o navegador nasceu com
+        // um texto de busca e o addon é o Vulgata, despacha a busca direto em
+        // vez da raiz (o `query=` busca sem Dialog.input — provado na VM).
+        // Outros addons abrem na raiz como antes.
+        val search = saved.get<String>("search").orEmpty()
+        if (addonId == VULGATA_ADDON_ID && search.isNotBlank()) openSearch(search) else openRoot()
     }
 
     /** Fase 3: sair do navegador do addon para o service.py dele
@@ -91,6 +100,29 @@ class KodiBrowserViewModel @Inject constructor(
         val name = KodiPluginRunner.cleanKodiText(rawName).ifBlank { addonId }
         _uiState.update { it.copy(addonName = name, title = name) }
         load("", "", pushCrumb = null, loadingLabel = "Carregando…", playTitle = "")
+    }
+
+    /** v1.5 — busca automática na folha (só Vulgata por enquanto): despacha
+     *  `action=search&query=<título>` — o addon busca direto, sem Dialog.input.
+     *  Voltar dos resultados volta p/ a raiz (a busca empilha uma migalha). */
+    fun openSearch(texto: String) {
+        val query = texto.trim()
+        if (query.isBlank() || addonId != VULGATA_ADDON_ID) {
+            openRoot()
+            return
+        }
+        crumbs.clear()
+        val rawName = addonStore.getAddon(addonId)?.name?.ifBlank { addonId } ?: addonId
+        val name = KodiPluginRunner.cleanKodiText(rawName).ifBlank { addonId }
+        val searchQuery = "action=search&query=" + URLEncoder.encode(query, "UTF-8")
+        _uiState.update { it.copy(addonName = name, title = "Busca: $query") }
+        load(
+            path = "main.py",
+            query = searchQuery,
+            pushCrumb = Crumb("main.py", searchQuery, "Busca: $query"),
+            loadingLabel = "Buscando…",
+            playTitle = "",
+        )
     }
 
     /** Toque num item: despacha a URL dele (lista -> navega; URL -> toca). */

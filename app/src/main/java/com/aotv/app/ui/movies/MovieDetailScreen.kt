@@ -88,7 +88,10 @@ fun MovieDetailScreen(
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = { _, _, _, _, _, _, _ -> },
     // v1.4, Fase 4 — tocar um addon Kodi na folha de fontes abre o
     // navegador dele (a navegação passa pela MoviesNavigation).
-    onOpenKodiAddon: (String) -> Unit = {},
+    // v1.5 — busca automática: leva (addonId, título) — filme: título do
+    // filme; série: título da SÉRIE (decisão do Davi). O navegador busca
+    // o título no Vulgata; outros addons abrem na raiz.
+    onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
     // Passa o item completo (título/poster/ano/tipo) p/ a ViewModel poder salvar na
@@ -600,7 +603,7 @@ fun MovieDetailScreen(
                             onPlay = { playStremio(it) },
                             onDownload = { dl(it.url) },
                             kodiAddons = state.kodiVideoAddons,
-                            onOpenKodiAddon = onOpenKodiAddon,
+                            onOpenKodiAddon = { addonId -> onOpenKodiAddon(addonId, title) },
                         )
                         if (state.stremioLoading) {
                             Text(
@@ -784,9 +787,9 @@ fun MovieDetailScreen(
                 isDownloadable = { viewModel.isDownloadable(it) },
                 onDownloadStremio = { s -> viewModel.downloadSource(s.url, "T$season:E$episode") },
                 kodiAddons = state.kodiVideoAddons,
-                onOpenKodiAddon = {
+                onOpenKodiAddon = { addonId ->
                     viewModel.clearSelectedEpisode()
-                    onOpenKodiAddon(it)
+                    onOpenKodiAddon(addonId, title)
                 },
             )
         }

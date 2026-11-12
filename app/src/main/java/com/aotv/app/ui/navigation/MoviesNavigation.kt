@@ -1,5 +1,6 @@
 package com.aotv.app.ui.navigation
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -68,8 +69,11 @@ private sealed class MoviesRoute(val route: String) {
     // listar, ligar/desligar, settings, diagnóstico, remover.
     object KodiAddons : MoviesRoute("movies_kodi_addons")
     // Navegação de addon Kodi (v1.2, Fase 2) — addonId é o id do addon instalado.
-    object KodiBrowser : MoviesRoute("movies_kodi_browser/{addonId}") {
-        fun create(addonId: String) = "movies_kodi_browser/$addonId"
+    // v1.5 — busca automática (folha de fontes): `search` opcional leva o título
+    // p/ buscar direto no addon; sem ele, abre na raiz como antes.
+    object KodiBrowser : MoviesRoute("movies_kodi_browser/{addonId}?search={search}") {
+        fun create(addonId: String, search: String? = null) =
+            "movies_kodi_browser/$addonId" + if (search.isNullOrBlank()) "" else "?search=" + Uri.encode(search)
     }
     object AddonStore : MoviesRoute("movies_addon_store")
     object MinhaLista : MoviesRoute("movies_minha_lista")
@@ -286,7 +290,7 @@ fun MoviesNavigation(
                         onPlayEpisode = onPlayEpisodeCb,
                         onPlayDirect = onPlayDirectCb,
                         onRelatedClick = onRelatedCb,
-                        onOpenKodiAddon = { navController.navigate(MoviesRoute.KodiBrowser.create(it)) },
+                        onOpenKodiAddon = { addonId, searchTitle -> navController.navigate(MoviesRoute.KodiBrowser.create(addonId, searchTitle)) },
                         viewModel = detailVm,
                     ) else MovieDetailScreen(
                         item = stub,
@@ -294,7 +298,7 @@ fun MoviesNavigation(
                         onPlayDirect = onPlayDirectCb,
                         onBack = onBackCb,
                         onRelatedClick = onRelatedCb,
-                        onOpenKodiAddon = { navController.navigate(MoviesRoute.KodiBrowser.create(it)) },
+                        onOpenKodiAddon = { addonId, searchTitle -> navController.navigate(MoviesRoute.KodiBrowser.create(addonId, searchTitle)) },
                         viewModel = detailVm,
                     )
                 }
@@ -450,7 +454,10 @@ fun MoviesNavigation(
             // jogável resolve e toca no player do app (mesmo ExoPlayer).
             composable(
                 MoviesRoute.KodiBrowser.route,
-                arguments = listOf(navArgument("addonId") { type = NavType.StringType }),
+                arguments = listOf(
+                    navArgument("addonId") { type = NavType.StringType },
+                    navArgument("search") { type = NavType.StringType; nullable = true; defaultValue = null },
+                ),
             ) {
                 tvScale(isTV) {
                     com.aotv.app.ui.kodi.KodiBrowserScreen(

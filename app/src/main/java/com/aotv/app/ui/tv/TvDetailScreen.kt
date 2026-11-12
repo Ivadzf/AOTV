@@ -70,7 +70,8 @@ fun TvDetailScreen(
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
     onRelatedClick: (MovieItem) -> Unit,
     // v1.4, Fase 4 — tocar um addon Kodi na folha de fontes abre o navegador dele.
-    onOpenKodiAddon: (String) -> Unit = {},
+    // v1.5 — busca automática: leva (addonId, título da série ou do filme).
+    onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
     TvText { TvDetailScreenBody(item, onPlayEpisode, onPlayDirect, onRelatedClick, onOpenKodiAddon, viewModel) }
@@ -82,7 +83,7 @@ private fun TvDetailScreenBody(
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
     onRelatedClick: (MovieItem) -> Unit,
-    onOpenKodiAddon: (String) -> Unit = {},
+    onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(item.tmdbId) { viewModel.load(item) }
@@ -247,7 +248,7 @@ private fun TvDetailScreenBody(
                                     cols = 2,
                                     television = true,
                                     kodiAddons = state.kodiVideoAddons,
-                                    onOpenKodiAddon = onOpenKodiAddon,
+                                    onOpenKodiAddon = { addonId -> onOpenKodiAddon(addonId, title) },
                                 )
                             }
                             when {
@@ -310,9 +311,9 @@ private fun TvDetailScreenBody(
                     cols = 1,
                     television = true,
                     kodiAddons = state.kodiVideoAddons,
-                    onOpenKodiAddon = {
+                    onOpenKodiAddon = { addonId ->
                         viewModel.clearSelectedEpisode()
-                        onOpenKodiAddon(it)
+                        onOpenKodiAddon(addonId, title)
                     },
                 )
                 when {
