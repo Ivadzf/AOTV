@@ -202,6 +202,7 @@ internal fun splitKodiStreamHeaders(url: String): Pair<String, Map<String, Strin
 /** Nome curto da fonte para avisos ("FrostStream · Servidor Neon · Dublado"). */
 private fun extName(src: MoviePlayerSource, title: String) =
     parseSourceLabel(src.label, src.addon, sourceQualityRank(src.label), title)
+        .let { listOf(it.addon, it.server, it.language) }.filter { it.isNotBlank() }.joinToString(" · ")
 
 /**
  * Erro curto do ExoPlayer p/ o diagnóstico (v1.2.7): código + mensagem +
@@ -217,7 +218,6 @@ private fun shortPlayerError(error: androidx.media3.common.PlaybackException): S
         if (rootTxt.isNotBlank() && rootTxt != error.message) append("\n$rootTxt")
     }.take(400)
 }
-        .let { listOf(it.addon, it.server, it.language) }.filter { it.isNotBlank() }.joinToString(" · ")
 
 // Torrent entrega o começo só depois de achar pares e baixar as primeiras peças, então espera bem mais.
 private val localMediaClient by lazy {
