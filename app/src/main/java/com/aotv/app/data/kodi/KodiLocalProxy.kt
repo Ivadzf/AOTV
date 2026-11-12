@@ -1,7 +1,10 @@
 package com.aotv.app.data.kodi
 
+import com.chaquo.python.Python
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -51,20 +54,27 @@ internal val kodiProxyHostnameVerifier = HostnameVerifier { hostname, session ->
  * O player nunca vê esse hostname: ele busca em `http://127.0.0.1`
  * (porta efêmera) e este proxy busca o stream real e repassa.
  *
- * Caminho do fetch (a escolha crítica): `java.net.URL` +
- * `HttpsURLConnection` (opção (a)). O `java.net.URL` NÃO faz validação
- * STD3 — ele guarda o hostname como string e o `InetAddress` passa o
- * nome ao resolver do sistema (o DNS resolve o host esquisito; provado
- * na VM por sistema e por DoH). A validação STD3 é do `OkHttp.HttpUrl`,
- * que chama `IDN.toASCII(host, USE_STD3_ASCII_RULES)` — é o bug que
- * estamos contornando, por isso o OkHttp NUNCA é usado p/ buscar a
- * URL real. O TLS usa o `kodiProxyHostnameVerifier` (só o check de
- * nome é relaxado p/ `*.null-null.shop`; a cadeia continua verificada).
- * SUPOSIÇÃO (não dá p/ provar nesta VM — não há Java): o JDK do
- * Android não impõe STD3 em `java.net.URL`/`InetAddress`. É o
- * comportamento padrão do JDK; se o celular discordar, a linha
- * `proxy:` no diag vai mostrar o erro do fetch, e o fallback é o
- * fetch via Python (`requests`, verify=False — provado pelo addon).
+ * Caminho do fetch: (a) `java.net.URL` + `HttpsURLConnection`
+ * primeiro; se falhar, (b) Python `requests` (verify=False) via
+ * Chaquopy (ver aotv_kodi.proxy_fetch). O (a) FALHOU no celular
+ * (v1.2.8): `IllegalArgumentException: Invalid input to toASCII` —
+ * o `InetAddress` do Android TAMBÉM rejeita o hostname (o rótulo
+ * começa com `xn--`, prefixo ACE de punycode, mas contém underscores,
+ * então é um rótulo punycode inválido). A suposição da v1.2.8 estava
+ * errada; o teste no celular decidiu. O (b) NÃO faz validação
+ * STD3/IDNA — o requests passa o hostname direto p/ o socket
+ * (provado na VM: fetch real com verify=OFF no host exato retornou
+ * 404 'Content deleted' = TLS + HTTP completos; o 404 era o token
+ * IP-bound, não falha de conexão). O OkHttp NUNCA é usado p/ buscar
+ * a URL real (ele rejeita o hostname no parse — o bug original).
+ * O TLS do (a) usa o `kodiProxyHostnameVerifier` (só o check de nome
+ * é relaxado p/ `*.null-null.shop`; a cadeia continua verificada);
+ * o (b) usa verify=False, como o addon.
+ * ATENÇÃO: o fetch (b) precisa do bypass da sonda HTTP (ver
+ * aotv_kodi._proxy_fetch_tls) — sem ele, a guarda do fake probe
+ * (v1.2.6) devolveria um 206 SINTÉTICO de 4096 bytes em vez do
+ * stream real, porque o fetch do proxy tem o mesmo padrão do probe
+ * (GET com Range p/ *.null-null.shop/tos-alisg-avt-0068/proxy*).
  *
  * O que o proxy faz:
  * - `.mp4` (filme): repassa `Range` p/ o upstream e devolve 206 com
@@ -243,27 +253,27 @@ object KodiLocalProxy {
     private fun serve(target: Target, reqHeaders: Map<String, String>, output: BufferedOutputStream) {
         val isPlaylist = target.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
         val t0 = System.currentTimeMillis()
-        var conn: HttpURLConnection? = null
+        var upstream: Upstream? = null
         try {
-            conn = openUpstream(target, reqHeaders["range"])
-            val status = conn.responseCode
+            upstream = openUpstream(target, reqHeaders["range"])
+            val status = upstream.status
             if (isPlaylist && status == HttpURLConnection.HTTP_OK) {
-                val text = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
+                val text = upstream.body?.bufferedReader(Charsets.UTF_8)?.readText().orEmpty()
                 val bytes = rewritePlaylist(text, target).toByteArray(Charsets.UTF_8)
-                noteDiag("GET ${shortUpstream(target.url)} $status ${bytes.size}B ${System.currentTimeMillis() - t0}ms")
+                noteDiag("GET ${shortUpstream(target.url)} $status ${bytes.size}B ${System.currentTimeMillis() - t0}ms (${upstream.via})")
                 writeHeaders(output, status, "application/vnd.apple.mpegurl", bytes.size.toLong())
                 output.write(bytes)
                 return
             }
             // Mídia (.mp4/.ts/...): repassa status, Content-Type, Range e
             // o corpo em streaming (sem guardar em memória).
-            val contentType = conn.contentType ?: guessContentType(target.url)
-            val contentLength = conn.getHeaderFieldLong("Content-Length", -1)
-            val contentRange = conn.getHeaderField("Content-Range")
+            val contentType = upstream.header("Content-Type") ?: guessContentType(target.url)
+            val contentLength = upstream.header("Content-Length")?.toLongOrNull() ?: -1
+            val contentRange = upstream.header("Content-Range")
             val sizeTxt = if (contentLength >= 0) "${contentLength}B" else "?B"
-            noteDiag("GET ${shortUpstream(target.url)} $status $sizeTxt ${System.currentTimeMillis() - t0}ms")
+            noteDiag("GET ${shortUpstream(target.url)} $status $sizeTxt ${System.currentTimeMillis() - t0}ms (${upstream.via})")
             writeHeaders(output, status, contentType, contentLength, contentRange, acceptRanges = true)
-            val input = if (status >= 400) conn.errorStream else conn.inputStream
+            val input = upstream.body
             if (input != null) {
                 val buf = ByteArray(64 * 1024)
                 var n = input.read(buf)
@@ -273,23 +283,117 @@ object KodiLocalProxy {
                 }
             }
         } catch (e: Exception) {
-            noteDiag("GET ${shortUpstream(target.url)} ERRO ${e.javaClass.simpleName}: ${e.message} ${System.currentTimeMillis() - t0}ms")
+            // Falha no fetch (upstream == null): o openUpstream já
+            // registrou (java) e (py) no diag — não sobrescreve a
+            // última linha. Falha DEPOIS do fetch (streaming/
+            // reescrita da playlist): registra, p/ o print mostrar.
+            if (upstream != null) {
+                noteDiag("GET ${shortUpstream(target.url)} ERRO ${e.javaClass.simpleName}: ${e.message} ${System.currentTimeMillis() - t0}ms")
+            }
             // O player já está esperando bytes — um 502 diz que o upstream
             // falhou, e o playerError + o diag mostram o motivo.
             runCatching { writeSimple(output, 502, "Bad Gateway") }
         } finally {
-            // Libera o socket do upstream (o proxy é por play; não há
-            // reuso de conexão p/ justificar manter o socket aberto).
-            runCatching { conn?.disconnect() }
+            // Libera o upstream (o proxy é por play; não há reuso de
+            // conexão p/ justificar manter o socket aberto).
+            runCatching { upstream?.close() }
+        }
+    }
+
+    /** Resposta do upstream, qualquer que seja o caminho de fetch. */
+    private class Upstream(
+        val status: Int,
+        private val headers: Map<String, String>,
+        val body: InputStream?,
+        /** "java" (HttpsURLConnection) ou "py" (requests) — vai p/ o diag. */
+        val via: String,
+        private val onClose: () -> Unit = {},
+    ) {
+        fun header(name: String): String? =
+            headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+        fun close() = runCatching { onClose() }
+    }
+
+    /** InputStream que lê o corpo do fetch Python em chunks via Chaquopy. */
+    private class PyObjectInputStream(
+        private val stream: com.chaquo.python.PyObject,
+    ) : InputStream() {
+        private var buf: ByteArray = byteArrayOf()
+        private var pos: Int = 0
+        private var eof: Boolean = false
+
+        override fun read(): Int {
+            if (pos >= buf.size && !fill()) return -1
+            return buf[pos++].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            if (pos >= buf.size && !fill()) return -1
+            val n = minOf(len, buf.size - pos)
+            buf.copyInto(b, off, pos, pos + n)
+            pos += n
+            return n
+        }
+
+        private fun fill(): Boolean {
+            if (eof) return false
+            // O Python devolve bytes (byte[] via Chaquopy); vazio = fim.
+            val chunk = runCatching {
+                stream.callAttr("read", 64 * 1024).toJava(ByteArray::class.java)
+            }.getOrNull() ?: byteArrayOf()
+            if (chunk.isEmpty()) {
+                eof = true
+                return false
+            }
+            buf = chunk
+            pos = 0
+            return true
+        }
+
+        override fun close() {
+            eof = true
+            runCatching { stream.callAttr("close") }
         }
     }
 
     /**
-     * Abre a conexão com o upstream (com redirect manual, até 5, e os
-     * headers registrados). `java.net.URL` NÃO faz validação STD3 — é
-     * por isso que este caminho alcança o host que o OkHttp rejeita.
+     * Abre o upstream: tenta (a) HttpsURLConnection e, se falhar, cai
+     * p/ (b) o fetch Python (requests, verify=False). O (a) falha no
+     * celular com IllegalArgumentException (IDN.toASCII rejeita o
+     * hostname punycode com underscores — a suposição da v1.2.8 estava
+     * errada, provado pelo diag do Davi). O (b) não faz validação
+     * STD3/IDNA (provado na VM: fetch real com verify=OFF no host
+     * exato retornou 404 = TLS + HTTP completos).
+     * Fallback só p/ IllegalArgumentException (IDNA) e IOException
+     * (rede/DNS/TLS) — erro de programação não cai p/ (b). Qualquer
+     * falha do (a) é registrada no diag (vira a 1ª linha; o resultado
+     * do (b) vira a última) p/ o print mostrar os dois caminhos.
      */
-    private fun openUpstream(target: Target, range: String?): HttpURLConnection {
+    private fun openUpstream(target: Target, range: String?): Upstream {
+        val t0 = System.currentTimeMillis()
+        try {
+            return openUpstreamJava(target, range)
+        } catch (e: Exception) {
+            val isFallback = e is IllegalArgumentException || e is IOException
+            noteDiag(
+                "GET ${shortUpstream(target.url)} ERRO ${e.javaClass.simpleName}: ${e.message} (java) ${System.currentTimeMillis() - t0}ms" +
+                    if (isFallback) "; tentando python" else ""
+            )
+            if (!isFallback) throw e
+            val t1 = System.currentTimeMillis()
+            try {
+                return openUpstreamPython(target, range)
+            } catch (e2: Exception) {
+                noteDiag("GET ${shortUpstream(target.url)} ERRO ${e2.javaClass.simpleName}: ${e2.message} (py) ${System.currentTimeMillis() - t1}ms")
+                throw e2
+            }
+        }
+    }
+
+    /** Caminho (a): HttpsURLConnection (java.net.URL), com redirect manual. */
+    private fun openUpstreamJava(target: Target, range: String?): Upstream {
         var url = URL(target.url)
         var redirects = 0
         while (true) {
@@ -315,8 +419,41 @@ object KodiLocalProxy {
                 redirects++
                 continue
             }
-            return conn
+            // Corpo: errorStream p/ status >= 400 (inputStream levanta).
+            val body = if (status >= 400) conn.errorStream
+                else runCatching { conn.inputStream }.getOrNull()
+            val headers = mapOf(
+                "Content-Type" to (conn.contentType ?: ""),
+                "Content-Length" to (conn.getHeaderField("Content-Length") ?: ""),
+                "Content-Range" to (conn.getHeaderField("Content-Range") ?: ""),
+                "Accept-Ranges" to (conn.getHeaderField("Accept-Ranges") ?: ""),
+            ).filterValues { it.isNotEmpty() }
+            return Upstream(status, headers, body, via = "java") { conn.disconnect() }
         }
+    }
+
+    /**
+     * Caminho (b): fetch Python (requests, verify=False) via Chaquopy
+     * (ver aotv_kodi.proxy_fetch). Só chamado quando o (a) falha.
+     * O run do addon já terminou quando o player toca, então este
+     * fetch não disputa com um dispatch — e NÃO segura o _run_lock.
+     * O Chaquopy permite chamar Python de qualquer thread Java (a
+     * thread é anexada ao interpretador e o GIL é adquirido); o
+     * proxy roda nas threads "kodi-proxy". Se o Python ainda não
+     * foi iniciado (o dispatch sempre roda antes do player, então
+     * não deveria acontecer), levanta e o serve() devolve 502.
+     */
+    private fun openUpstreamPython(target: Target, range: String?): Upstream {
+        val res = Python.getInstance().getModule("aotv_kodi")
+            .callAttr("proxy_fetch", target.url, target.headers, range ?: "")
+        val status = res.callAttr("__getitem__", "status").toInt()
+        val headersObj = res.callAttr("__getitem__", "headers")
+        @Suppress("UNCHECKED_CAST")
+        val headers = (headersObj.toJava(Map::class.java) as Map<*, *>)
+            .entries.associate { (k, v) -> k.toString() to v.toString() }
+        val stream = res.callAttr("__getitem__", "stream")
+        val body = PyObjectInputStream(stream)
+        return Upstream(status, headers, body, via = "py") { body.close() }
     }
 
     // ── playlist HLS ──────────────────────────────────────────────────

@@ -39,6 +39,17 @@ from _aotv_kodi_log import log as _log
 # Fase 2 também serializa, mas a garantia vive aqui).
 _run_lock = threading.Lock()
 
+# Fetch do proxy local (v1.2.9): flag thread-local que desliga SÓ a
+# guarda do fake probe p/ a thread do fetch (ver _probed_request).
+# O proxy busca o upstream via requests, mas a sonda (v1.2.6) finge o
+# probe de espelho do Vulgata p/ qualquer GET com Range p/
+# *.null-null.shop/tos-alisg-avt-0068/proxy* — sem o bypass, o fetch
+# do proxy receberia um 206 SINTÉTICO de 4096 bytes em vez do stream
+# real. A gravação do diag e o retry de SSLError continuam (só o
+# fake é pulado). Thread-local: o proxy roda nas threads dele, o
+# addon nas do dispatch — um não afeta o outro.
+_proxy_fetch_tls = threading.local()
+
 # ---------------------------------------------------------------------------
 # special:// — raízes (configuradas pelo Kotlin; sem configure, devolve o
 # caminho como veio, para o addon não quebrar em teste sem Android).
@@ -490,10 +501,17 @@ def _install_http_probe():
             # _fake_proxy_probe_response) — o token single-use não
             # é consumido e o player recebe um URL fresco. Registrado
             # como "206 FAKE" na sonda (transparente no diag).
-            try:
-                fake = _fake_proxy_probe_response(method, url, kwargs)
-            except Exception:
+            # v1.2.9: o fetch do proxy (flag thread-local ativa) NÃO
+            # passa pela guarda — ele quer o stream real, não o 206
+            # sintético de 4096 bytes. Só o fake é pulado; a gravação
+            # do diag e o retry de SSLError continuam.
+            if getattr(_proxy_fetch_tls, "active", False):
                 fake = None
+            else:
+                try:
+                    fake = _fake_proxy_probe_response(method, url, kwargs)
+                except Exception:
+                    fake = None
             if fake is not None:
                 ms = (time.monotonic() - t0) * 1000
                 try:
@@ -1357,3 +1375,131 @@ def listitem_to_dict(item):
         "mime_type": item.getMimeType(),
         "context_menu": list(item.getContextMenuItems()),
     }
+
+
+# ---------------------------------------------------------------------------
+# Fetch do proxy local (v1.2.9)
+# ---------------------------------------------------------------------------
+
+class _ProxyFetchResult:
+    """Resposta do fetch p/ o Kotlin (KodiLocalProxy).
+
+    status: código HTTP; headers: dict str->str; o corpo é lido em
+    chunks via read(n) (streaming — o corpo pode ter GBs, não cabe em
+    memória). close() libera a conexão. read/close nunca levantam
+    (devolvem b"" / ignoram) — o Kotlin trata o fim do stream.
+    """
+    def __init__(self, resp):
+        self.status = int(resp.status_code)
+        try:
+            self.headers = {str(k): str(v) for k, v in resp.headers.items()}
+        except Exception:
+            self.headers = {}
+        self._resp = resp
+        self._raw = resp.raw
+
+    def read(self, n):
+        try:
+            n = int(n)
+            if n <= 0:
+                return b""
+            data = self._raw.read(n)
+            return data if data else b""
+        except Exception:
+            return b""
+
+    def close(self):
+        try:
+            self._resp.close()
+        except Exception:
+            pass
+
+
+def proxy_fetch(url, headers, range_header=""):
+    """Busca o upstream do proxy local via requests (verify=False).
+
+    v1.2.9 — fallback (b) do KodiLocalProxy: o fetch Java
+    (HttpsURLConnection) falha no celular com IllegalArgumentException
+    (IDN.toASCII rejeita o hostname punycode com underscores — a
+    suposição da v1.2.8 estava errada). O requests NÃO faz validação
+    STD3/IDNA: passa o hostname direto p/ o socket (provado na VM:
+    fetch real com verify=OFF no host exato retornou 404 'Content
+    deleted' = TLS + HTTP completos; o 404 era o token IP-bound, não
+    falha de conexão). No celular o fetch sai pelo mesmo egresso WARP
+    da resolução, então o token vale.
+
+    Retorna dict {"status": int, "headers": {str: str},
+    "stream": _ProxyFetchResult} — o Kotlin lê via Chaquopy (mesmo
+    padrão do parseResult: __getitem__ + toJava). Levanta na falha
+    (o Kotlin cai p/ o 502 e registra no diag). NÃO usa o _run_lock:
+    o run do addon já terminou quando o player toca; o fetch é uma
+    chamada separada e não pode travar contra o dispatch.
+
+    headers: dict do sufixo Kodi (Referer/Origin/User-Agent/
+    Accept-Language). range_header: "bytes=a-b" ou "" (repassado
+    como header Range). Redirects: manual, até 5 (301/302/303/307/
+    308), preservando Range + headers — igual ao openUpstream do
+    Kotlin (o requests com allow_redirects=True também preservaria,
+    mas o manual é explícito). Timeouts (10, 30) iguais ao
+    openUpstream — na prática o piso da sonda (v1.2.4) eleva p/
+    (30, 60), igual aos fetches do addon; mais tempo, não menos.
+    verify=False: o addon usa em tudo; o cert é válido p/
+    *.null-null.shop, só o hostname é rejeitado — e aqui nem há
+    check de hostname. Accept-Encoding: identity — o requests
+    anuncia gzip por padrão, e o corpo cru (raw) chegaria
+    comprimido; o proxy serve os bytes como vieram e reescreve
+    .m3u8 como texto, então o upstream não pode comprimir.
+    O cookie __Host-rc-player da resolução NÃO é enviado: o fetch
+    real na VM sem cookie retornou 404 (token morto), não 403 —
+    o token na URL é a autenticação, e o addon cria sessão nova
+    por request mesmo.
+    """
+    import requests
+    from urllib.parse import urljoin
+
+    hdrs = {}
+    try:
+        for k, v in dict(headers or {}).items():
+            if k is not None and v is not None:
+                hdrs[str(k)] = str(v)
+    except Exception:
+        hdrs = {}
+    if range_header:
+        hdrs["Range"] = str(range_header)
+    # Sem gzip: o corpo cru precisa chegar sem compressão (ver acima).
+    hdrs["Accept-Encoding"] = "identity"
+    # User-Agent padrão se o sufixo não trouxer um (o upstream espera
+    # um UA de navegador; sem ele pode responder diferente).
+    if not any(str(k).lower() == "user-agent" for k in hdrs):
+        hdrs["User-Agent"] = (
+            "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+
+    # Bypass da guarda do fake probe SÓ nesta thread (ver o flag no
+    # topo): sem ele, este fetch — GET com Range p/ o host do proxy —
+    # receberia o 206 sintético em vez do stream real. O finally
+    # sempre desliga (mesmo com exceção).
+    _proxy_fetch_tls.active = True
+    try:
+        session = requests.Session()
+        session.trust_env = False  # sem proxy do ambiente
+        cur_url = str(url)
+        resp = None
+        for _ in range(6):  # 1 tentativa + até 5 redirects
+            resp = session.get(cur_url, headers=hdrs, stream=True,
+                               timeout=(10, 30), verify=False,
+                               allow_redirects=False)
+            loc = resp.headers.get("Location")
+            if loc and resp.status_code in (301, 302, 303, 307, 308):
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                cur_url = urljoin(cur_url, loc)
+                continue
+            break
+        return {"status": int(resp.status_code),
+                "headers": {str(k): str(v) for k, v in resp.headers.items()},
+                "stream": _ProxyFetchResult(resp)}
+    finally:
+        _proxy_fetch_tls.active = False
