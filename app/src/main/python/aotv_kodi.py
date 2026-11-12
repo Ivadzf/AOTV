@@ -993,7 +993,8 @@ def run_plugin(addon_id, path="", query="", handle=1):
     """Executa um plugin como o Kodi faria e devolve o resultado.
 
     Serializado (_run_lock): um addon por vez, nunca em paralelo.
-    sys.argv = ["plugin://<id>/<path>", "<handle>", "<query>"].
+    sys.argv = ["plugin://<id>/<path>", "<handle>", "?" + <query>]
+    (com o '?' inicial, como no Kodi real; vazio quando sem query).
     Retorna dict: {"items": [dict...], "resolved_url": str,
     "succeeded": bool, "error": str, "handle": int}.
     Os itens são a tradução de cada ListItem (ver listitem_to_dict).
@@ -1218,9 +1219,14 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
     if not lib or not os.path.isfile(lib):
         result["error"] = "biblioteca do plugin não encontrada: %s" % addon_id
         return result
-    # sys.argv como o Kodi invoca um plugin de vídeo.
+    # sys.argv como o Kodi invoca um plugin de vídeo. No Kodi real o
+    # argv[2] vem COM o '?' inicial ("?url=...&mode=..."); addons como
+    # o BrazucaPlay fazem parse_qsl(sys.argv[2][1:]) contando com ele.
+    # Sem o '?', o [1:] corta o 'u' de "url=" e o param some (url=None),
+    # o que quebrava o 2o nivel do BrazucaPlay com AttributeError em
+    # url.startswith(...) — reproduzido na VM em 2026-11-12.
     url = "plugin://%s/%s" % (addon_id, path.lstrip("/"))
-    argv = [url, str(handle), query or ""]
+    argv = [url, str(handle), ("?" + query) if query else ""]
     sys.argv = argv
     set_current_addon(addon_id)
     if d not in sys.path:
