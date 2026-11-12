@@ -103,23 +103,68 @@ _FORCED_SETTINGS = {
 # tenta 1x de novo um GET que falhe com SSLError (transitório —
 # a VPN oscilando, ou a rota mudando entre o browse e o play).
 # ---------------------------------------------------------------------------
+#
+# v1.2.6 — o play falhou no celular (VPN ligada, navegação OK):
+#   * TV: o dispatch levou 11,2s com "http: nenhuma". Duas causas:
+#     (a) o play de TV chama Dialog.select("Escolha a qualidade",
+#     ["FHD", "SD"]) e aborta se devolver -1 — o stub devolvia
+#     sempre -1, então o addon nem buscava a página do canal;
+#     (b) o diag fatiava _http_calls por índice absoluto e a lista
+#     cheia (30) fazia a fatia ficar vazia — "http: nenhuma" era
+#     artefato do diag, não prova de ausência de HTTP.
+#   * Filme: o player abriu e mostrou "Fonte indisponível". O play
+#     resolve um URL de proxy single-use: o addon sonda os espelhos
+#     (Range 0-4095) antes de resolver e esse probe CONSOME o token
+#     (re-fetch imediato dá 404 "Content deleted"; o mesmo token,
+#     buscado 2x, deu 206 e depois 404). O ExoPlayer recebe o 404.
+#   Fixes: Dialog.select devolve 0 (1ª opção) quando há opções;
+#   _http_calls com seq monotônico + teto 120; a sonda REPRODUZ o
+#   padrão de probe que o addon espera SEM tocar na rede (o host
+#   `...kerberos...` falha no socket como antes, o de underscores
+#   devolve 404 sintético, o `xn--` devolve 206 sintético de 4096
+#   bytes) p/ o token chegar fresco ao player; o diag ganha
+#   "play: select(...)" e "resolveu=<url> ok=...". Ver
+#   _fake_proxy_probe_response (fingir 206 p/ o host de underscores
+#   QUEBRA o addon — ele para sem resolver; e um 206 curto, de 24
+#   bytes, também é rejeitado).
+# ---------------------------------------------------------------------------
 
-_http_calls = []          # (método, url, resultado, ms) — últimas 30
-_HTTP_MAX_CALLS = 30
+_http_calls = []          # (seq, método, url, resultado, ms) — últimas 120
+_HTTP_MAX_CALLS = 120
 _HTTP_TIMEOUT_FLOOR = (30, 60)   # (connect, read) p/ fetches de conteúdo
 _HTTP_MIN_CONNECT = 5            # a partir daqui é "fetch de conteúdo"
 _HTTP_MIN_READ = 10
 _http_probe_state = {"requests": "?", "urllib": "?"}
+# Sequência monotônica das chamadas HTTP (v1.2.6): o diag fatiava
+# _http_calls por ÍNDICE absoluto (n_http0 = len() no início do
+# dispatch). Quando a lista estava CHEIA (30) no início e novas
+# chamadas chegavam, o trim apagava as mais antigas e a fatia [n0:]
+# ficava vazia — o diag mostrava "http: nenhuma" mesmo com chamadas
+# acontecendo (é o "http: nenhuma" do play da TV no celular da
+# v1.2.5, provado por teste unitário). Com seq monotônico, o resumo
+# filtra por seq > seq0 e nunca perde chamadas por causa do trim; o
+# teto subiu p/ 120 p/ caber um play inteiro (filme ~7, TV ~18-26).
+_http_seq = 0
 
 
 def _http_record(method, url, outcome, ms):
     """Guarda uma chamada HTTP (nunca levanta)."""
+    global _http_seq
     try:
-        _http_calls.append((method, url, outcome, int(ms)))
+        _http_seq += 1
+        _http_calls.append((_http_seq, method, url, outcome, int(ms)))
         if len(_http_calls) > _HTTP_MAX_CALLS:
             del _http_calls[:len(_http_calls) - _HTTP_MAX_CALLS]
     except Exception:
         pass
+
+
+def _http_seq_now():
+    """Seq da próxima chamada HTTP (marca o início de um dispatch)."""
+    try:
+        return _http_seq
+    except Exception:
+        return 0
 
 
 def _http_error_detail(exc, url):
@@ -199,6 +244,222 @@ def _http_floor_timeout(timeout):
     return timeout
 
 
+def _pad_fake_body(base, total, marker):
+    """Completa `base` até `total` bytes com linhas de comentário.
+
+    `marker` é o byte que abre a linha (b"#" p/ playlist — linhas
+    `#...` são ignoradas por parsers HLS). Nunca levanta.
+    """
+    try:
+        if len(base) >= total:
+            return base[:total]
+        out = bytearray(base)
+        # Linha de comentário: marker + espaços + "\n". A última
+        # linha é ajustada p/ fechar exatamente em `total`.
+        while len(out) < total:
+            room = total - len(out)
+            if room <= 2:
+                out += b"\n" * room
+                break
+            line_len = min(room, 64)
+            out += marker + b" " * (line_len - 2) + b"\n"
+        return bytes(out)
+    except Exception:
+        return base
+
+
+def _fake_response(method, url, kwargs, status, body, ctype, content_range=None,
+                   encoding="utf-8"):
+    """Monta uma Response sintética o mais fiel possível à real.
+
+    v1.2.6 — o addon distingue um 404/206 "de mentira" de um real
+    e PARA depois de uma só rodada se faltar algo (provado na VM:
+    com o 404 fake mínimo — só Content-Type/Content-Length, raw
+    None, elapsed 0 — o addon fez 1 rodada e parou; com o 404
+    real, faz várias e resolve). O 404 real do proxy traz:
+    `Server: cloudflare`, `Cf-Ray`, `Cache-Control: no-store...`,
+    `X-Frame-Options`, `alt-svc`, corpo `Content deleted` (15 B),
+    `raw` presente e elapsed ~40-900ms. A sintética reproduz
+    esses headers (Date atual, Cf-Ray aleatório), um `raw` urllib3
+    e elapsed ~50ms. Nunca levanta (qualquer dúvida, None).
+    """
+    try:
+        import requests as _rq
+        from requests.models import Response as _Resp
+        from requests.structures import CaseInsensitiveDict as _CID
+        import datetime as _dt
+        import email.utils as _eu
+        import random as _rnd
+        import io as _io
+        from urllib3.response import HTTPResponse as _HR
+        headers = {
+            "Date": _eu.formatdate(usegmt=True),
+            "Content-Type": ctype,
+            "Content-Length": str(len(body)),
+            "Connection": "keep-alive",
+            "Cf-Ray": "%016x-EWR" % _rnd.getrandbits(64),
+            "Cache-Control": ("no-store, no-cache, must-revalidate, "
+                              "proxy-revalidate, max-age=0, s-maxage=0"),
+            "Expires": "Thu, 01 Jan 1970 00:00:01 GMT",
+            "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Server": "cloudflare",
+            "alt-svc": 'h3=":443"; ma=86400',
+        }
+        if content_range is not None:
+            headers["Content-Range"] = content_range
+            headers["Accept-Ranges"] = "bytes"
+        resp = _Resp()
+        resp.status_code = status
+        resp.url = url
+        resp.headers = _CID(headers)
+        resp._content = body
+        resp.encoding = encoding
+        try:
+            req = _rq.Request(method, url,
+                              headers=dict(kwargs.get("headers") or {})).prepare()
+            resp.request = req
+        except Exception:
+            pass
+        try:
+            resp.raw = _HR(body=_io.BytesIO(body), preload_content=False,
+                           status=status, headers=dict(headers))
+        except Exception:
+            pass
+        try:
+            resp.elapsed = _dt.timedelta(milliseconds=50)
+        except Exception:
+            pass
+        return resp
+    except Exception:
+        return None
+
+
+def _fake_404_response(method, url, kwargs):
+    """Resposta 404 SINTÉTICA p/ o probe do espelho de underscores.
+
+    v1.2.6 — o addon espera 404 desse host (é o que o servidor
+    devolve de verdade). Responder sem tocar na rede mantém o
+    padrão esperado E não queima o token com um probe real. O corpo
+    é o MESMO do 404 real do proxy (`Content deleted`, visto nos
+    re-fetches e capturado no probe /tmp/probe_u404_v126.py) e os
+    headers reproduzem os do Cloudflare (ver _fake_response).
+    Nunca levanta (qualquer dúvida, devolve None).
+    """
+    try:
+        return _fake_response(method, url, kwargs, 404,
+                              b'Content deleted', "application/json")
+    except Exception:
+        return None
+
+
+def _fake_proxy_probe_response(method, url, kwargs):
+    """Resposta 206 SINTÉTICA p/ o probe de espelho do Vulgata — ou None.
+
+    v1.2.6 — o play do Vulgata resolve um URL de proxy single-use:
+    o addon sonda os espelhos com `Range: bytes=0-4095` antes de
+    resolver, e esse probe CONSOME o token (o re-fetch imediato do
+    URL resolvido dá 404 "Content deleted" — provado na VM p/ o
+    .mp4 do filme e o .m3u8 da TV, com os mesmos headers/cookies/
+    Range; e o mesmo token, buscado 2x pelo addon, deu 206 e
+    depois 404). O ExoPlayer depois recebe o 404 → "Fonte
+    indisponível" no celular. O probe existe só p/ achar um
+    espelho vivo; responder 206 sem tocar na rede deixa o token
+    fresco p/ o player (o 1º fetch real passa a ser o do player).
+
+    Só responde quando É o probe de espelho (tudo junto):
+      * GET com header Range (o probe é sempre Range 0-4095);
+      * host *.null-null.shop, caminho /tos-alisg-avt-0068/proxy*;
+      * host NÃO começando com "-" (o host `...kerberos...` é uma
+        isca que nem resolve em DNS — o request real falha no
+        socket sem queimar o token, então deixa acontecer).
+    E reproduz o padrão que o addon ESPERA (não muda o padrão):
+      * host de underscores → 404 sintético (é o que o servidor
+        devolve de verdade p/ ele; fingir 206 aqui QUEBRA o addon
+        — ele para sem resolver, provado na VM). O 404 sintético
+        não toca na rede, então o token não é queimado pelo probe
+        real.
+      * host `xn--` (punycode) → 206 sintético (é o espelho que
+        devolve 206 de verdade). Corpo de EXATAMENTE 4096 bytes
+        (o Range pedido é 0-4095 — um 206 curto é rejeitado pelo
+        addon): playlist mestre (FHD/SD) p/ .m3u8, ftyp + caixa
+        `free` p/ .mp4.
+    O addon escolhe o host resolvido pela lógica dele (às vezes o
+    de underscores, às vezes o `xn--`); como nenhum probe real
+    acontece, o token chega fresco ao player qualquer que seja o
+    host resolvido.
+    Fora disso devolve None (o fetch real acontece). As respostas
+    sintéticas são registradas na sonda como "206 FAKE" / "404
+    FAKE" (transparentes no diag).
+    Nunca levanta: qualquer dúvida, devolve None.
+    """
+    try:
+        if str(method).upper() != "GET":
+            return None
+        if not isinstance(url, str):
+            return None
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        if host.startswith("-") or not host.endswith(".null-null.shop"):
+            return None
+        if not (p.path or "").startswith("/tos-alisg-avt-0068/proxy"):
+            return None
+        headers = kwargs.get("headers") or {}
+        try:
+            has_range = any(str(k).lower() == "range" for k in headers.keys())
+        except Exception:
+            has_range = False
+        if not has_range:
+            return None
+        # Host de underscores → 404 sintético (o padrão que o addon
+        # espera; sem tocar na rede, o token não é queimado).
+        if host.startswith("_"):
+            return _fake_404_response(method, url, kwargs)
+        # Só o xn-- leva 206 sintético (espelho real).
+        if not host.startswith("xn--"):
+            return None
+        is_m3u8 = ".m3u8" in (p.path or "").lower() or ".m3u8" in url.lower()
+        # Corpo com EXATAMENTE 4096 bytes (o Range pedido é 0-4095):
+        # o addon rejeita um 206 "curto" (um .mp4 real devolve os
+        # 4096 bytes do início do arquivo; um corpo de 24 bytes com
+        # Content-Range 0-23/24 não passa na validação do probe — a
+        # v1.2.6 inicial devolvia corpo mínimo e o addon não
+        # resolveu). O .mp4 leva ftyp + caixa `free` (estrutura MP4
+        # válida); o .m3u8 leva playlist mínima + linhas de comentário
+        # `#` (ignoradas por parsers HLS) até 4096.
+        if is_m3u8:
+            # Playlist MESTRE com as duas qualidades que o addon
+            # oferece no Dialog.select (FHD/SD): se o addon lê o
+            # .m3u8 p/ montar a lista de qualidades, um media
+            # playlist sem STREAM-INF não devolve nenhuma e o play
+            # aborta antes do select (é o que acontecia com o corpo
+            # mínimo). As URLs das variantes são relativas (padrão
+            # HLS); o addon resolve o .m3u8 mestre em si, não busca
+            # as variantes (provado no probe real — o fluxo vai
+            # direto p/ o Dialog.select).
+            base = (b"#EXTM3U\n#EXT-X-VERSION:3\n"
+                    b"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n"
+                    b"fhd.m3u8\n"
+                    b"#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n"
+                    b"sd.m3u8\n")
+            body = _pad_fake_body(base, 4096, b"#")
+            ctype = "application/vnd.apple.mpegurl"
+        else:
+            # ftyp (24 bytes) + caixa free até 4096 bytes.
+            ftyp = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2"
+            free_size = 4096 - len(ftyp)
+            body = ftyp + free_size.to_bytes(4, "big") + b"free" + \
+                b"\x00" * (free_size - 8)
+            ctype = "video/mp4"
+        content_range = "bytes 0-%d/%d" % (len(body) - 1, len(body))
+        return _fake_response(method, url, kwargs, 206, body, ctype,
+                              content_range=content_range,
+                              encoding=("utf-8" if is_m3u8 else None))
+    except Exception:
+        return None
+
+
 def _install_http_probe():
     """Instala a sonda HTTP (idempotente, com marcador no wrapper).
 
@@ -224,6 +485,23 @@ def _install_http_probe():
                     kwargs.get("timeout", None))
             except Exception:
                 pass
+            # Guarda do probe (v1.2.6): responde 206 sintético ao
+            # probe de espelho do Vulgata sem tocar na rede (ver
+            # _fake_proxy_probe_response) — o token single-use não
+            # é consumido e o player recebe um URL fresco. Registrado
+            # como "206 FAKE" na sonda (transparente no diag).
+            try:
+                fake = _fake_proxy_probe_response(method, url, kwargs)
+            except Exception:
+                fake = None
+            if fake is not None:
+                ms = (time.monotonic() - t0) * 1000
+                try:
+                    outcome = "%d FAKE" % int(fake.status_code)
+                except Exception:
+                    outcome = "FAKE"
+                _http_record(method, url, outcome, ms)
+                return fake
             # Retry (v1.2.5): um SSLError no handshake é transitório
             # (a operadora interceptando, ou a VPN oscilando) — o
             # browse funciona e o play falha no mesmo host, mesma
@@ -322,17 +600,18 @@ def _install_http_probe():
         _http_probe_state["urllib"] = "ausente: %s" % type(e).__name__
 
 
-def _http_summary(n0):
+def _http_summary(seq0):
     """Resumo das chamadas HTTP durante um dispatch (p/ o diag).
 
-    Por chamada: "GET host/path STATUS TAM MS" ou
+    seq0 é o seq da última chamada ANTES do dispatch (ver
+    _http_seq_now): devolve só as chamadas com seq > seq0. Por
+    chamada: "GET host/path STATUS TAM MS" ou
     "GET host/path ERRO Tipo MS". Sem chamadas: "nenhuma" (+ aviso
     se o requests estiver ausente — aí o fetch nem aconteceu por
     falta da biblioteca). Nunca levanta.
     """
     try:
-        calls = _http_calls[n0:] if len(_http_calls) >= n0 \
-            else list(_http_calls)
+        calls = [c for c in _http_calls if c[0] > seq0]
     except Exception:
         return "http: ?"
     if not calls:
@@ -344,7 +623,7 @@ def _http_summary(n0):
             pass
         return "http: nenhuma%s" % extra
     parts = []
-    for method, url, outcome, ms in calls:
+    for _seq, method, url, outcome, ms in calls:
         try:
             from urllib.parse import urlparse
             p = urlparse(url)
@@ -932,11 +1211,18 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         n0 = len(_lm._calls)
     except Exception:
         n0 = None
-    # Índice das chamadas HTTP no início deste dispatch (sonda v1.2.4).
+    # Seq das chamadas HTTP no início deste dispatch (sonda v1.2.4,
+    # seq monotônico v1.2.6 — ver _http_seq_now).
     try:
-        n_http0 = len(_http_calls)
+        n_http0 = _http_seq_now()
     except Exception:
         n_http0 = None
+    # Escolhas de Dialog.select no início deste dispatch (v1.2.6).
+    try:
+        import xbmcgui as _xg_sel
+        n_sel0 = len(_xg_sel.get_dialog_select_calls())
+    except Exception:
+        n_sel0 = None
     run_exc = None
     try:
         entry_run = _find_entry_run(lib, diag)
@@ -1011,6 +1297,27 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
         except Exception as e:
             if not result["error"]:
                 result["error"] = "coleta falhou: %s" % e
+    # Diagnóstico do play (v1.2.6): o que o play fez — qual diálogo
+    # o addon pediu e o que escolhemos, e o que foi resolvido. É o
+    # que distingue "o addon abortou no diálogo" (select -> -1) de
+    # "resolveu um URL que o player não carrega".
+    try:
+        import xbmcgui as _xg_sel2
+        if n_sel0 is not None:
+            for heading, n, choice in \
+                    _xg_sel2.get_dialog_select_calls()[n_sel0:]:
+                diag.append("play: select(%r, %d) -> %d" % (heading, n, choice))
+    except Exception:
+        pass
+    try:
+        if result.get("resolved_url"):
+            u = result["resolved_url"]
+            diag.append("resolveu=%s ok=%s" % (
+                (u[:90] + "…") if len(u) > 90 else u,
+                result.get("succeeded")))
+    except Exception:
+        pass
+    result["diag"] = "\n".join(diag)
     return result
 
 

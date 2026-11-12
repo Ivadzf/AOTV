@@ -242,6 +242,21 @@ class InfoTagVideo:
         self._info["mediatype"] = v
 
 
+# Escolhas de Dialog.select (v1.2.6) — [(heading, nº de opções, escolha)].
+# O aotv_kodi lê as novas entradas de cada dispatch p/ o diag
+# ("play: select(...) -> ..."). Sem teto rígido: um dispatch faz
+# no máximo um punhado de selects.
+_dialog_select_calls = []
+
+
+def get_dialog_select_calls():
+    """Cópia das escolhas de Dialog.select até aqui (nunca levanta)."""
+    try:
+        return list(_dialog_select_calls)
+    except Exception:
+        return []
+
+
 class Dialog:
     def notification(self, heading, message, icon=None, time=5000, sound=True):
         _log("xbmcgui.Dialog.notification", "%s: %s" % (heading, message))
@@ -251,8 +266,26 @@ class Dialog:
         return default
 
     def select(self, heading, list, autoclose=0, preselect=-1, useDetails=False):
-        _log("xbmcgui.Dialog.select", heading)
-        return -1
+        # v1.2.6 — o play de TV do Vulgata chama
+        # select("Escolha a qualidade", ["FHD", "SD"]) e ABORTA se
+        # devolver -1 (cancelado): setResolvedUrl(handle, ok=False)
+        # sem tocar na rede (é o "http: nenhuma" do play da TV no
+        # celular da v1.2.5). Não há UI de diálogo ainda (Fase 4);
+        # devolver a 1ª opção (índice 0) é o "usuário escolheu a
+        # primeira" e destrava o play. Com lista vazia, -1 continua
+        # correto (não há o que escolher). A escolha fica registrada
+        # (get_dialog_select_calls) p/ o diag do dispatch mostrar.
+        try:
+            n = len(list) if list is not None else 0
+        except Exception:
+            n = 0
+        choice = 0 if n > 0 else -1
+        try:
+            _dialog_select_calls.append((heading, n, choice))
+        except Exception:
+            pass
+        _log("xbmcgui.Dialog.select", "%s -> %d" % (heading, choice))
+        return choice
 
     def multiselect(self, heading, options, autoclose=0, preselect=None, useDetails=False):
         _log("xbmcgui.Dialog.multiselect", heading)

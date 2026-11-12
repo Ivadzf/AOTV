@@ -126,16 +126,48 @@ private fun audioTrackLabel(group: androidx.media3.common.Tracks.Group, index: I
 
 /** Fonte de mídia com DNS da Cloudflare, Referer e arquivos locais (downloads). */
 @OptIn(UnstableApi::class)
-private fun mediaSourceFactory(context: android.content.Context): DefaultMediaSourceFactory {
+private fun mediaSourceFactory(
+    context: android.content.Context,
+    /** Headers extras p/ esta fonte (ex.: os do sufixo Kodi `|...`). */
+    extraHeaders: Map<String, String> = emptyMap(),
+): DefaultMediaSourceFactory {
     // OkHttpDataSource usa o DNS-over-HTTPS Cloudflare (AppDns.mediaClient). O torrent local tem cliente próprio.
     val calls = object : okhttp3.Call.Factory {
         override fun newCall(request: okhttp3.Request) =
             (if (request.url.host == "127.0.0.1") localMediaClient else com.aotv.app.data.remote.AppDns.mediaClient).newCall(request)
     }
     val http = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(calls)
-        .setDefaultRequestProperties(STREAM_HEADERS)
+        .setDefaultRequestProperties(STREAM_HEADERS + extraHeaders)
     // DefaultDataSource delega file://, content:// e asset:// para as fontes locais.
     return DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(context, http))
+}
+
+/**
+ * URL estilo Kodi `base|Header=Valor&Outro=Valor` → (base limpa, headers).
+ *
+ * v1.2.6 — o Vulgata resolve a TV com `|Accept-Language=...` no fim
+ * (convenção Kodi: headers a enviar no fetch). O ExoPlayer não
+ * entende o `|`: a URI chegaria malformada e o fetch falharia. Sem
+ * `|`, devolve a URL intacta e mapa vazio. Chaves e valores do
+ * sufixo vêm URL-encoded (ex.: `pt-BR%2Cpt%3Bq%3D0.9`).
+ */
+internal fun splitKodiStreamHeaders(url: String): Pair<String, Map<String, String>> {
+    val bar = url.indexOf('|')
+    if (bar < 0) return url to emptyMap()
+    val base = url.substring(0, bar)
+    val headers = LinkedHashMap<String, String>()
+    for (pair in url.substring(bar + 1).split('&')) {
+        val eq = pair.indexOf('=')
+        if (eq <= 0) continue
+        val k = runCatching {
+            java.net.URLDecoder.decode(pair.substring(0, eq), "UTF-8")
+        }.getOrDefault(pair.substring(0, eq))
+        val v = runCatching {
+            java.net.URLDecoder.decode(pair.substring(eq + 1), "UTF-8")
+        }.getOrDefault(pair.substring(eq + 1))
+        if (k.isNotBlank()) headers[k] = v
+    }
+    return base to headers
 }
 
 /** Nome curto da fonte para avisos ("FrostStream · Servidor Neon · Dublado"). */
@@ -150,7 +182,11 @@ private val localMediaClient by lazy {
 
 /** Magnet vira o endereço local do motor P2P na hora de tocar, a fonte guardada continua sendo o magnet. */
 private fun mediaItemFor(context: android.content.Context, url: String): MediaItem {
-    val play = if (TorrentMagnet.isMagnet(url)) Torrents.get(context).playUrl(url) else url
+    // v1.2.6 — tira o sufixo Kodi `|Header=...` (ver
+    // splitKodiStreamHeaders): a URI p/ o ExoPlayer tem que ser
+    // limpa; os headers vão p/ a factory (ver o call site).
+    val (clean, _) = splitKodiStreamHeaders(url)
+    val play = if (TorrentMagnet.isMagnet(clean)) Torrents.get(context).playUrl(clean) else clean
     val b = MediaItem.Builder().setUri(play)
     if (play.substringBefore('?').endsWith(".m3u8", ignoreCase = true)) b.setMimeType(MimeTypes.APPLICATION_M3U8)
     return b.build()
@@ -307,7 +343,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             }
         }
         try {
-            exoPlayer.setMediaSource(mediaSourceFactory(context).createMediaSource(mediaItemFor(context, play)))
+            // v1.2.6 — headers do sufixo Kodi `|...` (ex.: Accept-Language
+            // da TV do Vulgata) vão p/ a factory; a URI limpa vai p/ o item.
+            val (cleanPlay, playHeaders) = splitKodiStreamHeaders(play)
+            exoPlayer.setMediaSource(mediaSourceFactory(context, playHeaders).createMediaSource(mediaItemFor(context, cleanPlay)))
             exoPlayer.prepare()
             if (!didSeek && pendingSeekMs > 0) { exoPlayer.seekTo(pendingSeekMs); didSeek = true }
             // Transmitindo: mantém o player local MUDO (o Cast recebe a fonte em efeito próprio).
