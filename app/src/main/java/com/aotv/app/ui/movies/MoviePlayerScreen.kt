@@ -126,15 +126,44 @@ private fun audioTrackLabel(group: androidx.media3.common.Tracks.Group, index: I
 
 /** Fonte de mídia com DNS da Cloudflare, Referer e arquivos locais (downloads). */
 @OptIn(UnstableApi::class)
+/**
+ * v1.2.7 — Verificação de hostname relaxada SÓ p/ os hosts proxy do Vulgata
+ * (`*.null-null.shop`). O proxy devolve um certificado válido p/
+ * `*.null-null.shop`, mas o hostname real é um rótulo punycode com
+ * underscores (`xn--l...null-null.shop`) que a verificação estrita de
+ * hostname rejeita ("Hostname mismatch", provado na VM com verify=ON) —
+ * o addon contorna isso com `verify=False` em todos os fetches. Aqui só
+ * o CHECK DE NOME é relaxado p/ esses hosts; a cadeia de certificados
+ * continua sendo verificada (o trust manager padrão do OkHttp não é
+ * tocado). Qualquer outro host usa o verificador padrão do Android.
+ * Limite conhecido: se o OkHttp rejeitar a URL ainda no parse (o host
+ * tem underscores), o erro aparece antes do TLS e este verificador não
+ * alcança — o diag na tela de erro do player vai mostrar qual foi o
+ * erro, e o próximo passo seria o proxy local (127.0.0.1).
+ */
+private val kodiProxyHostnameVerifier = javax.net.ssl.HostnameVerifier { hostname, session ->
+    if (hostname.endsWith(".null-null.shop", ignoreCase = true)) true
+    else javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
+}
+
+/** Cliente do ExoPlayer com o HostnameVerifier acima (só o player usa). */
+private val kodiMediaClient by lazy {
+    com.aotv.app.data.remote.AppDns.mediaClient.newBuilder()
+        .hostnameVerifier(kodiProxyHostnameVerifier)
+        .build()
+}
+
 private fun mediaSourceFactory(
     context: android.content.Context,
     /** Headers extras p/ esta fonte (ex.: os do sufixo Kodi `|...`). */
     extraHeaders: Map<String, String> = emptyMap(),
 ): DefaultMediaSourceFactory {
     // OkHttpDataSource usa o DNS-over-HTTPS Cloudflare (AppDns.mediaClient). O torrent local tem cliente próprio.
+    // v1.2.7: o player usa o kodiMediaClient (mesmo DNS/headers, só o hostname
+    // check relaxado p/ *.null-null.shop — ver kodiProxyHostnameVerifier).
     val calls = object : okhttp3.Call.Factory {
         override fun newCall(request: okhttp3.Request) =
-            (if (request.url.host == "127.0.0.1") localMediaClient else com.aotv.app.data.remote.AppDns.mediaClient).newCall(request)
+            (if (request.url.host == "127.0.0.1") localMediaClient else kodiMediaClient).newCall(request)
     }
     val http = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(calls)
         .setDefaultRequestProperties(STREAM_HEADERS + extraHeaders)
@@ -173,6 +202,21 @@ internal fun splitKodiStreamHeaders(url: String): Pair<String, Map<String, Strin
 /** Nome curto da fonte para avisos ("FrostStream · Servidor Neon · Dublado"). */
 private fun extName(src: MoviePlayerSource, title: String) =
     parseSourceLabel(src.label, src.addon, sourceQualityRank(src.label), title)
+
+/**
+ * Erro curto do ExoPlayer p/ o diagnóstico (v1.2.7): código + mensagem +
+ * causa raiz, p/ distinguir TLS de 404 de URL inválida de timeout na
+ * tela de erro do player. Limitado a 400 caracteres p/ caber na tela.
+ */
+private fun shortPlayerError(error: androidx.media3.common.PlaybackException): String {
+    val root = generateSequence(error.cause) { it.cause }.lastOrNull()
+    val rootTxt = root?.let { "${it.javaClass.simpleName}: ${it.message}" }.orEmpty()
+    return buildString {
+        append(error.errorCodeName)
+        error.message?.takeIf { it.isNotBlank() }?.let { append(" — $it") }
+        if (rootTxt.isNotBlank() && rootTxt != error.message) append("\n$rootTxt")
+    }.take(400)
+}
         .let { listOf(it.addon, it.server, it.language) }.filter { it.isNotBlank() }.joinToString(" · ")
 
 // Torrent entrega o começo só depois de achar pares e baixar as primeiras peças, então espera bem mais.
@@ -208,6 +252,9 @@ fun MoviePlayerScreen(
     episode: Int = 0,
     episodeTotal: Int = 0,
     sources: List<MoviePlayerSource> = emptyList(),
+    /** Diagnóstico do play Kodi (resolveu= + http:) — v1.2.7: aparece na
+     *  tela de erro quando o ExoPlayer não carrega o stream resolvido. */
+    kodiDiag: String = "",
     television: Boolean = com.aotv.app.ui.common.LocalIsTv.current,
     progressVm: PlayerProgressViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     episodeVm: EpisodePlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
@@ -225,7 +272,7 @@ fun MoviePlayerScreen(
             context, scope, progressVm, episodeVm,
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs,
             backdropUrl, season, episode, episodeTotal, sources,
-            forceTv = forceTv,
+            forceTv = forceTv, kodiDiag = kodiDiag,
         )
     }
     SideEffect { s.isTv = forceTv }
@@ -369,6 +416,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 movieErrored = true // fonte direta falhou → tenta a próxima
+                playerError = shortPlayerError(error) // v1.2.7: vai p/ a tela de erro
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 audioGroups = tracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.length > 0 }
@@ -664,12 +712,12 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         val hasMirror = !userLockedSource && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
         kotlinx.coroutines.delay(if (hasMirror) 5_000 else 12_000)
         if (movieStarted || streamUrl != u) return@LaunchedEffect
-        if (userLockedSource) { sourceFailed = true; return@LaunchedEffect }
+        if (userLockedSource) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
         val m = sameMirror(facts(), currentSourceIdx, triedUrls)
         if (m >= 0) {
             toastMsg = "Servidor lento. Tentando outro espelho da mesma fonte."
             applyMovieSource(m)
-        } else if (!nextMovieSource(slow = true)) sourceFailed = true
+        } else if (!nextMovieSource(slow = true)) { noteTimeout(); sourceFailed = true }
     }
 
     // Vídeo carregou. (1) Filme com duração que não bate com o TMDB é outro filme de nome
@@ -736,14 +784,17 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // P2P que ainda recebe dado num ritmo razoável segue esperando em vez de trocar.
             if (p2p && (Torrents.ifStarted()?.status(u)?.downloadBps ?: 0) > 64_000) { startPos = position; continue }
             // Ainda travando na mesma fonte e sem progredir → troca (ou avisa, se travada à mão).
-            if (userLockedSource) sourceFailed = true
-            else if (!nextMovieSource(slow = true)) sourceFailed = true
+            if (userLockedSource) { noteTimeout("Timeout: o stream travou no buffering por 12s (sem erro do player)"); sourceFailed = true }
+            else if (!nextMovieSource(slow = true)) { noteTimeout("Timeout: o stream travou no buffering por 12s (sem erro do player)"); sourceFailed = true }
             return@LaunchedEffect
         }
     }
     // Todas as fontes falharam → avisa e volta ao detalhe (não deixa preso no preto).
+    // v1.2.7 (Kodi): com diag, NÃO volta sozinho — o Davi precisa ler e mandar
+    // o print do diagnóstico na tela de erro; ele volta pelo botão "Voltar".
     LaunchedEffect(sourceFailed) {
         if (!sourceFailed) return@LaunchedEffect
+        if (kodiDiag.isNotBlank()) return@LaunchedEffect
         kotlinx.coroutines.delay(2500)
         onBack()
     }
@@ -1082,8 +1133,9 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
             }
         }
 
-        // Todas as fontes falharam: aviso central (o efeito acima volta ao detalhe em ~2.5s).
-        if (sourceFailed) SourceFailedOverlay()
+        // Todas as fontes falharam: aviso central (o efeito acima volta ao detalhe em ~2.5s,
+        // exceto no play Kodi — v1.2.7 — que fica na tela p/ o Davi ler o diagnóstico).
+        if (sourceFailed) SourceFailedOverlay(diag = kodiDiag, playerError = playerError, onBack = onBack)
 
         if (syncBarOpen && extUrl != null && !inPip) {
             SyncBar(
@@ -1136,6 +1188,8 @@ internal class PlayerSession(
     val episodeTotal: Int,
     val sources: List<MoviePlayerSource>,
     forceTv: Boolean = false,
+    /** Diagnóstico do play Kodi (resolveu= + http:) — v1.2.7. */
+    val kodiDiag: String = "",
 ) {
     /** Volta para a tela anterior. Atualizado a cada composição. */
     var onBack: () -> Unit = {}
@@ -1229,6 +1283,14 @@ internal class PlayerSession(
     // Auto-fallback de FONTE (filme): fonte direta com erro OU que não inicia → tenta a próxima.
     var movieStarted by run { mutableStateOf(false) }
     var movieErrored by run { mutableStateOf(false) }
+    // Erro do ExoPlayer na fonte atual (código + mensagem + causa raiz) — v1.2.7: vai p/
+    // a tela de erro junto com o diag do Kodi, p/ distinguir TLS de 404 de timeout.
+    // Nulo quando a falha foi por timeout (sem exceção) — aí o noteTimeout() registra.
+    var playerError by run { mutableStateOf<String?>(null) }
+    /** Marca falha por timeout (stream não iniciou/travou) sem sobrescrever um erro real do player. */
+    fun noteTimeout(msg: String = "Timeout: o stream não iniciou em 12s (sem erro do player)") {
+        if (playerError == null) playerError = msg
+    }
     // Nenhuma fonte tocável (todas falharam/mortas) → overlay + volta ao detalhe (não trava no preto).
     var sourceFailed by run { mutableStateOf(false) }
     // URL que chegou em STATE_READY por último. Dispara a checagem de duração e a subida de qualidade.

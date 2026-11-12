@@ -53,7 +53,10 @@ class KodiBrowserViewModel @Inject constructor(
     )
 
     /** URL resolvida — a tela entrega ao player do app. */
-    data class PlayEvent(val url: String, val title: String)
+    /** v1.2.7: `diag` é o diagnóstico do dispatch (resolveu= + http:) — vai p/
+     *  a tela de erro do player, p/ o Davi mandar o print quando o ExoPlayer
+     *  não carregar o stream resolvido. */
+    data class PlayEvent(val url: String, val title: String, val diag: String = "")
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -139,7 +142,7 @@ class KodiBrowserViewModel @Inject constructor(
                 }
                 is KodiPluginRunner.KodiOpenResult.Resolved -> {
                     _uiState.update { it.copy(loading = false) }
-                    _playEvents.emit(PlayEvent(res.url, playTitle.ifBlank { _uiState.value.title }))
+                    _playEvents.emit(PlayEvent(res.url, playTitle.ifBlank { _uiState.value.title }, res.diag))
                 }
                 is KodiPluginRunner.KodiOpenResult.Empty -> {
                     _uiState.update { it.copy(loading = false, items = emptyList(), empty = true, diag = res.diag) }

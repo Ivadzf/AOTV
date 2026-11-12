@@ -66,8 +66,12 @@ class KodiPluginRunner @Inject constructor(
     sealed interface KodiOpenResult {
         /** O plugin devolveu uma listagem — navegar p/ ela. */
         data class Listing(val items: List<KodiItem>) : KodiOpenResult
-        /** O plugin resolveu um stream — tocar esta URL no ExoPlayer. */
-        data class Resolved(val url: String) : KodiOpenResult
+        /** O plugin resolveu um stream — tocar esta URL no ExoPlayer.
+         *  v1.2.7: carrega o `diag` do dispatch junto, p/ ele aparecer na
+         *  tela de erro do player (antes o diag só ia p/ o Empty e se
+         *  perdia no caminho do play — era por isso que o Davi via só o
+         *  "Fonte indisponível", sem diagnóstico). */
+        data class Resolved(val url: String, val diag: String = "") : KodiOpenResult
         /** O plugin rodou mas não devolveu lista nem URL (ação sem retorno). */
         data class Empty(val message: String, val diag: String = "") : KodiOpenResult
         /** O dispatch falhou (addon ausente, erro do plugin, erro Python). */
@@ -121,11 +125,13 @@ class KodiPluginRunner @Inject constructor(
         val items = parseItems(res)
         // Diagnóstico do lookup do run(argv) (aotv_kodi.py) — vai p/
         // a tela de estado vazio, p/ o Davi mandar o print quando o
-        // 2º nível voltar vazio no celular.
+        // 2º nível voltar vazio no celular. v1.2.7: vai TAMBÉM no
+        // Resolved, p/ aparecer na tela de erro do player quando o
+        // ExoPlayer não carregar o stream resolvido.
         val diag = dictStr(res, "diag")
         return when {
             items.isNotEmpty() -> KodiOpenResult.Listing(items)
-            resolved.isNotBlank() && succeeded -> KodiOpenResult.Resolved(resolved)
+            resolved.isNotBlank() && succeeded -> KodiOpenResult.Resolved(resolved, diag)
             resolved.isNotBlank() -> KodiOpenResult.Failed(
                 "O addon não conseguiu resolver este item."
             )

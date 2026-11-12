@@ -113,6 +113,10 @@ private data class PlayerData(
     val season: Int = 0, val episode: Int = 0, val episodeTotal: Int = 0,
     // Todas as fontes do filme/episódio — p/ trocar dentro do player
     val sources: List<MoviePlayerSource> = emptyList(),
+    // Diagnóstico do play Kodi (resolveu= + http:) — v1.2.7: vai p/ a tela
+    // de erro do player, p/ o Davi mandar o print quando o ExoPlayer não
+    // carregar o stream resolvido. Vazio p/ todo o resto (Nuvio, Stremio...).
+    val kodiDiag: String = "",
 )
 private val playerCache = mutableMapOf<Int, PlayerData>()
 private var playerIdCounter = 0
@@ -148,11 +152,12 @@ fun MoviesNavigation(
         lastEpisode: String = "", startPositionMs: Long = 0, backdropUrl: String = "",
         season: Int = 0, episode: Int = 0, episodeTotal: Int = 0,
         sources: List<MoviePlayerSource> = emptyList(),
+        kodiDiag: String = "",
     ) {
         val playId = ++playerIdCounter
         playerCache[playId] = PlayerData(
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs, backdropUrl,
-            season, episode, episodeTotal, sources,
+            season, episode, episodeTotal, sources, kodiDiag,
         )
         navController.navigate(MoviesRoute.Player.create(playId))
     }
@@ -322,6 +327,7 @@ fun MoviesNavigation(
                     episode     = data.episode,
                     episodeTotal = data.episodeTotal,
                     sources     = data.sources,
+                    kodiDiag    = data.kodiDiag,
                     television = isTV,
                     onBack      = { navController.popBackStack() },
                 )
@@ -430,13 +436,14 @@ fun MoviesNavigation(
                 tvScale(isTV) {
                     com.aotv.app.ui.kodi.KodiBrowserScreen(
                         onBack = { navController.popBackStack() },
-                        onPlay = { url, title, addonId ->
+                        onPlay = { url, title, addonId, diag ->
                             navigateToPlayer(
                                 embedUrl = url,
                                 title = title,
                                 sources = listOf(
                                     MoviePlayerSource(label = title, url = url, addon = addonId),
                                 ),
+                                kodiDiag = diag,
                             )
                         },
                     )

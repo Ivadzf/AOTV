@@ -60,13 +60,13 @@ import com.aotv.app.ui.theme.TextTertiary
 @Composable
 fun KodiBrowserScreen(
     onBack: () -> Unit,
-    onPlay: (url: String, title: String, addonId: String) -> Unit,
+    onPlay: (url: String, title: String, addonId: String, diag: String) -> Unit,
     viewModel: KodiBrowserViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
-        viewModel.playEvents.collect { onPlay(it.url, it.title, viewModel.addonId) }
+        viewModel.playEvents.collect { onPlay(it.url, it.title, viewModel.addonId, it.diag) }
     }
     BackHandler(enabled = state.canGoBack) { viewModel.goBack() }
 

@@ -10,7 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Cast
@@ -268,14 +270,56 @@ internal fun NextEpisodeCard(isSeason: Boolean, line: String, countdown: Int, on
     }
 }
 
-/** Nenhuma fonte serviu (.pl-fail). O player volta ao detalhe sozinho. */
+/** Nenhuma fonte serviu (.pl-fail). O player volta ao detalhe sozinho —
+ *  exceto no play Kodi (v1.2.7, `diag` não vazio), que fica na tela p/ o
+ *  Davi ler o diagnóstico e voltar pelo botão "Voltar".
+ *  `playerError` é o erro do ExoPlayer (código + mensagem + causa raiz);
+ *  `diag` é o diagnóstico do dispatch Kodi (resolveu= + http:). */
 @Composable
-internal fun SourceFailedOverlay() {
+internal fun SourceFailedOverlay(
+    diag: String = "",
+    playerError: String? = null,
+    onBack: (() -> Unit)? = null,
+) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.86f)), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        ) {
             Icon(Icons.Default.ErrorOutline, null, tint = Danger, modifier = Modifier.size(56.dp))
             Text("Fonte indisponível", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, fontFamily = Inter)
             Text("Não foi possível carregar este título agora.", color = TextSecondary, fontSize = 15.sp)
+            // Erro do ExoPlayer — distingue TLS de 404 de timeout de URL inválida.
+            if (!playerError.isNullOrBlank()) {
+                Text(
+                    playerError,
+                    color = Color.White, fontSize = 13.sp, lineHeight = 18.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            // Diagnóstico do play Kodi — manda o print.
+            if (diag.isNotBlank()) {
+                Text(
+                    "Diagnóstico (manda o print):",
+                    color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp),
+                ) {
+                    Text(diag, color = Color.White, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+            if (onBack != null) {
+                com.aotv.app.ui.common.AotvButton("Voltar", onBack)
+            }
         }
     }
 }
