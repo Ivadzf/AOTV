@@ -34,6 +34,7 @@ import javax.inject.Singleton
 class KodiPluginRunner @Inject constructor(
     @ApplicationContext private val context: Context,
     private val addonStore: KodiAddonStore,
+    private val serviceRunner: KodiServiceRunner,
 ) {
 
     /** Um item de diretório devolvido pelo plugin (tradução do ListItem). */
@@ -97,6 +98,12 @@ class KodiPluginRunner @Inject constructor(
         }
         try {
             ensurePython()
+            // Fase 3: abrir o addon inicia o service.py dele (se
+            // tiver) numa thread de fundo. Fire-and-forget, em try:
+            // o serviço nunca pode quebrar a navegação/play — se
+            // falhar, o open() segue normal e o diag do Python
+            // registra. Idempotente (o runner só sobe um por addon).
+            runCatching { serviceRunner.startService(addonId) }
             val res = Python.getInstance().getModule("aotv_kodi")
                 .callAttr("run_plugin", addonId, path, query, 1)
             parseResult(res)

@@ -848,6 +848,23 @@ def get_plugin_library(addon_id):
     return ""
 
 
+def get_service_library(addon_id):
+    """Biblioteca do extension point xbmc.service (service.py, Fase 3)."""
+    d = find_addon_dir(addon_id)
+    if not d:
+        return ""
+    info = _parse_addon_xml(d)
+    for point, library in info.get("extensions", []):
+        if point == "xbmc.service" and library:
+            return os.path.join(d, library)
+    return ""
+
+
+def has_service(addon_id):
+    """True se o addon declara um xbmc.service (service.py)."""
+    return bool(get_service_library(addon_id))
+
+
 # ---------------------------------------------------------------------------
 # settings.xml — definições + valores persistidos (formato do Kodi).
 # ---------------------------------------------------------------------------
@@ -1340,10 +1357,153 @@ def _run_plugin_inner(addon_id, path="", query="", handle=1):
 
 
 def run_script(addon_id, func_name):
-    """Entrada script (RunScript) — Fase 3. Na Fase 1 só registra."""
-    _log("aotv_kodi.run_script",
-         "%s.%s (dispatch de script é Fase 3)" % (addon_id, func_name))
-    return {"ok": False, "error": "RunScript é Fase 3 (não implementado)"}
+    """Entrada script (RunScript) — Fase 3.
+
+    Executa a entrada script do addon com sys.argv=[lib, func_name],
+    como o Kodi invoca um script (o BrazucaPlay despacha no top-level
+    por `if sys.argv[1] == '<func>':` — ex.: limparFavoritos).
+
+    Entrada: o extension point xbmc.python.script, se existir; senão
+    o pluginsource (o BrazucaPlay só declara pluginsource, e o
+    default.py dele atende os dois modos pelo sys.argv[1]).
+
+    Serializado (_run_lock), como o run_plugin: um addon por vez.
+    SystemExit (o script chamou exit() depois de agir — é o caso do
+    limparFavoritos) é sucesso, não erro. ValueError cuja mensagem
+    contenha o func_name é o fall-through conhecido: o script agiu e
+    depois caiu no dispatch de plugin (`addon_handle =
+    int(sys.argv[1])`), que rejeita o nome da função — a ação já
+    aconteceu, então também é sucesso (anotado no diag).
+    """
+    result = {"ok": False, "error": "", "diag": ""}
+    _ensure_simplejson()
+    _install_http_probe()
+    t_start = time.monotonic()
+    d = find_addon_dir(addon_id)
+    if not d:
+        result["error"] = "addon não instalado: %s" % addon_id
+        return result
+    lib = ""
+    info = _parse_addon_xml(d)
+    for point, library in info.get("extensions", []):
+        if point == "xbmc.python.script" and library:
+            lib = os.path.join(d, library)
+            break
+    if not lib:
+        lib = get_plugin_library(addon_id)
+    if not lib or not os.path.isfile(lib):
+        result["error"] = "biblioteca de script não encontrada: %s" % addon_id
+        return result
+    argv = [lib, func_name or ""]
+    diag = ["script=%s func=%s" % (os.path.basename(lib), func_name or "")]
+    with _run_lock:
+        sys.argv = argv
+        set_current_addon(addon_id)
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        try:
+            import runpy
+            runpy.run_path(lib, run_name="__main__")
+            result["ok"] = True
+        except SystemExit as e:
+            # O script terminou com exit() (código 0/None = normal).
+            result["ok"] = True
+            diag.append("exit(%s)" % (e.code,))
+        except ValueError as e:
+            # Fall-through p/ o dispatch de plugin depois da ação
+            # (int(sys.argv[1]) com o nome da função).
+            if func_name and func_name in str(e):
+                result["ok"] = True
+                diag.append("fall-through plugin apos acao: %s" % e)
+            else:
+                result["error"] = "ValueError: %s" % e
+        except BaseException as e:
+            import traceback
+            result["error"] = "%s: %s\n%s" % (
+                type(e).__name__, e, traceback.format_exc(limit=12))
+            _log("aotv_kodi.run_script", "ERRO %s: %s" % (addon_id, e))
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    result["diag"] = "\n".join(diag)
+    return result
+
+
+def run_service(addon_id):
+    """Executa o service.py de um addon na thread atual (Fase 3).
+
+    É o que o KodiServiceRunner (Kotlin) chama numa thread de fundo:
+    o serviço roda até o fim (normalmente até o abort do Monitor) e
+    esta função bloqueia até lá — por isso NÃO usa o _run_lock (o
+    serviço não pode segurar o lock do dispatch de plugin nem ser
+    travado por ele; navegação/play continuam em paralelo).
+
+    sys.argv=[service_lib], como o Kodi invoca um serviço. SystemExit
+    é término normal do serviço. O diag traz o tempo e o resumo HTTP
+    (é ele que mostra, no teste, se o serviço fez algum fetch —
+    presença/analytics e self-update do Vulgata DEVEM ficar em zero,
+    porque a Fase 1 força esses settings off).
+    """
+    result = {"ok": False, "error": "", "diag": ""}
+    _ensure_simplejson()
+    _install_http_probe()
+    t_start = time.monotonic()
+    d = find_addon_dir(addon_id)
+    if not d:
+        result["error"] = "addon não instalado: %s" % addon_id
+        return result
+    lib = get_service_library(addon_id)
+    if not lib or not os.path.isfile(lib):
+        result["error"] = "service.py não encontrado: %s" % addon_id
+        return result
+    diag = ["service=%s" % os.path.basename(lib)]
+    try:
+        n_http0 = _http_seq_now()
+    except Exception:
+        n_http0 = None
+    sys.argv = [lib]
+    set_current_addon(addon_id)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    try:
+        import runpy
+        runpy.run_path(lib, run_name="__main__")
+        result["ok"] = True
+    except SystemExit as e:
+        result["ok"] = True
+        diag.append("exit(%s)" % (e.code,))
+    except BaseException as e:
+        import traceback
+        result["error"] = "%s: %s\n%s" % (
+            type(e).__name__, e, traceback.format_exc(limit=12))
+        _log("aotv_kodi.run_service", "ERRO %s: %s" % (addon_id, e))
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    if n_http0 is not None:
+        diag.append(_http_summary(n_http0))
+    result["diag"] = "\n".join(diag)
+    return result
+
+
+def request_service_abort():
+    """Pede o abort de todo Monitor (o serviço sai do waitForAbort)."""
+    try:
+        import xbmc
+        xbmc.request_abort()
+    except Exception:
+        pass
+
+
+def clear_service_abort():
+    """Limpa o pedido de abort (antes de iniciar um serviço novo)."""
+    try:
+        import xbmc
+        xbmc.clear_abort()
+    except Exception:
+        pass
 
 
 def listitem_to_dict(item):

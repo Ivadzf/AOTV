@@ -64,6 +64,9 @@ private sealed class MoviesRoute(val route: String) {
     object Addons : MoviesRoute("movies_addons")
     object Plugins : MoviesRoute("movies_plugins")
     object KodiSpike : MoviesRoute("movies_kodi_spike")
+    // Gerenciador de addons Kodi (v1.4, Fase 4) — instalar ZIP/URL,
+    // listar, ligar/desligar, settings, diagnóstico, remover.
+    object KodiAddons : MoviesRoute("movies_kodi_addons")
     // Navegação de addon Kodi (v1.2, Fase 2) — addonId é o id do addon instalado.
     object KodiBrowser : MoviesRoute("movies_kodi_browser/{addonId}") {
         fun create(addonId: String) = "movies_kodi_browser/$addonId"
@@ -283,6 +286,7 @@ fun MoviesNavigation(
                         onPlayEpisode = onPlayEpisodeCb,
                         onPlayDirect = onPlayDirectCb,
                         onRelatedClick = onRelatedCb,
+                        onOpenKodiAddon = { navController.navigate(MoviesRoute.KodiBrowser.create(it)) },
                         viewModel = detailVm,
                     ) else MovieDetailScreen(
                         item = stub,
@@ -290,6 +294,7 @@ fun MoviesNavigation(
                         onPlayDirect = onPlayDirectCb,
                         onBack = onBackCb,
                         onRelatedClick = onRelatedCb,
+                        onOpenKodiAddon = { navController.navigate(MoviesRoute.KodiBrowser.create(it)) },
                         viewModel = detailVm,
                     )
                 }
@@ -376,7 +381,7 @@ fun MoviesNavigation(
                         onPlatformChanged = onRestartApp,
                         onOpenAddons      = { navController.navigate(MoviesRoute.Addons.route) },
                         onOpenPlugins     = { navController.navigate(MoviesRoute.Plugins.route) },
-                        onOpenKodiSpike   = { navController.navigate(MoviesRoute.KodiSpike.route) },
+                        onOpenKodiAddons  = { navController.navigate(MoviesRoute.KodiAddons.route) },
                         onOpenProfiles    = { navController.navigate(MoviesRoute.Profiles.route) },
                         onOpenHomeCustomize = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                         onOpenDebrid = { navController.navigate(MoviesRoute.Debrid.route) },
@@ -416,6 +421,8 @@ fun MoviesNavigation(
 
             // Spike Kodi (Fase 0, v1.1) — instala o ZIP do Vulgata por SAF e
             // testa se o .so dele carrega sob o Python do Chaquopy.
+            // A tela de gerenciamento (Fase 4) é a rota KodiAddons; o spike
+            // continua acessível pelo diagnóstico dela.
             composable(MoviesRoute.KodiSpike.route) {
                 tvScale(isTV) {
                     com.aotv.app.ui.settings.KodiSpikeScreen(
@@ -423,6 +430,18 @@ fun MoviesNavigation(
                         onOpenVulgata = {
                             navController.navigate(MoviesRoute.KodiBrowser.create("plugin.video.vulgata"))
                         },
+                    )
+                }
+            }
+
+            // Addons Kodi (v1.4, Fase 4) — gerenciar: instalar ZIP/URL,
+            // listar, ligar/desligar, settings, diagnóstico, remover.
+            composable(MoviesRoute.KodiAddons.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.kodi.KodiAddonsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenAddon = { navController.navigate(MoviesRoute.KodiBrowser.create(it)) },
+                        onOpenSpike = { navController.navigate(MoviesRoute.KodiSpike.route) },
                     )
                 }
             }

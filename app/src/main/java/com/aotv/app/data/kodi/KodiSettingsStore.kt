@@ -35,6 +35,7 @@ class KodiSettingsStore @Inject constructor(
         val default: String,
         val values: String,    // enum: "Kodi|FFmpeg Direct" (valores separados por |)
         val visible: String,   // "true"/"false" (default "true")
+        val action: String = "", // action: "RunScript(addon, func)" (v1.4, Fase 4)
     )
 
     private val kodiDir: File
@@ -54,6 +55,10 @@ class KodiSettingsStore @Inject constructor(
     private fun forcedValue(addonId: String, settingId: String): String? =
         forcedValues[addonId]?.get(settingId)
 
+    /** True se o setting é forçado (decisão do Davi) — a UI o mostra travado. */
+    fun isForced(addonId: String, settingId: String): Boolean =
+        forcedValues[addonId]?.containsKey(settingId) == true
+
     /** Definições de settings.xml (ou vazio se o addon não tiver). */
     fun getDefinitions(addonId: String): List<SettingDefinition> {
         val xml = File(kodiDir, "addons/$addonId/resources/settings.xml")
@@ -66,14 +71,20 @@ class KodiSettingsStore @Inject constructor(
             while (event != XmlPullParser.END_DOCUMENT) {
                 if (event == XmlPullParser.START_TAG && parser.name == "setting") {
                     val id = parser.getAttributeValue(null, "id").orEmpty()
-                    if (id.isNotBlank()) {
+                    val type = parser.getAttributeValue(null, "type").orEmpty().ifBlank { "text" }
+                    // Action/lsep sem id (ex.: "LIMPAR FAVORITOS" do
+                    // BrazucaPlay) entram na UI — são botões/separadores,
+                    // não valores persistidos (a ViewModel só persiste
+                    // defs com id).
+                    if (id.isNotBlank() || type == "action" || type == "lsep") {
                         defs += SettingDefinition(
                             id = id,
-                            type = parser.getAttributeValue(null, "type").orEmpty().ifBlank { "text" },
+                            type = type,
                             label = parser.getAttributeValue(null, "label").orEmpty(),
                             default = parser.getAttributeValue(null, "default").orEmpty(),
                             values = parser.getAttributeValue(null, "values").orEmpty(),
                             visible = parser.getAttributeValue(null, "visible").orEmpty().ifBlank { "true" },
+                            action = parser.getAttributeValue(null, "action").orEmpty(),
                         )
                     }
                 }

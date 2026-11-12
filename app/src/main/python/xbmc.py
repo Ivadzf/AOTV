@@ -12,6 +12,10 @@ Decisões aplicadas:
 - translatePath resolve special:// via aotv_kodi (lazy import).
 - executebuiltin: subset Container.Refresh / ActivateWindow / RunPlugin /
   RunScript (RunPlugin despacha de verdade; RunScript é Fase 3, só registra).
+- Notification(...) despacha p/ xbmcgui.Dialog().notification.
+- Monitor com evento de abort real (Fase 3): waitForAbort bloqueia de
+  verdade até o abort (ou o timeout); request_abort/clear_abort são o
+  controle do KodiServiceRunner (o abort é global, como no Kodi).
 """
 
 from _aotv_kodi_log import log as _log
@@ -135,10 +139,73 @@ def executebuiltin(function):
         inner = fn[len("RunPlugin("):-1].strip().strip("\"'")
         _run_plugin_url(inner)
         return
-    # RunScript(...) — entrada script (BrazucaPlay); dispatch é Fase 3.
-    if low.startswith("runscript("):
-        _log("xbmc.executebuiltin", "RunScript é Fase 3 (só registrado): %s" % fn)
+    # RunScript(addon_id[, func_name]) — despacha de verdade (Fase 3).
+    if low.startswith("runscript(") and fn.endswith(")"):
+        inner = fn[len("RunScript("):-1].strip()
+        args = _split_builtin_args(inner)
+        if args:
+            _run_script(args[0], args[1] if len(args) > 1 else "")
         return
+    # Notification(heading, message[, time[, icon[, sound]]]) — a ordem
+    # do builtin é heading, message, TIME, icon (diferente da do
+    # Dialog.notification Python, que é heading, message, icon, time).
+    if low.startswith("notification(") and fn.endswith(")"):
+        inner = fn[len("Notification("):-1].strip()
+        args = _split_builtin_args(inner)
+        if len(args) >= 2:
+            try:
+                import xbmcgui
+                time_ms = 5000
+                if len(args) >= 3:
+                    try:
+                        time_ms = int(args[2])
+                    except Exception:
+                        time_ms = 5000
+                icon = args[3] if len(args) >= 4 else None
+                xbmcgui.Dialog().notification(
+                    args[0], args[1], icon=icon, time=time_ms)
+            except Exception as e:
+                _log("xbmc.executebuiltin", "Notification falhou: %s" % e)
+        return
+
+
+def _split_builtin_args(inner):
+    """Divide os args de um builtin por vírgula, respeitando aspas.
+
+    O Kodi aceita args com ou sem aspas; o BrazucaPlay monta
+    Notification sem aspas em volta dos valores (só o heading pode
+    vir com aspas). Aspas simples/duplas em volta de um arg são
+    removidas; vírgula dentro de aspas não separa.
+    """
+    args = []
+    cur = []
+    quote = None
+    for ch in inner:
+        if quote is not None:
+            if ch == quote:
+                quote = None
+            else:
+                cur.append(ch)
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == ",":
+            args.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    args.append("".join(cur).strip())
+    return [a for a in args if a != ""]
+
+
+def _run_script(addon_id, func_name):
+    """Despacha um RunScript via aotv_kodi (para o executebuiltin)."""
+    bridge = _bridge()
+    if bridge is None:
+        return
+    try:
+        bridge.run_script(addon_id, func_name)
+    except Exception as e:
+        _log("xbmc.executebuiltin", "RunScript falhou: %s" % e)
 
 
 def _run_plugin_url(url):
@@ -159,15 +226,50 @@ def _run_plugin_url(url):
         _log("xbmc.executebuiltin", "RunPlugin falhou: %s" % e)
 
 
+# Evento de abort do Monitor (Fase 3). No Kodi o abort é do aplicativo
+# (global, não por addon): Monitor.abortRequested() lê este evento e
+# waitForAbort() bloqueia nele. O KodiServiceRunner limpa o evento ao
+# iniciar um serviço e o seta ao pará-lo; só um serviço roda por vez.
+import threading as _threading
+
+_abort_event = _threading.Event()
+
+
+def request_abort():
+    """Pede o abort de todo Monitor (o serviço sai do waitForAbort)."""
+    _abort_event.set()
+
+
+def clear_abort():
+    """Limpa o pedido de abort (antes de iniciar um serviço novo)."""
+    _abort_event.clear()
+
+
+def abort_requested():
+    return _abort_event.is_set()
+
+
 class Monitor:
     def abortRequested(self):
-        return False
+        return _abort_event.is_set()
 
     def waitForAbort(self, timeout=0):
-        import time
-        if timeout:
-            time.sleep(timeout)
-        return False
+        """Bloqueia até o abort ou o timeout (segundos, como no Kodi).
+
+        timeout <= 0: não bloqueia — devolve o estado atual (é a
+        semântica do WaitMSec(0) do Kodi: poll instantâneo). timeout
+        > 0: espera até timeout segundos; devolve True se abortou
+        durante a espera, False se o tempo esgotou. Na Fase 1 este
+        método só dormia o timeout e sempre devolvia False — o
+        serviço do Vulgata nunca sairia do loop sem o abort real.
+        """
+        try:
+            timeout = float(timeout or 0)
+        except Exception:
+            timeout = 0
+        if timeout <= 0:
+            return _abort_event.is_set()
+        return _abort_event.wait(timeout)
 
 
 class Player:

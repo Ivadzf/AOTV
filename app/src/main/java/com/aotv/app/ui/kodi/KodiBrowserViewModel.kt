@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.kodi.KodiPluginRunner
+import com.aotv.app.data.kodi.KodiServiceRunner
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -32,6 +33,7 @@ class KodiBrowserViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val runner: KodiPluginRunner,
     private val addonStore: KodiAddonStore,
+    private val serviceRunner: KodiServiceRunner,
 ) : ViewModel() {
 
     val addonId: String = saved.get<String>("addonId").orEmpty()
@@ -69,6 +71,14 @@ class KodiBrowserViewModel @Inject constructor(
 
     init {
         openRoot()
+    }
+
+    /** Fase 3: sair do navegador do addon para o service.py dele
+     *  (não-bloqueante — nunca dar join na main thread; a thread do
+     *  serviço sai sozinha do waitForAbort). */
+    override fun onCleared() {
+        runCatching { serviceRunner.stopService(addonId) }
+        super.onCleared()
     }
 
     /** Raiz do addon (menu) — limpa a pilha. */

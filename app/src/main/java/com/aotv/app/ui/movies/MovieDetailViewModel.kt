@@ -2,9 +2,9 @@ package com.aotv.app.ui.movies
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.local.PlatformPrefs
-import com.aotv.app.data.remote.TmdbApiService
-import com.aotv.app.data.remote.dto.bestLogoUrl
+import com.aotv.app.data.remote.TmdbApiServiceimport com.aotv.app.data.remote.dto.bestLogoUrl
 import com.aotv.app.data.remote.dto.bestTrailerKey
 import com.aotv.app.data.remote.dto.trailerKeys
 import com.aotv.app.data.remote.dto.toCastMember
@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -42,6 +43,7 @@ class MovieDetailViewModel @Inject constructor(
     private val debrid: com.aotv.app.data.debrid.DebridService,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
     private val pluginService: com.aotv.app.data.plugins.PluginService,
+    private val kodiStore: KodiAddonStore,
 ) : ViewModel() {
 
     // URLs já mandadas pro teste. A lista é recriada a cada addon que responde, então o
@@ -178,6 +180,10 @@ class MovieDetailViewModel @Inject constructor(
         // Streams de addons Stremio (só HTTP direto)
         val stremioStreams: List<com.aotv.app.data.remote.StremioStream> = emptyList(),
         val stremioLoading: Boolean = false,
+        // Addons Kodi de vídeo habilitados (v1.4, Fase 4) — grupo
+        // "Addons Kodi" na folha de fontes; tocar abre o navegador
+        // do addon (o Kodi não busca por título aqui — é navegação).
+        val kodiVideoAddons: List<KodiAddonStore.KodiAddon> = emptyList(),
         // true até os addons responderem. "Assistir" só libera quando false.
         val sourcesLoading: Boolean = true,
         // Continuar assistindo — progresso salvo (posição + última fonte + episódio)
@@ -269,6 +275,12 @@ class MovieDetailViewModel @Inject constructor(
     fun load(stub: MovieItem) {
         stubItem = stub
         startLibraryObservers(stub.tmdbId, stub.type)
+        // Addons Kodi de vídeo (v1.4, Fase 4) — p/ o grupo "Addons Kodi"
+        // na folha de fontes. Disco local, nunca trava a tela.
+        viewModelScope.launch(Dispatchers.IO) {
+            val kodi = runCatching { kodiStore.videoAddons() }.getOrDefault(emptyList())
+            _uiState.update { it.copy(kodiVideoAddons = kodi) }
+        }
         // Continuar assistindo: lê progresso salvo (posição + última fonte + episódio).
         // withTimeoutOrNull: a leitura local do histórico NUNCA pode segurar o botão
         // "Assistir" — se o Room travar, assume sem progresso e libera em 3s.

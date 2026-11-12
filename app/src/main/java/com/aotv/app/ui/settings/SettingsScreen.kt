@@ -72,7 +72,7 @@ import com.aotv.app.ui.theme.*
 fun SettingsScreen(
     onOpenAddons: () -> Unit = {},
     onOpenPlugins: () -> Unit = {},
-    onOpenKodiSpike: () -> Unit = {},
+    onOpenKodiAddons: () -> Unit = {},
     onOpenProfiles: () -> Unit = {},
     onOpenHomeCustomize: () -> Unit = {},
     onOpenDebrid: () -> Unit = {},
@@ -320,9 +320,9 @@ fun SettingsScreen(
                         com.aotv.app.ui.common.SettingsRow(
                             icon = Icons.Default.Extension,
                             iconTint = Accent,
-                            title = "Addons Kodi (spike)",
-                            sub = "Fase 0 da v1.1 — instala o ZIP do Vulgata e testa se o .so dele carrega sob o Python.",
-                            onClick = onOpenKodiSpike,
+                            title = "Addons Kodi",
+                            sub = "Instale addons Kodi por ZIP ou URL, ative cada um e ajuste as configurações.",
+                            onClick = onOpenKodiAddons,
                             grouped = true,
                             divider = true,
                         )

@@ -86,6 +86,9 @@ fun MovieDetailScreen(
     // (url, startPos, lastEp, sources, season, episode, episodeTotal)
     // season/episode/episodeTotal != 0 habilitam os botões anterior/próximo episódio no player.
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = { _, _, _, _, _, _, _ -> },
+    // v1.4, Fase 4 — tocar um addon Kodi na folha de fontes abre o
+    // navegador dele (a navegação passa pela MoviesNavigation).
+    onOpenKodiAddon: (String) -> Unit = {},
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
     // Passa o item completo (título/poster/ano/tipo) p/ a ViewModel poder salvar na
@@ -596,6 +599,8 @@ fun MovieDetailScreen(
                             mediaTitle = state.item?.title.orEmpty(),
                             onPlay = { playStremio(it) },
                             onDownload = { dl(it.url) },
+                            kodiAddons = state.kodiVideoAddons,
+                            onOpenKodiAddon = onOpenKodiAddon,
                         )
                         if (state.stremioLoading) {
                             Text(
@@ -778,6 +783,11 @@ fun MovieDetailScreen(
                 },
                 isDownloadable = { viewModel.isDownloadable(it) },
                 onDownloadStremio = { s -> viewModel.downloadSource(s.url, "T$season:E$episode") },
+                kodiAddons = state.kodiVideoAddons,
+                onOpenKodiAddon = {
+                    viewModel.clearSelectedEpisode()
+                    onOpenKodiAddon(it)
+                },
             )
         }
 
@@ -875,6 +885,10 @@ private fun EpisodeServersSheet(
     onPlayStremio: (com.aotv.app.data.remote.StremioStream) -> Unit,
     isDownloadable: (String) -> Boolean = { false },
     onDownloadStremio: (com.aotv.app.data.remote.StremioStream) -> Unit = {},
+    // v1.4, Fase 4 — grupo "Addons Kodi" na folha (addons de vídeo
+    // habilitados; tocar abre o navegador do addon).
+    kodiAddons: List<com.aotv.app.data.kodi.KodiAddonStore.KodiAddon> = emptyList(),
+    onOpenKodiAddon: (String) -> Unit = {},
 ) {
     // Scrim cobre a tela inteira; toque fora fecha.
     val scrimSrc = remember { MutableInteractionSource() }
@@ -980,6 +994,25 @@ private fun EpisodeServersSheet(
                 }
                 if (sourceData.filtered.size > sourceData.limit) item(key = "more") {
                     com.aotv.app.ui.common.AotvButton("Mostrar mais (${sourceData.filtered.size - sourceData.limit})", { sourceData.onMore() })
+                }
+                // v1.4, Fase 4 — grupo "Addons Kodi": os addons de vídeo
+                // habilitados entram como fontes navegáveis (o Kodi não
+                // busca por título aqui — tocar abre o catálogo do addon).
+                if (kodiAddons.isNotEmpty()) {
+                    item(key = "kodi-header") { SourceSectionHeader("Addons Kodi", kodiAddons.size) }
+                    kodiAddons.forEach { addon ->
+                        item(key = "kodi-${addon.id}") {
+                            SourceRow(
+                                label = com.aotv.app.data.kodi.KodiPluginRunner.cleanKodiText(
+                                    addon.name.ifBlank { addon.id },
+                                ),
+                                quality = "v${addon.version.ifBlank { "?" }}",
+                                tag = "KODI",
+                                tagColor = Accent,
+                                onClick = { onOpenKodiAddon(addon.id) },
+                            )
+                        }
+                    }
                 }
                 if (sourceData.filtered.isEmpty() && stremioStreams.isNotEmpty()) item(key = "empty-list") {
                     Text(
@@ -1198,9 +1231,13 @@ internal fun SourceList(
     cols: Int = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1,
     debridTag: String = "",
     television: Boolean = false,
+    // v1.4, Fase 4 — grupo "Addons Kodi" (addons de vídeo habilitados;
+    // tocar abre o navegador do addon).
+    kodiAddons: List<com.aotv.app.data.kodi.KodiAddonStore.KodiAddon> = emptyList(),
+    onOpenKodiAddon: (String) -> Unit = {},
 ) {
     if (television) {
-        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag) }
+        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon) }
         return
     }
     val data = rememberSourceListData(streams, facts)
@@ -1210,6 +1247,23 @@ internal fun SourceList(
         SourceSectionHeader(addon, gs.size)
         gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
             SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag)
+        }
+    }
+    // v1.4, Fase 4 — grupo "Addons Kodi": os addons de vídeo habilitados
+    // entram como fontes navegáveis (o Kodi não busca por título aqui —
+    // tocar abre o catálogo do addon).
+    if (kodiAddons.isNotEmpty()) {
+        SourceSectionHeader("Addons Kodi", kodiAddons.size)
+        kodiAddons.forEach { addon ->
+            SourceRow(
+                label = com.aotv.app.data.kodi.KodiPluginRunner.cleanKodiText(
+                    addon.name.ifBlank { addon.id },
+                ),
+                quality = "v${addon.version.ifBlank { "?" }}",
+                tag = "KODI",
+                tagColor = Accent,
+                onClick = { onOpenKodiAddon(addon.id) },
+            )
         }
     }
     if (data.filtered.size > data.limit) com.aotv.app.ui.common.AotvButton("Mostrar mais (${data.filtered.size - data.limit})", { data.onMore() })

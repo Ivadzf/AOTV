@@ -39,6 +39,50 @@ class Addon:
             return ""
         return bridge.get_setting(self._id, setting_id)
 
+    def setSetting(self, setting_id=None, value=None, **kwargs):
+        """Persiste um setting (Fase 3 — o BrazucaPlay usa no
+        removerEPG/donate_consider; o Kodi grava string). Aceita
+        id=... como kwarg (a assinatura do Kodi é setSetting(id, value)
+        e o BrazucaPlay chama setSettingBool(id=..., value=...))."""
+        if setting_id is None:
+            setting_id = kwargs.get("id")
+        if value is None:
+            value = kwargs.get("value")
+        bridge = _bridge()
+        if bridge is None:
+            return False
+        return bridge.set_setting(self._id, setting_id, value)
+
+    def setSettingBool(self, setting_id=None, value=None, **kwargs):
+        """setSettingBool(id=..., value=...) — o BrazucaPlay usa no
+        controledospais. O Kodi grava bool como "true"/"false"."""
+        if setting_id is None:
+            setting_id = kwargs.get("id")
+        if value is None:
+            value = kwargs.get("value")
+        return self.setSetting(
+            setting_id, "true" if value else "false")
+
+    def setSettingInt(self, setting_id=None, value=None, **kwargs):
+        if setting_id is None:
+            setting_id = kwargs.get("id")
+        if value is None:
+            value = kwargs.get("value")
+        try:
+            return self.setSetting(setting_id, str(int(value)))
+        except Exception:
+            return False
+
+    def setSettingNumber(self, setting_id=None, value=None, **kwargs):
+        if setting_id is None:
+            setting_id = kwargs.get("id")
+        if value is None:
+            value = kwargs.get("value")
+        try:
+            return self.setSetting(setting_id, str(float(value)))
+        except Exception:
+            return False
+
     def getAddonInfo(self, info_id):
         bridge = _bridge()
         if bridge is None:
@@ -54,5 +98,6 @@ class Addon:
 # chamadas (filesDir/kodi/xbmc_calls.log) — ver _aotv_kodi_log.record.
 from _aotv_kodi_log import traced as _traced
 
-for _m in ("getSetting", "getAddonInfo", "openSettings"):
+for _m in ("getSetting", "setSetting", "setSettingBool", "setSettingInt",
+           "setSettingNumber", "getAddonInfo", "openSettings"):
     setattr(Addon, _m, _traced("xbmcaddon.Addon." + _m, getattr(Addon, _m)))

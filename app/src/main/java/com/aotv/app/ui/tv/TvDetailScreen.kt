@@ -69,9 +69,11 @@ fun TvDetailScreen(
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
     onRelatedClick: (MovieItem) -> Unit,
+    // v1.4, Fase 4 — tocar um addon Kodi na folha de fontes abre o navegador dele.
+    onOpenKodiAddon: (String) -> Unit = {},
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
-    TvText { TvDetailScreenBody(item, onPlayEpisode, onPlayDirect, onRelatedClick, viewModel) }
+    TvText { TvDetailScreenBody(item, onPlayEpisode, onPlayDirect, onRelatedClick, onOpenKodiAddon, viewModel) }
 }
 
 @Composable
@@ -80,6 +82,7 @@ private fun TvDetailScreenBody(
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
     onRelatedClick: (MovieItem) -> Unit,
+    onOpenKodiAddon: (String) -> Unit = {},
     viewModel: MovieDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(item.tmdbId) { viewModel.load(item) }
@@ -243,6 +246,8 @@ private fun TvDetailScreenBody(
                                     onDownload = { null },
                                     cols = 2,
                                     television = true,
+                                    kodiAddons = state.kodiVideoAddons,
+                                    onOpenKodiAddon = onOpenKodiAddon,
                                 )
                             }
                             when {
@@ -304,6 +309,11 @@ private fun TvDetailScreenBody(
                     onDownload = { null },
                     cols = 1,
                     television = true,
+                    kodiAddons = state.kodiVideoAddons,
+                    onOpenKodiAddon = {
+                        viewModel.clearSelectedEpisode()
+                        onOpenKodiAddon(it)
+                    },
                 )
                 when {
                     state.episodeStremioLoading -> TvSpinner("Buscando fontes")
