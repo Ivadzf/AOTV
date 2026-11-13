@@ -1216,7 +1216,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
  * composable e cada lambda capturava dezenas de estados, o que estourava o tamanho do método.
  */
 @OptIn(UnstableApi::class)
-internal class PlayerSession(
+class PlayerSession(
     val context: android.content.Context,
     val scope: kotlinx.coroutines.CoroutineScope,
     val progressVm: PlayerProgressViewModel,
