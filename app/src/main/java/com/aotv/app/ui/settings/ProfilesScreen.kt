@@ -104,7 +104,7 @@ fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
     val url = validAvatarUrl(profile.avatarUrl)
     var imgFailed by remember(url) { mutableStateOf(false) }
     val preset = avatarPreset(profile.avatarId)
-    val bg = Color(preset?.color ?: PROFILE_COLORS[profile.color.mod(PROFILE_COLORS.size)])
+    val bg = Color(preset?.color ?: PROFILE_COLORS[profile.color.mod(PROFILE_COLORS.size)].toInt())
     Box(
         modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(bg),
         contentAlignment = Alignment.Center,

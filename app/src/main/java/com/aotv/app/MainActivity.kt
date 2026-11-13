@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
             val paletteId by platformPrefs.themePalette.collectAsStateWithLifecycle()
             // Lote 3 (v1.11.0): com o Personalizado selecionado, a paleta vem das
             // 6 cores editáveis salvas — editar uma cor recompõe o app na hora.
-            val customColors by platformPrefs.customTheme.collectAsStateWithLifecycle()
+            val customColors by platformPrefs.customThemeFlow.collectAsStateWithLifecycle()
             val palette = AotvPalette.fromId(paletteId, customColors)
             LaunchedEffect(palette) { if (currentPalette != palette) setCurrentPalette(palette) }
             AotvTheme {
