@@ -109,6 +109,16 @@ class StremioAddonService @Inject constructor(
     /** Nome do addon por base URL (preenchido ao ler o manifest) — usado p/ rotular as fontes. */
     private val addonNames = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+    /**
+     * Logo do manifest por NOME do addon (p/ a folha de fontes). Preenchido ao ler o
+     * manifest, o que já acontece ao buscar os streams de cada addon — sem chamada extra.
+     * Só em memória: o manifest é relido a cada abertura do app.
+     */
+    private val addonLogos = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** Logo do addon ("" quando não há logo ou o manifest ainda não foi lido). */
+    fun logoForAddon(name: String): String = addonLogos[name].orEmpty()
+
     private fun baseOf(manifestOrBase: String) = manifestOrBase.trim()
         .removeSuffix("/manifest.json").removeSuffix("/")
 
@@ -144,6 +154,7 @@ class StremioAddonService @Inject constructor(
                 catalogs = AddonLinks.homeCatalogs(json),
             ).also { m ->
                 if (m.name.isNotBlank()) addonNames[baseOf(url)] = m.name
+                if (m.name.isNotBlank() && m.logo.isNotBlank()) addonLogos[m.name] = m.logo
                 // A Início monta as fileiras de addon a partir disso, sem esperar a rede.
                 prefs.cacheManifest(url, m.name, m.catalogs, m.id)
             }

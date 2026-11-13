@@ -243,9 +243,11 @@ internal fun BoxScope.ExtAudioLoading() {
     }
 }
 
-/** Cartão de próximo episódio ou próxima temporada (.pl-next), com contagem. */
+/** Cartão de próximo episódio ou próxima temporada (.pl-next), com contagem.
+ * [autoAdvance] false (pref `playerAutoNext` desligada, Fase C): o cartão
+ * aparece mas sem contagem — só avança no botão "Assistir". */
 @Composable
-internal fun NextEpisodeCard(isSeason: Boolean, line: String, countdown: Int, onPlay: () -> Unit, onCancel: () -> Unit) {
+internal fun NextEpisodeCard(isSeason: Boolean, line: String, countdown: Int, onPlay: () -> Unit, onCancel: () -> Unit, autoAdvance: Boolean = true) {
     // Foco automático no botão principal — senão o D-pad fica no player por trás e OK pausa o
     // vídeo em vez de confirmar (mesmo padrão do TvExitDialog).
     val playFocus = remember { FocusRequester() }
@@ -261,7 +263,7 @@ internal fun NextEpisodeCard(isSeason: Boolean, line: String, countdown: Int, on
             Text(line, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, fontFamily = Inter)
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 com.aotv.app.ui.common.AotvButton(
-                    "Assistir agora (${countdown}s)", onPlay, Modifier.weight(1f).focusRequester(playFocus),
+                    if (autoAdvance) "Assistir agora (${countdown}s)" else "Assistir agora", onPlay, Modifier.weight(1f).focusRequester(playFocus),
                     tone = com.aotv.app.ui.common.ButtonTone.PRIMARY, compact = true,
                 )
                 com.aotv.app.ui.common.AotvButton("Cancelar", onCancel, compact = true)

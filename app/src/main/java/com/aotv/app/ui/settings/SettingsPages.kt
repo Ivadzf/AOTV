@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
@@ -37,18 +38,29 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ScreenRotation
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -66,6 +78,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -82,8 +95,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
+import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
+import com.aotv.app.ui.movies.PlayerPrefsViewModel
+import com.aotv.app.ui.movies.StreamPrefsViewModel
+import com.aotv.app.ui.movies.effectivePlayerButtons
+import com.aotv.app.ui.movies.effectivePlayerTopActions
+import com.aotv.app.ui.movies.playerButtonLabel
+import com.aotv.app.ui.movies.playerTopActionLabel
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.AccentSoft
@@ -159,12 +180,7 @@ fun SettingsPageScreen(
     when (pageId) {
         SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel)
         SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel)
-        SettingsPageIds.Streams -> PlaceholderPage(
-            title = "Streams",
-            sub = "Emblemas, pesquisa e ordem das fontes",
-            note = "Nada aqui ainda. As opções de streams — emblemas de tamanho e posição, mostrar no player, plano de fundo, logo do addon e barra de pesquisa — chegam na Fase C.",
-            onBack = onBack,
-        )
+        SettingsPageIds.Streams -> StreamsPage(onBack)
         SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onBack, viewModel)
         SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel)
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel)
@@ -420,6 +436,105 @@ private fun DetalhePage(
                 listOf("horizontal" to "Horizontal com arte", "stacked" to "Empilhado com texto"),
                 episodeStyle, viewModel::setDetailEpisodeStyle,
             )
+        }
+    }
+}
+
+// ── Streams (Fase C) ─────────────────────────────────────────────────────────
+
+@Composable
+private fun StreamsPage(
+    onBack: () -> Unit,
+    viewModel: StreamPrefsViewModel = hiltViewModel(),
+) {
+    val search by viewModel.search.collectAsStateWithLifecycle()
+    val badgesSize by viewModel.badgesSize.collectAsStateWithLifecycle()
+    val badgesCodec by viewModel.badgesCodec.collectAsStateWithLifecycle()
+    val badgesLang by viewModel.badgesLang.collectAsStateWithLifecycle()
+    val badgesPos by viewModel.badgesPos.collectAsStateWithLifecycle()
+    val logo by viewModel.logo.collectAsStateWithLifecycle()
+    val pinned by viewModel.pinned.collectAsStateWithLifecycle()
+    SettingsPageScaffold("Streams", "Pesquisa, emblemas, logo e fontes fixadas", onBack) {
+        SettingsSection("Folha de fontes")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Search,
+                title = "Barra de pesquisa nas fontes",
+                sub = if (search) "Filtra as fontes digitando o nome do addon"
+                    else "Sem barra de pesquisa. A folha mostra todas as fontes",
+                trailing = { Switch(checked = search, onCheckedChange = { viewModel.setSearch(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSearch(!search) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Image,
+                title = "Logo do addon",
+                sub = if (logo) "Mostra o logo do addon ao lado do nome da fonte"
+                    else "Só o nome da fonte, sem logo",
+                trailing = { Switch(checked = logo, onCheckedChange = { viewModel.setLogo(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLogo(!logo) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsSection("Emblemas")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Label,
+                title = "Mostrar tamanho",
+                sub = "Emblema com o tamanho do arquivo (ex.: 2,4 GB), quando a fonte informa",
+                trailing = { Switch(checked = badgesSize, onCheckedChange = { viewModel.setBadgesSize(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setBadgesSize(!badgesSize) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Label,
+                title = "Mostrar codec",
+                sub = "Emblema com o codec (ex.: HEVC, AV1), quando a fonte informa",
+                trailing = { Switch(checked = badgesCodec, onCheckedChange = { viewModel.setBadgesCodec(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setBadgesCodec(!badgesCodec) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Label,
+                title = "Mostrar idioma",
+                sub = "Emblema Dublado ou Legendado em cada fonte",
+                trailing = { Switch(checked = badgesLang, onCheckedChange = { viewModel.setBadgesLang(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setBadgesLang(!badgesLang) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsCard {
+            PrefRow(
+                "Posição dos emblemas",
+                listOf("stats" to "No canto", "pills" to "Na linha de pills"),
+                badgesPos, viewModel::setBadgesPos,
+            )
+        }
+        SettingsSection("Fontes fixadas")
+        Text(
+            "Para fixar uma fonte, toque no pin ao lado do nome dela na folha de fontes. As fixadas aparecem primeiro.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        if (pinned.isEmpty()) {
+            SettingsCard {
+                Text("Nenhuma fonte fixada", fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp)
+            }
+        } else {
+            com.aotv.app.ui.common.SettingsGroup {
+                pinned.forEachIndexed { i, name ->
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.PushPin,
+                        title = name,
+                        sub = "Aparece primeiro na folha de fontes",
+                        trailing = { TextButton(onClick = { viewModel.unpin(name) }) { Text("Desfixar", color = DangerText) } },
+                        grouped = true,
+                        divider = i > 0,
+                    )
+                }
+            }
         }
     }
 }
@@ -825,6 +940,7 @@ private fun PlatformOption(
 private fun ReproducaoPage(
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    playerPrefs: PlayerPrefsViewModel = hiltViewModel(),
 ) {
     val audio by viewModel.audioPref.collectAsStateWithLifecycle()
     val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
@@ -832,7 +948,20 @@ private fun ReproducaoPage(
     val subOn by viewModel.subOn.collectAsStateWithLifecycle()
     val subLang by viewModel.subLang.collectAsStateWithLifecycle()
     var pickLang by remember { mutableStateOf(false) }
-    SettingsPageScaffold("Reprodução", "Áudio, qualidade, trailer e legendas", onBack) {
+    // Botões do player (Fase C). A lista guardada vazia é o padrão; aqui a
+    // ordem em vigor, com os desligados no fim para religar sem perder o lugar.
+    val savedButtons by playerPrefs.buttons.collectAsStateWithLifecycle()
+    val effectiveButtons = effectivePlayerButtons(savedButtons)
+    val disabledButtons = DEFAULT_PLAYER_BUTTONS.filterNot { it in effectiveButtons }
+    val savedTopActions by playerPrefs.topActions.collectAsStateWithLifecycle()
+    val effectiveTopActions = effectivePlayerTopActions(savedTopActions)
+    val tapSeek by playerPrefs.tapSeek.collectAsStateWithLifecycle()
+    val volBoost by playerPrefs.volBoost.collectAsStateWithLifecycle()
+    val volBoostLevel by playerPrefs.volBoostLevel.collectAsStateWithLifecycle()
+    val mini by playerPrefs.mini.collectAsStateWithLifecycle()
+    val autoNext by playerPrefs.autoNext.collectAsStateWithLifecycle()
+    val autoNextDelay by playerPrefs.autoNextDelay.collectAsStateWithLifecycle()
+    SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
         SettingsSection("Reprodução")
         SettingsCard {
@@ -870,6 +999,152 @@ private fun ReproducaoPage(
             )
         }
         if (pickLang) SubLangDialog(subLang, onPick = { viewModel.setSubLang(it); pickLang = false }, onDismiss = { pickLang = false })
+
+        // Botões do player (Fase C). Sobe e desce reordena, o switch tira da
+        // barra. Desligado, o botão some do player mas continua aqui p/ religar.
+        SettingsSection("Botões do player")
+        SettingsCard {
+            (effectiveButtons + disabledButtons).forEachIndexed { i, id ->
+                val enabled = id in effectiveButtons
+                val pos = effectiveButtons.indexOf(id)
+                PlayerButtonRow(
+                    label = playerButtonLabel(id),
+                    enabled = enabled,
+                    canUp = enabled && pos > 0,
+                    canDown = enabled && pos >= 0 && pos < effectiveButtons.lastIndex,
+                    onUp = { playerPrefs.moveButton(id, -1) },
+                    onDown = { playerPrefs.moveButton(id, 1) },
+                    onToggle = { playerPrefs.setButtonEnabled(id, it) },
+                )
+                if (i < DEFAULT_PLAYER_BUTTONS.lastIndex) Spacer(Modifier.height(6.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { playerPrefs.resetButtons() }) { Text("Restaurar padrão", color = Accent) }
+            }
+        }
+        SettingsSection("Botões do topo")
+        Text(
+            "O botão Voltar sempre aparece. Estes são os opcionais do topo do player.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        com.aotv.app.ui.common.SettingsGroup {
+            listOf(
+                "cast" to Icons.Default.Cast,
+                "rotate" to Icons.Default.ScreenRotation,
+                "lock" to Icons.Default.Lock,
+            ).forEachIndexed { i, (id, icon) ->
+                val on = id in effectiveTopActions
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = icon,
+                    title = playerTopActionLabel(id),
+                    sub = when (id) {
+                        "cast" -> "Manda o vídeo para a TV (Chromecast)"
+                        "rotate" -> "Gira a tela do player"
+                        else -> "Trava os controles para não tocar sem querer"
+                    },
+                    trailing = { Switch(checked = on, onCheckedChange = { playerPrefs.setTopActionEnabled(id, it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                    onClick = { playerPrefs.setTopActionEnabled(id, !on) },
+                    grouped = true,
+                    divider = i > 0,
+                )
+            }
+        }
+        SettingsSection("Reprodução no player")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.TouchApp,
+                title = "Tocar na barra para buscar",
+                sub = if (tapSeek) "Tocar na barra de progresso pula para aquele ponto"
+                    else "Só arrastando a barra. Tocar nela não pula",
+                trailing = { Switch(checked = tapSeek, onCheckedChange = { playerPrefs.setTapSeek(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setTapSeek(!tapSeek) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VolumeUp,
+                title = "Volume Boost",
+                sub = if (volBoost) "Deixa o volume passar de 100%"
+                    else "Volume máximo é 100%",
+                trailing = { Switch(checked = volBoost, onCheckedChange = { playerPrefs.setVolBoost(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setVolBoost(!volBoost) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.PictureInPictureAlt,
+                title = "Mini player",
+                sub = if (mini) "Dá para minimizar o player e continuar navegando no app"
+                    else "Sem mini player. Sair do player pausa o vídeo",
+                trailing = { Switch(checked = mini, onCheckedChange = { playerPrefs.setMini(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMini(!mini) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.SkipNext,
+                title = "'A seguir' automático",
+                sub = if (autoNext) "Ao fim do episódio, avança sozinho para o próximo"
+                    else "Ao fim do episódio, espera você escolher o próximo",
+                trailing = { Switch(checked = autoNext, onCheckedChange = { playerPrefs.setAutoNext(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoNext(!autoNext) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        Column(Modifier.alpha(if (volBoost) 1f else 0.45f)) {
+            SettingsCard {
+                PrefRow(
+                    "Nível do Volume Boost",
+                    listOf(1.0f to "100%", 1.25f to "125%", 1.5f to "150%", 1.75f to "175%", 2.0f to "200%"),
+                    volBoostLevel, { if (volBoost) playerPrefs.setVolBoostLevel(it) },
+                )
+                if (!volBoost) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Ligue o Volume Boost para mudar o nível.", fontSize = 13.sp, color = TextSecondary)
+                }
+            }
+        }
+        Column(Modifier.alpha(if (autoNext) 1f else 0.45f)) {
+            SettingsCard {
+                PrefRow(
+                    "Atraso do \"A seguir\"",
+                    listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 30 to "30 s"),
+                    autoNextDelay, { if (autoNext) playerPrefs.setAutoNextDelay(it) },
+                )
+                if (!autoNext) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Ligue o \"A seguir\" automático para mudar o atraso.", fontSize = 13.sp, color = TextSecondary)
+                }
+            }
+        }
+    }
+}
+
+/** Linha de um botão do player: rótulo, subir/descer e liga/desliga. */
+@Composable
+private fun PlayerButtonRow(
+    label: String,
+    enabled: Boolean,
+    canUp: Boolean,
+    canDown: Boolean,
+    onUp: () -> Unit,
+    onDown: () -> Unit,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.55f),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        IconButton(onClick = onUp, enabled = canUp, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Default.KeyboardArrowUp, "Subir", tint = if (canUp) TextPrimary else TextTertiary)
+        }
+        IconButton(onClick = onDown, enabled = canDown, modifier = Modifier.size(40.dp)) {
+            Icon(Icons.Default.KeyboardArrowDown, "Descer", tint = if (canDown) TextPrimary else TextTertiary)
+        }
+        Switch(checked = enabled, onCheckedChange = onToggle, modifier = Modifier.focusProperties { canFocus = false })
     }
 }
 

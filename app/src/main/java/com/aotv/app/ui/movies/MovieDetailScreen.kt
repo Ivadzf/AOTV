@@ -13,6 +13,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,17 +29,25 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -1008,6 +1018,8 @@ private fun EpisodeServersSheet(
     // habilitados; tocar abre o navegador do addon).
     kodiAddons: List<com.aotv.app.data.kodi.KodiAddonStore.KodiAddon> = emptyList(),
     onOpenKodiAddon: (String) -> Unit = {},
+    // Fase C — prefs da folha (busca, emblemas, logo, fixadas).
+    streamPrefs: StreamPrefsViewModel = hiltViewModel(),
 ) {
     // Scrim cobre a tela inteira; toque fora fecha.
     val scrimSrc = remember { MutableInteractionSource() }
@@ -1083,7 +1095,11 @@ private fun EpisodeServersSheet(
             // auxiliar LazyListScope.sourceListItems não compilava (o compilador
             // recusou chamar @Composable com receiver LazyListScope de dentro do
             // conteúdo do LazyColumn), então os items ficam inline aqui.
-            val sourceData = rememberSourceListData(stremioStreams, facts)
+            // Fase C: busca, emblemas, logo e fixadas vêm das prefs de streams.
+            val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
+            val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
+            val cardPrefs = rememberStreamCardPrefs(streamPrefs)
+            val sourceData = rememberSourceListData(stremioStreams, facts, pinned)
             val cols = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1
 
             // LazyColumn com keys estáveis: a posição do scroll sobrevive quando
@@ -1097,16 +1113,19 @@ private fun EpisodeServersSheet(
                 if (sourceData.groups.isNotEmpty()) item(key = "count") {
                     Text("${sourceData.groups.size} versões em ${sourceData.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
                 }
-                item(key = "filters") { SourceListFilters(sourceData) }
+                item(key = "filters") { SourceListFilters(sourceData, showSearch = searchOn) }
                 sourceData.sections.forEach { (addon, gs) ->
-                    item(key = "section-$addon") { SourceSectionHeader(addon, gs.size) }
+                    item(key = "section-$addon") {
+                        SourceSectionHeader(addon, gs.size, pinned = addon in pinned,
+                            onTogglePin = { streamPrefs.togglePin(addon) })
+                    }
                     gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
                         // Key = url do lead do 1º grupo da fileira (estável por grupo).
                         item(key = "row-${row.first().lead.url}") {
                             SourceCardRow(
                                 row, sourceData, "", onPlayStremio,
                                 { s -> if (isDownloadable(s.url)) ({ onDownloadStremio(s) }) else null },
-                                cols, debridTag,
+                                cols, debridTag, cardPrefs,
                             )
                         }
                     }
@@ -1135,7 +1154,8 @@ private fun EpisodeServersSheet(
                 }
                 if (sourceData.filtered.isEmpty() && stremioStreams.isNotEmpty()) item(key = "empty-list") {
                     Text(
-                        if (sourceData.wrongCount > 0 && !sourceData.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
+                        if (sourceData.query.isNotBlank()) "Nenhuma fonte bate com essa busca."
+                        else if (sourceData.wrongCount > 0 && !sourceData.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
                         else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
                     )
                 }
@@ -1209,6 +1229,9 @@ private class SourceListData(
     val onShowWrongChange: (Boolean) -> Unit,
     val sourceFilter: String,
     val onSourceFilterChange: (String) -> Unit,
+    /** Busca por texto livre (Fase C): só da sessão, não persiste. */
+    val query: String,
+    val onQueryChange: (String) -> Unit,
     val limit: Int,
     val onMore: () -> Unit,
     val fact: (com.aotv.app.data.remote.StremioStream) -> com.aotv.app.data.remote.SourceFacts,
@@ -1216,17 +1239,59 @@ private class SourceListData(
     val addonOf: (ReleaseGroup) -> String,
 )
 
+/** Normaliza p/ busca: minúsculo e sem acento ("Dublado" casa com "dublado"). */
+private fun normBusca(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "")
+    .lowercase()
+
+/** Palavras de qualidade que o rank do stream cobre ("4k" casa com 2160p e vice-versa). */
+private fun qualityWords(rank: Int): String = when {
+    rank >= 2160 -> "4k 2160p uhd"
+    rank >= 1440 -> "1440p 2k"
+    rank >= 1080 -> "1080p fullhd fhd"
+    rank >= 720 -> "720p hd"
+    rank >= 480 -> "480p sd"
+    else -> ""
+}
+
+/**
+ * A busca casa com addon, qualidade, idioma, codec, servidor/grupo e título do arquivo:
+ * o rótulo cru do addon já traz quase tudo isso, e o resto (qualidade normalizada, idioma,
+ * nome do arquivo) entra no texto. Toda palavra digitada precisa aparecer em algum lugar
+ * do grupo.
+ */
+private fun groupMatchesQuery(
+    group: ReleaseGroup,
+    words: List<String>,
+    fact: (com.aotv.app.data.remote.StremioStream) -> com.aotv.app.data.remote.SourceFacts,
+): Boolean {
+    val hay = normBusca(buildString {
+        group.members.forEach { s ->
+            append(' '); append(s.addon)
+            append(' '); append(s.label)
+            append(' '); append(s.fileName)
+            append(' '); append(qualityWords(fact(s).rank))
+            append(' '); append(when (fact(s).lang) { "dub" -> "dublado dub"; "leg" -> "legendado leg"; else -> "" })
+        }
+    })
+    return words.all { it in hay }
+}
+
 @Composable
 private fun rememberSourceListData(
     streams: List<com.aotv.app.data.remote.StremioStream>,
     facts: List<com.aotv.app.data.remote.SourceFacts>,
+    /** Addons fixados, na ordem escolhida (Fase C): as seções deles vão p/ o topo. */
+    pinned: List<String> = emptyList(),
 ): SourceListData {
     var filter by rememberSaveable { mutableStateOf("all") }
     var showWrong by rememberSaveable { mutableStateOf(false) }
     // Filtro por fonte (""): "Todas" ou o nome do addon/provider.
     var sourceFilter by rememberSaveable { mutableStateOf("") }
+    // Busca por texto livre (Fase C): só da sessão, não persiste.
+    var query by rememberSaveable { mutableStateOf("") }
     // O limite reseta quando qualquer filtro muda (comportamento antigo).
-    var limit by rememberSaveable(filter, showWrong, sourceFilter) { mutableStateOf(24) }
+    var limit by rememberSaveable(filter, showWrong, sourceFilter, query) { mutableStateOf(24) }
     val groups = remember(streams) { groupReleases(streams) }
     // Tudo abaixo é derivado com remember: antes, cada emissão do UiState
     // (um probe, um addon) re-derivava as listas e criava listas novas, o
@@ -1245,23 +1310,32 @@ private fun rememberSourceListData(
         group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
     fun addonOf(group: ReleaseGroup) =
         fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
+    // Ordem das fixadas (Fase C): índice na lista de fixadas; quem não está fixado vai depois.
+    val pinIndex = remember(pinned) { pinned.withIndex().associate { it.value to it.index } }
     // Fontes presentes (dentro do filtro de idioma), ordenadas pelo melhor stream.
-    val sources = remember(langFiltered, facts) {
+    // Fixadas primeiro, na ordem escolhida; o resto segue por rank como antes.
+    val sources = remember(langFiltered, facts, pinIndex) {
         langFiltered.groupBy(::addonOf).entries
-            .sortedByDescending { (_, gs) -> gs.maxOf { fact(playable(it)).rank } }
+            .sortedWith(compareBy({ pinIndex[it.key] ?: Int.MAX_VALUE }, { -it.value.maxOf { g -> fact(playable(g)).rank } }))
             .map { it.key to it.value.size }
     }
-    val filtered = remember(langFiltered, facts, sourceFilter) {
-        if (sourceFilter.isEmpty()) langFiltered
+    val filtered = remember(langFiltered, facts, sourceFilter, query, pinIndex) {
+        val bySource = if (sourceFilter.isEmpty()) langFiltered
         else langFiltered.filter { addonOf(it) == sourceFilter }
+        val words = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.map(::normBusca)
+        val byQuery = if (words.isEmpty()) bySource else bySource.filter { groupMatchesQuery(it, words, ::fact) }
+        // Fixadas primeiro (ordenação estável: o resto mantém a ordem de chegada, e as
+        // fixadas sobrevivem ao corte do "Mostrar mais").
+        byQuery.sortedWith(compareBy { pinIndex[addonOf(it)] ?: Int.MAX_VALUE })
     }
     // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
-    // O limite ("Mostrar mais") corta antes de agrupar, então ele continua valendo no total.
+    // Fixadas primeiro, na ordem escolhida. O limite ("Mostrar mais") corta antes de
+    // agrupar, então ele continua valendo no total.
     val shown = remember(filtered, limit) { filtered.take(limit) }
-    val sections = remember(shown, facts) {
-        shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
-            gs.maxOf { fact(playable(it)).rank }
-        }
+    val sections = remember(shown, facts, pinIndex) {
+        shown.groupBy(::addonOf).entries.sortedWith(
+            compareBy({ pinIndex[it.key] ?: Int.MAX_VALUE }, { -it.value.maxOf { g -> fact(playable(g)).rank } }),
+        )
     }
     val best = remember(facts) { facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url }
     return SourceListData(
@@ -1271,6 +1345,7 @@ private fun rememberSourceListData(
         filter = filter, onFilterChange = { filter = it },
         showWrong = showWrong, onShowWrongChange = { showWrong = it },
         sourceFilter = sourceFilter, onSourceFilterChange = { sourceFilter = it },
+        query = query, onQueryChange = { query = it },
         limit = limit, onMore = { limit += 24 },
         fact = { s -> fact(s) }, playable = { g -> playable(g) }, addonOf = { g -> addonOf(g) },
     )
@@ -1278,7 +1353,14 @@ private fun rememberSourceListData(
 
 /** Cabeçalho de uma seção por fonte ("VêTela Brasil · 5 versões"). */
 @Composable
-private fun SourceSectionHeader(addon: String, count: Int) {
+private fun SourceSectionHeader(
+    addon: String,
+    count: Int,
+    /** A seção está fixada (pin preenchido). */
+    pinned: Boolean = false,
+    /** null = sem botão de pin (grupo "Addons Kodi"). Na TV o botão não aparece. */
+    onTogglePin: (() -> Unit)? = null,
+) {
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1286,6 +1368,18 @@ private fun SourceSectionHeader(addon: String, count: Int) {
     ) {
         Text(addon, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily)
         Text("$count ${if (count == 1) "versão" else "versões"}", color = TextTertiary, fontSize = 12.5.sp, fontFamily = ManropeFontFamily)
+        // Pin (Fase C): só no celular — na TV mantém o comportamento atual, sem o botão.
+        if (onTogglePin != null && !com.aotv.app.ui.common.LocalIsTv.current) {
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = onTogglePin, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                    if (pinned) "Desfixar fonte" else "Fixar fonte",
+                    tint = if (pinned) Accent else TextTertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
     }
 }
 
@@ -1299,6 +1393,7 @@ private fun SourceCardRow(
     onDownload: (com.aotv.app.data.remote.StremioStream) -> (() -> Unit)?,
     cols: Int,
     debridTag: String,
+    cardPrefs: StreamCardPrefs = StreamCardPrefs(),
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         row.forEach { group ->
@@ -1320,7 +1415,9 @@ private fun SourceCardRow(
             Box(Modifier.weight(1f)) {
                 androidx.compose.runtime.key(source.url) {
                     SourceCard(info, tag, color, onClick = { onPlay(source) }, onDownload = onDownload(source), note = note,
-                        suggested = group.members.any { it.url == data.best })
+                        suggested = group.members.any { it.url == data.best },
+                        logoUrl = if (cardPrefs.showLogo) cardPrefs.logoOf(info.addon) else "",
+                        cardPrefs = cardPrefs)
                 }
             }
         }
@@ -1328,9 +1425,37 @@ private fun SourceCardRow(
     }
 }
 
-/** Fileiras de filtros: por fonte (novo) e por idioma (existente). */
+/** Fileiras de filtros: busca por texto (Fase C), por fonte (novo) e por idioma (existente). */
 @Composable
-private fun SourceListFilters(data: SourceListData) {
+private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false) {
+    // Busca por texto livre (Fase C): addon, qualidade, idioma, codec, servidor e arquivo.
+    // TvTextFieldGate deixa o campo usável na TV sem roubar o foco do D-pad.
+    if (showSearch) {
+        val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+        com.aotv.app.ui.common.TvTextFieldGate(Modifier.fillMaxWidth()) { gate ->
+            OutlinedTextField(
+                value = data.query,
+                onValueChange = data.onQueryChange,
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary) },
+                trailingIcon = {
+                    if (data.query.isNotEmpty()) IconButton(onClick = { data.onQueryChange("") }) {
+                        Icon(Icons.Default.Clear, "Limpar busca", tint = TextTertiary)
+                    }
+                },
+                placeholder = { Text("Buscar nas fontes…", color = TextTertiary, fontSize = 15.sp) },
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 15.sp),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent, cursorColor = Accent,
+                    focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                modifier = gate,
+            )
+        }
+    }
     // Por fonte: um chip por addon/provider presente, com contagem. Só aparece
     // quando há mais de 1 fonte — com uma só, a seção já diz tudo.
     if (data.sources.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1367,18 +1492,24 @@ internal fun SourceList(
     // tocar abre o navegador do addon).
     kodiAddons: List<com.aotv.app.data.kodi.KodiAddonStore.KodiAddon> = emptyList(),
     onOpenKodiAddon: (String) -> Unit = {},
+    // Fase C — prefs da lista (busca, emblemas, logo, fixadas).
+    streamPrefs: StreamPrefsViewModel = hiltViewModel(),
 ) {
     if (television) {
-        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon) }
+        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon, streamPrefs = streamPrefs) }
         return
     }
-    val data = rememberSourceListData(streams, facts)
+    val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
+    val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
+    val cardPrefs = rememberStreamCardPrefs(streamPrefs)
+    val data = rememberSourceListData(streams, facts, pinned)
     if (data.groups.isNotEmpty()) Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
-    SourceListFilters(data)
+    SourceListFilters(data, showSearch = searchOn)
     data.sections.forEach { (addon, gs) ->
-        SourceSectionHeader(addon, gs.size)
+        SourceSectionHeader(addon, gs.size, pinned = addon in pinned,
+            onTogglePin = { streamPrefs.togglePin(addon) })
         gs.chunked(cols.coerceAtLeast(1)).forEach { row ->
-            SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag)
+            SourceCardRow(row, data, mediaTitle, onPlay, onDownload, cols, debridTag, cardPrefs)
         }
     }
     // v1.4, Fase 4 — grupo "Addons Kodi": os addons de vídeo habilitados
@@ -1400,7 +1531,8 @@ internal fun SourceList(
     }
     if (data.filtered.size > data.limit) com.aotv.app.ui.common.AotvButton("Mostrar mais (${data.filtered.size - data.limit})", { data.onMore() })
     if (data.filtered.isEmpty() && streams.isNotEmpty()) Text(
-        if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
+        if (data.query.isNotBlank()) "Nenhuma fonte bate com essa busca."
+        else if (data.wrongCount > 0 && !data.showWrong) "As fontes encontradas parecem ser de outro filme. Use Mostrar todas para conferir."
         else "Nenhuma versão neste filtro.", color = TextSecondary, fontSize = 13.sp,
     )
 }

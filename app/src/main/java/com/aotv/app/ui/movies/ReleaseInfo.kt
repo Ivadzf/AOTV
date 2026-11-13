@@ -34,6 +34,10 @@ internal fun releaseInfo(stream: StremioStream, title: String, providers: List<S
     val kind = RELEASE_KIND.find(text)?.value?.uppercase(Locale.ROOT)?.replace("WEBDL", "WEB-DL")
         ?.replace("WEBRIP", "WEBRip")?.replace("BLURAY", "BluRay")
     val badges = buildList {
+        // Codec vira emblema (pill) — a Fase C filtra os pills de codec pelo
+        // toggle "Mostrar codec"; antes o codec só aparecia na linha do servidor
+        // e o toggle não tinha efeito visível no card.
+        codec?.let { add(it) }
         if (stream.dolbyVision || hasDolbyVision(text)) add("Dolby Vision")
         if (stream.hdr || hasHdr(text)) add(if (Regex("HDR10\\+|HDR10Plus", RegexOption.IGNORE_CASE).containsMatchIn(text)) "HDR10+"
             else if (text.contains("HDR10", true)) "HDR10" else "HDR")
@@ -57,7 +61,7 @@ internal fun releaseInfo(stream: StremioStream, title: String, providers: List<S
     val file = stream.fileName.ifBlank { text.lineSequence().firstOrNull { RELEASE_FILE.containsMatchIn(it) }.orEmpty() }.take(512)
     return base.copy(
         quality = when { quality >= 2160 -> "4K"; quality >= 1440 -> "2K"; quality > 0 -> "${quality}p"; else -> "" },
-        server = listOfNotNull(kind, codec).joinToString(" · ").ifBlank { base.server.takeUnless { it == file }.orEmpty() },
+        server = kind.orEmpty().ifBlank { base.server.takeUnless { it == file }.orEmpty() },
         language = language, tags = badges.distinct(), fileName = file, size = size,
         seeds = RELEASE_SEEDS.find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
         providers = providers.ifEmpty { listOf(stream.addon).filter { it.isNotBlank() } },

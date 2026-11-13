@@ -239,6 +239,12 @@ fun MoviePlayerScreen(
     television: Boolean = com.aotv.app.ui.common.LocalIsTv.current,
     progressVm: PlayerProgressViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     episodeVm: EpisodePlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
+    /** Prefs do player (Fase C): botões, tap-seek, boost, mini player, "A seguir". */
+    playerPrefsVm: PlayerPrefsViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
+    /** playId da rota (p/ o mini player reabrir esta mesma sessão ao expandir). */
+    playId: Int = -1,
+    /** Sessão minimizada a reutilizar (expandir do mini player, em vez de criar outra). */
+    existingSession: PlayerSession? = null,
 ) {
     ImmersiveFullscreen()
     KeepScreenOn()
@@ -249,13 +255,45 @@ fun MoviePlayerScreen(
     // a compilar o código (antes passava do limite de instruções e rodava interpretado).
     val forceTv = television
     val s = remember {
-        PlayerSession(
+        // Expandir do mini player: reusa a sessão (mesmo ExoPlayer, mesma posição),
+        // em vez de criar outro player do zero.
+        existingSession ?: PlayerSession(
             context, scope, progressVm, episodeVm,
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs,
             backdropUrl, season, episode, episodeTotal, sources,
             forceTv = forceTv, kodiDiag = kodiDiag,
         )
     }
+    // A sessão voltou para a tela cheia: ela passa a ser da tela de novo e o
+    // mini player some. No SideEffect (não no remember): limpar o estado do
+    // mini aqui dentro da composição escreveria um estado que a navegação
+    // está lendo no mesmo passe.
+    if (existingSession != null) {
+        SideEffect {
+            existingSession.minimizedByUser = false
+            MiniPlayerState.clearStored()
+        }
+    }
+    // Prefs do player (Fase C): a tela lê os fluxos e entrega à sessão, que aplica
+    // (mesmo padrão do `s.onBack = onBack` abaixo). Mudar nas Configurações aplica
+    // na hora, mesmo com o player aberto.
+    val playerButtons by playerPrefsVm.buttons.collectAsState()
+    val playerTopActionsPref by playerPrefsVm.topActions.collectAsState()
+    val playerTapSeek by playerPrefsVm.tapSeek.collectAsState()
+    val playerVolBoost by playerPrefsVm.volBoost.collectAsState()
+    val playerVolBoostLevel by playerPrefsVm.volBoostLevel.collectAsState()
+    val playerMini by playerPrefsVm.mini.collectAsState()
+    val playerAutoNext by playerPrefsVm.autoNext.collectAsState()
+    val playerAutoNextDelay by playerPrefsVm.autoNextDelay.collectAsState()
+    s.playerButtonOrder = playerButtons
+    s.playerTopActions = playerTopActionsPref
+    s.routePlayId = playId
+    s.tapSeekEnabled = playerTapSeek
+    s.volBoostEnabled = playerVolBoost
+    s.volBoostLevel = playerVolBoostLevel
+    s.miniEnabled = playerMini
+    s.autoNextEnabled = playerAutoNext
+    s.autoNextDelaySec = playerAutoNextDelay
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
     // Fase 2 (Kodi): o xbmc.Player reflete o ExoPlayer de verdade — o addon
@@ -421,9 +459,16 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
                 videoQualityLabel = videoResolutionLabel(size.width, size.height)
             }
+            // Sessão de áudio (re)criada: (re)aplica o Volume Boost nela.
+            override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost() }
         }
         exoPlayer.addListener(l); onDispose { exoPlayer.removeListener(l) }
     }
+
+    // Volume Boost (Fase C): (re)aplica quando o toggle ou o nível muda nas
+    // Configurações. A 1ª aplicação acontece quando a sessão de áudio fica
+    // pronta (onAudioSessionIdChanged, no listener acima).
+    LaunchedEffect(volBoostEnabled, volBoostLevel) { applyVolBoost() }
 
     DisposableEffect(castPlayer, streamUrl) {
         val cp = castPlayer ?: return@DisposableEffect onDispose {}
@@ -521,7 +566,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // AUTO-PLAY: aviso de próximo episódio só no ÚLTIMO 1 MINUTO (antes aparecia a 90%,
             // cedo demais em episódios longos).
             if (hasNextEpisode && duration > 60_000 && position >= duration - 60_000 && nextPromptEp != curEpisode) {
-                nextPromptEp = curEpisode; promptIsSeason = false; nextCountdown = 10; showNextPrompt = true
+                nextPromptEp = curEpisode; promptIsSeason = false; nextCountdown = autoNextDelaySec; showNextPrompt = true
             }
             // PRÉ-CARREGA o próximo (ou a próxima temporada) na METADE do episódio atual. Quando
             // o usuário aperta "Próximo", as fontes já estão na memória e a troca é instantânea.
@@ -537,7 +582,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             if (!hasNextEpisode && hasNextSeason && duration > 60_000 &&
                 position >= duration - 60_000 && nextPromptEp != curEpisode
             ) {
-                nextPromptEp = curEpisode; promptIsSeason = true; nextCountdown = 15; showNextPrompt = true
+                nextPromptEp = curEpisode; promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true
             }
             delay(500)
         }
@@ -592,11 +637,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     }
     DisposableEffect(Unit) {
         onDispose {
-            extSync?.release(); exoPlayer.release(); mediaSession.release(); ScrubThumbnailer.release()
-            // v1.2.8: para o proxy local do Kodi (a porta e os tokens morrem com o player).
-            com.aotv.app.data.kodi.KodiLocalProxy.stop()
-            // Saiu do player, o aparelho para de baixar e de compartilhar o torrent.
-            Torrents.ifStarted()?.let { e -> Thread { e.stopAll() }.start() }
+            // Minimizado p/ o mini player: a sessão (e o ExoPlayer) sobrevive à
+            // saída da tela — liberar aqui mataria o áudio. O fechar do mini
+            // player ou a volta à tela cheia libera depois (ver releaseAll).
+            if (!minimizedByUser) releaseAll()
         }
     }
 
@@ -606,8 +650,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         onDispose { PipState.enter = null }
     }
     // Contagem regressiva do prompt — 0 = avança automaticamente (próximo ep OU próxima temporada).
+    // Com o "A seguir" automático DESLIGADO (Fase C), o cartão aparece mas a
+    // contagem não anda: só avança no botão "Assistir".
     LaunchedEffect(showNextPrompt) {
         if (!showNextPrompt) return@LaunchedEffect
+        if (!autoNextEnabled) return@LaunchedEffect
         while (nextCountdown > 0) { delay(1000); nextCountdown -= 1 }
         showNextPrompt = false
         if (promptIsSeason) goToNextSeason() else playNextEpisode()
@@ -620,9 +667,9 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         saveNow()
         when {
             // Tem próximo episódio na temporada → card "Próximo episódio".
-            type == "SERIES" && hasNextEpisode -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = 10; showNextPrompt = true }
+            type == "SERIES" && hasNextEpisode -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = autoNextDelaySec; showNextPrompt = true }
             // Acabou a temporada e existe outra → card "Próxima temporada".
-            type == "SERIES" && hasNextSeason -> { promptIsSeason = true; nextCountdown = 10; showNextPrompt = true }
+            type == "SERIES" && hasNextSeason -> { promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true }
             else -> onBack() // filme ou fim da série
         }
     }
@@ -1017,6 +1064,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         isSeason = promptIsSeason,
                         line = if (promptIsSeason) "Temporada ${curSeason + 1}" else "T$curSeason · E${curEpisode + 1}",
                         countdown = nextCountdown,
+                        autoAdvance = autoNextEnabled,
                         onPlay = { if (promptIsSeason) goToNextSeason() else playNextEpisode() },
                         onCancel = { showNextPrompt = false },
                     )
@@ -1068,7 +1116,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                             screenModes[screenModeIdx].first, playbackSpeedText(speeds[speedIdx]),
                         ).filter { it.isNotBlank() }.joinToString("  ·  "),
                         buffered = currentPlayer().bufferedPosition,
-
+                        tapSeek = tapSeekEnabled,
                     )
                 }
 
@@ -1079,6 +1127,10 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 ) {
                     PlayerTopActions(
                         isTv = isTv,
+                        visibleActions = orderTopActions(playerTopActions),
+                        // Mini player (Fase C): só no celular e com a pref ligada. Minimizar
+                        // guarda a sessão e volta p/ a navegação (o áudio continua na barra).
+                        onMinimize = if (miniEnabled && !isTv) ({ MiniPlayerState.minimize(s, routePlayId); onBack() }) else null,
                         onCast = {
                             runCatching {
                                 val themed = android.view.ContextThemeWrapper(
@@ -1358,6 +1410,32 @@ internal class PlayerSession(
     var locked by run { mutableStateOf(false) }
     var lockHintVisible by run { mutableStateOf(false) }
 
+    // ── Prefs do player (Fase C) ─────────────────────────────────────────
+    // A tela lê os fluxos do PlayerPrefsViewModel e entrega aqui (ver
+    // MoviePlayerScreen). São mutableState para a UI reagir na hora.
+    /** Ordem dos botões do player (pref `playerButtons`). Vazio = padrão. */
+    var playerButtonOrder by run { mutableStateOf<List<String>>(emptyList()) }
+    /** Botões do topo (pref `playerTopActions`). Vazio = padrão. */
+    var playerTopActions by run { mutableStateOf<List<String>>(emptyList()) }
+    /** Tocar na barra busca (pref `playerTapSeek`). */
+    var tapSeekEnabled by run { mutableStateOf(true) }
+    /** Volume Boost ligado (pref `playerVolBoost`). */
+    var volBoostEnabled by run { mutableStateOf(false) }
+    /** Nível do boost como multiplicador 1,0–2,0 (pref `playerVolBoostLevel`). */
+    var volBoostLevel by run { mutableFloatStateOf(1.5f) }
+    /** Mini player ligado (pref `playerMini`): mostra o botão de minimizar. */
+    var miniEnabled by run { mutableStateOf(true) }
+    /** "A seguir" automático ligado (pref `playerAutoNext`). */
+    var autoNextEnabled by run { mutableStateOf(true) }
+    /** Contagem do "A seguir" em segundos (pref `playerAutoNextDelay`). */
+    var autoNextDelaySec by run { mutableIntStateOf(10) }
+    /** true entre minimizar e expandir/fechar: o dispose da tela NÃO libera o player. */
+    var minimizedByUser by run { mutableStateOf(false) }
+    /** playId da rota que abriu esta sessão (p/ o mini player reabrir a mesma). */
+    var routePlayId by run { mutableIntStateOf(-1) }
+    /** O aparelho não aceitou o LoudnessEnhancer (aviso 1x, ver [applyVolBoost]). */
+    var volBoostUnavailable by run { mutableStateOf(false) }
+
     val exoPlayer = run {
         // Foco de áudio do sistema: pausa sozinho numa ligação ou quando outro app toca som, e
         // para ao tirar o fone (sem isso o filme seguia tocando mudo pro alto-falante).
@@ -1519,6 +1597,58 @@ internal class PlayerSession(
         runCatching { act.enterPictureInPictureMode(params) }
     }
     val inPip get() = PipState.inPip.value
+
+    // ── Volume Boost (Fase C) ────────────────────────────────────────────
+    // LoudnessEnhancer na sessão de áudio do ExoPlayer: amplifica o som do
+    // APP sem mexer no volume do sistema (o gesto de volume continua usando o
+    // AudioManager, como antes). Sem renderer nem audio sink custom: o efeito
+    // é do Android, aplicado na sessão que o ExoPlayer já cria. O ganho vem
+    // de volBoostGainMb (PlayerExtras): 1,5x ≈ +3,5 dB, 2,0x ≈ +6 dB.
+    // A sessão de áudio do ExoPlayer é estável por player, então basta
+    // (re)aplicar quando a pref muda ou quando a sessão de áudio muda
+    // (onAudioSessionIdChanged). Aparelho sem suporte: avisa 1x e segue sem boost.
+    private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
+    fun applyVolBoost() {
+        val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
+        if (!volBoostEnabled || volBoostLevel <= 1f || id == 0) {
+            runCatching { loudnessEnhancer?.enabled = false }
+            return
+        }
+        val enhancer = loudnessEnhancer ?: runCatching {
+            android.media.audiofx.LoudnessEnhancer(id)
+        }.getOrNull()
+        if (enhancer == null) {
+            if (!volBoostUnavailable) {
+                volBoostUnavailable = true
+                toastMsg = "Volume Boost não suportado neste aparelho"
+            }
+            return
+        }
+        loudnessEnhancer = enhancer
+        runCatching {
+            enhancer.setTargetGain(volBoostGainMb(volBoostLevel))
+            enhancer.enabled = true
+        }
+    }
+    fun releaseVolBoost() {
+        runCatching { loudnessEnhancer?.release() }
+        loudnessEnhancer = null
+    }
+
+    /** Libera tudo do player (ExoPlayer, sessão de mídia, boost, proxy, torrent).
+     * O dispose da tela chama isso, EXCETO ao minimizar (ver [minimizedByUser]);
+     * o fechar do mini player chama direto. */
+    fun releaseAll() {
+        extSync?.release()
+        releaseVolBoost()
+        exoPlayer.release()
+        mediaSession.release()
+        ScrubThumbnailer.release()
+        // v1.2.8: para o proxy local do Kodi (a porta e os tokens morrem com o player).
+        com.aotv.app.data.kodi.KodiLocalProxy.stop()
+        // Saiu do player, o aparelho para de baixar e de compartilhar o torrent.
+        Torrents.ifStarted()?.let { e -> Thread { e.stopAll() }.start() }
+    }
     // Salva o progresso ATUAL na hora (antes de trocar fonte/episódio e ao terminar) — evita
     // perder a posição do filme/série quando muda a fonte ou fecha.
     fun saveNow() {
@@ -1824,36 +1954,40 @@ internal class PlayerSession(
         if (kind == "sources") sourceLimit = 30
         if (kind == "episodes") selectPanelSeason(curSeason.coerceAtLeast(1))
     }
-    val tvChips: List<PlayerChipItem> get() = buildList {
+    // Chips do player (celular E TV: a mesma lista alimenta os dois — o toque
+    // usa como `actions`, a TV como `tvChips`). Cada chip tem o id canônico
+    // da pref `playerButtons` e a lista final passa por [orderPlayerChips]
+    // (Fase C): ordem escolhida, desligado some, chip novo vai p/ o fim.
+    val tvChips: List<PlayerChipItem> get() = orderPlayerChips(buildList {
         add(PlayerChipItem(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
             if (isPlaying) "Pausar" else "Assistir", main = true) { togglePlay() })
-        if (subActions.isNotEmpty()) add(PlayerChipItem(WebPlayerIcons.Subtitles, "Legendas", active = subtitleOn || selectedSubUrl != null) { openDpadPanel("subs") })
+        if (subActions.isNotEmpty()) add(PlayerChipItem(WebPlayerIcons.Subtitles, "Legendas", active = subtitleOn || selectedSubUrl != null, id = "subs") { openDpadPanel("subs") })
         if (audioGroups.size > 1 || currentSources.size > 1)
-            add(PlayerChipItem(WebPlayerIcons.Audio, if (extUrl != null) "Som de outra fonte" else "Áudio", active = extUrl != null) { openDpadPanel("audio") })
-        if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Sources, "Fontes") { openDpadPanel("sources") })
+            add(PlayerChipItem(WebPlayerIcons.Audio, if (extUrl != null) "Som de outra fonte" else "Áudio", active = extUrl != null, id = "audio") { openDpadPanel("audio") })
+        if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Sources, "Fontes", id = "sources") { openDpadPanel("sources") })
         if (type == "SERIES") {
-            add(PlayerChipItem(WebPlayerIcons.Episodes, "Episódios") { openDpadPanel("episodes") })
-            if (curEpisode > 1) add(PlayerChipItem(WebPlayerIcons.Previous, "Anterior") { playPrevEpisode() })
-            if (hasNextEpisode || hasNextSeason) add(PlayerChipItem(WebPlayerIcons.Next, "Próximo") {
+            add(PlayerChipItem(WebPlayerIcons.Episodes, "Episódios", id = "episodes") { openDpadPanel("episodes") })
+            if (curEpisode > 1) add(PlayerChipItem(WebPlayerIcons.Previous, "Anterior", id = "prev") { playPrevEpisode() })
+            if (hasNextEpisode || hasNextSeason) add(PlayerChipItem(WebPlayerIcons.Next, "Próximo", id = "next") {
                 if (hasNextEpisode) playNextEpisode() else goToNextSeason()
             })
         }
-        add(PlayerChipItem(WebPlayerIcons.Screen, "Tela ${screenModes[screenModeIdx].first.lowercase()}", active = screenModeIdx > 0) { openDpadPanel("screen") })
+        add(PlayerChipItem(WebPlayerIcons.Screen, "Tela ${screenModes[screenModeIdx].first.lowercase()}", active = screenModeIdx > 0, id = "screen") { openDpadPanel("screen") })
         val speed = speeds[speedIdx]
         add(PlayerChipItem(WebPlayerIcons.Speed, "Velocidade ${playbackSpeedText(speed)}", active = speed != 1f,
-            value = if (speed != 1f) playbackSpeedText(speed) else "") { openDpadPanel("speed") })
-        if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource) {
+            value = if (speed != 1f) playbackSpeedText(speed) else "", id = "speed") { openDpadPanel("speed") })
+        if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource
             userLockedSource = pinnedSource
             toastMsg = if (pinnedSource) "Fonte fixada. O player não troca sozinho." else "Fonte solta. Volta a trocar quando a atual falhar."
         })
         introMark?.let { (_, end) ->
             if (type == "SERIES" && introSkippedEp != curEpisode && position < end - 1_000L)
-                add(PlayerChipItem(WebPlayerIcons.Skip, "Pular abertura") {
+                add(PlayerChipItem(WebPlayerIcons.Skip, "Pular abertura", id = "skip") {
                     currentPlayer().seekTo(end); position = end; introSkippedEp = curEpisode
                 })
         }
-    }
+    }, playerButtonOrder)
 
 }
 

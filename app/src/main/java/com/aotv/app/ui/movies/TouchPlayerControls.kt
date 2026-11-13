@@ -42,6 +42,8 @@ internal fun TouchPlayerControls(
     isPlaying: Boolean, position: Long, duration: Long, buffered: Long, videoUrl: String,
     onToggle: () -> Unit, onBack: () -> Unit, onForward: () -> Unit, onSeek: (Long) -> Unit,
     actions: List<PlayerChipItem>, focusedIndex: Int,
+    /** Tocar na barra busca (pref `playerTapSeek`). Desligado, só o arraste busca. */
+    tapSeek: Boolean = true,
 ) {
     var more by remember { mutableStateOf(false) }
     var controlsHeight by remember { mutableFloatStateOf(0f) }
@@ -117,7 +119,7 @@ internal fun TouchPlayerControls(
                 if (showDetail && detail.isNotBlank()) Text(detail, color = TextSecondary, fontSize = 12.sp,
                     lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            PlayerSeekRow(position, duration, onSeek, videoUrl, buffered, showTimes = false)
+            PlayerSeekRow(position, duration, onSeek, videoUrl, buffered, showTimes = false, tapSeek = tapSeek)
             if (timeSeparate) Text(times, color = Color.White, fontSize = 12.sp, lineHeight = 18.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.align(Alignment.End))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,

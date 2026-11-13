@@ -168,6 +168,9 @@ fun MoviesNavigation(
         sources: List<MoviePlayerSource> = emptyList(),
         kodiDiag: String = "",
     ) {
+        // Novo play mata o mini player ativo (só existe 1 player por vez — sem
+        // isso o áudio minimizado seguiria tocando junto com o novo).
+        com.aotv.app.ui.movies.MiniPlayerState.close()
         val playId = ++playerIdCounter
         playerCache[playId] = PlayerData(
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs, backdropUrl,
@@ -348,6 +351,10 @@ fun MoviesNavigation(
                     kodiDiag    = data.kodiDiag,
                     television = isTV,
                     onBack      = { navController.popBackStack() },
+                    // Mini player (Fase C): expandir reabre ESTA sessão (mesmo
+                    // ExoPlayer, mesma posição), em vez de criar outro player.
+                    playId = playId,
+                    existingSession = com.aotv.app.ui.movies.MiniPlayerState.sessionFor(playId),
                 )
                 }
             }
@@ -696,8 +703,10 @@ fun MoviesNavigation(
     ) {
         // Reserva p/ a pílula: altura dela (~98dp: item 70 + margens) + inset da
         // navigation bar do sistema, para a última linha do grid não ficar escondida
-        // atrás da pílula.
-        val barReserve = 104.dp + WindowInsets.navigationBars.asPaddingValues()
+        // atrás da pílula. Com o mini player ativo (Fase C), soma a altura da
+        // barra compacta (~64dp) que fica acima da pílula.
+        val miniActive = com.aotv.app.ui.movies.MiniPlayerState.minimized.value
+        val barReserve = (104.dp + if (miniActive) 64.dp else 0.dp) + WindowInsets.navigationBars.asPaddingValues()
             .calculateBottomPadding()
         // Na TV a barra vira o menu lateral próprio (TvSideMenu).
         val hideBar = isFullscreen || isTV || showTabletRail
@@ -779,7 +788,18 @@ fun MoviesNavigation(
             )
         }
         if (!hideBar) {
-            Box(Modifier.align(Alignment.BottomCenter)) {
+            // Mini player (Fase C) acima da pílula: título + play/pause +
+            // expandir + fechar. Só no celular (hideBar cobre TV/tablet) e só
+            // fora da rota do player (lá o player cheio está na tela).
+            Column(Modifier.align(Alignment.BottomCenter)) {
+                if (miniActive) {
+                    com.aotv.app.ui.movies.MiniPlayerBar(
+                        onExpand = {
+                            val id = com.aotv.app.ui.movies.MiniPlayerState.playId
+                            if (id >= 0) navController.navigate(MoviesRoute.Player.create(id))
+                        },
+                    )
+                }
                 MoviesBottomBar(
                     currentRoute = currentRoute,
                     items = pillItems,

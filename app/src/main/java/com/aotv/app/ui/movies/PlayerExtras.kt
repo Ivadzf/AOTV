@@ -92,6 +92,18 @@ internal fun videoResolutionLabel(width: Int, height: Int): String = when {
 
 internal fun playbackSpeedText(speed: Float): String = (if (speed == speed.toInt().toFloat()) speed.toInt().toString() else speed.toString()).replace('.', ',') + "x"
 
+/**
+ * Ganho do Volume Boost (Fase C) em milibéis p/ o `LoudnessEnhancer.setTargetGain`.
+ * O nível da pref é um multiplicador de amplitude (1,0–2,0x): ganho em dB =
+ * 20·log10(nível), em milibéis ×100. 1,5x ≈ 352 mB; 2,0x ≈ 602 mB.
+ * Limitado a 0–1000 mB (teto do efeito). 1,0x ou menos = 0 (sem boost).
+ */
+internal fun volBoostGainMb(level: Float): Int {
+    if (level <= 1f) return 0
+    val db = 20 * kotlin.math.log10(level.toDouble())
+    return (db * 100).toInt().coerceIn(0, 1000)
+}
+
 internal fun clockLine(nowMs: Long, posMs: Long, durMs: Long, speed: Float, tz: java.util.TimeZone = java.util.TimeZone.getDefault()): String {
     val now = hhmm(nowMs, tz)
     if (durMs <= 0 || posMs >= durMs) return now

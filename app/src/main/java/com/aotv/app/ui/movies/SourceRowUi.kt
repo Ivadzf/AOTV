@@ -21,10 +21,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.aotv.app.ui.common.pressScale
 import com.aotv.app.ui.theme.*
 
@@ -167,6 +169,9 @@ private fun qualityColor(q: String): Color = when {
 /**
  * Linha de fonte do detalhe. Faixa de qualidade à esquerda, addon em destaque, servidor e
  * idioma embaixo, pills técnicas e os botões de tocar e baixar à direita.
+ *
+ * [cardPrefs] (Fase C) liga as prefs de streams: logo do addon, emblemas de tamanho/codec/
+ * idioma e onde o tamanho aparece ("stats" no canto ou "pills" na linha de pills).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -182,6 +187,9 @@ fun SourceCard(
     suggested: Boolean = false,
     focusedByDpad: Boolean = false,
     manualFocus: Boolean = false,
+    /** URL do logo do addon ("" = sem logo, só o nome como antes). */
+    logoUrl: String = "",
+    cardPrefs: StreamCardPrefs = StreamCardPrefs(),
 ) {
     val interaction = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
@@ -202,11 +210,11 @@ fun SourceCard(
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val font = androidx.compose.ui.platform.LocalDensity.current.fontScale
             if (maxWidth < (280f * font.coerceAtLeast(1f)).dp) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SourceIdentity(info, Modifier.fillMaxWidth())
-                SourceStats(info)
+                SourceIdentity(info, Modifier.fillMaxWidth(), logoUrl, cardPrefs.showLogo)
+                SourceStats(info, cardPrefs.showSize && !cardPrefs.sizeAsPill)
             } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                SourceIdentity(info, Modifier.weight(1f))
-                SourceStats(info)
+                SourceIdentity(info, Modifier.weight(1f), logoUrl, cardPrefs.showLogo)
+                SourceStats(info, cardPrefs.showSize && !cardPrefs.sizeAsPill)
             }
         }
 
@@ -215,8 +223,10 @@ fun SourceCard(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     if (info.quality.isNotBlank()) com.aotv.app.ui.common.Badge(info.quality,
                         if (info.quality in listOf("4K", "2K")) Gold else Accent)
-                    info.tags.take(10).forEach { SourcePill(it) }
-                    if (info.language.isNotBlank()) SourcePill(info.language)
+                    // "pills": o tamanho sai do canto e vira pill aqui (só o que o provider informou).
+                    if (cardPrefs.sizeAsPill && cardPrefs.showSize && info.size.isNotBlank()) SourcePill(info.size)
+                    info.tags.filter { cardPrefs.showCodec || it !in CODEC_TAGS }.take(10).forEach { SourcePill(it) }
+                    if (cardPrefs.showLang && info.language.isNotBlank()) SourcePill(info.language)
                     if (tag.isNotBlank()) com.aotv.app.ui.common.Badge(tag, tagColor)
                 }
                 if (info.providers.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -237,21 +247,34 @@ fun SourceCard(
     }
 }
 
+/** Pills de codec (Fase C): escondidas quando o emblema de codec está desligado. */
+private val CODEC_TAGS = setOf("HEVC", "AV1", "H.264")
+
 @Composable
-private fun SourceIdentity(info: SourceInfo, modifier: Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(info.addon.ifBlank { "Fonte" }, color = TextPrimary, fontSize = 16.sp, lineHeight = 21.sp,
-            fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (info.server.isNotBlank()) Text(info.server, color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
+private fun SourceIdentity(info: SourceInfo, modifier: Modifier, logoUrl: String = "", showLogo: Boolean = true) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Logo do addon (Fase C): círculo de 36dp. Sem logo, só o nome como antes.
+        if (showLogo && logoUrl.isNotBlank()) AsyncImage(
+            model = logoUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(36.dp).clip(CircleShape),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(info.addon.ifBlank { "Fonte" }, color = TextPrimary, fontSize = 16.sp, lineHeight = 21.sp,
+                fontWeight = FontWeight.ExtraBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (info.server.isNotBlank()) Text(info.server, color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
 @Composable
-private fun SourceStats(info: SourceInfo) {
-    if (info.size.isBlank() && info.seeds <= 0) return
+private fun SourceStats(info: SourceInfo, showSize: Boolean = true) {
+    if (!showSize && info.seeds <= 0) return
+    if (showSize && info.size.isBlank() && info.seeds <= 0) return
     Column(horizontalAlignment = Alignment.End) {
-        if (info.size.isNotBlank()) Text(info.size, color = TextPrimary, fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold)
+        if (showSize && info.size.isNotBlank()) Text(info.size, color = TextPrimary, fontSize = 16.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold)
         if (info.seeds > 0) Text("${info.seeds} seeds", color = TextTertiary, fontSize = 11.sp, lineHeight = 15.sp)
     }
 }

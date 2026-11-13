@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -50,15 +51,51 @@ import com.aotv.app.ui.tv.r
 // Na TV, título e controles seguem a composição inferior do player do webOS.
 // O celular usa controles por toque que se adaptam à altura e à fonte do sistema.
 
-/** Chip da barra de baixo (Zoom, Velocidade, Legendas, Áudio, Fontes), navegável por D-pad na TV. */
+/** Chip da barra de baixo (Zoom, Velocidade, Legendas, Áudio, Fontes), navegável por D-pad na TV.
+ * [id] é o id canônico da pref `playerButtons` (ver [DEFAULT_PLAYER_BUTTONS] em
+ * PlatformPrefs): "subs", "audio", "sources", "episodes", "prev", "next", "screen",
+ * "speed", "pin", "skip". O chip principal (play/pause, [main]) não entra na pref
+ * e fica sempre em primeiro. */
 internal data class PlayerChipItem(
     val icon: ImageVector,
     val label: String,
     val active: Boolean = false,
     val value: String = "",
     val main: Boolean = false,
+    val id: String = "",
     val onRun: () -> Unit,
 )
+
+/**
+ * Ordena os chips do player pela pref `playerButtons` (Fase C).
+ * Lista vazia = ordem padrão (a que o player já montava). Ids da pref que não
+ * existem no contexto atual (ex.: "prev" sem episódio anterior) são ignorados.
+ * Um id canônico que está FORA da lista guardada foi desligado nas
+ * Configurações e NÃO aparece; só vai para o fim um chip NOVO, cujo id nem
+ * existe no catálogo da pref (função nova não pode sumir só porque o usuário
+ * salvou a ordem antes dela existir). O chip principal (play/pause) fica
+ * sempre em primeiro.
+ */
+internal fun orderPlayerChips(chips: List<PlayerChipItem>, order: List<String>): List<PlayerChipItem> {
+    val main = chips.filter { it.main }
+    val rest = chips.filter { !it.main }
+    if (order.isEmpty()) return chips
+    val known = com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS.toSet()
+    val ordered = order.flatMap { wanted -> rest.filter { it.id == wanted } }
+    val leftovers = rest.filter { chip -> chip.id !in known && chip.id !in order.toSet() }
+    return main + ordered + leftovers
+}
+
+/**
+ * Botões do topo do player pela pref `playerTopActions` (Fase C).
+ * Lista vazia = padrão ([DEFAULT_PLAYER_TOP_ACTIONS]). Ids desconhecidos são
+ * ignorados. "Voltar" não entra aqui: sempre aparece, por último.
+ */
+internal fun orderTopActions(order: List<String>): List<String> {
+    if (order.isEmpty()) return com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
+    val known = com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS.toSet()
+    return order.filter { it in known }.distinct()
+}
 
 internal fun formatTime(ms: Long): String {
     if (ms <= 0) return "0:00"
@@ -90,18 +127,25 @@ internal fun CustomPlayerControls(
     formatTags: List<String> = emptyList(),
     playbackInfo: String = "",
     buffered: Long = 0,
+    /** Tocar na barra busca (pref `playerTapSeek`). Desligado, só o arraste busca. */
+    tapSeek: Boolean = true,
 ) {
     if (isTv) {
         TvPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo, position, duration, buffered, onSeekTo, tvChips, tvChipIdx)
         return
     }
     TouchPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo,
-        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx)
+        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek)
 }
 
-/** Tempo, barra fina com bolinha e duração na mesma linha (.pl-bar-row). Toque ou arraste busca. */
+/** Tempo, barra fina com bolinha e duração na mesma linha (.pl-bar-row). Toque ou arraste busca.
+ * O toque já existia antes da Fase C: são dois `pointerInput` separados — o de
+ * toque (`detectTapGestures`) e o de arraste (`detectHorizontalDragGestures`) — e
+ * o de arraste só consome o gesto depois de passar do limiar, então um toque
+ * rápido chega ao detector de toque sem conflito. [tapSeek] (pref
+ * `playerTapSeek`) só liga/desliga o toque; desligado, só o arraste busca. */
 @Composable
-internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> Unit, videoUrl: String, buffered: Long = 0, showTimes: Boolean = true) {
+internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> Unit, videoUrl: String, buffered: Long = 0, showTimes: Boolean = true, tapSeek: Boolean = true) {
     val total = if (duration > 0) duration else 0L
     val frac = if (total > 0) (position.toFloat() / total).coerceIn(0f, 1f) else 0f
     var barW by remember { mutableFloatStateOf(1f) }
@@ -127,9 +171,11 @@ internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> U
                 .fillMaxWidth()
                 .height(48.dp)
                 .onSizeChanged { barW = it.width.toFloat().coerceAtLeast(1f) }
-                .pointerInput(total) {
-                    detectTapGestures { off -> if (total > 0) onSeekTo(((off.x / barW).coerceIn(0f, 1f) * total).toLong()) }
-                }
+                .then(
+                    if (tapSeek) Modifier.pointerInput(total) {
+                        detectTapGestures { off -> if (total > 0) onSeekTo(((off.x / barW).coerceIn(0f, 1f) * total).toLong()) }
+                    } else Modifier
+                )
                 .pointerInput(total) {
                     detectHorizontalDragGestures(
                         onDragStart = { scrubbing = true },
@@ -261,7 +307,11 @@ internal fun PlayerChip(icon: ImageVector, label: String, active: Boolean = fals
     }
 }
 
-/** Botões do topo direito. Transmitir, Girar e Travar (só celular) e Voltar. */
+/** Botões do topo direito. Transmitir, Girar e Travar (só celular) e Voltar.
+ * [visibleActions] vem da pref `playerTopActions` (ver [orderTopActions]):
+ * só "cast"/"rotate"/"lock", na ordem escolhida; "Voltar" sempre aparece.
+ * [onMinimize] é o botão de minimizar p/ o mini player (Fase C): só aparece
+ * quando não é nulo (mini player ligado e celular); não entra na pref. */
 @Composable
 internal fun PlayerTopActions(
     isTv: Boolean,
@@ -269,6 +319,8 @@ internal fun PlayerTopActions(
     onRotate: () -> Unit,
     onLock: () -> Unit,
     onBack: () -> Unit,
+    visibleActions: List<String> = com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS,
+    onMinimize: (() -> Unit)? = null,
 ) {
     if (isTv) return
     Row(
@@ -276,11 +328,12 @@ internal fun PlayerTopActions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CtlButton(Icons.Default.Cast, "Transmitir", 48.dp, onClick = onCast)
+        if (onMinimize != null) CtlButton(Icons.Default.KeyboardArrowDown, "Minimizar", 48.dp, onClick = onMinimize)
+        if ("cast" in visibleActions) CtlButton(Icons.Default.Cast, "Transmitir", 48.dp, onClick = onCast)
         // Girar e Travar só no celular, na TV o controle já faz.
         if (!isTv) {
-            CtlButton(Icons.Default.ScreenRotation, "Girar a tela", 48.dp, onClick = onRotate)
-            CtlButton(Icons.Default.Lock, "Travar a tela", 48.dp, onClick = onLock)
+            if ("rotate" in visibleActions) CtlButton(Icons.Default.ScreenRotation, "Girar a tela", 48.dp, onClick = onRotate)
+            if ("lock" in visibleActions) CtlButton(Icons.Default.Lock, "Travar a tela", 48.dp, onClick = onLock)
         }
         CtlButton(Icons.AutoMirrored.Filled.ArrowBack, "Voltar", 48.dp, onClick = onBack)
     }

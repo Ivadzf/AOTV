@@ -49,7 +49,25 @@ internal val SCOPED_KEYS = listOf(
     "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
     "pref_detail_cinematic", "pref_detail_poster_transition", "pref_detail_icon_actions",
     "pref_detail_tabs", "pref_detail_episode_style",
+    "pref_stream_search", "pref_stream_badges_size", "pref_stream_badges_codec",
+    "pref_stream_badges_lang", "pref_stream_badges_pos", "pref_stream_logo",
+    "pref_stream_pinned",
+    "pref_player_buttons", "pref_player_top_actions", "pref_player_tap_seek",
+    "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
+    "pref_player_auto_next", "pref_player_auto_next_delay",
 )
+
+/**
+ * Ordem padrão dos botões do player (ids usados pelo construtor de chips em
+ * MoviePlayerScreen.kt). Lista vazia guardada = padrão (o construtor usa esta
+ * lista quando não há nada salvo).
+ */
+val DEFAULT_PLAYER_BUTTONS = listOf(
+    "subs", "audio", "sources", "episodes", "prev", "next", "screen", "speed", "pin", "skip",
+)
+
+/** Botões do topo do player (voltar sempre aparece; estes são os opcionais). */
+val DEFAULT_PLAYER_TOP_ACTIONS = listOf("cast", "rotate", "lock")
 
 @Singleton
 class PlatformPrefs @Inject constructor(
@@ -356,6 +374,132 @@ class PlatformPrefs @Inject constructor(
     var detailEpisodeStyle: String
         get() = _detailEpisodeStyle.value
         set(value) { prefs.edit().putString(sk("pref_detail_episode_style"), value).apply(); _detailEpisodeStyle.value = value }
+
+    // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
+    // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
+    // que avisa quem observa (a folha lê daqui e aplica na hora); o var é o valor
+    // guardado, no mesmo padrão das prefs da Fase B. Troca de perfil passa por
+    // refreshLayout() e recarrega as dele.
+
+    private val _streamSearch = MutableStateFlow(prefs.getBoolean(sk("pref_stream_search"), true))
+    /** Barra de pesquisa na folha de fontes. */
+    val streamSearchFlow: StateFlow<Boolean> = _streamSearch.asStateFlow()
+    var streamSearch: Boolean
+        get() = _streamSearch.value
+        set(value) { prefs.edit().putBoolean(sk("pref_stream_search"), value).apply(); _streamSearch.value = value }
+
+    private val _streamBadgesSize = MutableStateFlow(prefs.getBoolean(sk("pref_stream_badges_size"), true))
+    /** Emblema de tamanho nas fontes (ex.: "2,4 GB", quando o provider informa). */
+    val streamBadgesSizeFlow: StateFlow<Boolean> = _streamBadgesSize.asStateFlow()
+    var streamBadgesSize: Boolean
+        get() = _streamBadgesSize.value
+        set(value) { prefs.edit().putBoolean(sk("pref_stream_badges_size"), value).apply(); _streamBadgesSize.value = value }
+
+    private val _streamBadgesCodec = MutableStateFlow(prefs.getBoolean(sk("pref_stream_badges_codec"), true))
+    /** Emblema de codec nas fontes (ex.: "HEVC", "AV1", quando o provider informa). */
+    val streamBadgesCodecFlow: StateFlow<Boolean> = _streamBadgesCodec.asStateFlow()
+    var streamBadgesCodec: Boolean
+        get() = _streamBadgesCodec.value
+        set(value) { prefs.edit().putBoolean(sk("pref_stream_badges_codec"), value).apply(); _streamBadgesCodec.value = value }
+
+    private val _streamBadgesLang = MutableStateFlow(prefs.getBoolean(sk("pref_stream_badges_lang"), true))
+    /** Emblema de idioma nas fontes ("Dublado" / "Legendado"). */
+    val streamBadgesLangFlow: StateFlow<Boolean> = _streamBadgesLang.asStateFlow()
+    var streamBadgesLang: Boolean
+        get() = _streamBadgesLang.value
+        set(value) { prefs.edit().putBoolean(sk("pref_stream_badges_lang"), value).apply(); _streamBadgesLang.value = value }
+
+    private val _streamBadgesPos = MutableStateFlow(prefs.getString(sk("pref_stream_badges_pos"), "stats") ?: "stats")
+    /** Posição dos emblemas: "stats" (no canto superior direito, o atual) ou "pills" (na linha de pills). */
+    val streamBadgesPosFlow: StateFlow<String> = _streamBadgesPos.asStateFlow()
+    var streamBadgesPos: String
+        get() = _streamBadgesPos.value
+        set(value) { prefs.edit().putString(sk("pref_stream_badges_pos"), value).apply(); _streamBadgesPos.value = value }
+
+    private val _streamLogo = MutableStateFlow(prefs.getBoolean(sk("pref_stream_logo"), true))
+    /** Logo do addon ao lado do nome da fonte (quando o addon tem logo no manifest). */
+    val streamLogoFlow: StateFlow<Boolean> = _streamLogo.asStateFlow()
+    var streamLogo: Boolean
+        get() = _streamLogo.value
+        set(value) { prefs.edit().putBoolean(sk("pref_stream_logo"), value).apply(); _streamLogo.value = value }
+
+    private fun readStringList(key: String): List<String> = runCatching {
+        val arr = org.json.JSONArray(prefs.getString(sk(key), "[]"))
+        (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+    private fun writeStringList(key: String, value: List<String>) {
+        val arr = org.json.JSONArray()
+        value.forEach { arr.put(it) }
+        prefs.edit().putString(sk(key), arr.toString()).apply()
+    }
+
+    private val _streamPinned = MutableStateFlow(readStringList("pref_stream_pinned"))
+    /** Addons fixados no topo da folha de fontes, na ordem (nomes de addon). Vazio = nenhum fixado. */
+    val streamPinnedFlow: StateFlow<List<String>> = _streamPinned.asStateFlow()
+    var streamPinned: List<String>
+        get() = _streamPinned.value
+        set(value) { writeStringList("pref_stream_pinned", value); _streamPinned.value = value }
+
+    // ── Player (por perfil, Fase C) ──────────────────────────────────────────
+    // Botões configuráveis, tocar-p/-buscar, Volume Boost, mini player e
+    // "A seguir" automático. Mesmo padrão de fluxo + var das prefs da Fase B.
+
+    private val _playerButtons = MutableStateFlow(readStringList("pref_player_buttons"))
+    /** Botões do player na ordem escolhida (ids de [DEFAULT_PLAYER_BUTTONS]). Vazio = padrão. */
+    val playerButtonsFlow: StateFlow<List<String>> = _playerButtons.asStateFlow()
+    var playerButtons: List<String>
+        get() = _playerButtons.value
+        set(value) { writeStringList("pref_player_buttons", value); _playerButtons.value = value }
+
+    private val _playerTopActions = MutableStateFlow(readStringList("pref_player_top_actions"))
+    /** Botões do topo do player (ids de [DEFAULT_PLAYER_TOP_ACTIONS]). Vazio = padrão. "Voltar" sempre aparece. */
+    val playerTopActionsFlow: StateFlow<List<String>> = _playerTopActions.asStateFlow()
+    var playerTopActions: List<String>
+        get() = _playerTopActions.value
+        set(value) { writeStringList("pref_player_top_actions", value); _playerTopActions.value = value }
+
+    private val _playerTapSeek = MutableStateFlow(prefs.getBoolean(sk("pref_player_tap_seek"), true))
+    /** Tocar na barra de progresso pula para aquele ponto (além de arrastar). */
+    val playerTapSeekFlow: StateFlow<Boolean> = _playerTapSeek.asStateFlow()
+    var playerTapSeek: Boolean
+        get() = _playerTapSeek.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_tap_seek"), value).apply(); _playerTapSeek.value = value }
+
+    private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
+    /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
+    val playerVolBoostFlow: StateFlow<Boolean> = _playerVolBoost.asStateFlow()
+    var playerVolBoost: Boolean
+        get() = _playerVolBoost.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_vol_boost"), value).apply(); _playerVolBoost.value = value }
+
+    private val _playerVolBoostLevel = MutableStateFlow(prefs.getFloat(sk("pref_player_vol_boost_level"), 1.5f))
+    /** Nível do Volume Boost como multiplicador (1,0 = 100% até 2,0 = 200%). */
+    val playerVolBoostLevelFlow: StateFlow<Float> = _playerVolBoostLevel.asStateFlow()
+    var playerVolBoostLevel: Float
+        get() = _playerVolBoostLevel.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_vol_boost_level"), value).apply(); _playerVolBoostLevel.value = value }
+
+    private val _playerMini = MutableStateFlow(prefs.getBoolean(sk("pref_player_mini"), true))
+    /** Mini player: permite minimizar o player para uma janela flutuante e navegar no app. */
+    val playerMiniFlow: StateFlow<Boolean> = _playerMini.asStateFlow()
+    var playerMini: Boolean
+        get() = _playerMini.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_mini"), value).apply(); _playerMini.value = value }
+
+    private val _playerAutoNext = MutableStateFlow(prefs.getBoolean(sk("pref_player_auto_next"), true))
+    /** "A seguir" automático: ao fim do episódio, avança sozinho para o próximo. */
+    val playerAutoNextFlow: StateFlow<Boolean> = _playerAutoNext.asStateFlow()
+    var playerAutoNext: Boolean
+        get() = _playerAutoNext.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_auto_next"), value).apply(); _playerAutoNext.value = value }
+
+    private val _playerAutoNextDelay = MutableStateFlow(prefs.getInt(sk("pref_player_auto_next_delay"), 10))
+    /** Contagem regressiva do "A seguir" automático, em segundos. */
+    val playerAutoNextDelayFlow: StateFlow<Int> = _playerAutoNextDelay.asStateFlow()
+    var playerAutoNextDelay: Int
+        get() = _playerAutoNextDelay.value
+        set(value) { prefs.edit().putInt(sk("pref_player_auto_next_delay"), value).apply(); _playerAutoNextDelay.value = value }
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir
@@ -880,6 +1024,21 @@ class PlatformPrefs @Inject constructor(
         _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
         _detailTabs.value = prefs.getBoolean(sk("pref_detail_tabs"), false)
         _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
+        _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
+        _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
+        _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)
+        _streamBadgesLang.value = prefs.getBoolean(sk("pref_stream_badges_lang"), true)
+        _streamBadgesPos.value = prefs.getString(sk("pref_stream_badges_pos"), "stats") ?: "stats"
+        _streamLogo.value = prefs.getBoolean(sk("pref_stream_logo"), true)
+        _streamPinned.value = readStringList("pref_stream_pinned")
+        _playerButtons.value = readStringList("pref_player_buttons")
+        _playerTopActions.value = readStringList("pref_player_top_actions")
+        _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)
+        _playerVolBoost.value = prefs.getBoolean(sk("pref_player_vol_boost"), false)
+        _playerVolBoostLevel.value = prefs.getFloat(sk("pref_player_vol_boost_level"), 1.5f)
+        _playerMini.value = prefs.getBoolean(sk("pref_player_mini"), true)
+        _playerAutoNext.value = prefs.getBoolean(sk("pref_player_auto_next"), true)
+        _playerAutoNextDelay.value = prefs.getInt(sk("pref_player_auto_next_delay"), 10)
     }
 
     private fun computeLayout(): List<HomeRowPref> {
