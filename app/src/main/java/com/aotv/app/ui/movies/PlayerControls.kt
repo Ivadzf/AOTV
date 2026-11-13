@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
@@ -35,11 +35,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.viewinterop.AndroidView
+import android.widget.Toast
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -340,14 +341,26 @@ internal fun PlayerTopActions(
     ) {
         if (onMinimize != null) CtlButton(Icons.Default.KeyboardArrowDown, "Minimizar", 48.dp, onClick = onMinimize)
         if ("cast" in visibleActions) {
-            AndroidView(
-                factory = { ctx ->
-                    androidx.mediarouter.app.MediaRouteButton(ctx).apply {
+            // Cast (v1.12.0 fix do crash no toque): o MediaRouteButton de verdade
+            // (AndroidView) crashava o app ao aparecer junto com os controles no
+            // toque — confirmado pelo Davi ao desligar o "Transmitir". Volta o
+            // botão Compose comum, que abre o seletor de rota do sistema só
+            // quando tocado (mesmo comportamento pré-Lote 4). O diálogo abre sob
+            // runCatching: se o Cast não inicializar neste aparelho, mostra um
+            // aviso em vez de fechar o app. A sessão em si continua a mesma
+            // (SessionAvailabilityListener em MoviePlayerScreen).
+            val context = LocalContext.current
+            CtlButton(Icons.Default.Cast, "Transmitir", 48.dp, onClick = {
+                val activity = context as? android.app.Activity ?: return@CtlButton
+                runCatching {
+                    androidx.mediarouter.app.MediaRouteChooserDialog(activity).apply {
                         routeSelector = castRouteSelector()
+                        show()
                     }
-                },
-                modifier = Modifier.size(48.dp),
-            )
+                }.onFailure {
+                    Toast.makeText(context, "Cast indisponível neste aparelho", Toast.LENGTH_SHORT).show()
+                }
+            })
         }
         // Girar e Travar só no celular, na TV o controle já faz.
         if (!isTv) {
