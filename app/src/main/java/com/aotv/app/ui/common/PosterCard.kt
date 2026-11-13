@@ -28,6 +28,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -62,7 +63,10 @@ import com.aotv.app.ui.theme.Inter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.atan2
@@ -180,6 +184,24 @@ private fun posterHue(bmp: Bitmap): Int? = runCatching {
     hueOf(px)
 }.getOrNull()
 
+/** Matiz do drawable JÁ exibido na tela, subamostrado para 8×12. Bitmap de hardware não deixa
+ * ler pixel: copia para software antes (em Dispatchers.Default, pelo chamador). */
+private fun hueFromDrawable(drawable: Drawable): Int? {
+    val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return null
+    if (bmp.config == Bitmap.Config.HARDWARE) {
+        val soft = bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return null
+        return posterHue(soft)
+    }
+    return posterHue(bmp)
+}
+
+/** Espera o load() restaurar os tints salvos (no máximo 5 s): sem isso, a matiz inicial
+ * null dispara a leitura do disco antes do salvo chegar. */
+private suspend fun PosterInfo.waitTintsLoaded() {
+    if (tintsLoaded.value) return
+    withTimeoutOrNull(5_000) { tintsLoaded.first { it } }
+}
+
 // ── Cartão ──────────────────────────────────────────────────────────────────
 
 private val INK = Color(0xFF121316)
@@ -220,6 +242,11 @@ fun PosterCard(
 ) {
     val visual = rememberPosterVisual(item, badge, typeBadge, showTag, showBadges = showBadges)
     val unit = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f).dp
+    // decor estável por item/visual: lambda nova a cada composição tornava o
+    // card não-pulável. Só desenha depois que a imagem carregou (loaded).
+    val decor: @Composable BoxScope.() -> Unit = remember(item, visual, unit) {
+        { if (visual.loaded) PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22) }
+    }
     Column(modifier) {
         MediaPosterCard(
             title = item.title,
@@ -231,8 +258,9 @@ fun PosterCard(
             progress = progress,
             imageBottom = unit * 22,
             onImage = visual.onImage,
+            onImageError = visual.onImageError,
             cornerRadius = cornerRadius,
-            decor = { PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22) },
+            decor = decor,
         )
         if (caption != null) PosterCaption(caption, sub, highlight)
     }
@@ -253,7 +281,12 @@ internal fun rememberPosterHue(item: MovieItem): Int? {
     val context = LocalContext.current
     // Sem pôster exibido aqui para esperar (o destaque mostra o backdrop): a leitura
     // de 8 por 12 pixels baixa sozinha e grava no cache, para o cartão reaproveitar.
+    // Espera o load() e confere o salvo antes: sem isso, a matiz inicial null
+    // (o salvo ainda não chegou) disparava a leitura em rajada na abertura.
     if (readHue) LaunchedEffect(key) {
+        info?.waitTintsLoaded()
+        val cached = info?.tint(key)
+        if (cached != null) { hue = cached; return@LaunchedEffect }
         val small = context.imageLoader.execute(
             ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
                 .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
@@ -271,6 +304,13 @@ internal data class PosterVisual(
     val tag: PosterTag?,
     val quality: SourceQuality?,
     val onImage: ((Drawable) -> Unit)?,
+    /** True quando a imagem exibida carregou — as decorações só desenham aí. */
+    val loaded: Boolean = false,
+    /** True quando a matiz ainda precisa ser lida (nada em cache). A TV usa para
+     * desligar o hardware bitmap só nesse caso. */
+    val huePending: Boolean = false,
+    /** Fallback 8×12 quando a imagem não carregou (sem bitmap exibido para ler). */
+    val onImageError: (() -> Unit)? = null,
 )
 
 @Composable
@@ -293,25 +333,46 @@ internal fun rememberPosterVisual(
     }
 
     var hue by remember(key) { mutableStateOf(if (key.isEmpty()) null else info?.tint(key)) }
-    // Só pôster do TMDB e só enquanto não tem cor salva.
+    // Só pôster do TMDB e só enquanto não tem cor salva. A cor sai do bitmap
+    // JÁ exibido (onImage) — nada de segundo decode. O execute 8×12 só entra
+    // no fallback (onImageError), quando a imagem não carregou.
     val readHue = remember(key) { hue == null && info != null && key.isNotEmpty() && item.posterUrl.startsWith("https://image.tmdb.org/") }
     var loaded by remember(key) { mutableStateOf(false) }
     val context = LocalContext.current
-    // O pôster que aparece na tela pode ser bitmap de hardware (sem subir textura na hora de desenhar). A cor sai de uma
-    // leitura de 8 por 12 pixels, vinda do cache em disco, que nunca é desenhada.
-    // A Início usa a mesma leitura sozinha em rememberPosterHue (fundo dinâmico); aqui ela
-    // espera o pôster exibido carregar, para a leitura sair do cache e não baixar de novo.
-    if (readHue) LaunchedEffect(loaded) {
-        if (!loaded) return@LaunchedEffect
-        val small = context.imageLoader.execute(
-            ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
-        )
-        val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
-        val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@LaunchedEffect
-        hue = h
-        info?.putTint(key, h)
-    }
+    val scope = rememberCoroutineScope()
+    // Sempre presente: marca a imagem como carregada (as decorações dependem
+    // disso) e, quando falta a matiz, tira ela do drawable exibido.
+    val onImage = remember(key, readHue) { { drawable: Drawable ->
+        loaded = true
+        if (readHue) {
+            scope.launch(Dispatchers.Default) {
+                if (hue != null) return@launch
+                val h = hueFromDrawable(drawable) ?: return@launch
+                hue = h
+                info?.putTint(key, h)
+            }
+        }
+    } }
+    // Só quando a imagem não carregou: espera o load() restaurar os tints
+    // salvos, confere o cache e só então faz a leitura 8×12 do disco.
+    val onImageError = remember(key, readHue) { {
+        if (readHue) {
+            scope.launch {
+                info?.waitTintsLoaded()
+                if (hue != null) return@launch
+                val cached = info?.tint(key)
+                if (cached != null) { hue = cached; return@launch }
+                val small = context.imageLoader.execute(
+                    ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                        .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
+                )
+                val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@launch
+                val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@launch
+                hue = h
+                info?.putTint(key, h)
+            }
+        }
+    } }
     // Cartão parado na tela por 0,7 s pede a leitura das fontes. Saiu antes da vez, sai da fila.
     // Sem selos (compacto) nem pede: a leitura não aparece em lugar nenhum.
     if (showBadges && requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
@@ -330,7 +391,7 @@ internal fun rememberPosterVisual(
     }
     // A cor da faixa entra na hora. Animada, recompunha o cartão inteiro a cada quadro por 300 ms.
     val tint = tintColor(hue)
-    return PosterVisual(tint, tag, quality, if (readHue) ({ _ -> loaded = true }) else null)
+    return PosterVisual(tint, tag, quality, onImage, loaded, readHue, onImageError)
 }
 
 @Composable

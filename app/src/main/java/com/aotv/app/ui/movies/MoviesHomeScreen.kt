@@ -99,6 +99,11 @@ fun MoviesHomeScreen(
         }
     }
 
+    // Callbacks estáveis: lambda nova a cada composição tornava as fileiras
+    // não-puláveis (a Início inteira recompunha a cada emissão do UiState).
+    val seeMore = remember(viewModel) { { q: MoviesHomeViewModel.CatalogQuery -> viewModel.openCatalog(q) } }
+    val playTrailerFn = remember { { card: MoviesHomeViewModel.TrailerCard -> playTrailer(card) } }
+
     // SEM bottom bar aqui — a barra é a única do MoviesNavigation (Início, Descobrir, Minha Lista, Downloads, Busca e Config).
     Box(Modifier.fillMaxSize().background(Background)) {
         when {
@@ -117,8 +122,8 @@ fun MoviesHomeScreen(
                 state = state, viewModel = viewModel, onItemClick = onItemClick,
                 onSearchClick = onSearchClick, onSettingsClick = onSettingsClick,
                 onDiscoverClick = onDiscoverClick,
-                onSeeMore = { query -> viewModel.openCatalog(query) },
-                onPlayTrailer = { card -> playTrailer(card) },
+                onSeeMore = seeMore,
+                onPlayTrailer = playTrailerFn,
                 onCustomize = onCustomize,
                 onFolderClick = onFolderClick,
             )
@@ -356,8 +361,9 @@ private fun CatalogTab(
             verticalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(state.catalogItems, key = { it.tmdbId }) { item ->
-                MediaCard(item = item, onClick = { onItemClick(item) })
+            items(state.catalogItems, key = { rowKey(it) }) { item ->
+                val click = remember(item) { { onItemClick(item) } }
+                MediaCard(item = item, onClick = click)
             }
             // Rodapé com indicador de carregamento da próxima página
             if (state.isLoadingMore) {
@@ -377,6 +383,13 @@ private fun CatalogTab(
 }
 
 // ── Media card (poster) ────────────────────────────────────────────────────
+/**
+ * Key estável da fileira/grid: tipo + id do TMDB; item de addon sem id usa o
+ * embedId — tmdbId = 0 colidia (vários itens com a mesma key 0, reciclagem errada).
+ */
+internal fun rowKey(item: MovieItem) =
+    com.aotv.app.data.local.posterKey(item).ifBlank { "embed:${item.embedId.ifBlank { item.title }}" }
+
 @Composable
 fun MediaCard(
     item: MovieItem,
@@ -405,16 +418,12 @@ private fun HomeSectionsTab(
 ) {
     val listState = rememberLazyListState()
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
-    val loadMore by remember {
-        derivedStateOf {
-            val li = listState.layoutInfo
-            val total = li.totalItemsCount
-            val last = li.visibleItemsInfo.lastOrNull()?.index ?: 0
-            total > 0 && last >= total - 2
-        }
-    }
-    val genresOn = state.layout.any { it.system == SystemRow.GENRES }
-    LaunchedEffect(loadMore, genresOn) { if (loadMore && genresOn) viewModel.loadMoreSections() }
+    // Listas derivadas estáveis: map/associate novos a cada composição tornavam
+    // a fileira não-pulável (o LazyColumn recompunha a fileira inteira a cada
+    // emissão do UiState, mesmo sem nada mudar nela).
+    val newEpItems = remember(state.newEpisodes) { state.newEpisodes.map { it.item } }
+    val newEpBadges = remember(state.newEpisodes) { state.newEpisodes.associate { it.item.tmdbId to it.badge } }
+    val newEpSubs = remember(state.newEpisodes) { state.newEpisodes.associate { it.item.tmdbId to it.sub } }
 
     // Destaque vem da fileira escolhida no Personalizar Início (ou do automático).
     val heroSource = heroCandidates(state)
@@ -425,10 +434,15 @@ private fun HomeSectionsTab(
             viewModel.ensureHeroLogo(it.tmdbId, series)
         }
     }
-    val heroItems = heroSource.mapNotNull { item ->
-        val bd = item.backdropUrl.ifBlank { state.heroBackdrops[item.tmdbId].orEmpty() }
-        if (bd.isBlank()) null else item.copy(backdropUrl = bd)
-    }.take(8)
+    // Itens do herói estáveis: o copy() novo a cada composição recompunha o
+    // pager inteiro a cada emissão do UiState (o remember só refaz quando a
+    // fonte ou os backdrops mudam de verdade).
+    val heroItems = remember(heroSource, state.heroBackdrops) {
+        heroSource.mapNotNull { item ->
+            val bd = item.backdropUrl.ifBlank { state.heroBackdrops[item.tmdbId].orEmpty() }
+            if (bd.isBlank()) null else item.copy(backdropUrl = bd)
+        }.take(8)
+    }
 
     val display = state.display
     // Fundo dinâmico (opt-in, desligado por padrão): gradiente com a matiz do
@@ -514,10 +528,10 @@ private fun HomeSectionsTab(
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
-                        row.displayTitle, state.newEpisodes.map { it.item }, onItemClick,
+                        row.displayTitle, newEpItems, onItemClick,
                         display = display,
-                        badges = state.newEpisodes.associate { it.item.tmdbId to it.badge },
-                        subs = state.newEpisodes.associate { it.item.tmdbId to it.sub },
+                        badges = newEpBadges,
+                        subs = newEpSubs,
                     )
                 }
                 SystemRow.RECOMMENDED -> if (state.recommended.isNotEmpty()) item(key = row.key) {
@@ -527,31 +541,27 @@ private fun HomeSectionsTab(
                     LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle, display = display)
                 }
                 SystemRow.TRENDING_MOVIES -> if (state.trendingMovies.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.trendingMovies, onItemClick, display = display) {
-                        onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.TRENDING))
-                    }
+                    val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.TRENDING)) } }
+                    SectionRow(row.displayTitle, state.trendingMovies, onItemClick, display = display, onSeeMore = more)
                 }
                 SystemRow.TRENDING_TV -> if (state.trendingTv.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.trendingTv, onItemClick, display = display) {
-                        onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.SERIES, MoviesHomeViewModel.CatalogEndpoint.TRENDING))
-                    }
+                    val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.SERIES, MoviesHomeViewModel.CatalogEndpoint.TRENDING)) } }
+                    SectionRow(row.displayTitle, state.trendingTv, onItemClick, display = display, onSeeMore = more)
                 }
                 SystemRow.NOW_PLAYING -> if (state.nowPlaying.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.nowPlaying, onItemClick, display = display) {
-                        onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.NOW_PLAYING))
-                    }
+                    val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.NOW_PLAYING)) } }
+                    SectionRow(row.displayTitle, state.nowPlaying, onItemClick, display = display, onSeeMore = more)
                 }
                 SystemRow.RELEASES -> if (state.releases2026.isNotEmpty()) item(key = row.key) {
                     val t = custom.ifBlank { "Lançamentos ${state.releasesYear}" }
-                    SectionRow(t, state.releases2026, onItemClick, display = display) {
-                        onSeeMore(MoviesHomeViewModel.CatalogQuery(t, MoviesHomeViewModel.CatalogType.MOVIE, genreId = null, sort = MoviesHomeViewModel.SORT_RELEASE_MOVIE, year = state.releasesYear))
-                    }
+                    val more = remember(row.key, t, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(t, MoviesHomeViewModel.CatalogType.MOVIE, genreId = null, sort = MoviesHomeViewModel.SORT_RELEASE_MOVIE, year = state.releasesYear)) } }
+                    SectionRow(t, state.releases2026, onItemClick, display = display, onSeeMore = more)
                 }
-                SystemRow.GENRES -> {
-                    items(state.homeSections, key = { it.id }) { sec ->
-                        SectionRow(sec.title, sec.items, onItemClick, display = display) { onSeeMore(sec.query) }
-                    }
-                    if (state.isLoadingSections) items(2, key = { "genres_skel_$it" }) { com.aotv.app.ui.common.SkeletonRail() }
+                // Gêneros é UMA fileira ligada: 1 fileira de chips (filmes + séries),
+                // sem expandir em seções. Antes 1 fileira virava até ~70 seções
+                // carregadas ao rolar (76 fileiras na tela com só 15 ligadas).
+                SystemRow.GENRES -> if (state.movieGenres.isNotEmpty() || state.tvGenres.isNotEmpty()) item(key = row.key) {
+                    GenresChipsRow(state.movieGenres, state.tvGenres, display, onSeeMore)
                 }
                 // Coleção sem pasta não aparece, como no Nuvio.
                 null -> if (row.collectionId != null) collections.firstOrNull { it.id == row.collectionId }?.takeIf { it.folders.isNotEmpty() }?.let { col ->
@@ -560,11 +570,17 @@ private fun HomeSectionsTab(
                     }
                 } else state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || it.items.isNotEmpty() }?.let { ar ->
                     item(key = "addon:" + ar.ref.key) {
+                        // Carrega ao aparecer na tela (a LazyColumn só compõe o
+                        // visível): antes todas as fileiras de addon disparavam
+                        // juntas na abertura, cada uma com 40 metas + resolve.
+                        LaunchedEffect(ar.ref.key) {
+                            if (ar.items.isEmpty() && ar.loading) viewModel.loadAddonRow(ar.ref.key)
+                        }
                         if (ar.items.isEmpty()) com.aotv.app.ui.common.SkeletonRail()
                         else SectionRow(
                             ar.title, ar.items, onItemClick,
                             display = display,
-                            onNearEnd = if (ar.more) ({ viewModel.loadAddonRow(ar.ref.key) }) else null,
+                            onNearEnd = if (ar.more) remember(ar.ref.key) { { viewModel.loadAddonRow(ar.ref.key) } } else null,
                         )
                     }
                 }
@@ -633,8 +649,9 @@ private fun ContinueRow(
         )
         LazyRow(contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding()),
             horizontalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeRowSpacing(display.density))) {
-            items(state.continueWatching, key = { com.aotv.app.data.local.posterKey(it) }) { item ->
-                com.aotv.app.ui.common.ContinueCard(item, { onItemClick(item) },
+            items(state.continueWatching, key = { rowKey(it) }) { item ->
+                val click = remember(item) { { onItemClick(item) } }
+                com.aotv.app.ui.common.ContinueCard(item, click,
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
                     episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact)
@@ -671,16 +688,14 @@ private fun HeroCarousel(
     }
     // Um efeito só cuida do avanço e do trailer, assim um não corta o outro. Com trailer ligado,
     // espera 5 s, toca e só avança quando o trailer acaba. Sem trailer, avança a cada 6 s.
+    // Herói fora do topo (rolou) ou app em 2º plano: PARA — antes avançava a cada
+    // 6 s mesmo fora da tela, animando o pager e buscando trailer sem ninguém ver.
     LaunchedEffect(pagerState.settledPage, active, items.size) {
         trailer = null
-        if (items.isEmpty()) return@LaunchedEffect
+        if (items.isEmpty() || !active) return@LaunchedEffect
         val page = pagerState.settledPage
-        if (active) {
-            kotlinx.coroutines.delay(5000)
-            trailerFor(items[page])?.let { trailer = page to it; return@LaunchedEffect }
-        } else {
-            kotlinx.coroutines.delay(6000)
-        }
+        kotlinx.coroutines.delay(5000)
+        trailerFor(items[page])?.let { trailer = page to it; return@LaunchedEffect }
         advance(page)
     }
     val config = androidx.compose.ui.platform.LocalConfiguration.current
@@ -707,8 +722,17 @@ private fun HeroCarousel(
                     if (wide) Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.8f)
                     else Modifier.fillMaxSize()
                 ) {
+                    // Tamanho explícito em px de exibição (chave de cache estável).
+                    val density = androidx.compose.ui.platform.LocalDensity.current
+                    val pxW = with(density) { (config.screenWidthDp.dp * (if (wide) 0.8f else 1f)).roundToPx() }
+                    val pxH = with(density) { heroHeight.roundToPx() }
+                    val heroContext = androidx.compose.ui.platform.LocalContext.current
+                    val heroRequest = remember(item.backdropUrl, item.posterUrl, pxW, pxH) {
+                        coil.request.ImageRequest.Builder(heroContext)
+                            .data(item.backdropUrl.ifBlank { item.posterUrl }).size(pxW, pxH).build()
+                    }
                     coil.compose.AsyncImage(
-                        model = item.backdropUrl.ifBlank { item.posterUrl },
+                        model = heroRequest,
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
@@ -796,6 +820,45 @@ private fun HeroCarousel(
     }
 }
 
+/**
+ * Fileira Gêneros: 1 fileira de chips (filmes + séries), cada chip abre a
+ * grade daquele gênero. Sem expandir em seções: a expansão era o que fazia
+ * 1 fileira ligada virar até ~70 fileiras na tela. Recebe só as listas de
+ * gêneros (não o UiState inteiro) para o Compose poder pular a fileira.
+ */
+@Composable
+private fun GenresChipsRow(
+    movieGenres: List<com.aotv.app.data.remote.dto.TmdbGenreDto>,
+    tvGenres: List<com.aotv.app.data.remote.dto.TmdbGenreDto>,
+    display: HomeDisplayPrefs = HomeDisplayPrefs(),
+    onSeeMore: (MoviesHomeViewModel.CatalogQuery) -> Unit,
+) {
+    // Chips estáveis: a lista só refaz quando os gêneros chegam/mudam.
+    val chips = remember(movieGenres, tvGenres) {
+        movieGenres.map { g ->
+            g.name to MoviesHomeViewModel.CatalogQuery(g.name, MoviesHomeViewModel.CatalogType.MOVIE, genreId = g.id, sort = MoviesHomeViewModel.SORT_POPULAR)
+        } + tvGenres.map { g ->
+            "${g.name} · Séries" to MoviesHomeViewModel.CatalogQuery("${g.name} · Séries", MoviesHomeViewModel.CatalogType.SERIES, genreId = g.id, sort = MoviesHomeViewModel.SORT_POPULAR)
+        }
+    }
+    Column {
+        com.aotv.app.ui.common.SectionHeader(
+            title = "Gêneros",
+            underline = display.sectionUnderline,
+            compact = display.compact,
+        )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = com.aotv.app.ui.common.pagePadding()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            chips.forEach { (label, query) ->
+                FilterChipPill(label, false, { onSeeMore(query) })
+            }
+        }
+    }
+}
+
 @Composable
 private fun SectionRow(
     title: String,
@@ -835,11 +898,14 @@ private fun SectionRow(
             contentPadding = PaddingValues(horizontal = pad),
             horizontalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeRowSpacing(display.density)),
         ) {
-            items(items, key = { it.tmdbId }) { item ->
+            items(items, key = { rowKey(it) }) { item ->
+                // Clique estável por item: lambda nova a cada composição tornava
+                // o card não-pulável mesmo com MovieItem estável e key certa.
+                val click = remember(item) { { onItemClick(item) } }
                 val remain = remainingMap?.get(item.tmdbId)
                 com.aotv.app.ui.common.PosterCard(
                     item = item,
-                    onClick = { onItemClick(item) },
+                    onClick = click,
                     modifier = Modifier.width(cardWidth),
                     caption = if (remain != null) "$remain min restantes" else item.title,
                     sub = subs?.get(item.tmdbId),
@@ -903,9 +969,10 @@ private fun CatalogGridView(
                 verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeGridSpacing(display.density)),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(state.gridItems, key = { it.tmdbId }) { item ->
+                items(state.gridItems, key = { rowKey(it) }) { item ->
+                    val click = remember(item) { { onItemClick(item) } }
                     MediaCard(
-                        item = item, onClick = { onItemClick(item) },
+                        item = item, onClick = click,
                         showBadges = display.showPosterBadges, cornerRadius = display.posterRadiusDp.dp,
                     )
                 }
@@ -1017,8 +1084,16 @@ private fun TrailerCardView(card: MoviesHomeViewModel.TrailerCard, onClick: () -
                 .background(BackgroundCard2)
                 .then(if (focused) Modifier.border(3.dp, Color.White, RoundedCornerShape(14.dp)) else Modifier),
         ) {
+            // Tamanho explícito em px de exibição (card 264dp × 16:9).
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val pxW = with(density) { 264.dp.roundToPx() }
+            val pxH = pxW * 9 / 16
+            val trailerContext = androidx.compose.ui.platform.LocalContext.current
+            val trailerRequest = remember(card.backdropUrl, pxW, pxH) {
+                coil.request.ImageRequest.Builder(trailerContext).data(card.backdropUrl).size(pxW, pxH).build()
+            }
             coil.compose.AsyncImage(
-                model = card.backdropUrl,
+                model = trailerRequest,
                 contentDescription = card.title,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,

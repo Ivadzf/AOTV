@@ -7,6 +7,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -113,8 +114,9 @@ fun AotvTheme(content: @Composable () -> Unit) {
     // PlatformPrefs): ler aqui assina o State e recompõe a árvore inteira
     // quando o tema troca. As cores dos vals de Color.kt leem o mesmo holder.
     val palette = currentPaletteState.value
+    val scheme = remember(palette) { aotvColorScheme(palette) }
     MaterialTheme(
-        colorScheme = aotvColorScheme(palette),
+        colorScheme = scheme,
         typography  = AotvTypography,
         shapes      = AotvShapes,
         content     = content,

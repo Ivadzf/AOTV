@@ -200,10 +200,11 @@ fun MoviesNavigation(
         ) {
 
             composable(MoviesRoute.Home.route) {
-                val openDetail: (MovieItem) -> Unit = { item ->
+                // Estável entre recomposições: lambda nova a cada vez recompunha a Início inteira.
+                val openDetail: (MovieItem) -> Unit = androidx.compose.runtime.remember(navController) { { item ->
                     movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
-                }
+                } }
                 // TV tem Início própria no desenho do webOS. Celular segue com a dele.
                 if (isTV) com.aotv.app.ui.tv.TvHomeScreen(
                     onItemClick = openDetail, navigationOpen = menuOpen,

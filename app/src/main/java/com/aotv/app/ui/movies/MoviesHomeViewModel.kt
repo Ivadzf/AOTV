@@ -222,6 +222,10 @@ class MoviesHomeViewModel @Inject constructor(
 
     /** Busca o detalhe de cada série (até 15) e monta a fileira "Novos episódios". */
     private fun buildNewEpisodes(series: List<Triple<Int, String, String>>) {
+        lastNewEpSeries = series
+        // Fileira desligada não busca na rede (nem consome a chave: ao religar,
+        // o applyLayout repõe porque a chave não andou).
+        if (!sysRowOn(com.aotv.app.data.local.SystemRow.NEW_EPISODES.key)) return
         val key = series.joinToString(",") { it.first.toString() }
         if (key == lastNewEpKey) return
         lastNewEpKey = key
@@ -262,6 +266,8 @@ class MoviesHomeViewModel @Inject constructor(
         lastHistory = history
         // Recomendação é do catálogo AOTV (TMDB). Desligado, nem chama a rede.
         if (!prefs.catalogOn) return
+        // Fileira desligada não busca na rede (ao religar, o applyLayout repõe).
+        if (!sysRowOn(com.aotv.app.data.local.SystemRow.RECOMMENDED.key)) return
         val apiKey = prefs.tmdbApiKey
         if (apiKey.isBlank() || history.isEmpty()) {
             if (history.isEmpty()) _uiState.update { it.copy(recommended = emptyList(), recommendedBecause = "") }
@@ -432,6 +438,12 @@ class MoviesHomeViewModel @Inject constructor(
     /** Último histórico visto, para refazer a recomendação quando o catálogo AOTV volta. */
     private var lastHistory: List<com.aotv.app.data.local.entity.MovieHistoryEntity> = emptyList()
 
+    /** Última lista de séries do histórico/Minha Lista (para repor Novos episódios ao religar a fileira). */
+    private var lastNewEpSeries: List<Triple<Int, String, String>> = emptyList()
+
+    /** Fileiras visíveis na última aplicação do layout (para repor dados de quem voltou a aparecer). */
+    private var lastVisibleKeys: Set<String> = emptySet()
+
     private data class HomeInputs(
         val layout: List<com.aotv.app.data.local.HomeRowPref>,
         val catalogOn: Boolean,
@@ -460,15 +472,37 @@ class MoviesHomeViewModel @Inject constructor(
                 addonRows = refs.map { (ref, title) -> old[ref.key]?.copy(title = title) ?: AddonRow(ref, title = title) },
             )
         }
-        refs.filter { old[it.first.key] == null }.forEach { loadAddonRow(it.first.key) }
+        // Fileiras de addon carregam quando APARECEM na tela (LaunchedEffect
+        // no item da LazyColumn), não todas juntas na abertura: cada uma são
+        // 40 metas + resolve no TMDB por item + 1 emissão de UiState — com
+        // muitas fileiras, a abertura disparava tudo junto. Exceção: a fileira
+        // do destaque, que alimenta o herói antes de ser rolada até ela.
+        refs.filter { old[it.first.key] == null && it.first.key == i.hero }.forEach { loadAddonRow(it.first.key) }
+        // Fileira que voltou a aparecer (ligaram de novo, ou o catálogo AOTV voltou)
+        // precisa dos dados: trailers, novos episódios e recomendações só carregam
+        // quando a fileira está ligada, então repor aqui — senão a fileira
+        // religada ficava vazia até o histórico mudar.
+        val visibleKeys = visible.mapTo(HashSet()) { it.key }
+        val newlyVisible = visibleKeys - lastVisibleKeys
+        lastVisibleKeys = visibleKeys
+        val stNow = _uiState.value
+        if (com.aotv.app.data.local.SystemRow.TRAILERS.key in newlyVisible && stNow.latestTrailers.isEmpty() && !stNow.trailersLoading) {
+            selectTrailerTab(stNow.trailerTab)
+        }
+        if (com.aotv.app.data.local.SystemRow.NEW_EPISODES.key in newlyVisible && stNow.newEpisodes.isEmpty()) {
+            buildNewEpisodes(lastNewEpSeries)
+        }
+        if (com.aotv.app.data.local.SystemRow.RECOMMENDED.key in newlyVisible && stNow.recommended.isEmpty()) {
+            lastRecKey = ""
+            buildRecommendations(lastHistory)
+        }
         val prev = lastCatalogOn
         lastCatalogOn = i.catalogOn
         if (prev == null || prev == i.catalogOn) return
         if (i.catalogOn) {
+            // Trailers e recomendações já foram repostos acima (fileiras que
+            // voltaram a aparecer); aqui só recarrega o catálogo TMDB.
             load()
-            selectTrailerTab(_uiState.value.trailerTab)
-            lastRecKey = ""
-            buildRecommendations(lastHistory)
         } else {
             _uiState.update {
                 it.copy(
@@ -494,7 +528,8 @@ class MoviesHomeViewModel @Inject constructor(
             prefs.homeDisplayFlow.collect { d -> _uiState.update { it.copy(display = d) } }
         }
         load()
-        if (prefs.catalogOn) selectTrailerTab(TrailerTab.POPULAR)
+        // Trailers carregam pelo applyLayout (fileira que aparece), não aqui:
+        // a fileira desligada não busca dado nenhum.
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(library.recentlyPlayed(), library.watchlist()) { h, w ->
                 (h.filter { it.type == MediaType.SERIES.name }.map { Triple(it.tmdbId, it.title, it.posterUrl) } +
@@ -563,27 +598,31 @@ class MoviesHomeViewModel @Inject constructor(
     fun selectTab(tab: Int) { _uiState.update { it.copy(selectedTab = tab) } }
 
     /** Busca a logo-art de um item sob demanda (hero da TV) e cacheia em heroLogos. */
+    // Em busca (sem o update "em busca" de antes, que emitia 1 UiState por item
+    // só para marcar "" — na abertura eram até 20 emissões para 10 itens).
+    private val heroLogoFetching = mutableSetOf<Int>()
+    private val heroBackdropFetching = mutableSetOf<Int>()
+    private val heroCertFetching = mutableSetOf<Int>()
+
     fun ensureHeroLogo(tmdbId: Int, isSeries: Boolean) {
-        if (_uiState.value.heroLogos.containsKey(tmdbId)) return
+        if (_uiState.value.heroLogos.containsKey(tmdbId) || !heroLogoFetching.add(tmdbId)) return
         val apiKey = prefs.tmdbApiKey
-        if (apiKey.isBlank()) return
-        // marca como "em busca" (evita refetch em foco rápido)
-        _uiState.update { it.copy(heroLogos = it.heroLogos + (tmdbId to "")) }
+        if (apiKey.isBlank()) { heroLogoFetching.remove(tmdbId); return }
         viewModelScope.launch {
             val url = runCatching {
                 if (isSeries) tmdb.getSeriesImages(tmdbId, apiKey = apiKey).bestLogoUrl()
                 else tmdb.getMovieImages(tmdbId, apiKey = apiKey).bestLogoUrl()
             }.getOrNull().orEmpty()
             if (url.isNotBlank()) _uiState.update { it.copy(heroLogos = it.heroLogos + (tmdbId to url)) }
+            else heroLogoFetching.remove(tmdbId)
         }
     }
 
     /** Backdrop real p/ hero de itens sem backdrop (ex: Continuar assistindo). Cacheia em heroBackdrops. */
     fun ensureHeroBackdrop(tmdbId: Int, isSeries: Boolean) {
-        if (_uiState.value.heroBackdrops.containsKey(tmdbId)) return
+        if (_uiState.value.heroBackdrops.containsKey(tmdbId) || !heroBackdropFetching.add(tmdbId)) return
         val apiKey = prefs.tmdbApiKey
-        if (apiKey.isBlank()) return
-        _uiState.update { it.copy(heroBackdrops = it.heroBackdrops + (tmdbId to "")) }
+        if (apiKey.isBlank()) { heroBackdropFetching.remove(tmdbId); return }
         viewModelScope.launch {
             val base = "https://image.tmdb.org/t/p/w780"
             val url = runCatching {
@@ -591,21 +630,22 @@ class MoviesHomeViewModel @Inject constructor(
                 else tmdb.getMovieDetail(tmdbId, apiKey = apiKey).backdropPath?.let { "$base$it" }
             }.getOrNull().orEmpty()
             if (url.isNotBlank()) _uiState.update { it.copy(heroBackdrops = it.heroBackdrops + (tmdbId to url)) }
+            else heroBackdropFetching.remove(tmdbId)
         }
     }
 
     /** Classificação indicativa do hero (catálogo não traz) — busca no detalhe e cacheia. */
     fun ensureHeroCert(tmdbId: Int, isSeries: Boolean) {
-        if (_uiState.value.heroCerts.containsKey(tmdbId)) return
+        if (_uiState.value.heroCerts.containsKey(tmdbId) || !heroCertFetching.add(tmdbId)) return
         val apiKey = prefs.tmdbApiKey
-        if (apiKey.isBlank()) return
-        _uiState.update { it.copy(heroCerts = it.heroCerts + (tmdbId to "")) }
+        if (apiKey.isBlank()) { heroCertFetching.remove(tmdbId); return }
         viewModelScope.launch {
             val cert = runCatching {
                 if (isSeries) tmdb.getSeriesDetail(tmdbId, apiKey = apiKey).contentRatings.certBR()
                 else tmdb.getMovieDetail(tmdbId, apiKey = apiKey).releaseDates.certBR()
             }.getOrNull().orEmpty()
             if (cert.isNotBlank()) _uiState.update { it.copy(heroCerts = it.heroCerts + (tmdbId to cert)) }
+            else heroCertFetching.remove(tmdbId)
         }
     }
 
@@ -811,17 +851,34 @@ class MoviesHomeViewModel @Inject constructor(
             }
             _uiState.update { it.copy(isLoading = true, error = null) }
 
-            // Somente catálogo TMDB. As 6 chamadas rodam EM PARALELO (async/await) — antes eram
+            // Fileira desligada não busca dado nenhum: antes as chamadas rodavam
+            // sempre que o catálogo AOTV estava ligado, mesmo com as fileiras
+            // desligadas no Personalizar Início. Gêneros alimenta outras telas
+            // (Descobrir, Catálogo, chips de Gêneros), então sempre carrega.
+            val layoutNow = prefs.homeLayout
+            val rowOn = { key: String -> layoutNow.any { it.key == key && it.enabled } }
+            val heroSrc = prefs.heroSource
+            // Herói automático (ou fonte desligada/inexistente) usa o em alta.
+            val heroNeedsTrending = heroSrc.isBlank() ||
+                heroSrc == com.aotv.app.data.local.SystemRow.TRENDING_MOVIES.key ||
+                heroSrc == com.aotv.app.data.local.SystemRow.TRENDING_TV.key ||
+                layoutNow.none { it.key == heroSrc }
+            val fetchTrendingMovies = rowOn(com.aotv.app.data.local.SystemRow.TRENDING_MOVIES.key) || heroNeedsTrending
+            val fetchTrendingTv = rowOn(com.aotv.app.data.local.SystemRow.TRENDING_TV.key) || heroNeedsTrending
+            val fetchNowPlaying = rowOn(com.aotv.app.data.local.SystemRow.NOW_PLAYING.key)
+            val fetchReleases = rowOn(com.aotv.app.data.local.SystemRow.RELEASES.key)
+
+            // Somente catálogo TMDB. As chamadas rodam EM PARALELO (async/await) — antes eram
             // em série (6 round-trips somados = segundos de "Carregando" em rede/CPU fraca).
             val trendingMoviesD = async {
-                if (apiKey.isBlank()) emptyList()
+                if (apiKey.isBlank() || !fetchTrendingMovies) emptyList()
                 else runCatching {
                     (if (kids) tmdb.discoverMovies(genres = KIDS_MOVIES, apiKey = apiKey) else tmdb.getTrendingMovies(apiKey = apiKey))
                         .results.filterNot { it.adult }.map { it.toMovieItem() }
                 }.getOrDefault(emptyList())
             }
             val trendingTvD = async {
-                if (apiKey.isBlank()) emptyList()
+                if (apiKey.isBlank() || !fetchTrendingTv) emptyList()
                 else runCatching {
                     (if (kids) tmdb.discoverTv(genres = KIDS_SERIES, apiKey = apiKey) else tmdb.getTrendingTv(apiKey = apiKey))
                         .results.filterNot { it.adult }.map { it.toMovieItem() }
@@ -834,11 +891,11 @@ class MoviesHomeViewModel @Inject constructor(
                 if (apiKey.isBlank()) emptyList() else runCatching { tmdb.getTvGenres(apiKey = apiKey).genres }.getOrDefault(emptyList())
             }
             val nowPlayingD = async {
-                if (apiKey.isBlank()) emptyList()
+                if (apiKey.isBlank() || !fetchNowPlaying) emptyList()
                 else runCatching { tmdb.getNowPlaying(apiKey = apiKey).results.filterNot { it.adult }.map { it.toMovieItem() } }.getOrDefault(emptyList())
             }
             val releases2026D = async {
-                if (apiKey.isBlank()) emptyList()
+                if (apiKey.isBlank() || !fetchReleases) emptyList()
                 else runCatching { tmdb.discoverMovies(sort = SORT_RELEASE_MOVIE, year = _uiState.value.releasesYear, apiKey = apiKey).results.filterNot { it.adult }.map { it.toMovieItem() } }.getOrDefault(emptyList())
             }
             val trendingMovies = trendingMoviesD.await()
@@ -862,7 +919,8 @@ class MoviesHomeViewModel @Inject constructor(
             }
 
             // Logo-art do hero (estilo Nuvio): busca em paralelo os logos dos até 8 destaques.
-            if (apiKey.isNotBlank()) {
+            // Só quando o em alta foi buscado (fileira ligada ou herói automático).
+            if (apiKey.isNotBlank() && (fetchTrendingMovies || fetchTrendingTv)) {
                 val candidates =
                     (trendingMovies.filter { it.backdropUrl.isNotBlank() }.map { it to true } +
                         trendingTv.filter { it.backdropUrl.isNotBlank() }.map { it to false }).take(8)
@@ -886,11 +944,12 @@ class MoviesHomeViewModel @Inject constructor(
             // carrega a primeira página do catálogo com os filtros atuais
             reloadCatalog()
 
-            // Monta as specs das seções (estilo Netflix) e carrega o 1º lote
+            // Specs das seções de gênero (só a TV usa: o celular mostra Gêneros
+            // como 1 fileira de chips e não carrega seção nenhuma). O 1º lote
+            // parte do efeito da TV; o load() não dispara mais.
             sectionSpecs = buildSectionSpecs(genres, tvGenres)
             nextSpecIndex = 0
             _uiState.update { it.copy(homeSections = emptyList()) }
-            loadMoreSections()
         }
     }
 
@@ -929,9 +988,12 @@ class MoviesHomeViewModel @Inject constructor(
         return out
     }
 
+    /** Fileira de sistema ligada no Personalizar Início (e catálogo AOTV ligado). */
+    private fun sysRowOn(key: String) = prefs.catalogOn &&
+        prefs.homeLayout.any { it.key == key && it.enabled }
+
     /** Fileira Gêneros ligada no Personalizar Início (e catálogo AOTV ligado). */
-    private fun genresOn() = prefs.catalogOn &&
-        prefs.homeLayout.any { it.key == com.aotv.app.data.local.SystemRow.GENRES.key && it.enabled }
+    private fun genresOn() = sysRowOn(com.aotv.app.data.local.SystemRow.GENRES.key)
 
     /** Carrega o próximo lote de seções (chamado ao rolar perto do fim). */
     fun loadMoreSections() {

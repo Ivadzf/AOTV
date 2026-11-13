@@ -147,6 +147,9 @@ private fun TvHomeScreenBody(
     }
     val genresOn = state.layout.any { it.system == SystemRow.GENRES }
     LaunchedEffect(loadMore, genresOn) { if (loadMore && genresOn) viewModel.loadMoreSections() }
+    // Primeira leva de seções na abertura (o load() não dispara mais: o celular
+    // não usa as seções e a TV carrega por aqui).
+    LaunchedEffect(genresOn) { if (genresOn) viewModel.loadMoreSections() }
 
     Box(Modifier.fillMaxSize().background(Background)) {
         if (state.isLoading) {
@@ -439,6 +442,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
                 }
             } else state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || it.items.isNotEmpty() }?.let { ar ->
                 item(key = row.key) {
+                    // Carrega ao aparecer na tela (igual ao celular): antes
+                    // todas as fileiras de addon disparavam juntas na abertura.
+                    LaunchedEffect(ar.ref.key) {
+                        if (ar.items.isEmpty() && ar.loading) viewModel.loadAddonRow(ar.ref.key)
+                    }
                     if (ar.items.isEmpty()) TvSkeletonRail()
                     else PosterRail(ar.title, ar.items, onItemClick, onFocus,
                         onNearEnd = if (ar.more) ({ viewModel.loadAddonRow(ar.ref.key) }) else null)

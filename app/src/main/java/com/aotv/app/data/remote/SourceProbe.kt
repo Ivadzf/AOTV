@@ -106,11 +106,21 @@ private val DUB = Regex("dublad|\\bdub\\b|dual|portugu|pt-?br|nacional", RegexOp
 private val LEG = Regex("legendad|\\bleg\\b|\\bsub(s|bed)?\\b", RegexOption.IGNORE_CASE)
 
 /** Idioma da fonte pelo rótulo. "dub", "leg" ou "" quando não dá pra saber. */
-fun langOf(label: String): String = when {
-    ptAudio(label) -> "dub"
-    LEG.containsMatchIn(label) -> "leg"
-    DUB.containsMatchIn(label) -> "dub"
-    else -> ""
+private val langCache = ConcurrentHashMap<String, String>()
+
+/** Idioma da fonte pelo rótulo, com cache por rótulo: o sort roda a cada addon que responde e
+ * cada chamada varria até 3 regexes por rótulo. */
+fun langOf(label: String): String {
+    langCache[label]?.let { return it }
+    val lang = when {
+        ptAudio(label) -> "dub"
+        LEG.containsMatchIn(label) -> "leg"
+        DUB.containsMatchIn(label) -> "dub"
+        else -> ""
+    }
+    if (langCache.size > 2000) langCache.clear()
+    langCache[label] = lang
+    return lang
 }
 
 // ── Texto do addon lido para os selos do pôster (iguais ao webOS) ─────────────────────────────

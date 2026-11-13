@@ -41,7 +41,9 @@ class AotvApplication : Application(), ImageLoaderFactory {
             // na prática — e sem limite, a home disparava dezenas de downloads
             // juntos e saturava a conexão em internet lenta.
             .dispatcher(Dispatchers.IO.limitedParallelism(8))
-            .crossfade(if (lowRam) 0 else 150)
+            // Sem crossfade nem fora de low-RAM: animar o bitmap a cada scroll
+            // em lista = jank (antes era 150 ms fora de low-RAM).
+            .crossfade(0)
             .allowRgb565(true)
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)

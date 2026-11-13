@@ -28,6 +28,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
@@ -51,12 +52,35 @@ class MovieDetailViewModel @Inject constructor(
     // resultado fica por URL em [UiState.probes].
     private val probing = mutableSetOf<String>()
 
+    // Debounce das emissões de fontes/probes: cada addon/plugin que responde
+    // emitia um UiState novo e recompunha o detalhe inteiro (folha inclusa).
+    // As respostas que chegam juntas (300–400 ms) viram 1 emissão só.
+    private val pendingProbes = mutableMapOf<String, com.aotv.app.data.remote.ProbeResult>()
+    private var probeDebounceJob: Job? = null
+    private var streamDebounceJob: Job? = null
+
+    /** Aplica [apply] no UiState depois de 300 ms sem outra chamada (cancela a anterior). */
+    private fun updateStreamsDebounced(apply: (UiState) -> UiState) {
+        streamDebounceJob?.cancel()
+        streamDebounceJob = viewModelScope.launch {
+            delay(300)
+            _uiState.update(apply)
+        }
+    }
+
     /** Testa as fontes novas (64 KB cada, 4 por vez no prober) e guarda o resultado. */
     private fun verify(streams: List<com.aotv.app.data.remote.StremioStream>) {
         streams.map { it.url }.filter { it.startsWith("http") && probing.add(it) }.forEach { u ->
             viewModelScope.launch {
                 val r = prober.probe(u)
-                _uiState.update { it.copy(probes = it.probes + (u to r)) }
+                pendingProbes[u] = r
+                probeDebounceJob?.cancel()
+                probeDebounceJob = viewModelScope.launch {
+                    delay(400)
+                    val batch = pendingProbes.toMap()
+                    pendingProbes.clear()
+                    _uiState.update { it.copy(probes = it.probes + batch) }
+                }
             }
         }
         scheduleDebridCheck()
@@ -344,6 +368,9 @@ class MovieDetailViewModel @Inject constructor(
 
     fun load(embedId: String, tmdbId: Int, type: MediaType) {
         loadJob?.cancel()
+        // Emissões adiadas do detalhe anterior não podem cair no novo.
+        streamDebounceJob?.cancel()
+        probeDebounceJob?.cancel()
         val seq = ++loadSeq
         loadJob = viewModelScope.launch {
             // Cão de guarda: se este load não destravar as flags em 120s (await que
@@ -420,9 +447,12 @@ class MovieDetailViewModel @Inject constructor(
                         srcJobs += launch {
                             val s = runCatching { stremio.getStreams(addon, "movie", stremioId, tmdbId = tmdbId) }.getOrDefault(emptyList())
                             slots[idx] = s
-                            _uiState.update { st ->
+                            // Merge/sort fora do Main, e a emissão com debounce:
+                            // cada addon que responde não recompõe o detalhe sozinho.
+                            val merged = withContext(Dispatchers.Default) { prefs.sortStreams(mergedSources()) }
+                            updateStreamsDebounced { st ->
                                 st.copy(
-                                    stremioStreams = dropUncached(prefs.sortStreams(mergedSources()), st),
+                                    stremioStreams = dropUncached(merged, st),
                                     stremioLoading = sourcesPending(),
                                 )
                             }
@@ -440,9 +470,10 @@ class MovieDetailViewModel @Inject constructor(
                         srcJobs += launch {
                             val s = pluginService.getStreamsForPlugin(plugin, tmdbId, "movie")
                             pluginSlots[idx] = s
-                            _uiState.update { st ->
+                            val merged = withContext(Dispatchers.Default) { prefs.sortStreams(mergedSources()) }
+                            updateStreamsDebounced { st ->
                                 st.copy(
-                                    stremioStreams = dropUncached(prefs.sortStreams(mergedSources()), st),
+                                    stremioStreams = dropUncached(merged, st),
                                     stremioLoading = sourcesPending(),
                                 )
                             }
@@ -496,7 +527,10 @@ class MovieDetailViewModel @Inject constructor(
                 launch {
                     srcJobs.joinAll()
                     // Resumo para os selos do pôster (4K, HDR, Dolby, DUB), igual ao webOS.
-                    if (srcJobs.isNotEmpty()) posterInfo.remember(com.aotv.app.domain.model.MediaType.MOVIE, tmdbId, mergedSources())
+                    if (srcJobs.isNotEmpty()) {
+                        val all = withContext(Dispatchers.Default) { mergedSources() }
+                        posterInfo.remember(com.aotv.app.domain.model.MediaType.MOVIE, tmdbId, all)
+                    }
                     _uiState.update { it.copy(sourcesLoading = false) }
                 }
             } else {
@@ -652,6 +686,9 @@ class MovieDetailViewModel @Inject constructor(
 
     /** Busca nos addons as fontes do episódio selecionado, para o painel de fontes. */
     fun selectEpisode(season: Int, episode: Int) {
+        // Emissões adiadas do episódio anterior não podem cair no novo.
+        streamDebounceJob?.cancel()
+        probeDebounceJob?.cancel()
         // Stremio do episódio (HTTP/4K) — PROGRESSIVO por addon: cada um aparece assim que
         // responde, na ordem dos addons. Addon lento/morto não segura os que já chegaram
         // (antes o awaitAll esperava todos → até 10s de tela vazia ao trocar de episódio).
@@ -706,12 +743,13 @@ class MovieDetailViewModel @Inject constructor(
                     // Todos os addons responderam. O episódio também vale para o pôster da série.
                     maybeRememberPoster()
                     if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
-                    _uiState.update { st ->
+                    val merged = withContext(Dispatchers.Default) { prefs.sortStreams(mergedEpisodeSources()) }
+                    updateStreamsDebounced { st ->
                         if (st.selectedEpisode != (season to episode)) st
                         else st.copy(
                             // Ordem dos ADDONS (slots seguem o gerenciador) e, dentro de cada
                             // addon, maior qualidade primeiro.
-                            episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
+                            episodeStremioStreams = dropUncached(merged, st),
                             episodeStremioLoading = episodePending(),
                         )
                     }
@@ -727,10 +765,11 @@ class MovieDetailViewModel @Inject constructor(
                         pluginSlots[idx] = s
                         maybeRememberPoster()
                         if (_uiState.value.selectedEpisode == (season to episode)) verify(s)
-                        _uiState.update { st ->
+                        val merged = withContext(Dispatchers.Default) { prefs.sortStreams(mergedEpisodeSources()) }
+                        updateStreamsDebounced { st ->
                             if (st.selectedEpisode != (season to episode)) st
                             else st.copy(
-                                episodeStremioStreams = dropUncached(prefs.sortStreams(mergedEpisodeSources()), st),
+                                episodeStremioStreams = dropUncached(merged, st),
                                 episodeStremioLoading = episodePending(),
                                 episodePluginDone = pluginDone(),
                                 episodePluginTotal = plugins.size,

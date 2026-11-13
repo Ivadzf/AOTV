@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -45,10 +46,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.aotv.app.R
 import com.aotv.app.ui.theme.*
 
@@ -445,6 +448,8 @@ fun MediaPosterCard(
     imageBottom: Dp = 0.dp,
     /** Avisa quando a imagem carregou (a cor do pôster sai de uma leitura separada de 8×12 px). */
     onImage: ((android.graphics.drawable.Drawable) -> Unit)? = null,
+    /** Avisa quando a imagem NÃO carregou (a matiz cai para a leitura 8×12 do disco). */
+    onImageError: (() -> Unit)? = null,
     /** Desenhado por cima da arte (etiqueta, faixa e selos do pôster). */
     decor: (@Composable BoxScope.() -> Unit)? = null,
     /** Raio dos cantos, em dp (Fase B: configurável na página Layout, padrão 14dp). */
@@ -461,7 +466,7 @@ fun MediaPosterCard(
             .aspectRatio(aspectRatio)
             .shadow(if (focused) 18.dp else 0.dp, shape)
             .clip(shape)
-            .background(BackgroundCard2)
+            .background(Color.Black)
             .then(if (focused) Modifier.border(3.dp, FocusRing, shape) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .then(
@@ -471,20 +476,27 @@ fun MediaPosterCard(
                     Modifier.clickable(interactionSource = src, indication = null, role = Role.Button, onClick = onClick)
             ),
     ) {
-        // Sem imagem fica o nome no meio, como o .pc-fallback.
-        Text(
-            title, color = TextTertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.Center).padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 10.dp + imageBottom),
-        )
-        // A imagem exibida fica em bitmap de hardware (rápido p/ desenhar). A cor do pôster sai de
-        // uma leitura separada de 8×12 px (ver rememberPosterVisual), que nunca é desenhada.
-        val model: Any? = imageUrl
-        AsyncImage(
-            model = model, contentDescription = title, contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().padding(bottom = imageBottom),
-            onSuccess = onImage?.let { f -> { s: coil.compose.AsyncImagePainter.State.Success -> f(s.result.drawable) } },
-        )
+        // Sem imagem fica só a forma preta (sem texto, como o Nuvio).
+        // Tamanho explícito em px de exibição: a chave do cache de memória fica
+        // estável e o Coil não decodifica acima do que a tela mostra. A cor do
+        // pôster sai do bitmap exibido (ver rememberPosterVisual).
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = imageBottom)) {
+            val density = LocalDensity.current
+            val wPx = constraints.maxWidth.takeIf { it > 0 && it != Constraints.Infinity }
+                ?: with(density) { 108.dp.roundToPx() }
+            val hPx = constraints.maxHeight.takeIf { it > 0 && it != Constraints.Infinity }
+                ?: (wPx * 3 / 2)
+            val context = LocalContext.current
+            val request = remember(imageUrl, wPx, hPx) {
+                ImageRequest.Builder(context).data(imageUrl).size(wPx, hPx).build()
+            }
+            AsyncImage(
+                model = request, contentDescription = title, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                onSuccess = onImage?.let { f -> { s: coil.compose.AsyncImagePainter.State.Success -> f(s.result.drawable) } },
+                onError = onImageError?.let { f -> { _: coil.compose.AsyncImagePainter.State.Error -> f() } },
+            )
+        }
         if (!cleanPoster) {
             Box(
                 Modifier.fillMaxSize().background(

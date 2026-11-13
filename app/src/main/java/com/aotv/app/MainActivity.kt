@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -44,13 +45,16 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             // Paleta de cores (Fase A, Frente 3): publica a escolha salva no
-            // holder que os vals de Color.kt e o AotvTheme leem. O `if` evita
-            // escrever o State em toda recomposição — só quando a paleta muda.
+            // holder que os vals de Color.kt e o AotvTheme leem — FORA da
+            // composição, num efeito, para a escrita não invalidar a árvore.
             val paletteId by platformPrefs.themePalette.collectAsStateWithLifecycle()
             val palette = AotvPalette.fromId(paletteId)
-            if (currentPalette != palette) setCurrentPalette(palette)
+            LaunchedEffect(palette) { if (currentPalette != palette) setCurrentPalette(palette) }
             AotvTheme {
                 val deviceLayout = currentDeviceLayout(platformPrefs.platformMode)
+                // Estável entre recomposições: sem ele, o lambda novo a cada vez
+                // impedia o Compose de pular o MoviesNavigation no wrapper.
+                val onRestartApp = remember { { restartApp() } }
                 // 1ª abertura: nome do perfil + confirmar a plataforma detectada. Só uma vez.
                 var onboarding by rememberSaveable { mutableStateOf(!platformPrefs.onboarded) }
                 // Com mais de um perfil, celular e TV perguntam quem está assistindo ao abrir.
@@ -75,22 +79,35 @@ class MainActivity : ComponentActivity() {
                     }
                     return@AotvTheme
                 }
-                // Ranking e resumo das fontes, lidos uma vez aqui e entregues aos cartões por
-                // CompositionLocal — antes cada pôster abria dois coletores e uma tela cheia
-                // recompunha todos os cartões a cada resumo novo de qualquer título.
-                val posterRanks = posterInfo.ranks.collectAsStateWithLifecycle()
-                val posterQuality = posterInfo.quality.collectAsStateWithLifecycle()
-                androidx.compose.runtime.CompositionLocalProvider(
-                    com.aotv.app.ui.common.LocalPosterInfo provides posterInfo,
-                    LocalPosterRanks provides posterRanks,
-                    LocalPosterQuality provides posterQuality,
-                ) {
+                // Ranking e resumo das fontes, lidos num wrapper próprio e
+                // entregues aos cartões por CompositionLocal — antes cada emissão
+                // recompunha o setContent inteiro (tema + navegação). Agora a
+                // emissão só invalida este wrapper; o conteúdo é pulado quando
+                // os parâmetros não mudam.
+                PosterInfoScope(posterInfo) {
                     MoviesNavigation(
                         deviceLayout = deviceLayout,
-                        onRestartApp = { restartApp() },
+                        onRestartApp = onRestartApp,
                     )
                 }
             }
+        }
+    }
+
+    // Coleta ranks/quality isolada: cada emissão só recompõe este wrapper.
+    @androidx.compose.runtime.Composable
+    private fun PosterInfoScope(
+        posterInfo: com.aotv.app.data.local.PosterInfo,
+        content: @androidx.compose.runtime.Composable () -> Unit,
+    ) {
+        val posterRanks = posterInfo.ranks.collectAsStateWithLifecycle()
+        val posterQuality = posterInfo.quality.collectAsStateWithLifecycle()
+        androidx.compose.runtime.CompositionLocalProvider(
+            com.aotv.app.ui.common.LocalPosterInfo provides posterInfo,
+            LocalPosterRanks provides posterRanks,
+            LocalPosterQuality provides posterQuality,
+        ) {
+            content()
         }
     }
 

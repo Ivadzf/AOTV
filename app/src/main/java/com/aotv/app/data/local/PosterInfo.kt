@@ -95,6 +95,12 @@ class PosterInfo @Inject constructor(
     val ranks: StateFlow<DayRanks?> = _ranks.asStateFlow()
     private val _quality = MutableStateFlow<Map<String, SourceQuality>>(emptyMap())
     val quality: StateFlow<Map<String, SourceQuality>> = _quality.asStateFlow()
+    // True quando load() terminou de restaurar o que ficou salvo (ranks, tints e
+    // quality). Os cartões esperam isso antes de ler matiz do disco, para não
+    // dispararem a leitura 8×12 em rajada na abertura só porque o salvo ainda
+    // não chegou (a matiz inicial é lida antes do load terminar).
+    private val _tintsLoaded = MutableStateFlow(false)
+    val tintsLoaded: StateFlow<Boolean> = _tintsLoaded.asStateFlow()
 
     // Tudo abaixo só muda dentro de synchronized(lock).
     private var addonSig = ""
@@ -151,9 +157,20 @@ class PosterInfo @Inject constructor(
         checkAddons()
         val key = posterKey(type, tmdbId)
         val now = System.currentTimeMillis()
+        val freshSummary = summarize(list, now)
+        val old = _quality.value[key]
+        // Resumo idêntico e ainda fresco: não emite (cada emissão recompõe os
+        // cartões) nem recopia o mapa inteiro. Velho ou diferente, atualiza.
+        if (list.isNotEmpty() && old != null && old.fresh(now) && old.q == freshSummary.q &&
+            old.hdr == freshSummary.hdr && old.dolbyVision == freshSummary.dolbyVision &&
+            old.atmos == freshSummary.atmos && old.ptAudio == freshSummary.ptAudio && old.n == freshSummary.n
+        ) return
         _quality.update { m ->
-            val old = m[key]
-            if (list.isEmpty() && old != null && old.n > 0 && old.fresh(now)) m else m + (key to summarize(list, now))
+            val cur = m[key]
+            val kept = if (list.isEmpty() && cur != null && cur.n > 0 && cur.fresh(now)) m else m + (key to freshSummary)
+            // O mapa vivo tem o mesmo teto do salvamento (500 mais recentes):
+            // sem teto, cada emissão recopiava um mapa que só crescia.
+            if (kept.size > 500) kept.entries.sortedByDescending { it.value.at }.take(500).associate { it.key to it.value } else kept
         }
         synchronized(lock) {
             if (saveQualityJob?.isActive != true) saveQualityJob = scope.launch { delay(1500); saveQuality() }
@@ -248,6 +265,8 @@ class PosterInfo @Inject constructor(
     fun putTint(key: String, hue: Int) {
         synchronized(lock) {
             tints[key] = hue
+            // Teto também no mapa vivo (antes só o salvamento podava em 800).
+            while (tints.size > 800) tints.remove(tints.keys.first())
             if (saveTintJob?.isActive != true) saveTintJob = scope.launch { delay(2000); saveTints() }
         }
     }
@@ -289,6 +308,7 @@ class PosterInfo @Inject constructor(
             // O que chegou enquanto lia vale mais que o salvo.
             _quality.update { saved + it }
         }
+        _tintsLoaded.value = true
     }
 
     private companion object {

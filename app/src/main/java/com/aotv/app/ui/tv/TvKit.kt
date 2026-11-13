@@ -285,7 +285,9 @@ fun TvPoster(
         try { awaitCancellation() } finally { nearby.forEach(posterInfo::unwant) }
     }
     val context = LocalContext.current
-    val readColor = visual.onImage != null
+    // Só desliga o hardware bitmap quando a matiz ainda precisa ser lida do
+    // drawable exibido (onImage agora existe sempre, para marcar loaded).
+    val readColor = visual.huePending
     val image = remember(context, item.posterUrl, item.backdropUrl, readColor) {
         ImageRequest.Builder(context).data(item.posterUrl.ifBlank { item.backdropUrl })
             .apply { if (readColor) allowHardware(false) }.build()

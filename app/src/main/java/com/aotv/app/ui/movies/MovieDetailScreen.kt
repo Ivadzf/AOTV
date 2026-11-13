@@ -148,7 +148,9 @@ fun MovieDetailScreen(
     // Série terminada (último ep ≥90%) → sugere "Próximo seriado" (1ª série relacionada).
     val nextSeries = primary.nextSeries
 
-    // Ken Burns scale animation
+    // Ken Burns scale animation — parado com a folha de fontes aberta: a
+    // animação infinita recompõe o hero a cada quadro por baixo da folha.
+    val sheetOpen = state.selectedEpisode != null
     val infiniteTransition = rememberInfiniteTransition(label = "kenburns")
     val scale by infiniteTransition.animateFloat(
         initialValue = 1.08f,
@@ -228,7 +230,7 @@ fun MovieDetailScreen(
         // Fundo cinematográfico (Fase B, opt-in): arte desfocada em tela cheia
         // atrás da página. O LazyColumn não tem fundo próprio, então a arte aparece.
         if (cinematicBg && backdropUrl.isNotBlank()) {
-            CinematicBackdrop(backdropUrl)
+            CinematicBackdrop(backdropUrl, sheetOpen = sheetOpen)
         }
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -262,7 +264,9 @@ fun MovieDetailScreen(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .scale(scale),
+                                // Folha aberta: escala fixa — o valor animado não é
+                                // lido, então a recomposição por quadro para.
+                                .scale(if (sheetOpen) 1.08f else scale),
                         )
                     } else if (backdropUrl.isBlank()) {
                         // Sem arte: o gradiente azul escuro de antes. Com arte no modo
@@ -863,8 +867,9 @@ fun MovieDetailScreen(
                         contentPadding = PaddingValues(horizontal = pad),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(state.related, key = { it.tmdbId }) { rel ->
-                            com.aotv.app.ui.common.PosterCard(item = rel, onClick = { onRelatedClick(rel) }, modifier = Modifier.width(com.aotv.app.ui.common.posterWidth()))
+                        items(state.related, key = { rowKey(it) }) { rel ->
+                            val click = remember(rel) { { onRelatedClick(rel) } }
+                            com.aotv.app.ui.common.PosterCard(item = rel, onClick = click, modifier = Modifier.width(com.aotv.app.ui.common.posterWidth()))
                         }
                     }
                 }
@@ -1223,14 +1228,17 @@ private fun rememberSourceListData(
     // O limite reseta quando qualquer filtro muda (comportamento antigo).
     var limit by rememberSaveable(filter, showWrong, sourceFilter) { mutableStateOf(24) }
     val groups = remember(streams) { groupReleases(streams) }
-    val byUrl = facts.associateBy { it.url }
+    // Tudo abaixo é derivado com remember: antes, cada emissão do UiState
+    // (um probe, um addon) re-derivava as listas e criava listas novas, o
+    // que inutilizava até o remember(streams) do groupReleases.
+    val byUrl = remember(facts) { facts.associateBy { it.url } }
     fun fact(s: com.aotv.app.data.remote.StremioStream) = byUrl[s.url]
         ?: com.aotv.app.data.remote.SourceFacts(s.url, s.addon, s.releaseText.ifBlank { s.label }, s.qualityRank)
-    val wrongCount = groups.count { g -> g.members.all { fact(it).wrongTitle } }
-    val visible = groups.filter { g -> showWrong || g.members.any { !fact(it).wrongTitle } }
-    val counts = SRC_FILTERS.associate { (k, _, fn) -> k to visible.count { g -> g.members.any { fn(fact(it)) } } }
-    val predicate = SRC_FILTERS.firstOrNull { it.first == filter }?.third ?: { true }
-    val langFiltered = visible.filter { g -> g.members.any { predicate(fact(it)) } }
+    val wrongCount = remember(groups, facts) { groups.count { g -> g.members.all { fact(it).wrongTitle } } }
+    val visible = remember(groups, facts, showWrong) { groups.filter { g -> showWrong || g.members.any { !fact(it).wrongTitle } } }
+    val counts = remember(visible, facts) { SRC_FILTERS.associate { (k, _, fn) -> k to visible.count { g -> g.members.any { fn(fact(it)) } } } }
+    val predicate = remember(filter) { SRC_FILTERS.firstOrNull { it.first == filter }?.third ?: { true } }
+    val langFiltered = remember(visible, facts, predicate) { visible.filter { g -> g.members.any { predicate(fact(it)) } } }
     // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
     // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
     fun playable(group: ReleaseGroup) =
@@ -1238,18 +1246,24 @@ private fun rememberSourceListData(
     fun addonOf(group: ReleaseGroup) =
         fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
     // Fontes presentes (dentro do filtro de idioma), ordenadas pelo melhor stream.
-    val sources = langFiltered.groupBy(::addonOf).entries
-        .sortedByDescending { (_, gs) -> gs.maxOf { fact(playable(it)).rank } }
-        .map { it.key to it.value.size }
-    val filtered = if (sourceFilter.isEmpty()) langFiltered
+    val sources = remember(langFiltered, facts) {
+        langFiltered.groupBy(::addonOf).entries
+            .sortedByDescending { (_, gs) -> gs.maxOf { fact(playable(it)).rank } }
+            .map { it.key to it.value.size }
+    }
+    val filtered = remember(langFiltered, facts, sourceFilter) {
+        if (sourceFilter.isEmpty()) langFiltered
         else langFiltered.filter { addonOf(it) == sourceFilter }
+    }
     // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
     // O limite ("Mostrar mais") corta antes de agrupar, então ele continua valendo no total.
-    val shown = filtered.take(limit)
-    val sections = shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
-        gs.maxOf { fact(playable(it)).rank }
+    val shown = remember(filtered, limit) { filtered.take(limit) }
+    val sections = remember(shown, facts) {
+        shown.groupBy(::addonOf).entries.sortedByDescending { (_, gs) ->
+            gs.maxOf { fact(playable(it)).rank }
+        }
     }
-    val best = facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url
+    val best = remember(facts) { facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url }
     return SourceListData(
         groups = groups, streamCount = streams.size, wrongCount = wrongCount,
         visible = visible, counts = counts, sources = sources,
@@ -1290,7 +1304,11 @@ private fun SourceCardRow(
         row.forEach { group ->
             val source = data.playable(group)
             val f = data.fact(source)
-            var info = releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
+            // parseSourceLabel + ~10 regexes por linha: memorizado por URL
+            // (antes rodava em toda linha visível, a cada recomposição).
+            var info = remember(source.url, mediaTitle, f.probe?.height) {
+                releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
+            }
             if (source.qualityRank == 0 && (f.probe?.height ?: 0) > 0) info = info.copy(quality = com.aotv.app.data.remote.heightLabel(f.probe!!.height))
             val note = when { f.wrongTitle -> "Parece ser outro filme com nome parecido"; f.dead -> "Não respondeu no teste agora"; else -> null }
             val (tag, color) = when {
@@ -1920,7 +1938,16 @@ private fun SmallPlayBtn(label: String, accentColor: Color, onClick: () -> Unit,
 // escurecida — sem blur, sem biblioteca nova. A escala 1.18 cobre as bordas
 // que o blur deixaria transparentes.
 @Composable
-private fun CinematicBackdrop(backdropUrl: String) {
+private fun CinematicBackdrop(backdropUrl: String, sheetOpen: Boolean = false) {
+    // RenderEffect criado 1× (antes era criado dentro do graphicsLayer a cada
+    // recomposição). Com a folha aberta o blur nem é aplicado.
+    val blur = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP).asComposeRenderEffect()
+        } else {
+            null
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         AsyncImage(
             model = backdropUrl,
@@ -1930,10 +1957,8 @@ private fun CinematicBackdrop(backdropUrl: String) {
                 .fillMaxSize()
                 .scale(1.18f)
                 .then(
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        Modifier.graphicsLayer {
-                            renderEffect = RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP).asComposeRenderEffect()
-                        }
+                    if (blur != null && !sheetOpen) {
+                        Modifier.graphicsLayer { renderEffect = blur }
                     } else Modifier
                 ),
         )
