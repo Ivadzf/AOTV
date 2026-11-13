@@ -1099,7 +1099,7 @@ private fun ReproducaoPage(
                 grouped = true,
             )
             com.aotv.app.ui.common.SettingsRow(
-                icon = Icons.Default.Swipe,
+                icon = Icons.Default.SwapHoriz,
                 title = "Deslizar para avançar/retroceder",
                 sub = if (swipeSeek) "Deslizar sobre o vídeo avança ou retrocede 10s"
                     else "Deslizar sobre o vídeo não busca",
