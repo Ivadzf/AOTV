@@ -129,6 +129,28 @@ class PlayerProgressViewModel @Inject constructor(
         return runCatching { library.getPlayback(tmdbId, type)?.lastAddon }.getOrNull().orEmpty()
     }
 
+    // ── Última fonte escolhida à mão por título (Lote 4 item 6, v1.12.0) ────
+    // Identidade estável = addon + qualidade (o rótulo muda a cada episódio e a
+    // URL resolvida muda a cada busca, então nenhum dos dois serve de chave —
+    // ver [pickPreferredSource]). NUNCA guarda URL (token/assinatura).
+    // LER é liberado no modo privado (só lê uma pref, como a posição salva);
+    // GRAVAR é bloqueado, como todo o resto que o modo privado impede.
+
+    /** Última fonte escolhida à mão neste título, ou null (sem escolha ou pref desligada). */
+    fun lastSourcePick(tmdbId: Int, type: String): com.aotv.app.data.local.LastSourcePick? {
+        if (tmdbId <= 0 || !prefs.playerReuseLastSource) return null
+        return prefs.lastSourcePicks["$type:$tmdbId"]
+    }
+
+    /** Grava a escolha à mão da fonte do título. No-op no modo privado, com a pref desligada ou sem addon. */
+    fun saveLastSourcePick(tmdbId: Int, type: String, addon: String, qualityRank: Int) {
+        if (privateMode || !prefs.playerReuseLastSource) return
+        if (tmdbId <= 0 || addon.isBlank()) return
+        val all = prefs.lastSourcePicks.toMutableMap()
+        all["$type:$tmdbId"] = com.aotv.app.data.local.LastSourcePick(addon, qualityRank, System.currentTimeMillis())
+        prefs.lastSourcePicks = all
+    }
+
     /**
      * Posição salva deste conteúdo, ou 0.
      *

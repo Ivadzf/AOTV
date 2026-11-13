@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.SubLangs
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 
@@ -21,6 +23,7 @@ fun playerButtonLabel(id: String): String = when (id) {
     "pin" -> "Fixar fonte"
     "skip" -> "Pular abertura"
     "color" -> "Cor"
+    "info" -> "Infos técnicas"
     else -> id
 }
 
@@ -135,9 +138,42 @@ class PlayerPrefsViewModel @Inject constructor(
     val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
     fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }
 
+    // ── Lote 4 — Player parte 2 (v1.12.0) ────────────────────────────────────
+    // Idiomas preferidos de áudio/legenda + reutilizar a última fonte do título.
+
+    /**
+     * Idioma preferido da faixa de ÁUDIO (código SubLangs, ex. "pob", "eng";
+     * padrão "pob"). O player usa a família ISO 639-1 dele no ExoPlayer e
+     * escolhe a faixa nesse idioma ao abrir o vídeo. Valor desconhecido volta
+     * p/ "pob" (mesmo comportamento de antes, que era "pt" fixo).
+     */
+    val audioLang: StateFlow<String> = prefs.playerAudioLangFlow
+    fun setAudioLang(v: String) { prefs.playerAudioLang = v }
+
+    /**
+     * Idioma preferido da LEGENDA. A pref já existia (`pref_sub_lang`, por
+     * perfil, no PlatformPrefs) e o pickAutoSub já a usava; aqui ela só ganha
+     * o mesmo acesso do PlayerPrefsViewModel que o áudio, p/ a tela do player
+     * e as Configurações lerem as duas no mesmo lugar. O fluxo local espelha
+     * o valor guardado (mesmo padrão do SettingsViewModel).
+     */
+    private val _subLang = MutableStateFlow(prefs.subLang)
+    val subLang: StateFlow<String> = _subLang
+    fun setSubLang(v: String) {
+        val clean = v.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
+        prefs.subLang = clean; _subLang.value = clean
+    }
+
+    /** Reutilizar a última fonte escolhida à mão em cada título (padrão ligado). */
+    val reuseLastSource: StateFlow<Boolean> = prefs.playerReuseLastSourceFlow
+    fun setReuseLastSource(v: Boolean) { prefs.playerReuseLastSource = v }
+
     /** Modo privado do perfil (Lote 2, v1.10.0): assistir sem gravar nada. */
     val privateMode: StateFlow<Boolean> = prefs.privateModeFlow
     fun setPrivateMode(v: Boolean) { prefs.privateMode = v }
+
+    /** Blur/vidro fosco nos painéis do player (Lote 4, v1.12.0): mesma pref `pref_panel_blur` do detalhe. */
+    val panelBlur: StateFlow<Boolean> = prefs.panelBlurFlow
 
     /** Cor do texto da legenda (ARGB; branco por padrão). v1.9.0. */
     val subColor: StateFlow<Int> = prefs.subColorFlow
@@ -186,4 +222,12 @@ class PlayerPrefsViewModel @Inject constructor(
 
     val colorDaltonism: StateFlow<String> = prefs.playerColorDaltonismFlow
     fun setColorDaltonism(v: String) { prefs.playerColorDaltonism = v }
+
+    /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno) ou "external". */
+    val engine: StateFlow<String> = prefs.playerEngineFlow
+    fun setEngine(v: String) { prefs.playerEngine = if (v == "external") "external" else "exoplayer" }
+
+    /** Decoder de vídeo do perfil (Lote 4, v1.12.0): "hw" ou "hw_fallback". */
+    val decoder: StateFlow<String> = prefs.playerDecoderFlow
+    fun setDecoder(v: String) { prefs.playerDecoder = if (v == "hw_fallback") "hw_fallback" else "hw" }
 }

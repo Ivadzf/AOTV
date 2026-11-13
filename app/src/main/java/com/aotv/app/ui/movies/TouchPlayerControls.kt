@@ -1,5 +1,7 @@
 package com.aotv.app.ui.movies
 
+import android.os.Build
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -26,7 +28,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,6 +48,8 @@ internal fun TouchPlayerControls(
     actions: List<PlayerChipItem>, focusedIndex: Int,
     /** Tocar na barra busca (pref `playerTapSeek`). Desligado, só o arraste busca. */
     tapSeek: Boolean = true,
+    /** Vidro fosco/blur nas folhas do player (pref `pref_panel_blur`, Lote 4). */
+    panelBlur: Boolean = true,
 ) {
     var more by remember { mutableStateOf(false) }
     var controlsHeight by remember { mutableFloatStateOf(0f) }
@@ -148,7 +154,12 @@ internal fun TouchPlayerControls(
         }
     }
     if (more) ModalBottomSheet(onDismissRequest = { more = false }, containerColor = BackgroundElevated,
+        // Lote 4: com o toggle ligado o scrim é leve (0.32) p/ o blur da janela
+        // aparecer; desligado (ou abaixo do Android 12, sem blur) o scrim mais
+        // escuro (0.6) faz o papel de fallback fosco.
+        scrimColor = if (panelBlur) Color.Black.copy(alpha = 0.32f) else Color.Black.copy(alpha = 0.6f),
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        SheetWindowBlur(panelBlur)
         Text("Reprodução", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 22.sp,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
@@ -156,6 +167,29 @@ internal fun TouchPlayerControls(
             items(options) { (_, action) ->
                 TouchPlayerAction(action.copy(onRun = { more = false; action.onRun() }), false, Modifier.fillMaxWidth())
             }
+        }
+    }
+}
+
+/**
+ * Blur da janela do ModalBottomSheet (Lote 4, v1.12.0): o RenderEffect do
+ * Compose não atravessa janelas, então o desfoque atrás da folha "Mais
+ * opções" usa o blurBehindRadius da janela (API 31+). Melhor esforço: a
+ * OEM pode ignorar o efeito. Abaixo do Android 12 o scrim mais escuro
+ * (0.6, no ModalBottomSheet acima) faz o papel de fallback. Respeita o
+ * toggle `pref_panel_blur` (só chama com ele ligado).
+ */
+@Composable
+private fun SheetWindowBlur(enabled: Boolean) {
+    if (!enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    val view = LocalView.current
+    SideEffect {
+        val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+        runCatching {
+            window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+            val attrs = window.attributes
+            attrs.blurBehindRadius = 24
+            window.attributes = attrs
         }
     }
 }

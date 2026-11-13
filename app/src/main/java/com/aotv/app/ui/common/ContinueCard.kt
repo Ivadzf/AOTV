@@ -50,6 +50,13 @@ fun ContinueCard(
     onLongClick: (() -> Unit)? = null,
     /** Modo compacto (Fase B): card mais estreito. */
     compact: Boolean = false,
+    /**
+     * Vidro fosco (Lote 4): com o toggle `pref_panel_blur` ligado, o fundo
+     * fica translúcido (0.78) em vez de opaco — o conteúdo atrás aparece
+     * através do card. Blur real não alcança aqui: o RenderEffect desfoca
+     * o próprio conteúdo, não o que está atrás. Funciona em qualquer API.
+     */
+    frosted: Boolean = false,
 ) {
     val width = continueCardWidth(compact)
     val font = LocalDensity.current.fontScale.coerceAtLeast(1f)
@@ -72,7 +79,7 @@ fun ContinueCard(
         else -> ""
     }
     Row(
-        Modifier.width(width).height(height).clip(shape).background(BackgroundCard)
+        Modifier.width(width).height(height).clip(shape).background(frostedColor(frosted, BackgroundCard))
             .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Border, shape)
             .onFocusChanged { focused = it.isFocused }
             .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick),

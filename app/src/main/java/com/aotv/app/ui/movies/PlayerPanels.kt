@@ -75,9 +75,11 @@ internal fun PlayerActionPanel(
     onPick: (TvPlayerAction) -> Unit,
     onDismiss: () -> Unit,
     television: Boolean = false,
+    /** Vidro fosco (Lote 4): painel translúcido com o toggle `pref_panel_blur` ligado. */
+    frosted: Boolean = false,
 ) {
-    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true) }
-    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false)
+    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true, frosted) }
+    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false, frosted)
 }
 
 @Composable
@@ -91,6 +93,7 @@ private fun PlayerActionPanelBody(
     onPick: (TvPlayerAction) -> Unit,
     onDismiss: () -> Unit,
     television: Boolean,
+    frosted: Boolean = false,
 ) {
     val sourceCount = actions.count { it.isSource }
     val shortWindow = !television && androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
@@ -101,6 +104,9 @@ private fun PlayerActionPanelBody(
         // Título maior e pill "Fechar", como os painéis do Nuvio.
         titleSize = 26.sp,
         dismissLabel = "Fechar",
+        // Lote 4: vidro fosco no painel de fontes (e nos demais painéis do
+        // player, que usam o mesmo SidePanel) com o toggle ligado.
+        frosted = frosted,
         // A frase de fonte só vale no painel de fontes. Legendas e Áudio ganham a dica das teclas.
         sub = when {
             !showCount && television -> "Setas escolhem, OK aplica, Voltar fecha"

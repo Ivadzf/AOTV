@@ -439,6 +439,8 @@ private fun HomeSectionsTab(
 ) {
     val listState = rememberLazyListState()
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
+    // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
+    val panelBlurOn by hiltViewModel<DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
     // Modo aleatório (Lote 2): o sorteio abre DIRETO no player quando sai;
     // sem série elegível, mostra o estado vazio em diálogo (não trava).
     val randomState by randomVm.state.collectAsStateWithLifecycle()
@@ -514,36 +516,8 @@ private fun HomeSectionsTab(
                 }
             }
         }
-        // Descobrir saiu da barra (Fase A, pílula de 4 abas): a entrada fica aqui,
-        // no topo da Início.
-        item(key = "discover_entry") {
-            Row(
-                Modifier.fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(BackgroundCard)
-                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDiscoverClick)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Icon(Icons.Default.Explore, null, tint = TextPrimary, modifier = Modifier.size(24.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Descobrir", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
-                        fontWeight = FontWeight.SemiBold)
-                    Text("Explorar o catálogo por gênero e novidades", color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
-                }
-                Icon(Icons.Default.ChevronRight, "Abrir Descobrir", tint = TextTertiary, modifier = Modifier.size(22.dp))
-            }
-        }
-        // Modo aleatório (Lote 2): entrada visível no topo da Início, mesmo sem
-        // nada no Continuar assistindo. Tocar sorteia e abre direto no player.
-        item(key = "random_episode") {
-            RandomEpisodeEntry(
-                rolling = randomState is RandomEpisodeViewModel.RandomState.Rolling,
-                onRoll = { randomVm.roll() },
-            )
-        }
+        // (Lote 4, Correção B): Descobrir e Surpreenda-me NÃO ficam mais aqui,
+        // acima do herói — foram p/ o fim da Início (depois das fileiras).
         if (heroItems.isNotEmpty()) {
             item(key = "hero") {
                 // Trailer só com a Início no topo. Rolou, parou o trailer.
@@ -561,7 +535,7 @@ private fun HomeSectionsTab(
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
-                    ContinueRow(row.displayTitle, state, onItemClick, display)
+                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn)
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
@@ -623,6 +597,39 @@ private fun HomeSectionsTab(
                 }
             }
         }
+        // ── Fim da Início (Lote 4, Correção B) ──────────────────────────────
+        // Descobrir e Surpreenda-me estavam acima do herói e incomodavam:
+        // agora ficam aqui, depois de todas as fileiras. Mesma navegação de
+        // antes (Descobrir abre o catálogo; Surpreenda-me sorteia e abre
+        // direto no player). O Surpreenda-me continua também na Biblioteca.
+        item(key = "discover_entry") {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(BackgroundCard)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDiscoverClick)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Icon(Icons.Default.Explore, null, tint = TextPrimary, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Descobrir", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Text("Explorar o catálogo por gênero e novidades", color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                Icon(Icons.Default.ChevronRight, "Abrir Descobrir", tint = TextTertiary, modifier = Modifier.size(22.dp))
+            }
+        }
+        // Modo aleatório (Lote 2): entrada visível mesmo sem nada no Continuar
+        // assistindo. Tocar sorteia e abre direto no player.
+        item(key = "random_episode") {
+            RandomEpisodeEntry(
+                rolling = randomState is RandomEpisodeViewModel.RandomState.Rolling,
+                onRoll = { randomVm.roll() },
+            )
+        }
         if (heroItems.isEmpty() && state.layout.isEmpty()) item(key = "empty") {
             com.aotv.app.ui.common.AotvEmptyState(
                 Icons.Default.MovieFilter, "Sua Início está vazia",
@@ -674,9 +681,10 @@ private fun HeroTitle(title: String, compact: Boolean = false) {
 }
 
 /**
- * Entrada do Modo aleatório (Lote 2, v1.10.0): cartão "Surpreenda-me" no topo
- * da Início (e o mesmo na Biblioteca). Tocar sorteia um episódio das séries do
- * Continuar assistindo + Minha Lista e abre direto no player.
+ * Entrada do Modo aleatório (Lote 2, v1.10.0): cartão "Surpreenda-me" no fim
+ * da Início (Lote 4: estava acima do herói) e o mesmo na Biblioteca. Tocar
+ * sorteia um episódio das séries do Continuar assistindo + Minha Lista e
+ * abre direto no player.
  */
 @Composable
 fun RandomEpisodeEntry(
@@ -713,6 +721,8 @@ private fun ContinueRow(
     state: MoviesHomeViewModel.UiState,
     onItemClick: (MovieItem) -> Unit,
     display: HomeDisplayPrefs = HomeDisplayPrefs(),
+    /** Vidro fosco nos cartões (Lote 4): toggle `pref_panel_blur`. */
+    frosted: Boolean = false,
 ) {
     Column {
         com.aotv.app.ui.common.SectionHeader(
@@ -725,7 +735,7 @@ private fun ContinueRow(
                 com.aotv.app.ui.common.ContinueCard(item, click,
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
-                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact)
+                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact, frosted = frosted)
             }
         }
     }

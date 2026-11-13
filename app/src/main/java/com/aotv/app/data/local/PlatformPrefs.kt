@@ -16,6 +16,15 @@ enum class PlatformMode { AUTO, TV, PHONE }
 data class ExtAudioPick(val sig: String, val delaySec: Double, val at: Long)
 
 /**
+ * Última fonte ESCOLHIDA À MÃO num título (Lote 4 item 6, v1.12.0).
+ * Identidade estável = addon + qualidade (ver [pickPreferredSource] no player:
+ * o rótulo muda a cada episódio e a URL muda a cada resolve). NUNCA guarda a
+ * URL: links de addon costumam trazer token/assinatura com validade curta e
+ * não podem ficar persistidos. [at] é p/ cortar os títulos mais velhos.
+ */
+data class LastSourcePick(val addon: String, val qualityRank: Int, val at: Long)
+
+/**
  * Um addon Stremio instalado. A ordem da lista é a prioridade (o 1º é tentado primeiro).
  * [id] é o id do manifest, serve para reconhecer o mesmo addon com URL configurada diferente.
  */
@@ -77,8 +86,13 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_auto_next", "pref_player_auto_next_delay",
     "pref_player_auto_switch", "pref_player_source_timeout",
     "pref_player_animeskip_client_id", "pref_player_speed", "pref_player_swipe_seek",
+    // Lote 4 — Player parte 2 (v1.12.0): idioma de áudio preferido, reutilizar
+    // a última fonte do título e o mapa da última fonte escolhida por título.
+    "pref_player_audio_lang", "pref_player_reuse_last_source", "last_source_v1",
     "pref_player_color_brightness", "pref_player_color_contrast", "pref_player_color_saturation",
     "pref_player_color_hue", "pref_player_color_preset", "pref_player_color_daltonism",
+    // Lote 4 — motor do player (v1.12.0): player padrão (interno/externo) e decoder.
+    "pref_player_engine", "pref_player_decoder",
     // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
     "pref_detail_original_title",
     // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
@@ -732,6 +746,30 @@ class PlatformPrefs @Inject constructor(
         get() = _playerColorDaltonism.value
         set(value) { prefs.edit().putString(sk("pref_player_color_daltonism"), value).apply(); _playerColorDaltonism.value = value }
 
+    // ── Motor do player (Lote 4, v1.12.0) — por perfil ─────────────────────
+    // Player padrão: "exoplayer" (interno) ou "external" (abre o link
+    // resolvido num player instalado, via ACTION_VIEW + seletor do sistema).
+    // Libmpv NÃO entra aqui: sem artefato Maven Central (ver PlayerEngine.kt).
+
+    private val _playerEngine = MutableStateFlow(prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer")
+    /** Player padrão do perfil ("exoplayer" ou "external"). */
+    val playerEngineFlow: StateFlow<String> = _playerEngine.asStateFlow()
+    var playerEngine: String
+        get() = _playerEngine.value
+        set(value) { prefs.edit().putString(sk("pref_player_engine"), value).apply(); _playerEngine.value = value }
+
+    // Decoder de vídeo: "hw" (só hardware) ou "hw_fallback" (tenta outro
+    // decoder de plataforma se o de hardware falhar ao iniciar). NÃO há
+    // modo SW: exigiria a extensão FFmpeg do Media3, não incluída
+    // (ver DecoderMode em PlayerEngine.kt).
+
+    private val _playerDecoder = MutableStateFlow(prefs.getString(sk("pref_player_decoder"), "hw") ?: "hw")
+    /** Decoder de vídeo do perfil ("hw" ou "hw_fallback"). Vale a partir da próxima reprodução. */
+    val playerDecoderFlow: StateFlow<String> = _playerDecoder.asStateFlow()
+    var playerDecoder: String
+        get() = _playerDecoder.value
+        set(value) { prefs.edit().putString(sk("pref_player_decoder"), value).apply(); _playerDecoder.value = value }
+
     private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
     /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
     val playerVolBoostFlow: StateFlow<Boolean> = _playerVolBoost.asStateFlow()
@@ -787,6 +825,37 @@ class PlatformPrefs @Inject constructor(
     var playerAnimeSkipClientId: String
         get() = _playerAnimeSkipClientId.value
         set(value) { prefs.edit().putString(sk("pref_player_animeskip_client_id"), value).apply(); _playerAnimeSkipClientId.value = value }
+
+    // ── Idiomas preferidos de áudio/legenda do player (Lote 4 item 7, v1.12.0) ──
+    // Áudio: código do OpenSubtitles (ver [SubLangs], mesma lista da legenda) — o
+    // player usa a família ISO 639-1 dele ("pob" → "pt") no ExoPlayer. A legenda
+    // já tinha a pref (`pref_sub_lang`, `subLang`); o áudio era "pt" FIXO na
+    // criação do ExoPlayer. Padrão "pob" = mesmo comportamento de antes.
+
+    private val _playerAudioLang = MutableStateFlow(
+        prefs.getString(sk("pref_player_audio_lang"), null)?.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT,
+    )
+    /** Idioma preferido da faixa de áudio (código SubLangs, ex. "pob", "eng"). */
+    val playerAudioLangFlow: StateFlow<String> = _playerAudioLang.asStateFlow()
+    var playerAudioLang: String
+        get() = _playerAudioLang.value
+        set(value) {
+            val clean = value.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
+            prefs.edit().putString(sk("pref_player_audio_lang"), clean).apply(); _playerAudioLang.value = clean
+        }
+
+    // ── Reutilizar a última fonte do título (Lote 4 item 6, v1.12.0) ──────────
+    // Ligado, o player abre o título na última fonte escolhida À MÃO nele
+    // (addon + qualidade, ver [LastSourcePick]) quando ela ainda existe na
+    // lista; sem ela, cai no comportamento atual sem erro. Desligado, nem
+    // grava nem lê a escolha. Padrão ligado.
+
+    private val _playerReuseLastSource = MutableStateFlow(prefs.getBoolean(sk("pref_player_reuse_last_source"), true))
+    /** Reutilizar a última fonte escolhida à mão em cada título. */
+    val playerReuseLastSourceFlow: StateFlow<Boolean> = _playerReuseLastSource.asStateFlow()
+    var playerReuseLastSource: Boolean
+        get() = _playerReuseLastSource.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_reuse_last_source"), value).apply(); _playerReuseLastSource.value = value }
 
     // ── Modo privado (Lote 2, v1.10.0) — por perfil ─────────────────────────
     // Ligado, assistir não grava nada: nem progresso (poll do player, saída
@@ -995,6 +1064,28 @@ class PlatformPrefs @Inject constructor(
             val o = org.json.JSONObject()
             value.forEach { (k, p) -> o.put(k, org.json.JSONObject().put("s", p.sig).put("d", p.delaySec).put("t", p.at)) }
             prefs.edit().putString(sk("ext_audio_v1"), o.toString()).apply()
+        }
+
+    /**
+     * Última fonte escolhida À MÃO por título (Lote 4 item 6, v1.12.0), chave
+     * "TIPO:tmdbId". Guarda SÓ addon + qualidade — nunca a URL (token/assinatura).
+     * No máximo 60 títulos (os mais recentes); o resto cai no cortar por [LastSourcePick.at].
+     * Por perfil (SCOPED_KEYS "last_source_v1"). Quem grava é o
+     * PlayerProgressViewModel, que já bloqueia no modo privado.
+     */
+    var lastSourcePicks: Map<String, LastSourcePick>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(sk("last_source_v1"), null) ?: "{}")
+            o.keys().asSequence().associateWith { k ->
+                val v = o.getJSONObject(k)
+                LastSourcePick(v.optString("a"), v.optInt("q", 0), v.optLong("t", 0L))
+            }.filterValues { it.addon.isNotBlank() }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val kept = value.entries.sortedByDescending { it.value.at }.take(60)
+            val o = org.json.JSONObject()
+            kept.forEach { (k, p) -> o.put(k, org.json.JSONObject().put("a", p.addon).put("q", p.qualityRank).put("t", p.at)) }
+            prefs.edit().putString(sk("last_source_v1"), o.toString()).apply()
         }
 
     /**
@@ -1419,6 +1510,8 @@ class PlatformPrefs @Inject constructor(
         _playerColorHue.value = prefs.getFloat(sk("pref_player_color_hue"), 0f)
         _playerColorPreset.value = prefs.getString(sk("pref_player_color_preset"), "padrao") ?: "padrao"
         _playerColorDaltonism.value = prefs.getString(sk("pref_player_color_daltonism"), "off") ?: "off"
+        _playerEngine.value = prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer"
+        _playerDecoder.value = prefs.getString(sk("pref_player_decoder"), "hw") ?: "hw"
         _subColor.value = prefs.getInt(sk("sub_color"), -1)
         _subBgOpacity.value = prefs.getFloat(sk("sub_bg_opacity"), 0.78f)
         _subOutline.value = prefs.getBoolean(sk("sub_outline"), true)
@@ -1431,6 +1524,9 @@ class PlatformPrefs @Inject constructor(
         _playerAutoSwitch.value = prefs.getBoolean(sk("pref_player_auto_switch"), true)
         _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
         _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
+        _playerAudioLang.value =
+            prefs.getString(sk("pref_player_audio_lang"), null)?.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
+        _playerReuseLastSource.value = prefs.getBoolean(sk("pref_player_reuse_last_source"), true)
         _privateMode.value = prefs.getBoolean(sk("pref_private_mode"), false)
         _randomIncludeContinue.value = prefs.getBoolean(sk("pref_random_include_continue"), true)
         _randomIncludeWatchlist.value = prefs.getBoolean(sk("pref_random_include_watchlist"), true)

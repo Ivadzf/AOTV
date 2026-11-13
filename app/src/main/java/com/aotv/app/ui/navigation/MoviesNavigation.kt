@@ -660,6 +660,10 @@ fun MoviesNavigation(
     val profiles by profVm.profiles.collectAsStateWithLifecycle()
     val pid by profVm.profileId.collectAsStateWithLifecycle()
     val profile = profiles.firstOrNull { it.id == pid } ?: profiles.first()
+    // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
+    // "Gota" do Davi = esta pílula flutuante de navegação (formato de
+    // pílula/gota, embaixo da tela) + o mini player acima dela.
+    val panelBlurOn by androidx.hilt.navigation.compose.hiltViewModel<com.aotv.app.ui.movies.DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
 
     // Foco da TV. Cada tela nova recebe o foco no conteúdo e Voltar na Início vai ao menu e
     // depois pergunta se quer sair, igual ao back() do webOS.
@@ -819,6 +823,7 @@ fun MoviesNavigation(
                             val id = com.aotv.app.ui.movies.MiniPlayerState.playId
                             if (id >= 0) navController.navigate(MoviesRoute.Player.create(id))
                         },
+                        frosted = panelBlurOn,
                     )
                 }
                 MoviesBottomBar(
@@ -827,6 +832,7 @@ fun MoviesNavigation(
                     profile = profile,
                     profilesRoute = MoviesRoute.Profiles.route,
                     onProfile = { navTab(MoviesRoute.Profiles.route) },
+                    frosted = panelBlurOn,
                 )
             }
         }
@@ -898,13 +904,21 @@ private fun MoviesBottomBar(
     profile: com.aotv.app.data.local.Profile,
     profilesRoute: String,
     onProfile: () -> Unit,
+    /**
+     * Vidro fosco (Lote 4): com o toggle `pref_panel_blur` ligado, a pílula
+     * ("gota") fica mais translúcida (0.62 em vez de 0.72) p/ o conteúdo
+     * aparecer através dela. Blur real não alcança aqui: o RenderEffect
+     * desfoca o próprio conteúdo (ícones inclusos), não o que está atrás
+     * da barra. Funciona em qualquer API.
+     */
+    frosted: Boolean = false,
 ) {
     // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
     // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
     // próprio conteúdo (ícones inclusos), não o que está atrás da barra.
     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
         .shadow(16.dp, MaterialTheme.shapes.extraLarge)
-        .clip(MaterialTheme.shapes.extraLarge).background(com.aotv.app.ui.theme.GlassBg)
+        .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.62f) else com.aotv.app.ui.theme.GlassBg)
         .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
         .padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         items.forEach { item ->
@@ -966,6 +980,8 @@ private fun MinhaListaScreen(
     val watchlist by vm.watchlist.collectAsStateWithLifecycle()
     val recent by vm.recentlyPlayed.collectAsStateWithLifecycle()
     val recentArtwork by vm.recentArtwork.collectAsStateWithLifecycle()
+    // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
+    val panelBlurOn by androidx.hilt.navigation.compose.hiltViewModel<com.aotv.app.ui.movies.DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
     // Calendário (Lote 2, item 6): carrega 1x ao abrir a Biblioteca; o "Atualizar"
     // da seção força a releitura (o cache de detalhe tem TTL de 6h).
     val calendar by vm.calendar.collectAsStateWithLifecycle()
@@ -1122,6 +1138,7 @@ private fun MinhaListaScreen(
                                 episode = h.lastEpisode,
                                 progress = pct,
                                 onLongClick = { pendingRemove = h }, // segurar → remover
+                                frosted = panelBlurOn,
                             )
                         }
                     }

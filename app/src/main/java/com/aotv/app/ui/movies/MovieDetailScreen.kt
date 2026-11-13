@@ -80,6 +80,7 @@ import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.AotvPrimaryButton
+import com.aotv.app.ui.common.FrostedScrim
 import com.aotv.app.ui.common.blurBehind
 import com.aotv.app.ui.common.rememberPanelBlurEffect
 import com.aotv.app.ui.common.pressScale
@@ -187,7 +188,8 @@ fun MovieDetailScreen(
 
     // Blur nos painéis (Lote 3 item 4, v1.11.0): com uma folha aberta (fontes
     // ou filmografia), o conteúdo da página atrás dela é desfocado. O efeito
-    // é criado 1x; abaixo do Android 12 ele é null e não há blur (só o scrim).
+    // é criado 1x; abaixo do Android 12 ele é null e o fallback é o scrim
+    // fosco ([FrostedScrim], Lote 4) — o toggle continua valendo lá.
     val panelBlurOn by detailPrefs.panelBlur.collectAsStateWithLifecycle()
     val panelBlurEffect = rememberPanelBlurEffect()
     val blurBehindSheets = panelBlurOn && panelBlurEffect != null &&
@@ -1060,6 +1062,10 @@ fun MovieDetailScreen(
 
             item { Spacer(Modifier.height(28.dp)) }
         }
+        // Fallback < Android 12 (Lote 4): sem RenderEffect, o scrim fosco
+        // escurece o conteúdo atrás da folha quando o toggle está ligado.
+        // Com efeito real ele não aparece (nunca os dois juntos).
+        FrostedScrim(panelBlurOn && (sheetOpen || state.personName != null), panelBlurEffect)
         } // fecha o Box do blur atrás das folhas
 
         // ── (A) Painel de FONTES/SERVIDORES do episódio selecionado ────────────

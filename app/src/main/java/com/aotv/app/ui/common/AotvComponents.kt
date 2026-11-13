@@ -708,6 +708,13 @@ fun SidePanel(
     titleSize: androidx.compose.ui.unit.TextUnit = 22.sp,
     /** Quando setado, o botão de fechar vira pill com esse texto (Nuvio: "Fechar"). */
     dismissLabel: String? = null,
+    /**
+     * Vidro fosco (Lote 4): com o toggle `pref_panel_blur` ligado, o fundo
+     * fica translúcido (0.82) em vez de quase opaco (0.97) — o vídeo aparece
+     * através do painel, escurecido. Blur real não alcança aqui: o vídeo
+     * roda numa Surface separada e o RenderEffect não desfoca Surface.
+     */
+    frosted: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val touch = !LocalIsTv.current
@@ -724,7 +731,7 @@ fun SidePanel(
         Column(
             Modifier.fillMaxHeight().widthIn(max = width).fillMaxWidth()
                 .shadow(24.dp, RoundedCornerShape(0.dp))
-                .background(PanelBackground)
+                .background(if (frosted) PanelBackground.copy(alpha = 0.82f) else PanelBackground)
                 .focusProperties { canFocus = false }
                 .clickable(remember { MutableInteractionSource() }, null) {}
                 .padding(start = 18.dp, end = 18.dp, top = if (shortWindow) 12.dp else 22.dp, bottom = 16.dp),

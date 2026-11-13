@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ClosedCaptionOff
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
@@ -252,6 +254,11 @@ fun MoviePlayerScreen(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Motor do player (Lote 4, v1.12.0): lidos ANTES do remember da sessão
+    // porque o decoder entra no construtor (só vale na criação do player)
+    // e o player padrão decide o auto-abrir abaixo.
+    val playerEngine by playerPrefsVm.engine.collectAsState()
+    val playerDecoder by playerPrefsVm.decoder.collectAsState()
     // Estado e regra do player moram na sessão. A função de tela ficou pequena e o Android volta
     // a compilar o código (antes passava do limite de instruções e rodava interpretado).
     val forceTv = television
@@ -263,6 +270,7 @@ fun MoviePlayerScreen(
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs,
             backdropUrl, season, episode, episodeTotal, sources,
             forceTv = forceTv, kodiDiag = kodiDiag,
+            decoderMode = DecoderMode.fromId(playerDecoder),
         )
     }
     // A sessão voltou para a tela cheia: ela passa a ser da tela de novo e o
@@ -290,6 +298,10 @@ fun MoviePlayerScreen(
     val playerAutoSwitch by playerPrefsVm.autoSwitch.collectAsState()
     val playerSourceTimeout by playerPrefsVm.sourceTimeout.collectAsState()
     val playerAnimeSkipClientId by playerPrefsVm.animeSkipClientId.collectAsState()
+    // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): pref por perfil, código SubLangs.
+    val playerAudioLang by playerPrefsVm.audioLang.collectAsState()
+    /** Blur/vidro fosco nos painéis do player (Lote 4): mesma pref do detalhe. */
+    val panelBlurOn by playerPrefsVm.panelBlur.collectAsState()
     // Correção de cor do vídeo (v1.9.0, Lote 1 item 1): fluxos do
     // PlayerPrefsViewModel (contrato de prefs no relatório da v1.9.0).
     val playerColorBrightness by playerPrefsVm.colorBrightness.collectAsState()
@@ -320,6 +332,9 @@ fun MoviePlayerScreen(
     s.autoSwitchEnabled = playerAutoSwitch
     s.sourceTimeoutSec = playerSourceTimeout
     s.animeSkipClientId = playerAnimeSkipClientId
+    // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): a tela lê o fluxo e
+    // entrega à sessão, como as outras prefs do player.
+    s.audioLangPref = playerAudioLang
     // Correção de cor do vídeo (v1.9.0, Lote 1 item 1): a tela lê os fluxos e
     // entrega à sessão, como as outras prefs do player. O painel salva de
     // volta por [PlayerSession.onColorFilterSave].
@@ -348,6 +363,27 @@ fun MoviePlayerScreen(
     LaunchedEffect(playerSpeed) {
         s.speedIdx = PLAYBACK_SPEEDS.indexOf(playerSpeed).takeIf { it >= 0 } ?: PLAYBACK_SPEEDS.indexOf(1f)
         runCatching { s.currentPlayer().setPlaybackSpeed(playerSpeed) }
+    }
+    // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): o ExoPlayer nasce
+    // com o padrão ("pt") e a pref do perfil é aplicada aqui — e reaplicada
+    // quando muda nas Configurações com o player aberto. Escolha à mão no
+    // vídeo atual não é desfeita (ver audioPicked em applyPreferredAudioLanguage).
+    LaunchedEffect(playerAudioLang) {
+        s.audioLangPref = playerAudioLang
+        s.applyPreferredAudioLanguage()
+        s.pickAutoAudio()
+    }
+    // Motor do player (Lote 4 item 1, v1.12.0): pref "Player externo" —
+    // quando a fonte já resolveu e começou no interno, abre 1x no player
+    // externo e volta p/ o detalhe. Só no celular: na TV o chip "Player
+    // externo" faz isso à mão. Se abrir falhar (sem player instalado),
+    // fica no interno e o toast explica — não volta sozinho.
+    LaunchedEffect(playerEngine, s.readyUrl) {
+        if (playerEngine != "external" || s.isTv || s.casting || s.externalOpened) return@LaunchedEffect
+        if (s.readyUrl == null) return@LaunchedEffect
+        s.externalOpened = true
+        runCatching { s.exoPlayer.playWhenReady = false }
+        if (s.openExternalPlayer()) onBack()
     }
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
@@ -406,8 +442,17 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         if (type == "SERIES" && episode > 0 && currentSources.none { it.url == activeUrl }) {
             // Sem preferência ainda nesta sessão (abriu fresco pelo detalhe) → herda o addon
             // da última vez que essa série tocou, pra não perguntar nos episódios seguintes.
-            if (preferredAddon.isBlank()) preferredAddon = progressVm.lastAddon(tmdbId, type)
-            val eps = episodeVm.stremioEpisodeSources(tmdbId, curSeason, episode)
+            // Última fonte escolhida À MÃO neste título (Lote 4 item 6): addon +
+            // qualidade valem antes do addon herdado do progresso; sem ela, o
+            // comportamento atual (lastAddon) continua.
+            progressVm.lastSourcePick(tmdbId, type)?.let {
+                preferredAddon = it.addon
+                preferredQuality = it.qualityRank
+            } ?: run { if (preferredAddon.isBlank()) preferredAddon = progressVm.lastAddon(tmdbId, type) }
+            // Fontes PRÉ-CARREGADAS no meio do episódio anterior (Lote 4 item 5):
+            // sem rede nenhuma quando o cache da sessão ainda vale (15 min).
+            val eps = episodeVm.cachedEpisodeSources(tmdbId, curSeason, episode)
+                ?: episodeVm.stremioEpisodeSources(tmdbId, curSeason, episode)
             if (eps.isNotEmpty()) {
                 currentSources = eps
                 val matchIdx = eps.indexOfFirst { it.url == activeUrl }
@@ -435,6 +480,9 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(tmdbId, type, curSeason, curEpisode) {
         selectedSubUrl = null
         subPicked = false
+        // Idioma de áudio (Lote 4 item 7): episódio novo devolve a faixa para o
+        // automático, como a legenda — a escolha à mão valia p/ o vídeo anterior.
+        audioPicked = false
         externalSubs = runCatching { episodeVm.subtitlesFor(tmdbId, type, curSeason, curEpisode) }.getOrDefault(emptyList())
         pickAutoSub()
     }
@@ -512,6 +560,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                     duration = exoPlayer.duration.coerceAtLeast(0L); movieStarted = true
                     readyUrl = streamUrl
                     switching = false // novo episódio no ar, tira o loading da troca
+                    refreshTechInfo()
                 }
                 if (state == Player.STATE_ENDED) playbackEnded = true
             }
@@ -525,10 +574,15 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 // Faixas novas (episódio ou fonte trocados). Com a legenda ligada no perfil, liga a
                 // do idioma escolhido. Escolha à mão no vídeo atual não é desfeita.
                 pickAutoSub()
+                // Áudio no idioma preferido do perfil (Lote 4 item 7) + infos
+                // técnicas do stream novo (Lote 4 item 4).
+                pickAutoAudio()
+                refreshTechInfo()
             }
             // Resolução real do que está tocando (ex "1080p") — mostrada junto da fonte.
             override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
                 videoQualityLabel = videoResolutionLabel(size.width, size.height)
+                refreshTechInfo()
             }
             // Sessão de áudio (re)criada: (re)aplica o Volume Boost nela.
             override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost() }
@@ -649,7 +703,9 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             }
             // PRÉ-CARREGA o próximo (ou a próxima temporada) na METADE do episódio atual. Quando
             // o usuário aperta "Próximo", as fontes já estão na memória e a troca é instantânea.
-            if (duration > 0 && position >= duration / 2 && prefetchedEp != curEpisode) {
+            // Modo privado (Lote 4 item 5): nada de trabalho especulativo ligado ao que se
+            // assiste — o preload em si não grava progresso, mas no privado ele nem dispara.
+            if (!privateMode && duration > 0 && position >= duration / 2 && prefetchedEp != curEpisode) {
                 prefetchedEp = curEpisode
                 when {
                     hasNextEpisode -> episodeVm.prefetchEpisode(tmdbId, curSeason, curEpisode + 1)
@@ -754,7 +810,12 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     }
     LaunchedEffect(type, tmdbId, curSeason, curEpisode) {
         if (type != "SERIES" || tmdbId <= 0 || curSeason <= 0 || curEpisode <= 0) return@LaunchedEffect
-        if (preferredAddon.isBlank()) preferredAddon = progressVm.lastAddon(tmdbId, type)
+        // Última fonte escolhida À MÃO neste título (Lote 4 item 6): mesma
+        // precedência do efeito de resumo — addon + qualidade antes do lastAddon.
+        progressVm.lastSourcePick(tmdbId, type)?.let {
+            preferredAddon = it.addon
+            preferredQuality = it.qualityRank
+        } ?: run { if (preferredAddon.isBlank()) preferredAddon = progressVm.lastAddon(tmdbId, type) }
         fun merge(novas: List<MoviePlayerSource>) {
             if (novas.isEmpty()) return
             val tocando = currentSources.getOrNull(currentSourceIdx)?.url
@@ -1010,6 +1071,15 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                                 applyColorState(activateColorRow(colorState, colorFocusIdx)); true
                             }
+                            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
+                            else -> true
+                        }
+                    }
+                    // Painel de INFOS TÉCNICAS (Lote 4 item 4): só mostra dados — ↑↓/OK
+                    // não executam nada e ←/Back fecha. Sem esta guarda, o OK
+                    // executaria uma ação de fonte (o panelActions cai em sourceActions).
+                    if (panelKind == "info") {
+                        return@onKeyEvent when (kc) {
                             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
                             else -> true
                         }
@@ -1275,6 +1345,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         ).filter { it.isNotBlank() }.joinToString("  ·  "),
                         buffered = currentPlayer().bufferedPosition,
                         tapSeek = tapSeekEnabled,
+                        panelBlur = panelBlurOn,
                     )
                 }
 
@@ -1289,22 +1360,6 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         // Mini player (Fase C): só no celular e com a pref ligada. Minimizar
                         // guarda a sessão e volta p/ a navegação (o áudio continua na barra).
                         onMinimize = if (miniEnabled && !isTv) ({ MiniPlayerState.minimize(s, routePlayId); onBack() }) else null,
-                        onCast = {
-                            runCatching {
-                                val themed = android.view.ContextThemeWrapper(
-                                    context, androidx.appcompat.R.style.Theme_AppCompat_DayNight
-                                )
-                                val selector = androidx.mediarouter.media.MediaRouteSelector.Builder()
-                                    .addControlCategory(
-                                        com.google.android.gms.cast.CastMediaControlIntent.categoryForCast(
-                                            com.google.android.gms.cast.CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID
-                                        )
-                                    ).build()
-                                androidx.mediarouter.app.MediaRouteChooserDialog(themed).apply {
-                                    routeSelector = selector
-                                }.show()
-                            }
-                        },
                         onRotate = {
                             val cur = activity?.requestedOrientation
                             activity?.requestedOrientation =
@@ -1355,9 +1410,15 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
         // ── Seletor de FONTE (dentro do player) — troca mantendo o tempo ──
         // Travado, o painel não abre (o onLock já o fecha; a guarda cobre o caso
         // de ele estar aberto por outro caminho quando a tela trava).
-        // O painel de COR tem sliders e não cabe na lista de ações: tem
-        // composable próprio ([ColorFilterPanel]).
-        if (sourcePanelOpen && !locked && panelKind == "color") {
+        // O painel de INFOS TÉCNICAS tem composable próprio ([TechInfoPanel]),
+        // como o de COR ([ColorFilterPanel]) — não cabe na lista de ações.
+        if (sourcePanelOpen && !locked && panelKind == "info") {
+            TechInfoPanel(
+                info = techInfo,
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "color") {
             ColorFilterPanel(
                 state = colorState,
                 focusIdx = colorFocusIdx,
@@ -1376,6 +1437,8 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 onPick = { act -> act.onRun(); if (!act.keepOpen) sourcePanelOpen = false },
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
+                // Lote 4: painel de fontes (e demais painéis) em vidro fosco.
+                frosted = panelBlurOn,
             )
         }
     }
@@ -1416,6 +1479,9 @@ class PlayerSession(
     forceTv: Boolean = false,
     /** Diagnóstico do play Kodi (resolveu= + http:) — v1.2.7. */
     val kodiDiag: String = "",
+    /** Decoder de vídeo (pref `pref_player_decoder`, Lote 4 — v1.12.0).
+     *  Só vale na criação do player: a sessão cria o ExoPlayer 1x. */
+    val decoderMode: DecoderMode = DecoderMode.HW,
 ) {
     /** Volta para a tela anterior. Atualizado a cada composição. */
     var onBack: () -> Unit = {}
@@ -1593,6 +1659,21 @@ class PlayerSession(
     var subWanted by run { mutableStateOf(progressVm.subtitleOn) }
     val subLang = progressVm.subLang
     var subPicked by run { mutableStateOf(false) }
+    // Idioma preferido de ÁUDIO do perfil (Lote 4 item 7, v1.12.0 — pref
+    // `pref_player_audio_lang`, código SubLangs). A tela entrega aqui a cada
+    // composição. [audioPicked] marca escolha À MÃO no vídeo atual: ela vale
+    // e o automático não troca no meio da reprodução; zera a cada episódio
+    // novo, como o subPicked.
+    var audioLangPref by run { mutableStateOf(SubLangs.DEFAULT) }
+    var audioPicked by run { mutableStateOf(false) }
+    // Infos técnicas do vídeo (Lote 4 item 4, v1.12.0): dados do stream atual
+    // p/ o painel "Informações de reprodução". Refeito a cada troca de faixa,
+    // de resolução e quando o vídeo fica pronto — e ao abrir o painel.
+    var techInfo by run { mutableStateOf<TechInfo?>(null) }
+    /** Re-lê os dados do stream atual p/ o painel de infos técnicas. Não trava o player. */
+    fun refreshTechInfo() {
+        techInfo = runCatching { collectTechInfo(exoPlayer) }.getOrNull()
+    }
     // Legendas externas (OpenSubtitles e addons). Ligam sozinhas quando são a melhor no idioma.
     var externalSubs by run { mutableStateOf<List<com.aotv.app.data.remote.ExternalSub>>(emptyList()) }
     var selectedSubUrl by run { mutableStateOf<String?>(null) }
@@ -1724,6 +1805,7 @@ class PlayerSession(
             .build()
         try {
             ExoPlayer.Builder(context)
+                .setRenderersFactory(decoderRenderersFactory(context, decoderMode))
                 .setMediaSourceFactory(mediaSourceFactory(context))
                 .setAudioAttributes(audioAttrs, true)
                 .setHandleAudioBecomingNoisy(true)
@@ -1731,14 +1813,18 @@ class PlayerSession(
                     playWhenReady = true
                     // Legenda: começa desligada e pickAutoSub liga a do idioma do perfil quando
                     // ele deixou a legenda ligada (subWanted).
-                    // Áudio: prefere português quando o arquivo trouxer mais de uma faixa.
+                    // Áudio: o padrão aqui é o da pref nova (`pref_player_audio_lang`,
+                    // "pob" → "pt"); a pref de verdade é aplicada logo depois da
+                    // criação pelo LaunchedEffect (a tela entrega o valor aqui
+                    // depois do remember) — ver applyPreferredAudioLanguage.
                     trackSelectionParameters = trackSelectionParameters.buildUpon()
                         .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, !subtitleOn)
-                        .setPreferredAudioLanguage("pt")
+                        .setPreferredAudioLanguage(SubLangs.of(SubLangs.DEFAULT)?.family ?: "pt")
                         .build()
                 }
         } catch (_: Exception) {
-            ExoPlayer.Builder(context).setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
+            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode))
+                .setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
                 .build().apply { playWhenReady = true }
         }
     }
@@ -1757,12 +1843,84 @@ class PlayerSession(
     fun currentPlayer(): androidx.media3.common.Player =
         if (casting && castPlayer != null) castPlayer else exoPlayer
 
+    // ── Player externo (Lote 4 item 1 — v1.12.0) ──────────────────────────
+    /** true depois que o "Player externo" automático já disparou 1x nesta sessão. */
+    var externalOpened by run { mutableStateOf(false) }
+
+    /**
+     * Abre a fonte atual num player externo instalado (VLC, MX Player…).
+     * Devolve true quando o seletor do sistema abriu. Mesma guarda do Cast:
+     * torrent só sai do app pelo link do debrid (o motor P2P mora aqui);
+     * transmitindo p/ TV, não abre fora (senão toca nos dois lugares).
+     * A URL que vai é a fonte atual limpa do sufixo Kodi `|...` (headers
+     * não viajam no intent — ver [openInExternalPlayer]).
+     */
+    fun openExternalPlayer(): Boolean {
+        if (casting) {
+            toastMsg = "Pare de transmitir antes de abrir num player externo."
+            return false
+        }
+        val src = streamUrl ?: activeUrl
+        val url = if (TorrentMagnet.isMagnet(src)) {
+            src?.let { episodeVm.debridNow(it, curSeason, curEpisode) }
+        } else {
+            src
+        }
+        if (url.isNullOrBlank()) {
+            toastMsg = "Fonte P2P sem link pronto. Escolha outra fonte ou espere o debrid."
+            return false
+        }
+        val clean = splitKodiStreamHeaders(url).first
+        val err = openInExternalPlayer(context, clean, displayTitle)
+        if (err != null) {
+            toastMsg = err
+            return false
+        }
+        return true
+    }
+
     // Seleciona uma faixa de ÁUDIO específica (índice no audioGroups)
     fun selectAudio(index: Int) {
+        // Escolha À MÃO (Lote 4 item 7): vale p/ o vídeo atual e o automático
+        // não volta por cima dela no meio da reprodução.
+        audioPicked = true
         val g = audioGroups.getOrNull(index) ?: return
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, 0))
             .build()
+    }
+
+    // Aplica o idioma de áudio preferido do perfil no ExoPlayer. O seletor de
+    // faixas do Media3 casa o código ISO 639-1 ("pt"), então a pref (código
+    // SubLangs, ex. "pob") entra pela família. Não mexe quando a pessoa já
+    // escolheu a faixa à mão no vídeo atual (audioPicked).
+    fun applyPreferredAudioLanguage() {
+        if (audioPicked) return
+        val lang = SubLangs.of(audioLangPref)?.family ?: "pt"
+        runCatching {
+            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                .setPreferredAudioLanguage(lang)
+                .build()
+        }
+    }
+
+    // Escolhe a faixa de áudio no idioma preferido quando as faixas chegam
+    // (episódio/fonte novos). O setPreferredAudioLanguage nem sempre casa
+    // código 639-2 ("por") com faixa 639-1 ("pt"); aqui o casamento é pelo
+    // SubLangs.match (exato, depois família), igual ao pickAutoSub. Escolha
+    // à mão no vídeo atual manda; sem faixa no idioma, fica a atual.
+    fun pickAutoAudio() {
+        if (audioPicked || audioGroups.isEmpty()) return
+        val langs = audioGroups.map { it.getTrackFormat(0).language }
+        val best = langs.indices.maxByOrNull { SubLangs.match(langs[it], audioLangPref) } ?: return
+        if (SubLangs.match(langs[best], audioLangPref) == 0) return
+        val g = audioGroups[best]
+        if (g.isSelected) return
+        runCatching {
+            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                .setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, 0))
+                .build()
+        }
     }
     fun enableTextGroup(g: androidx.media3.common.Tracks.Group) {
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
@@ -2024,6 +2182,10 @@ class PlayerSession(
         if (manual) {
             preferredAddon = src.addon
             preferredQuality = sourceQualityRank(src.label)
+            // Última fonte do título (Lote 4 item 6): grava addon + qualidade
+            // (nunca a URL). O gravar já é bloqueado no modo privado e com a
+            // pref desligada — ver PlayerProgressViewModel.saveLastSourcePick.
+            progressVm.saveLastSourcePick(tmdbId, type, src.addon, sourceQualityRank(src.label))
         }
         // O painel fecha só por quem escolheu (onPick e OK). Troca automática (corrida de espelhos,
         // fonte lenta) não fecha o painel que o controle remoto está usando.
@@ -2263,6 +2425,7 @@ class PlayerSession(
         "screen" -> "Tela"
         "episodes" -> "Episódios"
         "color" -> "Cor do vídeo"
+        "info" -> "Informações de reprodução"
         else -> "Fontes"
     }
 
@@ -2273,6 +2436,8 @@ class PlayerSession(
         sourcePanelOpen = true
         if (kind == "sources") sourceLimit = 30
         if (kind == "color") colorFocusIdx = 0
+        // Infos técnicas (Lote 4 item 4): lê os dados do stream na hora de abrir.
+        if (kind == "info") refreshTechInfo()
         if (kind == "episodes") selectPanelSeason(curSeason.coerceAtLeast(1))
     }
     // Chips do player (celular E TV: a mesma lista alimenta os dois — o toque
@@ -2301,11 +2466,21 @@ class PlayerSession(
         // canônica DEFAULT_PLAYER_BUTTONS (não mexida); o orderPlayerChips
         // põe ids fora do catálogo no fim, então ele aparece por último.
         add(PlayerChipItem(Icons.Default.Tune, "Cor", active = !colorState.isDefault, id = "color") { openDpadPanel("color") })
+        // Infos técnicas do vídeo (Lote 4 item 4, v1.12.0): mesmo padrão do chip
+        // "color" — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado
+        // nas Configurações (é um painel de diagnóstico, não um botão configurável).
+        add(PlayerChipItem(Icons.Default.Info, "Infos técnicas", id = "info") { openDpadPanel("info") })
         // Modo privado (Lote 2, item 7 — v1.10.0): mesmo padrão do chip "color"
         // — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado nas
         // Configurações (é um estado, não um botão configurável). Ligado, o
         // player não salva progresso nem marca visto (ver togglePrivateMode).
         add(PlayerChipItem(Icons.Default.VisibilityOff, if (privateMode) "Privado" else "Modo privado", active = privateMode, id = "private") { togglePrivateMode() })
+        // Player externo (Lote 4 item 1 — v1.12.0): mesmo padrão dos chips
+        // "color"/"private" — id fora do catálogo canônico, vai p/ o fim e
+        // NÃO pode ser desligado nas Configurações. Abre a fonte atual no
+        // seletor do sistema (VLC, MX Player…). Com a pref "Player externo"
+        // ligada, nem precisa tocar aqui: abre sozinho ao resolver a fonte.
+        add(PlayerChipItem(Icons.Default.OpenInNew, "Player externo", id = "external") { openExternalPlayer() })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource
             userLockedSource = pinnedSource

@@ -88,9 +88,13 @@ object MiniPlayerState {
  * título (+ episódio), play/pause, expandir (volta ao player cheio) e fechar
  * (para e libera o player). A posição avança por poll do ExoPlayer (o poll da
  * tela cheia morre junto com a composição dela ao minimizar).
+ *
+ * [frosted] (Lote 4): com o toggle `pref_panel_blur` ligado, o fundo fica
+ * translúcido (vidro fosco) em vez de opaco. Blur real não alcança aqui
+ * (RenderEffect desfoca o próprio conteúdo, não o que está atrás).
  */
 @Composable
-fun MiniPlayerBar(onExpand: () -> Unit, modifier: Modifier = Modifier) {
+fun MiniPlayerBar(onExpand: () -> Unit, modifier: Modifier = Modifier, frosted: Boolean = false) {
     val session = MiniPlayerState.session ?: return
     var isPlaying by remember(session) { mutableStateOf(false) }
     var position by remember(session) { mutableLongStateOf(0L) }
@@ -112,7 +116,7 @@ fun MiniPlayerBar(onExpand: () -> Unit, modifier: Modifier = Modifier) {
             .padding(horizontal = 12.dp)
             .padding(bottom = 4.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(BackgroundCard)
+            .background(com.aotv.app.ui.common.frostedColor(frosted, BackgroundCard))
             .clickable(role = Role.Button, onClick = onExpand),
     ) {
         Row(

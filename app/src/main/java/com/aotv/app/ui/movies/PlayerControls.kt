@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
@@ -40,6 +39,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -129,13 +129,15 @@ internal fun CustomPlayerControls(
     buffered: Long = 0,
     /** Tocar na barra busca (pref `playerTapSeek`). Desligado, só o arraste busca. */
     tapSeek: Boolean = true,
+    /** Vidro fosco/blur nas folhas do player (pref `pref_panel_blur`, Lote 4). */
+    panelBlur: Boolean = true,
 ) {
     if (isTv) {
         TvPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo, position, duration, buffered, onSeekTo, tvChips, tvChipIdx)
         return
     }
     TouchPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo,
-        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek)
+        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek, panelBlur = panelBlur)
 }
 
 /** Tempo, barra fina com bolinha e duração na mesma linha (.pl-bar-row). Toque ou arraste busca.
@@ -311,11 +313,19 @@ internal fun PlayerChip(icon: ImageVector, label: String, active: Boolean = fals
  * [visibleActions] vem da pref `playerTopActions` (ver [orderTopActions]):
  * só "cast"/"rotate"/"lock", na ordem escolhida; "Voltar" sempre aparece.
  * [onMinimize] é o botão de minimizar p/ o mini player (Fase C): só aparece
- * quando não é nulo (mini player ligado e celular); não entra na pref. */
+ * quando não é nulo (mini player ligado e celular); não entra na pref.
+ * O "cast" NÃO é um CtlButton: é o [MediaRouteButton] de verdade (Lote 4,
+ * v1.12.0) — ele some sozinho quando não há rota de Cast por perto, mostra
+ * o estado conectado e abre o diálogo do sistema (escolher a TV /
+ * desconectar). A sessão em si continua a mesma de antes
+ * (SessionAvailabilityListener + LaunchedEffect em MoviePlayerScreen):
+ * conectar manda a fonte atual p/ a TV e silencia o local; desconectar
+ * volta p/ o celular no ponto onde a TV estava. Sem ele, o caminho antigo
+ * (diálogo manual de escolha de rota) era um segundo caminho de descoberta
+ * que duplicava o do botão — removido. */
 @Composable
 internal fun PlayerTopActions(
     isTv: Boolean,
-    onCast: () -> Unit,
     onRotate: () -> Unit,
     onLock: () -> Unit,
     onBack: () -> Unit,
@@ -329,7 +339,16 @@ internal fun PlayerTopActions(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onMinimize != null) CtlButton(Icons.Default.KeyboardArrowDown, "Minimizar", 48.dp, onClick = onMinimize)
-        if ("cast" in visibleActions) CtlButton(Icons.Default.Cast, "Transmitir", 48.dp, onClick = onCast)
+        if ("cast" in visibleActions) {
+            AndroidView(
+                factory = { ctx ->
+                    androidx.mediarouter.app.MediaRouteButton(ctx).apply {
+                        routeSelector = castRouteSelector()
+                    }
+                },
+                modifier = Modifier.size(48.dp),
+            )
+        }
         // Girar e Travar só no celular, na TV o controle já faz.
         if (!isTv) {
             if ("rotate" in visibleActions) CtlButton(Icons.Default.ScreenRotation, "Girar a tela", 48.dp, onClick = onRotate)

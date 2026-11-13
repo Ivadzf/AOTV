@@ -955,7 +955,7 @@ private fun AparenciaPage(
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Image,
                 title = "Blur nos painéis",
-                sub = "Desfoca o conteúdo atrás da folha de fontes e da filmografia (Android 12+). Abaixo disso, fica só o fundo escuro.",
+                sub = "Desfoca o conteúdo atrás das folhas (detalhe e player) e deixa a pílula, o mini player e os cartões em vidro fosco. Abaixo do Android 12, um fundo escuro fosco no lugar do desfoque.",
                 trailing = { Switch(checked = panelBlur, onCheckedChange = { viewModel.setPanelBlur(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setPanelBlur(!panelBlur) },
                 grouped = true,
@@ -1035,6 +1035,11 @@ private fun ReproducaoPage(
     val subOn by viewModel.subOn.collectAsStateWithLifecycle()
     val subLang by viewModel.subLang.collectAsStateWithLifecycle()
     var pickLang by remember { mutableStateOf(false) }
+    // Idioma preferido de ÁUDIO (Lote 4 item 7, v1.12.0) + reutilizar a última
+    // fonte do título (item 6). A legenda já tinha o controle acima.
+    val audioLang by playerPrefs.audioLang.collectAsStateWithLifecycle()
+    var pickAudioLang by remember { mutableStateOf(false) }
+    val reuseLastSource by playerPrefs.reuseLastSource.collectAsStateWithLifecycle()
     // Botões do player (Fase C). A lista guardada vazia é o padrão; aqui a
     // ordem em vigor, com os desligados no fim para religar sem perder o lugar.
     val savedButtons by playerPrefs.buttons.collectAsStateWithLifecycle()
@@ -1058,6 +1063,9 @@ private fun ReproducaoPage(
     val subOutline by playerPrefs.subOutline.collectAsStateWithLifecycle()
     val subFont by playerPrefs.subFont.collectAsStateWithLifecycle()
     val playerSpeed by playerPrefs.speed.collectAsStateWithLifecycle()
+    // Motor do player (Lote 4, v1.12.0): player padrão e decoder.
+    val playerEngine by playerPrefs.engine.collectAsStateWithLifecycle()
+    val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
@@ -1095,8 +1103,20 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Idioma preferido da faixa de ÁUDIO (Lote 4 item 7, v1.12.0): o
+            // player escolhe a faixa nesse idioma ao abrir o vídeo. A escolha
+            // à mão no player continua valendo p/ o vídeo atual.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VolumeUp,
+                title = "Idioma do áudio",
+                sub = SubLangs.label(audioLang) + ". O player escolhe a faixa de áudio nesse idioma quando o título tiver",
+                onClick = { pickAudioLang = true },
+                grouped = true,
+                divider = true,
+            )
         }
         if (pickLang) SubLangDialog(subLang, onPick = { viewModel.setSubLang(it); pickLang = false }, onDismiss = { pickLang = false })
+        if (pickAudioLang) SubLangDialog(audioLang, onPick = { playerPrefs.setAudioLang(it); pickAudioLang = false }, onDismiss = { pickAudioLang = false }, title = "Idioma do áudio")
 
         // Personalização de legenda (v1.9.0): cor, fonte, opacidade do fundo e
         // contorno. Vale para a legenda embutida e para a externa, e também dá
@@ -1232,6 +1252,19 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Reutilizar a última fonte do título (Lote 4 item 6, v1.12.0): o
+            // player reabre o título na fonte escolhida à mão da última vez
+            // (mesmo addon e qualidade), quando ela ainda existe na lista.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Reutilizar última fonte",
+                sub = if (reuseLastSource) "Abre cada título na última fonte escolhida à mão nele"
+                    else "Sempre abre na melhor fonte, sem lembrar a escolha anterior",
+                trailing = { Switch(checked = reuseLastSource, onCheckedChange = { playerPrefs.setReuseLastSource(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setReuseLastSource(!reuseLastSource) },
+                grouped = true,
+                divider = true,
+            )
         }
         // Velocidade padrão (v1.9.0): o player abre nela; mudar no player salva aqui.
         SettingsCard {
@@ -1280,6 +1313,29 @@ private fun ReproducaoPage(
                 }
             }
         }
+        // Motor do player (Lote 4, v1.12.0): player padrão e decoder de vídeo.
+        SettingsSection("Motor do player")
+        SettingsCard {
+            PrefRow(
+                "Player padrão",
+                listOf("exoplayer" to "ExoPlayer (interno)", "external" to "Player externo (VLC, MX…)"),
+                playerEngine, playerPrefs::setEngine,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Decoder de vídeo",
+                listOf("hw" to "Hardware (HW)", "hw_fallback" to "Hardware com fallback"),
+                playerDecoder, playerPrefs::setDecoder,
+            )
+        }
+        Text(
+            "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Sem Libmpv interno nesta versão.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
         SettingsSection("Pular trechos")
         Text(
             "O player busca os trechos (resumo, abertura, encerramento e pós-créditos) no IntroDB e no SkipDB, sem chave. O Anime-Skip (só séries) precisa de um client ID seu — vazio, ele fica desligado.",
@@ -1352,7 +1408,7 @@ private fun PlayerButtonRow(
 
 /** Lista dos idiomas de legenda. Na TV o foco já começa no idioma atual. */
 @Composable
-private fun SubLangDialog(current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+private fun SubLangDialog(current: String, onPick: (String) -> Unit, onDismiss: () -> Unit, title: String = "Idioma da legenda") {
     val langs = SubLangs.all
     val start = langs.indexOfFirst { it.key == current }.coerceAtLeast(0)
     val list = rememberLazyListState(initialFirstVisibleItemIndex = (start - 2).coerceAtLeast(0))
@@ -1360,7 +1416,7 @@ private fun SubLangDialog(current: String, onPick: (String) -> Unit, onDismiss: 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = BackgroundCard,
-        title = { Text("Idioma da legenda", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        title = { Text(title, color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
         text = {
             LazyColumn(Modifier.heightIn(max = 420.dp), state = list, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 itemsIndexed(langs, key = { _, l -> l.key }) { i, l ->
