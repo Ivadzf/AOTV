@@ -30,6 +30,13 @@ data class TmdbMovieDto(
     // Presente na resposta de /movie/{id} (detail); null nas respostas de lista.
     // Evita chamada separada a /movie/{id}/external_ids para resolver o IMDB ID.
     @SerializedName("imdb_id")        val imdbId: String? = null,
+    // Título em idioma original (Lote 3, v1.11.0). Só vem em /movie/{id};
+    // null nas respostas de lista. Igual ao originalName das séries.
+    @SerializedName("original_title") val originalTitle: String? = null,
+    // Orçamento e receita em dólares (TMDB, /movie/{id}). 0 = sem dado
+    // (o TMDB usa 0 quando não sabe); nunca inventar valor a partir daqui.
+    val budget: Long = 0,
+    val revenue: Long = 0,
     // Duração em minutos. Só vem em /movie/{id}. Prova se a fonte é mesmo deste filme.
     val runtime: Int? = null,
     // Classificação indicativa via append_to_response=release_dates

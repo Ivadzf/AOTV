@@ -30,4 +30,8 @@ class DetailPrefsViewModel @Inject constructor(
     val episodeStyle: StateFlow<String> = prefs.detailEpisodeStyleFlow
     /** Notas dos episódios visíveis nos cards (Lote 2 item 5; padrão: mostrar). */
     val episodeRatings: StateFlow<Boolean> = prefs.detailEpisodeRatingsFlow
+    /** Título em idioma original na página de detalhes (Lote 3 item 6; padrão: desligado). */
+    val originalTitle: StateFlow<Boolean> = prefs.detailOriginalTitleFlow
+    /** Blur real atrás das folhas do detalhe (Lote 3 item 4; padrão: ligado). */
+    val panelBlur: StateFlow<Boolean> = prefs.panelBlurFlow
 }

@@ -80,6 +80,8 @@ import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.AotvPrimaryButton
+import com.aotv.app.ui.common.blurBehind
+import com.aotv.app.ui.common.rememberPanelBlurEffect
 import com.aotv.app.ui.common.pressScale
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
@@ -183,6 +185,16 @@ fun MovieDetailScreen(
     // Notas dos episódios (Lote 2 item 5, por perfil; padrão: mostrar).
     val showEpisodeRatings by detailPrefs.episodeRatings.collectAsStateWithLifecycle()
 
+    // Blur nos painéis (Lote 3 item 4, v1.11.0): com uma folha aberta (fontes
+    // ou filmografia), o conteúdo da página atrás dela é desfocado. O efeito
+    // é criado 1x; abaixo do Android 12 ele é null e não há blur (só o scrim).
+    val panelBlurOn by detailPrefs.panelBlur.collectAsStateWithLifecycle()
+    val panelBlurEffect = rememberPanelBlurEffect()
+    val blurBehindSheets = panelBlurOn && panelBlurEffect != null &&
+        (sheetOpen || state.personName != null)
+    // Título em idioma original (Lote 3 item 6, por perfil; padrão: desligado).
+    val showOriginalTitle by detailPrefs.originalTitle.collectAsStateWithLifecycle()
+
     // Navegador de episódios (Lote 2 item 3): busca + ordenação da TEMPORADA
     // selecionada, em memória (sem recarregar a série). O estado vive aqui,
     // na tela — não é pref: trocar de série recomeça a busca do zero.
@@ -246,6 +258,14 @@ fun MovieDetailScreen(
             .fillMaxSize()
             .background(if (cinematicBg) Color.Black else Background),
     ) {
+        // O blur é aplicado a ESTE Box (fundo + lista): a folha, irmã dele no
+        // Box externo, fica nítida por cima. Com o blur desligado (ou sem
+        // folha aberta, ou abaixo do Android 12) o Modifier não muda nada.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .blurBehind(blurBehindSheets, panelBlurEffect),
+        ) {
         // Fundo cinematográfico (Fase B, opt-in): arte desfocada em tela cheia
         // atrás da página. O LazyColumn não tem fundo próprio, então a arte aparece.
         if (cinematicBg && backdropUrl.isNotBlank()) {
@@ -413,6 +433,22 @@ fun MovieDetailScreen(
                                 overflow = TextOverflow.Ellipsis,
                                 lineHeight = 37.sp,
                                 letterSpacing = (-0.5).sp,
+                            )
+                        }
+                        // Título em idioma original (Lote 3 item 6): linha secundária
+                        // abaixo do título traduzido (ou do logo, quando há). Só quando a
+                        // pref está ligada, o TMDB trouxe o original E ele é diferente do
+                        // traduzido. Nos cards NÃO aparece — não cabe sem ruído; só no detalhe.
+                        val originalTitle = state.originalTitle.takeIf { it.isNotBlank() && !it.equals(title, ignoreCase = true) }
+                        if (showOriginalTitle && originalTitle != null) {
+                            Text(
+                                originalTitle,
+                                fontSize = 15.sp,
+                                color = TextTertiary,
+                                fontFamily = ManropeFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                         Spacer(Modifier.height(11.dp))
@@ -681,6 +717,23 @@ fun MovieDetailScreen(
                                 lineHeight = 24.sp,
                                 modifier = Modifier.widthIn(max = 760.dp),
                             )
+                            // Orçamento e receita (Lote 3 item 7): só filmes, só quando o
+                            // TMDB trouxe valor > 0. Séries não têm esses campos no TMDB —
+                            // budget/revenue ficam 0 e nada aparece. Sem dado, não mostra nada.
+                            if (state.budget > 0 || state.revenue > 0) {
+                                Column(Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (state.budget > 0) Text(
+                                        "Orçamento · ${formatMoneyUsdBr(state.budget)}",
+                                        fontSize = 14.sp, color = TextSecondary, fontFamily = ManropeFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    if (state.revenue > 0) Text(
+                                        "Receita · ${formatMoneyUsdBr(state.revenue)}",
+                                        fontSize = 14.sp, color = TextSecondary, fontFamily = ManropeFontFamily,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1007,6 +1060,7 @@ fun MovieDetailScreen(
 
             item { Spacer(Modifier.height(28.dp)) }
         }
+        } // fecha o Box do blur atrás das folhas
 
         // ── (A) Painel de FONTES/SERVIDORES do episódio selecionado ────────────
         // Reaproveita o visual do bloco "Fontes" do filme (SourceRow), como bottom sheet.
@@ -1014,6 +1068,9 @@ fun MovieDetailScreen(
             EpisodeServersSheet(
                 season = season,
                 episode = episode,
+                // Lote 3 item 4: com o blur ligado, o card fica translúcido p/
+                // o conteúdo desfocado aparecer através dele (vidro fosco).
+                blurred = blurBehindSheets,
                 stremioStreams = state.episodeStremioStreams,
                 facts = state.episodeFacts(),
                 debridTag = state.debridTag,
@@ -1057,6 +1114,8 @@ fun MovieDetailScreen(
                 name = person,
                 items = state.personCredits,
                 loading = state.personLoading,
+                // Lote 3 item 4: vidro fosco, como na folha de fontes.
+                blurred = blurBehindSheets,
                 onDismiss = { viewModel.closePerson() },
                 onItemClick = { rel -> viewModel.closePerson(); onRelatedClick(rel) },
             )
@@ -1071,6 +1130,9 @@ private fun PersonFilmographySheet(
     name: String,
     items: List<MovieItem>,
     loading: Boolean,
+    // Lote 3 item 4: com o blur ligado, o card fica translúcido (vidro fosco)
+    // e o conteúdo da página atrás aparece desfocado; desligado, opaco como antes.
+    blurred: Boolean = false,
     onDismiss: () -> Unit,
     onItemClick: (MovieItem) -> Unit,
 ) {
@@ -1083,7 +1145,7 @@ private fun PersonFilmographySheet(
         Column(
             Modifier.fillMaxWidth().fillMaxHeight(0.82f)
                 .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                .background(Background)
+                .background(if (blurred) Background.copy(alpha = 0.86f) else Background)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
                 .padding(16.dp)
@@ -1145,6 +1207,9 @@ private fun EpisodeServersSheet(
     onOpenKodiAddon: (String) -> Unit = {},
     // Fase C — prefs da folha (busca, emblemas, logo, fixadas).
     streamPrefs: StreamPrefsViewModel = hiltViewModel(),
+    // Lote 3 item 4: com o blur ligado, o card fica translúcido (vidro fosco)
+    // e o conteúdo da página atrás aparece desfocado; desligado, opaco como antes.
+    blurred: Boolean = false,
 ) {
     // Scrim cobre a tela inteira; toque fora fecha.
     val scrimSrc = remember { MutableInteractionSource() }
@@ -1164,7 +1229,7 @@ private fun EpisodeServersSheet(
                 .fillMaxWidth()
                 .fillMaxHeight(0.9f)
                 .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-                .background(BackgroundCard)
+                .background(if (blurred) BackgroundCard.copy(alpha = 0.86f) else BackgroundCard)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .clickable(interactionSource = cardSrc, indication = null, onClick = {})
                 .padding(horizontal = 16.dp)

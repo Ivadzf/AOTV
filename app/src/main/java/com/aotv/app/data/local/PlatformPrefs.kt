@@ -2,6 +2,7 @@ package com.aotv.app.data.local
 
 import android.content.Context
 import com.aotv.app.BuildConfig
+import com.aotv.app.ui.theme.CustomThemeColors
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,8 +26,26 @@ data class HomeCatalogRef(val base: String, val type: String, val id: String, va
     val key get() = "$base|$type|$id"
 }
 
-/** Perfil de quem assiste. [color] é o índice em [PROFILE_COLORS]. */
-data class Profile(val id: String, val name: String, val color: Int = 0, val kids: Boolean = false)
+/**
+ * Perfil de quem assiste. [color] é o índice em [PROFILE_COLORS].
+ * Campos novos (v1.11.0, Lote 3) são todos opcionais com default, então perfis
+ * salvos antes deles continuam válidos: sem avatar = inicial colorida, sem
+ * PIN = troca livre, sem "addons primários" = comportamento atual.
+ * [avatarUrl] URL de imagem colada pelo usuário (http/https); [avatarId] id
+ * de um preset do catálogo embutido ([AVATAR_CATALOG]); [pinHash] hash do
+ * PIN do perfil ("" = sem PIN); [usePrimaryAddons] resolve as fontes fixadas
+ * com a lista do perfil principal em vez da própria (ver [pinnedOwnerId]).
+ */
+data class Profile(
+    val id: String,
+    val name: String,
+    val color: Int = 0,
+    val kids: Boolean = false,
+    val avatarUrl: String = "",
+    val avatarId: String = "",
+    val pinHash: String = "",
+    val usePrimaryAddons: Boolean = false,
+)
 
 /** Cores dos perfis, nas cores do AOTV (turquesa e vermelho escuro). */
 val PROFILE_COLORS = listOf(0xFF00C2B8, 0xFF9E1B1B, 0xFF3DDC84, 0xFFF5A524, 0xFFA970FF, 0xFFFF6FB5)
@@ -60,6 +79,8 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_animeskip_client_id", "pref_player_speed", "pref_player_swipe_seek",
     "pref_player_color_brightness", "pref_player_color_contrast", "pref_player_color_saturation",
     "pref_player_color_hue", "pref_player_color_preset", "pref_player_color_daltonism",
+    // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
+    "pref_detail_original_title",
     // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
     "pref_private_mode",
     // Lote 2 — Biblioteca e Descoberta: Continuar assistindo novo + Modo aleatório.
@@ -128,6 +149,15 @@ class PlatformPrefs @Inject constructor(
 
         /** Paleta padrão (Padrão, id "default"). */
         private const val DEFAULT_THEME_PALETTE = "default"
+
+        /**
+         * As 6 cores editáveis do tema personalizado (JSON, ver [CustomThemeColors]).
+         * Do aparelho, como o tema: vale p/ todo mundo que usa o aparelho.
+         */
+        private const val KEY_CUSTOM_THEME = "custom_theme_v1"
+
+        /** Blur real atrás das folhas/painéis (Lote 3, v1.11.0). Do aparelho, como o tema. */
+        private const val KEY_PANEL_BLUR = "pref_panel_blur"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -153,13 +183,25 @@ class PlatformPrefs @Inject constructor(
         val arr = org.json.JSONArray(prefs.getString("profiles", "[]"))
         (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
-            Profile(o.getString("id"), o.optString("name", "Perfil"), o.optInt("color", 0), o.optBoolean("kids", false))
+            Profile(
+                o.getString("id"), o.optString("name", "Perfil"), o.optInt("color", 0), o.optBoolean("kids", false),
+                // Campos novos (v1.11.0): opt* com default = perfil antigo lê como se
+                // nunca tivesse avatar/PIN/primários, sem perder nome, cor ou infantil.
+                o.optString("avatar_url", ""), o.optString("avatar_id", ""),
+                o.optString("pin_hash", ""), o.optBoolean("use_primary_addons", false),
+            )
         }
     }.getOrDefault(emptyList()).ifEmpty { listOf(Profile(MAIN_PROFILE, "Principal")) }
 
     private fun saveProfiles(list: List<Profile>) {
         val arr = org.json.JSONArray()
-        list.forEach { arr.put(org.json.JSONObject().put("id", it.id).put("name", it.name).put("color", it.color).put("kids", it.kids)) }
+        list.forEach {
+            arr.put(
+                org.json.JSONObject().put("id", it.id).put("name", it.name).put("color", it.color).put("kids", it.kids)
+                    .put("avatar_url", it.avatarUrl).put("avatar_id", it.avatarId)
+                    .put("pin_hash", it.pinHash).put("use_primary_addons", it.usePrimaryAddons),
+            )
+        }
         prefs.edit().putString("profiles", arr.toString()).apply()
         _profiles.value = list
     }
@@ -176,8 +218,16 @@ class PlatformPrefs @Inject constructor(
         return p
     }
 
-    fun updateProfile(p: Profile) =
-        saveProfiles(_profiles.value.map { if (it.id == p.id) p.copy(name = p.name.trim().take(20).ifBlank { "Perfil" }) else it })
+    fun updateProfile(p: Profile) {
+        // Antes só copiava o nome (o resto — cor, infantil, avatar, PIN,
+        // primários — se perdia no salvar). Agora grava o perfil inteiro,
+        // só normalizando o nome; quem chama passa o copy completo.
+        val clean = p.copy(name = p.name.trim().take(20).ifBlank { "Perfil" })
+        saveProfiles(_profiles.value.map { if (it.id == p.id) clean else it })
+        // Trocar "usar addons primários" muda DE QUAL perfil vem a lista de
+        // fontes fixadas: recarrega o fluxo efetivo na hora.
+        _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
+    }
 
     /**
      * Apaga o perfil e as preferências dele. Nunca apaga o último. O que fica no banco (lista,
@@ -353,6 +403,49 @@ class PlatformPrefs @Inject constructor(
         get() = _themePalette.value
         set(value) { prefs.edit().putString(KEY_THEME_PALETTE, value).apply(); _themePalette.value = value }
 
+    // ── Tema personalizado (Lote 3, v1.11.0) — do aparelho, como o tema ─────
+    // As 6 cores editáveis (ver CustomThemeColors); o resto da paleta é
+    // derivado delas em derivedCustomPalette. Editar aqui já avisa a
+    // MainActivity, então com o Personalizado selecionado a mudança aparece
+    // na hora, sem reabrir nada. NÃO vai p/ SCOPED_KEYS: tema é do aparelho,
+    // não do perfil.
+
+    private val _customTheme = MutableStateFlow(
+        CustomThemeColors.fromJson(prefs.getString(KEY_CUSTOM_THEME, null)),
+    )
+    /** As 6 cores editáveis do tema personalizado, que avisam quem observa. */
+    val customThemeFlow: StateFlow<CustomThemeColors> = _customTheme.asStateFlow()
+
+    /** As 6 cores editáveis do tema personalizado. Gravar aqui já avisa quem observa. */
+    var customTheme: CustomThemeColors
+        get() = _customTheme.value
+        set(value) { prefs.edit().putString(KEY_CUSTOM_THEME, value.toJson()).apply(); _customTheme.value = value }
+
+    /** Troca uma das 6 cores editáveis (chave desconhecida = sem mudança). */
+    fun updateCustomThemeColor(key: String, argb: Int) {
+        customTheme = customTheme.withColor(key, argb)
+    }
+
+    /** Volta as 6 cores editáveis p/ as do tema Padrão. */
+    fun resetCustomTheme() {
+        customTheme = CustomThemeColors()
+    }
+
+    // ── Blur nos painéis (Lote 3, v1.11.0) — do aparelho, como o tema ───────
+    // Liga o blur real (RenderEffect, API 31+) atrás das folhas do detalhe
+    // (fontes e filmografia). Padrão LIGADO: em aparelho abaixo do Android 12
+    // não há efeito (só o scrim escuro), então ligar por padrão não muda nada
+    // p/ quem não tem o recurso. NÃO vai p/ SCOPED_KEYS: é do aparelho.
+
+    private val _panelBlur = MutableStateFlow(prefs.getBoolean(KEY_PANEL_BLUR, true))
+    /** Blur nos painéis ligado, que avisa quem observa. */
+    val panelBlurFlow: StateFlow<Boolean> = _panelBlur.asStateFlow()
+
+    /** Blur nos painéis ligado. Gravar aqui já avisa quem observa. */
+    var panelBlur: Boolean
+        get() = _panelBlur.value
+        set(value) { prefs.edit().putBoolean(KEY_PANEL_BLUR, value).apply(); _panelBlur.value = value }
+
     // ── Exibição da Início (por perfil, Fase B) ─────────────────────────────
     // Pôster pequeno por padrão (o Davi achou a Início grande demais). Um fluxo
     // só carrega as 7 prefs juntas; cada setter reescreve o conjunto e avisa.
@@ -453,6 +546,17 @@ class PlatformPrefs @Inject constructor(
         get() = _detailEpisodeRatings.value
         set(value) { prefs.edit().putBoolean(sk("pref_detail_episode_ratings"), value).apply(); _detailEpisodeRatings.value = value }
 
+    // (v1.11.0, Lote 3 item 6) Título em idioma original na página de
+    // detalhes — linha secundária abaixo do título traduzido (ou do logo).
+    // Padrão false: quem não mexer continua vendo só o título traduzido.
+    // Sem dado do TMDB (original_title/original_name vazio) não mostra nada.
+    private val _detailOriginalTitle = MutableStateFlow(prefs.getBoolean(sk("pref_detail_original_title"), false))
+    /** Título original (TMDB) visível na página de detalhes. */
+    val detailOriginalTitleFlow: StateFlow<Boolean> = _detailOriginalTitle.asStateFlow()
+    var detailOriginalTitle: Boolean
+        get() = _detailOriginalTitle.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_original_title"), value).apply(); _detailOriginalTitle.value = value }
+
     // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
     // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
     // que avisa quem observa (a folha lê daqui e aplica na hora); o var é o valor
@@ -501,8 +605,27 @@ class PlatformPrefs @Inject constructor(
         get() = _streamLogo.value
         set(value) { prefs.edit().putBoolean(sk("pref_stream_logo"), value).apply(); _streamLogo.value = value }
 
-    private fun readStringList(key: String): List<String> = runCatching {
-        val arr = org.json.JSONArray(prefs.getString(sk(key), "[]"))
+    /**
+     * SEMÂNTICA DE "USAR ADDONS PRIMÁRIOS" (Lote 3, v1.11.0) — espelho do
+     * NuvioAccountService (perfil do Nuvio com usesPrimaryAddons resolve os
+     * addons com o índice 1, o principal). No AOTV a lista de addons Stremio
+     * em si é DO APARELHO (addonEntries, sem escopo por perfil — ver o
+     * comentário em SCOPED_KEYS), então não há "addons do perfil" para
+     * trocar. O que É por perfil é a lista de FONTES FIXADAS
+     * (pref_stream_pinned, Fase C: a ordem/fixação na folha de fontes). Com
+     * o toggle ligado, o perfil lê E grava a lista de fixadas do perfil
+     * principal em vez da sua — igual ao Nuvio, só que sobre o que de fato
+     * é por perfil aqui. O perfil principal com o toggle ligado é no-op
+     * (ele já é o primário). A importação da conta Nuvio (que já usa
+     * usesPrimaryAddons no servidor) NÃO muda com isto.
+     */
+    fun pinnedOwnerId(): String =
+        if (profile.usePrimaryAddons && _profileId.value != MAIN_PROFILE) MAIN_PROFILE else _profileId.value
+
+    private fun readStringList(key: String): List<String> = readStringListFor(key, _profileId.value)
+
+    private fun readStringListFor(key: String, profileId: String): List<String> = runCatching {
+        val arr = org.json.JSONArray(prefs.getString(scopedKey(key, profileId), "[]"))
         (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
     }.getOrDefault(emptyList())
 
@@ -512,12 +635,19 @@ class PlatformPrefs @Inject constructor(
         prefs.edit().putString(sk(key), arr.toString()).apply()
     }
 
-    private val _streamPinned = MutableStateFlow(readStringList("pref_stream_pinned"))
-    /** Addons fixados no topo da folha de fontes, na ordem (nomes de addon). Vazio = nenhum fixado. */
+    /** Grava a lista de fixadas no dono efetivo (ver [pinnedOwnerId]). */
+    private fun writePinnedList(value: List<String>) {
+        val arr = org.json.JSONArray()
+        value.forEach { arr.put(it) }
+        prefs.edit().putString(scopedKey("pref_stream_pinned", pinnedOwnerId()), arr.toString()).apply()
+    }
+
+    private val _streamPinned = MutableStateFlow(readStringListFor("pref_stream_pinned", pinnedOwnerId()))
+    /** Addons fixados no topo da folha de fontes, na ordem (nomes de addon). Vazio = nenhum fixado. Com "usar addons primários" ligado, é a lista do perfil principal (ver [pinnedOwnerId]). */
     val streamPinnedFlow: StateFlow<List<String>> = _streamPinned.asStateFlow()
     var streamPinned: List<String>
         get() = _streamPinned.value
-        set(value) { writeStringList("pref_stream_pinned", value); _streamPinned.value = value }
+        set(value) { writePinnedList(value); _streamPinned.value = value }
 
     // ── Player (por perfil, Fase C) ──────────────────────────────────────────
     // Botões configuráveis, tocar-p/-buscar, Volume Boost, mini player e
@@ -699,6 +829,22 @@ class PlatformPrefs @Inject constructor(
     var randomUnwatchedOnly: Boolean
         get() = _randomUnwatchedOnly.value
         set(value) { prefs.edit().putBoolean(sk("pref_random_unwatched_only"), value).apply(); _randomUnwatchedOnly.value = value }
+
+    // ── PIN do perfil (Lote 3, v1.11.0) ─────────────────────────────────────
+    // Um PIN por perfil, guardado como hash no próprio Profile (pinHash).
+    // Mesmo padrão do PIN dos pais (SHA-256 com sal fixo do app, gate de uso
+    // doméstico, não cofre). O sal NÃO inclui o id do perfil de propósito:
+    // o PIN pode ser definido no editor ANTES de o perfil existir (id novo
+    // só nasce no addProfile) e precisa continuar válido depois de criado.
+    // "" = perfil sem PIN (troca livre).
+    fun hashProfilePin(pin: String): String {
+        val bytes = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(("aotv-profile-pin:$pin").toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    fun checkProfilePin(p: Profile, pin: String): Boolean =
+        p.pinHash.isNotBlank() && p.pinHash == hashProfilePin(pin)
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir
@@ -1254,13 +1400,14 @@ class PlatformPrefs @Inject constructor(
         _detailTabs.value = prefs.getBoolean(sk("pref_detail_tabs"), false)
         _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
         _detailEpisodeRatings.value = prefs.getBoolean(sk("pref_detail_episode_ratings"), true)
+        _detailOriginalTitle.value = prefs.getBoolean(sk("pref_detail_original_title"), false)
         _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
         _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
         _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)
         _streamBadgesLang.value = prefs.getBoolean(sk("pref_stream_badges_lang"), true)
         _streamBadgesPos.value = prefs.getString(sk("pref_stream_badges_pos"), "stats") ?: "stats"
         _streamLogo.value = prefs.getBoolean(sk("pref_stream_logo"), true)
-        _streamPinned.value = readStringList("pref_stream_pinned")
+        _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
         _playerButtons.value = readStringList("pref_player_buttons")
         _playerTopActions.value = readStringList("pref_player_top_actions")
         _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)

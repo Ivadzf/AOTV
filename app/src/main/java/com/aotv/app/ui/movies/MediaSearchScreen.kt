@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.LocalMovies
 import androidx.compose.material3.*
@@ -178,6 +179,12 @@ fun MediaSearchScreen(
         return
     }
 
+    // Busca por voz (Lote 3, item 1) — só no celular. Na TV não há microfone, então
+    // o ramo de TV abaixo nem cria o launcher e a pill não mostra o botão. A
+    // transcrição cai em onQueryChange e a busca ao vivo dispara como se digitada.
+    // É da sessão: nada é salvo em pref.
+    val voiceSearch = rememberVoiceSearch(onResult = viewModel::onQueryChange)
+
     Column(
         Modifier
             .fillMaxSize()
@@ -205,6 +212,9 @@ fun MediaSearchScreen(
                 onValueChange = viewModel::onQueryChange,
                 modifier = Modifier.weight(1f),
                 onSearch = viewModel::searchNow,
+                // Aparelho sem reconhecimento de voz: sem botão, sem erro.
+                onVoiceClick = if (voiceSearch.available) voiceSearch.start else null,
+                voiceListening = voiceSearch.listening,
             )
         }
         SearchBody(query, results, isLoading, recents, viewModel, onItemClick)
@@ -338,6 +348,10 @@ private fun SearchPill(
     readOnly: Boolean = false,
     /** Busca imediata (botão de busca do teclado). */
     onSearch: (() -> Unit)? = null,
+    /** Busca por voz (só celular: null na TV e em aparelho sem reconhecedor). */
+    onVoiceClick: (() -> Unit)? = null,
+    /** O reconhecedor do sistema está aberto: o microfone acende. */
+    voiceListening: Boolean = false,
 ) {
     val src = remember { MutableInteractionSource() }
     val focused by src.collectIsFocusedAsState()
@@ -391,6 +405,32 @@ private fun SearchPill(
                 modifier = Modifier.fillMaxWidth()
                     .then(if (readOnly) Modifier.focusProperties { canFocus = false } else Modifier),
             )
+        }
+        // Microfone (Lote 3, item 1): só no celular editável — na TV readOnly=true
+        // e onVoiceClick é null, então o botão nunca aparece lá. Ouvindo, o botão
+        // acende em Accent; parado, fica igual ao limpar.
+        if (onVoiceClick != null && !readOnly) {
+            val micSrc = remember { MutableInteractionSource() }
+            Box(
+                Modifier
+                    .pressScale(micSrc)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(if (voiceListening) Accent else FillSubtle)
+                    .clickable(
+                        interactionSource = micSrc,
+                        indication = null,
+                        onClick = onVoiceClick,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = if (voiceListening) "Ouvindo…" else "Buscar por voz",
+                    tint = if (voiceListening) OnAccent else TextSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
         if (value.isNotEmpty() && !readOnly) {
             val clearSrc = remember { MutableInteractionSource() }

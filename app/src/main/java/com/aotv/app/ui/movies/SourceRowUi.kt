@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -197,16 +198,23 @@ fun SourceCard(
     val shape = RoundedCornerShape(16.dp)
     Column(
         modifier.fillMaxWidth().pressScale(interaction).clip(shape)
-            .background(if (focus || selected) AccentSoft else BackgroundCard2)
-            .border(if (focus) 2.dp else 1.dp, if (focus) FocusRing else if (selected) Accent else Border, shape)
+            // Selecionada com borda branca, como o card "720p / Selected" do Nuvio
+            // (antes: fundo AccentSoft + borda Accent 1.dp). Foco D-pad não muda.
+            .background(if (focus) AccentSoft else if (selected) Color.White.copy(alpha = 0.06f) else BackgroundCard2)
+            .border(if (focus || selected) 2.dp else 1.dp, if (focus) FocusRing else if (selected) Color.White.copy(alpha = 0.9f) else Border, shape)
             .onFocusChanged { focused = it.isFocused }
             .then(if (manualFocus) Modifier.focusProperties { canFocus = false } else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (selected || suggested) Text(if (selected) "Tocando agora" else "Melhor opção", color = Accent,
-            fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+        // Selo do selecionado com check, como o Nuvio marca a faixa/qualidade ativa.
+        if (selected || suggested) Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(Icons.Default.Check, null, tint = Accent, modifier = Modifier.size(13.dp))
+            Text(if (selected) "Tocando agora" else "Melhor opção", color = Accent,
+                fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+        }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val font = androidx.compose.ui.platform.LocalDensity.current.fontScale
             if (maxWidth < (280f * font.coerceAtLeast(1f)).dp) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

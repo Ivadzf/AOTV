@@ -2,6 +2,198 @@ package com.aotv.app.ui.theme
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+
+/**
+ * Cor editável do tema personalizado (Lote 3, v1.11.0). Só 6 cores são
+ * editáveis — o resto da paleta é DERIVADO delas (ver [derivedCustomPalette]):
+ * escolher 6 cores já dá um tema inteiro sem expor ~35 campos ao usuário.
+ * Guardado como ARGB Int (0xAARRGGBB) p/ serializar fácil em JSON no
+ * [com.aotv.app.data.local.PlatformPrefs].
+ *
+ * Chaves (estáveis, guardadas no JSON): "accent", "accentSecondary",
+ * "background", "backgroundElevated", "backgroundCard", "textPrimary".
+ */
+data class CustomThemeColors(
+    val accent: Int = 0xFF00C2B8.toInt(),
+    val accentSecondary: Int = 0xFF9E1B1B.toInt(),
+    val background: Int = 0xFF0D0D0D.toInt(),
+    val backgroundElevated: Int = 0xFF191919.toInt(),
+    val backgroundCard: Int = 0xFF222222.toInt(),
+    val textPrimary: Int = 0xFFF5F7F8.toInt(),
+) {
+    /** Valor da chave; chave desconhecida devolve o destaque. */
+    fun color(key: String): Int = when (key) {
+        "accent" -> accent
+        "accentSecondary" -> accentSecondary
+        "background" -> background
+        "backgroundElevated" -> backgroundElevated
+        "backgroundCard" -> backgroundCard
+        "textPrimary" -> textPrimary
+        else -> accent
+    }
+
+    /** Cópia com uma cor trocada (chave desconhecida = sem mudança). */
+    fun withColor(key: String, argb: Int): CustomThemeColors = when (key) {
+        "accent" -> copy(accent = argb)
+        "accentSecondary" -> copy(accentSecondary = argb)
+        "background" -> copy(background = argb)
+        "backgroundElevated" -> copy(backgroundElevated = argb)
+        "backgroundCard" -> copy(backgroundCard = argb)
+        "textPrimary" -> copy(textPrimary = argb)
+        else -> this
+    }
+
+    /** JSON `{"accent":"#00C2B8",...}` (sempre opaco: o alfa não é editável). */
+    fun toJson(): String {
+        val o = org.json.JSONObject()
+        CUSTOM_THEME_KEYS.forEach { o.put(it, formatHexColor(color(it))) }
+        return o.toString()
+    }
+
+    companion object {
+        /** As 6 chaves, na ordem do editor. */
+        val CUSTOM_THEME_KEYS = listOf(
+            "accent", "accentSecondary", "background",
+            "backgroundElevated", "backgroundCard", "textPrimary",
+        )
+
+        /** Rótulo de cada chave no editor. */
+        fun label(key: String): String = when (key) {
+            "accent" -> "Destaque"
+            "accentSecondary" -> "Destaque secundário"
+            "background" -> "Fundo"
+            "backgroundElevated" -> "Fundo elevado"
+            "backgroundCard" -> "Cartões"
+            "textPrimary" -> "Texto principal"
+            else -> key
+        }
+
+        /** Lê o JSON guardado; qualquer erro (ou null) volta ao padrão. */
+        fun fromJson(raw: String?): CustomThemeColors = runCatching {
+            val o = org.json.JSONObject(raw ?: return CustomThemeColors())
+            var out = CustomThemeColors()
+            CUSTOM_THEME_KEYS.forEach { key ->
+                parseHexColor(o.optString(key, ""))?.let { out = out.withColor(key, it) }
+            }
+            out
+        }.getOrDefault(CustomThemeColors())
+    }
+}
+
+/** Cores do tema Padrão nas 6 chaves editáveis (o personalizado nasce igual a ele). */
+val DEFAULT_CUSTOM_COLORS = CustomThemeColors()
+
+/** "#RRGGBB" a partir de um ARGB Int (alfa ignorado: as cores editáveis são opacas). */
+fun formatHexColor(argb: Int): String = "#%06X".format(argb and 0xFFFFFF)
+
+/**
+ * "#RRGGBB" (com ou sem "#", maiúsculo ou minúsculo) → ARGB opaco.
+ * Null quando não são 6 dígitos hexadecimais — o editor só aplica quando válido.
+ */
+fun parseHexColor(hex: String): Int? {
+    val clean = hex.trim().removePrefix("#")
+    if (clean.length != 6 || clean.any { it !in '0'..'9' && it !in 'a'..'f' && it !in 'A'..'F' }) return null
+    return (0xFF000000.toInt() or clean.toInt(16))
+}
+
+/** Mistura [a] com [b]: t=0 devolve [a], t=1 devolve [b]. */
+fun mixColors(a: Color, b: Color, t: Float): Color {
+    val k = t.coerceIn(0f, 1f)
+    return Color(
+        red = a.red + (b.red - a.red) * k,
+        green = a.green + (b.green - a.green) * k,
+        blue = a.blue + (b.blue - a.blue) * k,
+        alpha = a.alpha + (b.alpha - a.alpha) * k,
+    )
+}
+
+/**
+ * Texto (escuro 0xFF0A0A0A ou branco) com mais contraste sobre [background].
+ * Razão WCAG: escuro = (L+0,05)/0,05, branco = 1,05/(L+0,05); o escuro vence
+ * quando L > ~0,18. Usado p/ o onAccent do tema personalizado.
+ */
+fun bestOnColor(background: Color): Color {
+    val lum = background.luminance()
+    val contrastDark = (lum + 0.05f) / 0.05f
+    val contrastWhite = 1.05f / (lum + 0.05f)
+    return if (contrastDark >= contrastWhite) Color(0xFF0A0A0A) else Color(0xFFFFFFFF)
+}
+
+/**
+ * Paleta completa a partir das 6 cores editáveis (Lote 3, v1.11.0).
+ * REGRAS DE DERIVAÇÃO (documentadas p/ quem for mexer aqui):
+ * - accentFill = destaque escurecido 12%; accentDark = escurecido 40%.
+ * - accentSoft = fundo misturado com 15% de destaque (o "brilho" suave do tema).
+ * - backgroundCard2 = fundo clareado 4%; surface2 = fundo elevado clareado 10%.
+ * - textSecondary = texto misturado 22% p/ o fundo; textTertiary = 38% p/ o fundo.
+ * - border = fundo clareado 16% (tema escuro) / escurecido 16% (tema claro);
+ *   borderSubtle = texto principal com 6% de alfa.
+ * - glassBg = fundo com alfa 0xB8; panelBackground = fundo com alfa 0xF7;
+ *   overlayScrim = preto 0x99; hintChipBackground = preto 0x88; hintChipText = branco 0xAA.
+ * - focusBackground = fundo clareado 14%; searchFocused = fundo com 18% de destaque.
+ * - onAccent = o que tem MAIS contraste sobre o destaque (texto escuro
+ *   0xFF0A0A0A ou branco), pela razão de contraste WCAG: escuro vence quando
+ *   a luminância (linearizada) do destaque passa de ~0,18. Com as cores do
+ *   Padrão dá texto escuro sobre o turquesa, igual ao tema Padrão.
+ * - isLight = luminância do fundo > 0,55. Tema claro usa os valores de foco do
+ *   tema Branco (superfície escura, anel escuro, preenchimento preto); tema
+ *   escuro usa os do Padrão. O usuário escolhe o texto principal, então um
+ *   fundo claro com texto claro fica legível só se ele trocar o texto também.
+ * - liveRed/danger/dangerText/gold/ok NÃO são derivados: são as cores de estado
+ *   do Padrão, fixas em todo tema personalizado (não editáveis).
+ */
+fun derivedCustomPalette(colors: CustomThemeColors): AotvPalette {
+    val accent = Color(colors.accent)
+    val accentSecondary = Color(colors.accentSecondary)
+    val background = Color(colors.background)
+    val backgroundElevated = Color(colors.backgroundElevated)
+    val backgroundCard = Color(colors.backgroundCard)
+    val textPrimary = Color(colors.textPrimary)
+    val isLight = background.luminance() > 0.55f
+    val white = Color.White
+    val black = Color.Black
+    val lightenTarget = if (isLight) black else white
+    return AotvPalette(
+        id = "custom",
+        name = "Personalizado",
+        isLight = isLight,
+        background = background,
+        backgroundElevated = backgroundElevated,
+        backgroundCard = backgroundCard,
+        backgroundCard2 = mixColors(background, lightenTarget, 0.04f),
+        surface2 = mixColors(backgroundElevated, lightenTarget, 0.10f),
+        accent = accent,
+        accentFill = mixColors(accent, black, 0.12f),
+        accentDark = mixColors(accent, black, 0.40f),
+        accentSoft = mixColors(background, accent, 0.15f),
+        accentSecondary = accentSecondary,
+        liveRed = Color(0xFFE5484D),
+        danger = Color(0xFFE5484D),
+        dangerText = Color(0xFFFF8C8F),
+        gold = Color(0xFFF4CC75),
+        ok = Color(0xFF3DDC84),
+        textPrimary = textPrimary,
+        textSecondary = mixColors(textPrimary, background, 0.22f),
+        textTertiary = mixColors(textPrimary, background, 0.38f),
+        textOnLight = Color(0xFF0A0A0A),
+        border = mixColors(background, lightenTarget, 0.16f),
+        borderSubtle = textPrimary.copy(alpha = 0.06f),
+        glassBg = background.copy(alpha = 0xB8 / 255f),
+        overlayScrim = Color(0x99000000),
+        hintChipBackground = Color(0x88000000),
+        hintChipText = Color(0xAAFFFFFF),
+        panelBackground = background.copy(alpha = 0xF7 / 255f),
+        focusBackground = mixColors(background, lightenTarget, 0.14f),
+        focusSurface = if (isLight) Color(0xFF161616) else Color(0xFFFFFFFF),
+        onFocusSurface = if (isLight) Color(0xFFFFFFFF) else Color(0xFF0A0A0A),
+        focusRing = if (isLight) Color(0xFF1A1A1A) else Color(0xFFFFFFFF),
+        onAccent = bestOnColor(accent),
+        fillSubtle = if (isLight) Color(0x14000000) else Color(0x14FFFFFF),
+        fillTint = if (isLight) Color(0xFF000000) else Color(0xFFFFFFFF),
+        searchFocused = mixColors(background, accent, 0.18f),
+    )
+}
 
 /**
  * Paleta de cores do AOTV (Fase A, Frente 3). Uma paleta cobre tudo que antes
@@ -206,11 +398,20 @@ data class AotvPalette(
             accentSecondary = Color(0xFF7E57C2),
         )
 
-        /** Todas as paletas, na ordem do seletor. */
-        val all: List<AotvPalette> = listOf(Default, White, Crimson, Ocean, Violet, Emerald, Amber, Pink)
+        /** Tema personalizado (Lote 3, v1.11.0): derivado das cores salvas; aqui, com os padrões. */
+        val Custom: AotvPalette = derivedCustomPalette(DEFAULT_CUSTOM_COLORS)
 
-        /** Paleta pelo id salvo; id desconhecido (ou vazio) volta ao Padrão. */
-        fun fromId(id: String): AotvPalette = all.firstOrNull { it.id == id } ?: Default
+        /** Todas as paletas, na ordem do seletor. */
+        val all: List<AotvPalette> = listOf(Default, White, Crimson, Ocean, Violet, Emerald, Amber, Pink, Custom)
+
+        /**
+         * Paleta pelo id salvo; id desconhecido (ou vazio) volta ao Padrão.
+         * [custom] são as 6 cores editáveis salvas — só vale p/ id "custom";
+         * null usa os padrões (o seletor mostra o Personalizado com elas).
+         */
+        fun fromId(id: String, custom: CustomThemeColors? = null): AotvPalette =
+            if (id == "custom") derivedCustomPalette(custom ?: DEFAULT_CUSTOM_COLORS)
+            else all.firstOrNull { it.id == id } ?: Default
     }
 }
 

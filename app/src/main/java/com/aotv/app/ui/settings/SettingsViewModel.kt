@@ -117,6 +117,15 @@ class SettingsViewModel @Inject constructor(
     val detailEpisodeRatings: StateFlow<Boolean> = platformPrefs.detailEpisodeRatingsFlow
     fun setDetailEpisodeRatings(v: Boolean) { platformPrefs.detailEpisodeRatings = v }
 
+    // ── Aparência (Lote 3, v1.11.0; do aparelho, como o tema) ──
+    // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
+    val panelBlur: StateFlow<Boolean> = platformPrefs.panelBlurFlow
+    fun setPanelBlur(v: Boolean) { platformPrefs.panelBlur = v }
+
+    // Lote 3 item 6 (v1.11.0): título em idioma original na página de detalhes.
+    val detailOriginalTitle: StateFlow<Boolean> = platformPrefs.detailOriginalTitleFlow
+    fun setDetailOriginalTitle(v: Boolean) { platformPrefs.detailOriginalTitle = v }
+
     // ── Modo aleatório (Lote 2, v1.10.0) ───────────────────────────────────
     val randomIncludeContinue: StateFlow<Boolean> = platformPrefs.randomIncludeContinueFlow
     fun setRandomIncludeContinue(v: Boolean) { platformPrefs.randomIncludeContinue = v }

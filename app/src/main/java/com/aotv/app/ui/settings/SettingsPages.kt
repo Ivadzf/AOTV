@@ -127,6 +127,7 @@ import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
 // DEPENDÊNCIA (outra frente da Fase A): ThemeSelector() vive em ui/theme/ThemePicker.kt.
 // Se o arquivo ainda não existe, esta importação é o único ponto a integrar.
+import com.aotv.app.ui.theme.CustomThemeEditor
 import com.aotv.app.ui.theme.ThemeSelector
 
 /** Ids das páginas — são os segmentos da rota `movies_settings/{page}`. */
@@ -434,6 +435,7 @@ private fun DetalhePage(
     val tabs by viewModel.detailTabs.collectAsStateWithLifecycle()
     val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
     val episodeRatings by viewModel.detailEpisodeRatings.collectAsStateWithLifecycle()
+    val originalTitle by viewModel.detailOriginalTitle.collectAsStateWithLifecycle()
     SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack) {
         SettingsSection("Fundo e entrada")
         com.aotv.app.ui.common.SettingsGroup {
@@ -473,6 +475,18 @@ private fun DetalhePage(
                 onClick = { viewModel.setDetailTabs(!tabs) },
                 grouped = true,
                 divider = true,
+            )
+        }
+        SettingsSection("Título original")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Translate,
+                title = "Título em idioma original",
+                sub = if (originalTitle) "Mostra o título original do TMDB numa linha abaixo do título traduzido na página de detalhes"
+                    else "Só o título traduzido. Ligado, mostra também o original (ex.: o nome em inglês) abaixo dele",
+                trailing = { Switch(checked = originalTitle, onCheckedChange = { viewModel.setDetailOriginalTitle(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailOriginalTitle(!originalTitle) },
+                grouped = true,
             )
         }
         SettingsSection("Episódios")
@@ -926,11 +940,27 @@ private fun AparenciaPage(
 ) {
     val currentMode by viewModel.platformMode.collectAsStateWithLifecycle()
     val deviceLayout = com.aotv.app.ui.common.currentDeviceLayout(currentMode)
+    // Blur nos painéis (Lote 3 item 4, v1.11.0; padrão: ligado).
+    val panelBlur by viewModel.panelBlur.collectAsStateWithLifecycle()
     SettingsPageScaffold("Aparência", "Tema e aparelho", onBack) {
         SettingsSection("Tema")
         // Única setting nova da Fase A. O composable vem de ui/theme/ThemePicker.kt
         // (outra frente); sem ele, esta é a única importação a integrar.
         ThemeSelector()
+        // Tema personalizado (Lote 3 item 3, v1.11.0): as 6 cores editáveis.
+        SettingsSection("Tema personalizado")
+        CustomThemeEditor()
+        SettingsSection("Painéis")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Image,
+                title = "Blur nos painéis",
+                sub = "Desfoca o conteúdo atrás da folha de fontes e da filmografia (Android 12+). Abaixo disso, fica só o fundo escuro.",
+                trailing = { Switch(checked = panelBlur, onCheckedChange = { viewModel.setPanelBlur(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setPanelBlur(!panelBlur) },
+                grouped = true,
+            )
+        }
         SettingsSection("Aparelho")
         Text(
             "Layout atual ${deviceLayout.label}. O modo automático reconhece TV e adapta celular e tablet ao espaço disponível.",

@@ -24,15 +24,15 @@ import com.aotv.app.ui.theme.DangerText
 import com.aotv.app.ui.theme.TextPrimary
 import com.aotv.app.ui.theme.TextSecondary
 
-/** Pede o PIN dos pais pra confirmar uma ação (sair do infantil, abrir Addons/TMDB/Aparelho). */
+/** Pede o PIN pra confirmar uma ação (sair do infantil, abrir Addons/TMDB/Aparelho, ou entrar num perfil com PIN). */
 @Composable
-fun VerifyPinDialog(onConfirm: (pin: String) -> Boolean, onDismiss: () -> Unit) {
+fun VerifyPinDialog(title: String = "PIN dos pais", onConfirm: (pin: String) -> Boolean, onDismiss: () -> Unit) {
     var pin by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = BackgroundCard,
-        title = { Text("PIN dos pais", color = TextPrimary) },
+        title = { Text(title, color = TextPrimary) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Digite o PIN pra continuar.", color = TextSecondary, fontSize = 13.sp)

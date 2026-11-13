@@ -704,6 +704,10 @@ fun SidePanel(
     subColor: Color = TextTertiary,
     titleTrailing: (@Composable () -> Unit)? = null,
     width: Dp = 440.dp,
+    /** Título maior, estilo Nuvio (painéis do player usam 26.sp; o resto mantém 22.sp). */
+    titleSize: androidx.compose.ui.unit.TextUnit = 22.sp,
+    /** Quando setado, o botão de fechar vira pill com esse texto (Nuvio: "Fechar"). */
+    dismissLabel: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val touch = !LocalIsTv.current
@@ -727,12 +731,19 @@ fun SidePanel(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(title, color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, fontFamily = Inter,
+                Text(title, color = TextPrimary, fontSize = titleSize, fontWeight = FontWeight.ExtraBold, fontFamily = Inter,
                     lineHeight = if (touch) 28.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
                     maxLines = if (touch) 2 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = touch))
                 titleTrailing?.invoke()
-                if (touch) GlassCircleButton(Icons.Default.Close, onDismiss, size = 48.dp, contentDescription = "Fechar painel")
+                if (touch) {
+                    if (dismissLabel != null) {
+                        // Pill "Fechar" do Nuvio no lugar do X: texto em pill escura.
+                        Text(dismissLabel, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = Inter,
+                            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Surface2)
+                                .clickable(onClick = onDismiss).padding(horizontal = 16.dp, vertical = 10.dp))
+                    } else GlassCircleButton(Icons.Default.Close, onDismiss, size = 48.dp, contentDescription = "Fechar painel")
+                }
             }
             if (!sub.isNullOrBlank()) Text(sub, color = subColor, fontSize = 13.sp, fontFamily = Inter)
             content()

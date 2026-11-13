@@ -4,6 +4,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Saber se a rede é de dados móveis. Os selos do pôster não leem fontes em segundo plano nela. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Busca por voz (Lote 3, item 1): pedida em runtime só quando o microfone é tocado. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Microfone opcional: aparelho sem ele instala normal e a busca por voz some. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

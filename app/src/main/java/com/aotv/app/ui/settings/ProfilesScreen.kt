@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -25,6 +26,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -36,6 +38,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import coil.compose.AsyncImage
 import com.aotv.app.data.local.MAX_PROFILES
 import com.aotv.app.data.local.PROFILE_COLORS
 import com.aotv.app.data.local.PlatformPrefs
@@ -55,13 +58,19 @@ class ProfilesViewModel @Inject constructor(
     val profileId = prefs.profileId
 
     fun select(id: String) = prefs.selectProfile(id)
-    fun add(name: String, kids: Boolean, color: Int) {
-        prefs.addProfile(name, kids)?.let { prefs.updateProfile(it.copy(color = color)) }
+    fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false) {
+        prefs.addProfile(name, kids)?.let {
+            prefs.updateProfile(it.copy(color = color, avatarUrl = avatarUrl.trim(), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons))
+        }
     }
     fun update(p: Profile) = prefs.updateProfile(p)
     fun remove(id: String) {
         if (prefs.removeProfile(id)) viewModelScope.launch { library.dropProfile(id) }
     }
+
+    // PIN do perfil (Lote 3, v1.11.0): hash guardado no próprio Profile.
+    fun checkProfilePin(p: Profile, pin: String) = prefs.checkProfilePin(p, pin)
+    fun hashProfilePin(pin: String) = prefs.hashProfilePin(pin)
 
     // PIN dos pais: trava sair do infantil e entrar em editar perfis com infantil ativo.
     fun hasPin() = prefs.hasParentalPin
@@ -73,7 +82,12 @@ class ProfilesViewModel @Inject constructor(
     fun setPrivateMode(v: Boolean) { prefs.privateMode = v }
 }
 
-/** Círculo com a inicial na cor do perfil. Usado na grade, na barra e nas Configurações. */
+/**
+ * Avatar do perfil. Ordem (Lote 3, v1.11.0): URL personalizada (Coil, a mesma
+ * do resto do app) → preset do catálogo embutido → inicial colorida (o atual).
+ * URL inválida/vazia ou que falha ao carregar cai p/ o próximo, sem travar.
+ * Usado na grade, na barra e nas Configurações (mesma assinatura de antes).
+ */
 @Composable
 fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -87,22 +101,45 @@ fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
             trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.Both,
         ),
     )
+    val url = validAvatarUrl(profile.avatarUrl)
+    var imgFailed by remember(url) { mutableStateOf(false) }
+    val preset = avatarPreset(profile.avatarId)
+    val bg = Color(preset?.color ?: PROFILE_COLORS[profile.color.mod(PROFILE_COLORS.size)])
     Box(
-        modifier.size(size).clip(RoundedCornerShape(size * 0.28f))
-            .background(Color(PROFILE_COLORS[profile.color.mod(PROFILE_COLORS.size)])),
+        modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(bg),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            profile.name.trim().take(1).uppercase().ifBlank { "?" },
-            color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = initialSize,
-            lineHeight = initialSize, textAlign = TextAlign.Center, style = avatarText,
-        )
+        if (url.isNotBlank() && !imgFailed) {
+            AsyncImage(
+                model = url, contentDescription = profile.name, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                onError = { imgFailed = true },
+            )
+        } else if (preset != null) {
+            Text(
+                preset.glyph, color = Color.White, fontSize = initialSize, lineHeight = initialSize,
+                textAlign = TextAlign.Center, style = avatarText,
+            )
+        } else {
+            Text(
+                profile.name.trim().take(1).uppercase().ifBlank { "?" },
+                color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = initialSize,
+                lineHeight = initialSize, textAlign = TextAlign.Center, style = avatarText,
+            )
+        }
         if (profile.kids && size >= 48.dp) {
             Text(
                 "KIDS", color = Color.White, fontSize = kidsSize, lineHeight = kidsSize,
                 fontWeight = FontWeight.Black, textAlign = TextAlign.Center, style = avatarText,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = size * 0.06f),
             )
+        }
+        if (profile.pinHash.isNotBlank() && size >= 64.dp) {
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(4.dp).size(20.dp).clip(CircleShape)
+                    .background(Color(0xCC000000)),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Default.Lock, "Perfil com PIN", tint = Color.White, modifier = Modifier.size(12.dp)) }
         }
     }
 }
@@ -129,6 +166,9 @@ fun ProfilesScreen(
     // PIN dos pais: perfil pra trocar depois de confirmar, ou "entrar em editar" pendente.
     var pendingSwitch by remember { mutableStateOf<Profile?>(null) }
     var pendingEdit by remember { mutableStateOf(false) }
+    // PIN do perfil (Lote 3): trocar p/ um perfil com PIN ou editar um perfil com PIN.
+    var pendingSwitchPin by remember { mutableStateOf<Profile?>(null) }
+    var pendingEditProfile by remember { mutableStateOf<Profile?>(null) }
     var showSetPinNudge by remember { mutableStateOf(false) }
     // Controle remoto começa no perfil em uso.
     val currentTile = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -163,7 +203,12 @@ fun ProfilesScreen(
                     modifier = if (p.id == current) Modifier.focusRequester(currentTile) else Modifier,
                     selected = p.id == current && !editing,
                     onClick = {
-                        if (editing) panel = p
+                        if (editing) {
+                            // Editar um perfil com PIN pede o PIN antes de abrir o editor.
+                            if (p.pinHash.isNotBlank()) pendingEditProfile = p else panel = p
+                        }
+                        // Trocar p/ um perfil com PIN pede o PIN dele (antes do PIN dos pais).
+                        else if (p.pinHash.isNotBlank()) pendingSwitchPin = p
                         // Sair do infantil pra outro perfil pede o PIN, quando existe um definido.
                         else if (me?.kids == true && !p.kids && vm.hasPin()) pendingSwitch = p
                         else { vm.select(p.id); onPicked() }
@@ -255,16 +300,43 @@ fun ProfilesScreen(
         ProfileEditDialog(
             initial = p,
             canRemove = p.id.isNotEmpty() && profiles.size > 1,
+            // Resumo como na foto do Nuvio ("Perfil 2 | Addons primários ativados / Avatar: Kai").
+            summary = if (p.id.isEmpty()) "" else buildString {
+                append("Perfil ${profiles.indexOfFirst { it.id == p.id } + 1}")
+                if (p.usePrimaryAddons) append("  |  Addons primários ativados")
+                avatarPreset(p.avatarId)?.let { append("  |  Avatar: ${it.name}") }
+                if (p.pinHash.isNotBlank()) append("  |  Com PIN")
+            },
             onDismiss = { panel = null },
             onSave = { edited ->
                 val becameKids = edited.kids && !p.kids
-                if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color) else vm.update(edited)
+                if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons) else vm.update(edited)
                 panel = null
                 // Marcou infantil pela 1ª vez sem PIN nenhum definido no aparelho: convida a criar
                 // um agora, senão o modo infantil não trava nada (qualquer um sai dele na hora).
                 if (becameKids && !vm.hasPin()) showSetPinNudge = true
             },
             onRemove = { vm.remove(p.id); panel = null },
+            onHashPin = { pin -> vm.hashProfilePin(pin) },
+        )
+    }
+
+    pendingSwitchPin?.let { target ->
+        VerifyPinDialog(
+            title = "PIN do perfil",
+            onConfirm = { pin ->
+                if (vm.checkProfilePin(target, pin)) { vm.select(target.id); pendingSwitchPin = null; onPicked(); true } else false
+            },
+            onDismiss = { pendingSwitchPin = null },
+        )
+    }
+    pendingEditProfile?.let { target ->
+        VerifyPinDialog(
+            title = "PIN do perfil",
+            onConfirm = { pin ->
+                if (vm.checkProfilePin(target, pin)) { panel = target; pendingEditProfile = null; true } else false
+            },
+            onDismiss = { pendingEditProfile = null },
         )
     }
 
@@ -319,15 +391,29 @@ private fun ProfileTile(label: String, selected: Boolean, onClick: () -> Unit, m
 private fun ProfileEditDialog(
     initial: Profile,
     canRemove: Boolean,
+    summary: String = "",
     onDismiss: () -> Unit,
     onSave: (Profile) -> Unit,
     onRemove: () -> Unit,
+    onHashPin: (String) -> String,
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var kids by remember { mutableStateOf(initial.kids) }
     var color by remember { mutableIntStateOf(initial.color) }
+    // Lote 3 (v1.11.0): avatar por URL, preset do catálogo, "usar addons
+    // primários" e PIN do perfil. O perfil principal (id "main") não tem o
+    // toggle de primários — ele JÁ é o primário.
+    var avatarUrl by remember { mutableStateOf(initial.avatarUrl) }
+    var avatarId by remember { mutableStateOf(initial.avatarId) }
+    var usePrimaryAddons by remember { mutableStateOf(initial.usePrimaryAddons) }
+    var pinHash by remember { mutableStateOf(initial.pinHash) }
+    var showSetProfilePin by remember { mutableStateOf(false) }
+    var confirmRemovePin by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
-    val draft = initial.copy(name = name, kids = kids, color = color)
+    val draft = initial.copy(
+        name = name, kids = kids, color = color, avatarUrl = avatarUrl.trim(),
+        avatarId = avatarId, pinHash = pinHash, usePrimaryAddons = usePrimaryAddons,
+    )
     // Na TV o nome vem do teclado na tela. Perfil novo já abre pedindo o nome.
     val tv = com.aotv.app.ui.common.LocalIsTv.current
     var naming by remember { mutableStateOf(tv && initial.id.isEmpty()) }
@@ -342,6 +428,14 @@ private fun ProfileEditDialog(
         )
         return
     }
+    if (showSetProfilePin) {
+        SetPinDialog(
+            title = "Definir PIN do perfil",
+            onSet = { pin -> pinHash = onHashPin(pin); showSetProfilePin = false },
+            onDismiss = { showSetProfilePin = false },
+        )
+        return
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -351,17 +445,20 @@ private fun ProfileEditDialog(
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     ProfileAvatar(draft.copy(name = name.ifBlank { "?" }), 56.dp)
-                    if (tv) com.aotv.app.ui.common.SettingsRow(
-                        icon = Icons.Default.Edit, title = name.ifBlank { "Sem nome" }, sub = "Renomear",
-                        modifier = Modifier.weight(1f), onClick = { naming = true },
-                    ) else OutlinedTextField(
-                        value = name, onValueChange = { name = it.take(20) },
-                        label = { Text("Nome") }, singleLine = true, modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Accent, unfocusedBorderColor = Border,
-                            focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
-                        ),
-                    )
+                    Column(Modifier.weight(1f)) {
+                        if (tv) com.aotv.app.ui.common.SettingsRow(
+                            icon = Icons.Default.Edit, title = name.ifBlank { "Sem nome" }, sub = "Renomear",
+                            modifier = Modifier.fillMaxWidth(), onClick = { naming = true },
+                        ) else OutlinedTextField(
+                            value = name, onValueChange = { name = it.take(20) },
+                            label = { Text("Nome") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+                            ),
+                        )
+                        if (summary.isNotBlank()) Text(summary, color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
                 }
                 Text("Cor", color = TextTertiary, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -374,6 +471,57 @@ private fun ProfileEditDialog(
                         ) { if (i == color) Icon(Icons.Default.Check, "Cor escolhida", tint = Color.White, modifier = Modifier.size(18.dp)) }
                     }
                 }
+                // ── Avatar por URL (Lote 3 item 2a) ─────────────────────────
+                // Colar o link da imagem; vazio ou inválido volta p/ o catálogo
+                // e depois p/ a inicial, sem travar (ver ProfileAvatar).
+                Text("URL de avatar personalizada", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = avatarUrl, onValueChange = { avatarUrl = it },
+                    label = { Text("https://exemplo.com/avatar.png") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                        focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+                    ),
+                )
+                // ── Catálogo de avatares (Lote 3 item 2b) ───────────────────
+                // Presets embutidos no app (emoji + cor, sem URL de terceiros).
+                // A URL acima tem prioridade quando carrega; escolher aqui só
+                // muda o preset de fallback.
+                Text("Escolher um avatar", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text(
+                    avatarPreset(avatarId)?.name ?: "Nenhum — usa a inicial",
+                    color = TextTertiary, fontSize = 12.sp,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AVATAR_CATALOG.forEach { preset ->
+                        Box(
+                            Modifier.size(48.dp).clip(CircleShape).background(Color(preset.color))
+                                .border(3.dp, if (preset.id == avatarId) Color.White else Color.Transparent, CircleShape)
+                                .clickable { avatarId = preset.id },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(preset.glyph, fontSize = 24.sp, textAlign = TextAlign.Center) }
+                    }
+                }
+                // ── Usar addons primários (Lote 3 item 2d) ──────────────────
+                // Espelho do Nuvio: o perfil usa as fontes fixadas do perfil
+                // principal em vez das suas (addons em si são do aparelho).
+                // O principal não mostra o toggle (ele já é o primário).
+                if (initial.id != com.aotv.app.data.local.MAIN_PROFILE) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { usePrimaryAddons = !usePrimaryAddons }.padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Usar addons primários", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Compartilhar a configuração de addon do perfil principal em vez de gerenciar uma lista separada",
+                                color = TextTertiary, fontSize = 12.sp,
+                            )
+                        }
+                        Switch(checked = usePrimaryAddons, onCheckedChange = { usePrimaryAddons = it }, modifier = Modifier.focusProperties { canFocus = false })
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { kids = !kids }.padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -384,6 +532,29 @@ private fun ProfileEditDialog(
                     }
                     // A linha inteira já liga e desliga. O controle não precisa parar no Switch.
                     Switch(checked = kids, onCheckedChange = { kids = it }, modifier = Modifier.focusProperties { canFocus = false })
+                }
+                // ── PIN do perfil (Lote 3 item 2c) ──────────────────────────
+                // Trava entrar neste perfil E editar este perfil. Sem PIN, o
+                // comportamento é o atual. O hash vive no Profile; a troca
+                // pede o PIN (VerifyPinDialog "PIN do perfil").
+                Text("Segurança", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Adicione um PIN se quiser que este perfil seja bloqueado antes de alternar para ele.",
+                    color = TextTertiary, fontSize = 12.sp,
+                )
+                if (pinHash.isBlank()) {
+                    TextButton(onClick = { showSetProfilePin = true }) {
+                        Text("Definir bloqueio por PIN", color = Accent, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Default.Lock, null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                        Text("PIN definido", color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showSetProfilePin = true }) { Text("Trocar PIN", color = Accent) }
+                        TextButton(onClick = { if (confirmRemovePin) { pinHash = ""; confirmRemovePin = false } else confirmRemovePin = true }) {
+                            Text(if (confirmRemovePin) "Tocar de novo remove" else "Remover", color = LiveRed)
+                        }
+                    }
                 }
                 if (canRemove) {
                     TextButton(onClick = { if (confirmRemove) onRemove() else confirmRemove = true }) {

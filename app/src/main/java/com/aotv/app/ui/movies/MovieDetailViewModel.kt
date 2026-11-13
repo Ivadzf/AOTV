@@ -244,6 +244,12 @@ class MovieDetailViewModel @Inject constructor(
         val error: String? = null,
         /** Duração do filme no TMDB, em minutos. 0 = desconhecida. */
         val runtimeMin: Int = 0,
+        /** Título em idioma original (TMDB original_title / original_name). "" = sem dado. */
+        val originalTitle: String = "",
+        /** Orçamento do filme em dólares (TMDB). 0 = sem dado; séries sempre 0. */
+        val budget: Long = 0,
+        /** Receita do filme em dólares (TMDB). 0 = sem dado; séries sempre 0. */
+        val revenue: Long = 0,
         /** Teste das fontes por URL (filme e episódio). */
         val probes: Map<String, com.aotv.app.data.remote.ProbeResult> = emptyMap(),
         /** Magnet → o debrid tem pronto (true) ou não tem (false). Ausente = não se sabe. */
@@ -501,7 +507,7 @@ class MovieDetailViewModel @Inject constructor(
                 // Mostra o filme JÁ (hero). As fontes dos addons entram conforme chegam.
                 val trailer = detailDto?.videos.bestTrailerKey()
                 val trailers = detailDto?.videos.trailerKeys()
-                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
+                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
                 // Franquia (Harry Potter, Velozes…): carrega em paralelo e ordena por data de
                 // lançamento, que é a ordem cronológica que o usuário espera assistir.
@@ -576,6 +582,7 @@ class MovieDetailViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         series = seriesDetail,
+                        originalTitle = detailDto?.originalName.orEmpty(),
                         cast = castList,
                         related = relatedList,
                         trailerKey = trailer,

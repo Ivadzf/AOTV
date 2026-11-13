@@ -98,6 +98,9 @@ private fun PlayerActionPanelBody(
         title = title,
         onDismiss = onDismiss,
         width = if (television && (showCount || actions.any { it.episode || it.isSource })) 800.dp else 440.dp,
+        // Título maior e pill "Fechar", como os painéis do Nuvio.
+        titleSize = 26.sp,
+        dismissLabel = "Fechar",
         // A frase de fonte só vale no painel de fontes. Legendas e Áudio ganham a dica das teclas.
         sub = when {
             !showCount && television -> "Setas escolhem, OK aplica, Voltar fecha"
@@ -120,7 +123,7 @@ private fun PlayerActionPanelBody(
         LaunchedEffect(focusIdx, actions.size) {
             if (actions.isNotEmpty()) listState.animateScrollToItem(focusIdx.coerceIn(0, actions.lastIndex))
         }
-        LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             itemsIndexed(actions) { i, act ->
                 SourcePanelRow(act, focused = i == focusIdx, movieTitle = movieTitle, onClick = { onPick(act) })
             }
@@ -128,32 +131,36 @@ private fun PlayerActionPanelBody(
     }
 }
 
-/** Linha do painel (.panel-item). Selecionada em azul suave, foco D-pad em branco. */
+/** Linha do painel (.panel-item). Selecionada com borda branca, como no Nuvio
+ * (antes: fundo AccentSoft + borda Accent); foco D-pad continua fundo branco. */
 @Composable
 private fun SourcePanelRow(action: TvPlayerAction, focused: Boolean, movieTitle: String, onClick: () -> Unit) {
     val bg = when {
         focused -> Color.White
-        action.active -> AccentSoft
+        action.active -> Color.White.copy(alpha = 0.08f)
         else -> Color.White.copy(alpha = 0.05f)
     }
     val fg = if (focused) TextOnLight else Color.White
     val subColor = if (focused) Color(0xFF444444) else TextTertiary
-    val rowMod = Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(14.dp)).background(bg)
-        .then(if (action.active && !focused) Modifier.border(1.dp, Accent.copy(alpha = 0.45f), RoundedCornerShape(14.dp)) else Modifier)
+    val rowMod = Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(16.dp)).background(bg)
+        .then(if (action.active && !focused) Modifier.border(2.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(16.dp)) else Modifier)
         .focusProperties { canFocus = false }
         .clickable { onClick() }
         .padding(horizontal = 14.dp, vertical = 10.dp)
 
     Column(Modifier.alpha(if (action.disabled) 0.45f else 1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (action.header.isNotBlank()) com.aotv.app.ui.common.Eyebrow(action.header, Modifier.padding(top = 10.dp, start = 4.dp))
+        // Rótulo de seção em cinza, como o "Idiomas"/"Legendas" do Nuvio (antes: Accent).
+        if (action.header.isNotBlank()) com.aotv.app.ui.common.Eyebrow(action.header, Modifier.padding(top = 10.dp, start = 4.dp), color = TextSecondary)
         if (action.seasonTabs.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 action.seasonTabs.forEach { season ->
+                    // Chip de temporada do Nuvio: a selecionada é pill BRANCA com texto
+                    // escuro; as outras, pill escura com texto claro (antes: AccentFill).
                     val selected = season == action.selectedSeason
-                    Text("Temporada $season", color = if (focused && selected) TextOnLight else TextPrimary,
+                    Text("Temporada $season", color = if (selected) TextOnLight else TextPrimary,
                         fontSize = 14.sp, fontWeight = FontWeight.Bold,
                         modifier = Modifier.clip(RoundedCornerShape(30.dp))
-                            .background(if (focused && selected) Color.White else if (selected) AccentFill else Surface2)
+                            .background(if (selected) Color.White else Surface2)
                             .focusProperties { canFocus = false }.clickable { action.onSeasonPick?.invoke(season) }
                             .padding(horizontal = 14.dp, vertical = 10.dp))
                 }
@@ -178,27 +185,47 @@ private fun SourcePanelRow(action: TvPlayerAction, focused: Boolean, movieTitle:
                 null, tint = if (focused) TextOnLight else if (action.active) Accent else TextTertiary, modifier = Modifier.size(20.dp))
         }
         if (compactEpisode) Column(rowMod, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            AsyncImage(action.image, null, Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(8.dp)).background(Surface2), contentScale = ContentScale.Crop)
+            EpisodeThumb(action, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PlayerActionCopy(action, fg, subColor, Modifier.weight(1f))
+                PlayerActionCopy(action, fg, subColor, Modifier.weight(1f), titleSize = 16.sp)
                 trailing()
             }
         } else Row(rowMod, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (action.episode) AsyncImage(action.image, null, Modifier.width(if (shortWindow) 104.dp else 146.dp)
-                .aspectRatio(16f / 9f).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-            PlayerActionCopy(action, fg, subColor, Modifier.weight(1f))
+            if (action.episode) EpisodeThumb(action,
+                Modifier.width(if (shortWindow) 104.dp else 146.dp).aspectRatio(16f / 9f))
+            PlayerActionCopy(action, fg, subColor, Modifier.weight(1f), titleSize = if (action.episode) 16.sp else 15.sp)
             trailing()
         }
 
     }
 }
 
+/** "T1 E1" que o Nuvio grava na miniatura do episódio — o nosso vem no início do sub
+ * ("T1 E1 · 45 min · ★ 8.5"), então é só extrair, sem campo novo no TvPlayerAction. */
+private val EPISODE_CODE = Regex("""T(\d+)\s*E(\d+)""")
+
+private fun episodeCode(sub: String): String? =
+    EPISODE_CODE.find(sub)?.let { "T${it.groupValues[1]} E${it.groupValues[2]}" }
+
+/** Miniatura 16:9 do episódio com o selo "T1 E1" no canto inferior esquerdo, como no Nuvio. */
 @Composable
-private fun PlayerActionCopy(action: TvPlayerAction, foreground: Color, secondary: Color, modifier: Modifier) {
+private fun EpisodeThumb(action: TvPlayerAction, modifier: Modifier) {
+    val code = episodeCode(action.sub)
+    Box(modifier.clip(RoundedCornerShape(8.dp)).background(Surface2)) {
+        AsyncImage(action.image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (code != null) Text(code, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.align(Alignment.BottomStart).padding(6.dp)
+                .clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(alpha = 0.72f))
+                .padding(horizontal = 7.dp, vertical = 3.dp))
+    }
+}
+
+@Composable
+private fun PlayerActionCopy(action: TvPlayerAction, foreground: Color, secondary: Color, modifier: Modifier,
+    titleSize: androidx.compose.ui.unit.TextUnit = 15.sp) {
     val shortWindow = !com.aotv.app.ui.common.LocalIsTv.current && androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
     Column(modifier) {
-        Text(action.label, color = foreground, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
+        Text(action.label, color = foreground, fontSize = titleSize, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (action.sub.isNotBlank()) Text(action.sub, color = secondary, fontSize = 13.sp, lineHeight = 18.sp,
             maxLines = if (shortWindow) 1 else 3, overflow = TextOverflow.Ellipsis)
