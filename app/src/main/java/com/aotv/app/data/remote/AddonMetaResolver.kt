@@ -22,13 +22,18 @@ class AddonMetaResolver @Inject constructor(
 ) {
     private val imdbToTmdb = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
+    // Compilados uma vez: antes cada item compilava os dois (40 por página de
+    // fileira de addon, na Main) ao aparecer a fileira.
+    private val tmdbIdRegex = Regex("""^tmdb:(?:movie:|series:)?(\d+)""")
+    private val imdbIdRegex = Regex("""^tt\d+""")
+
     suspend fun resolve(metas: List<AddonMeta>, series: Boolean): List<MovieItem> = coroutineScope {
         val apiKey = prefs.tmdbApiKey
         metas.map { m ->
             async {
                 if (m.poster.isBlank()) return@async null
-                val tm = Regex("""^tmdb:(?:movie:|series:)?(\d+)""").find(m.id)?.groupValues?.get(1)?.toIntOrNull()
-                val imdb = Regex("""^tt\d+""").find(m.id)?.value
+                val tm = tmdbIdRegex.find(m.id)?.groupValues?.get(1)?.toIntOrNull()
+                val imdb = imdbIdRegex.find(m.id)?.value
                 val id = tm ?: imdb?.let { tt ->
                     imdbToTmdb[tt] ?: runCatching {
                         val r = tmdb.findByImdb(tt, apiKey = apiKey)

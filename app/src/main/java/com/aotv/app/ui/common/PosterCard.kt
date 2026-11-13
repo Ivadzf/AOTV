@@ -347,6 +347,12 @@ internal fun rememberPosterVisual(
         if (readHue) {
             scope.launch(Dispatchers.Default) {
                 if (hue != null) return@launch
+                // Espera os salvos: na abertura, a matiz inicial null disparava
+                // a cópia do bitmap (readback da GPU) mesmo com a cor salva.
+                info?.waitTintsLoaded()
+                val cached = info?.tint(key)
+                if (cached != null) { hue = cached; return@launch }
+                if (hue != null) return@launch
                 val h = hueFromDrawable(drawable) ?: return@launch
                 hue = h
                 info?.putTint(key, h)
@@ -373,6 +379,26 @@ internal fun rememberPosterVisual(
             }
         }
     } }
+    // Matiz cedo, em paralelo com o download da imagem: leitura 8×12 só do
+    // disco (sem rede — sem isso, o execute baixaria o pôster de novo em
+    // paralelo com o AsyncImage). Evita a cópia do bitmap exibido (readback
+    // da GPU + escala da imagem inteira) na maioria dos casos, e a matiz
+    // costuma chegar junto com a imagem — a faixa já nasce com a cor certa,
+    // sem uma segunda recomposição por cartão. Sem pôster no disco, o
+    // execute falha e a matiz sai do onImage, como antes (nada se perde).
+    if (readHue) LaunchedEffect(key) {
+        info?.waitTintsLoaded()
+        val cached = info?.tint(key)
+        if (cached != null) { hue = cached; return@LaunchedEffect }
+        val small = context.imageLoader.execute(
+            ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).networkCachePolicy(CachePolicy.DISABLED).build(),
+        )
+        val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
+        val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@LaunchedEffect
+        hue = h
+        info?.putTint(key, h)
+    }
     // Cartão parado na tela por 0,7 s pede a leitura das fontes. Saiu antes da vez, sai da fila.
     // Sem selos (compacto) nem pede: a leitura não aparece em lugar nenhum.
     if (showBadges && requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
