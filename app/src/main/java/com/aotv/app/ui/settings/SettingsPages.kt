@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -53,6 +54,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TouchApp
@@ -377,6 +379,45 @@ private fun LayoutPage(
                 grouped = true,
             )
         }
+
+        // Continuar assistindo novo + Modo aleatório (Lote 2, v1.10.0). O que o
+        // sorteio pode pegar: séries do Continuar assistindo e/ou da Minha Lista
+        // do perfil ativo. Filmes nunca entram (só episódios de série).
+        SettingsSection("Continuar assistindo e Modo aleatório")
+        val randomContinue by viewModel.randomIncludeContinue.collectAsStateWithLifecycle()
+        val randomWatchlist by viewModel.randomIncludeWatchlist.collectAsStateWithLifecycle()
+        val randomUnwatched by viewModel.randomUnwatchedOnly.collectAsStateWithLifecycle()
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Sortear do Continuar assistindo",
+                sub = if (randomContinue) "Séries em andamento entram no sorteio"
+                    else "Séries em andamento ficam fora do sorteio",
+                trailing = { Switch(checked = randomContinue, onCheckedChange = { viewModel.setRandomIncludeContinue(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setRandomIncludeContinue(!randomContinue) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.BookmarkBorder,
+                title = "Sortear da Minha Lista",
+                sub = if (randomWatchlist) "Séries salvas entram no sorteio"
+                    else "Séries salvas ficam fora do sorteio",
+                trailing = { Switch(checked = randomWatchlist, onCheckedChange = { viewModel.setRandomIncludeWatchlist(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setRandomIncludeWatchlist(!randomWatchlist) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VisibilityOff,
+                title = "Só episódios não vistos",
+                sub = if (randomUnwatched) "Se tudo já foi visto, o sorteio avisa em vez de tocar um repetido"
+                    else "Um episódio já visto pode sair no sorteio (o app tenta evitá-lo primeiro)",
+                trailing = { Switch(checked = randomUnwatched, onCheckedChange = { viewModel.setRandomUnwatchedOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setRandomUnwatchedOnly(!randomUnwatched) },
+                grouped = true,
+                divider = true,
+            )
+        }
     }
 }
 
@@ -392,6 +433,7 @@ private fun DetalhePage(
     val iconActions by viewModel.detailIconActions.collectAsStateWithLifecycle()
     val tabs by viewModel.detailTabs.collectAsStateWithLifecycle()
     val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
+    val episodeRatings by viewModel.detailEpisodeRatings.collectAsStateWithLifecycle()
     SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack) {
         SettingsSection("Fundo e entrada")
         com.aotv.app.ui.common.SettingsGroup {
@@ -434,6 +476,17 @@ private fun DetalhePage(
             )
         }
         SettingsSection("Episódios")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Star,
+                title = "Mostrar notas dos episódios",
+                sub = if (episodeRatings) "A nota do TMDB aparece nos cards de episódio, no mapa de notas e no painel de episódios do player"
+                    else "Sem notas: os cards mostram só data e duração, e o mapa de notas fica oculto",
+                trailing = { Switch(checked = episodeRatings, onCheckedChange = { viewModel.setDetailEpisodeRatings(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailEpisodeRatings(!episodeRatings) },
+                grouped = true,
+            )
+        }
         SettingsCard {
             PrefRow(
                 "Estilo do card de episódio",

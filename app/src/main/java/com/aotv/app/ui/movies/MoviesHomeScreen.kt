@@ -60,6 +60,7 @@ import com.aotv.app.ui.common.ScreenTopHeader
 import kotlinx.coroutines.launch
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.runtime.rememberCoroutineScope
 import com.aotv.app.ui.theme.*
 import com.aotv.app.data.local.SystemRow
@@ -73,7 +74,10 @@ fun MoviesHomeScreen(
     onDiscoverClick: () -> Unit = {},
     onCustomize: () -> Unit = {},
     onFolderClick: (collectionId: String, folderId: String) -> Unit = { _, _ -> },
+    /** Modo aleatório (Lote 2): episódio sorteado abre DIRETO no player. */
+    onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     viewModel: MoviesHomeViewModel = hiltViewModel(),
+    randomVm: RandomEpisodeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     // "Ver Tudo" → grid daquela query; null = home (hero + fileiras).
@@ -126,6 +130,21 @@ fun MoviesHomeScreen(
                 onPlayTrailer = playTrailerFn,
                 onCustomize = onCustomize,
                 onFolderClick = onFolderClick,
+                onPlayEpisode = onPlayEpisode,
+                randomVm = randomVm,
+            )
+        }
+        // Estado vazio do sorteio (Lote 2): diálogo com o motivo, sem travar a
+        // tela. Fica aqui (fora do LazyColumn, que não aceita @Composable direto).
+        val randomState by randomVm.state.collectAsStateWithLifecycle()
+        (randomState as? RandomEpisodeViewModel.RandomState.Empty)?.let { empty ->
+            AlertDialog(
+                onDismissRequest = { randomVm.consume() },
+                title = { Text("Nada para sortear") },
+                text = { Text(empty.message) },
+                confirmButton = {
+                    TextButton(onClick = { randomVm.consume() }) { Text("Entendi") }
+                },
             )
         }
         // Overlay do trailer (ExoPlayer) por cima de tudo, num Dialog em tela cheia.
@@ -415,9 +434,19 @@ private fun HomeSectionsTab(
     onPlayTrailer: (MoviesHomeViewModel.TrailerCard) -> Unit,
     onCustomize: () -> Unit,
     onFolderClick: (String, String) -> Unit,
+    onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    randomVm: RandomEpisodeViewModel,
 ) {
     val listState = rememberLazyListState()
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
+    // Modo aleatório (Lote 2): o sorteio abre DIRETO no player quando sai;
+    // sem série elegível, mostra o estado vazio em diálogo (não trava).
+    val randomState by randomVm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(randomState) {
+        val ready = randomState as? RandomEpisodeViewModel.RandomState.Ready ?: return@LaunchedEffect
+        onPlayEpisode(ready.item, ready.season, ready.episode, ready.episodeTotal)
+        randomVm.consume()
+    }
     // Listas derivadas estáveis: map/associate novos a cada composição tornavam
     // a fileira não-pulável (o LazyColumn recompunha a fileira inteira a cada
     // emissão do UiState, mesmo sem nada mudar nela).
@@ -506,6 +535,14 @@ private fun HomeSectionsTab(
                 }
                 Icon(Icons.Default.ChevronRight, "Abrir Descobrir", tint = TextTertiary, modifier = Modifier.size(22.dp))
             }
+        }
+        // Modo aleatório (Lote 2): entrada visível no topo da Início, mesmo sem
+        // nada no Continuar assistindo. Tocar sorteia e abre direto no player.
+        item(key = "random_episode") {
+            RandomEpisodeEntry(
+                rolling = randomState is RandomEpisodeViewModel.RandomState.Rolling,
+                onRoll = { randomVm.roll() },
+            )
         }
         if (heroItems.isNotEmpty()) {
             item(key = "hero") {
@@ -634,6 +671,40 @@ private fun HeroTitle(title: String, compact: Boolean = false) {
         fontFamily = SoraFontFamily, maxLines = 2, lineHeight = if (compact) 32.sp else 37.sp, letterSpacing = (-0.7).sp,
         overflow = TextOverflow.Ellipsis,
     )
+}
+
+/**
+ * Entrada do Modo aleatório (Lote 2, v1.10.0): cartão "Surpreenda-me" no topo
+ * da Início (e o mesmo na Biblioteca). Tocar sorteia um episódio das séries do
+ * Continuar assistindo + Minha Lista e abre direto no player.
+ */
+@Composable
+fun RandomEpisodeEntry(
+    rolling: Boolean,
+    onRoll: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(BackgroundCard)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, enabled = !rolling, onClick = onRoll)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(Icons.Default.Shuffle, null, tint = Accent, modifier = Modifier.size(24.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Surpreenda-me", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                fontWeight = FontWeight.SemiBold)
+            Text(
+                if (rolling) "Sorteando um episódio…" else "Sortear um episódio das suas séries",
+                color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+            )
+        }
+        if (rolling) CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+        else Icon(Icons.Default.ChevronRight, "Sortear episódio", tint = TextTertiary, modifier = Modifier.size(22.dp))
+    }
 }
 
 @Composable

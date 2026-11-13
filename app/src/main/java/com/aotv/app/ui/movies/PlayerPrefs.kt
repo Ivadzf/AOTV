@@ -135,6 +135,10 @@ class PlayerPrefsViewModel @Inject constructor(
     val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
     fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }
 
+    /** Modo privado do perfil (Lote 2, v1.10.0): assistir sem gravar nada. */
+    val privateMode: StateFlow<Boolean> = prefs.privateModeFlow
+    fun setPrivateMode(v: Boolean) { prefs.privateMode = v }
+
     /** Cor do texto da legenda (ARGB; branco por padrão). v1.9.0. */
     val subColor: StateFlow<Int> = prefs.subColorFlow
     fun setSubColor(v: Int) { prefs.subColor = v }
@@ -154,6 +158,15 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Velocidade de reprodução salva do perfil (0,5x–2x; 1x por padrão). v1.9.0. */
     val speed: StateFlow<Float> = prefs.playerSpeedFlow
     fun setSpeed(v: Float) { prefs.playerSpeed = v }
+
+    /**
+     * Notas dos episódios visíveis (Lote 2 item 5). Só LEITURA aqui: a pref é
+     * do detalhe (`pref_detail_episode_ratings`, por perfil) e o controle de
+     * verdade fica em Configurações → Página de detalhes → Episódios. O player
+     * só consome, p/ esconder o "★ nota" do painel de episódios junto com os
+     * cards do detalhe — uma fonte única, sem segunda pref p/ o mesmo ajuste.
+     */
+    val episodeRatings: StateFlow<Boolean> = prefs.detailEpisodeRatingsFlow
 
     /** Filtro de correção de cor do vídeo (Lote 1, v1.9.0). */
     val colorBrightness: StateFlow<Float> = prefs.playerColorBrightnessFlow

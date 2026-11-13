@@ -49,7 +49,7 @@ internal val SCOPED_KEYS = listOf(
     "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
     "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
     "pref_detail_cinematic", "pref_detail_poster_transition", "pref_detail_icon_actions",
-    "pref_detail_tabs", "pref_detail_episode_style",
+    "pref_detail_tabs", "pref_detail_episode_style", "pref_detail_episode_ratings",
     "pref_stream_search", "pref_stream_badges_size", "pref_stream_badges_codec",
     "pref_stream_badges_lang", "pref_stream_badges_pos", "pref_stream_logo",
     "pref_stream_pinned",
@@ -60,6 +60,10 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_animeskip_client_id", "pref_player_speed", "pref_player_swipe_seek",
     "pref_player_color_brightness", "pref_player_color_contrast", "pref_player_color_saturation",
     "pref_player_color_hue", "pref_player_color_preset", "pref_player_color_daltonism",
+    // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
+    "pref_private_mode",
+    // Lote 2 — Biblioteca e Descoberta: Continuar assistindo novo + Modo aleatório.
+    "pref_random_include_continue", "pref_random_include_watchlist", "pref_random_unwatched_only",
     // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
     "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
     "anilist_v1", "wetrakr_v1", "publicmetadb_v1",
@@ -438,6 +442,17 @@ class PlatformPrefs @Inject constructor(
         get() = _detailEpisodeStyle.value
         set(value) { prefs.edit().putString(sk("pref_detail_episode_style"), value).apply(); _detailEpisodeStyle.value = value }
 
+    // (v1.10.0, Lote 2 item 5) Mostrar ou ocultar as notas (ratings do TMDB) nos
+    // cards de episódio — detalhe e painel de episódios do player. Padrão true:
+    // quem não mexer continua vendo as notas como antes. Desligado, a nota some
+    // da meta do card E o Rating Map some junto (o mapa É a nota, em cor).
+    private val _detailEpisodeRatings = MutableStateFlow(prefs.getBoolean(sk("pref_detail_episode_ratings"), true))
+    /** Notas dos episódios visíveis nos cards (e no Rating Map / painel do player). */
+    val detailEpisodeRatingsFlow: StateFlow<Boolean> = _detailEpisodeRatings.asStateFlow()
+    var detailEpisodeRatings: Boolean
+        get() = _detailEpisodeRatings.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_episode_ratings"), value).apply(); _detailEpisodeRatings.value = value }
+
     // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
     // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
     // que avisa quem observa (a folha lê daqui e aplica na hora); o var é o valor
@@ -642,6 +657,48 @@ class PlatformPrefs @Inject constructor(
     var playerAnimeSkipClientId: String
         get() = _playerAnimeSkipClientId.value
         set(value) { prefs.edit().putString(sk("pref_player_animeskip_client_id"), value).apply(); _playerAnimeSkipClientId.value = value }
+
+    // ── Modo privado (Lote 2, v1.10.0) — por perfil ─────────────────────────
+    // Ligado, assistir não grava nada: nem progresso (poll do player, saída
+    // e ON_STOP), nem Continuar assistindo, nem episódio visto, nem scrobble
+    // pro Trakt. O bloqueio mora nos ViewModels que gravam (PlayerProgress e
+    // MovieDetail) e lê esta pref — desligar volta ao normal e o que foi
+    // assistido no privado NÃO aparece depois, porque nunca foi gravado.
+    // NÃO apaga o progresso anterior: só impede o novo.
+
+    private val _privateMode = MutableStateFlow(prefs.getBoolean(sk("pref_private_mode"), false))
+    /** Modo privado ligado no perfil ativo. */
+    val privateModeFlow: StateFlow<Boolean> = _privateMode.asStateFlow()
+    var privateMode: Boolean
+        get() = _privateMode.value
+        set(value) { prefs.edit().putBoolean(sk("pref_private_mode"), value).apply(); _privateMode.value = value }
+
+    // ── Modo aleatório (Lote 2, v1.10.0) — por perfil ───────────────────────
+    // O que entra no sorteio (ver RandomEpisode.kt p/ a decisão do conjunto):
+    // séries do Continuar assistindo e/ou da Minha Lista. "Só não vistos" tenta
+    // evitar episódios já marcados como vistos; sem episódio não visto no
+    // sorteio, o modo mostra o estado vazio em vez de tocar um repetido.
+
+    private val _randomIncludeContinue = MutableStateFlow(prefs.getBoolean(sk("pref_random_include_continue"), true))
+    /** Séries do Continuar assistindo entram no sorteio do Modo aleatório. */
+    val randomIncludeContinueFlow: StateFlow<Boolean> = _randomIncludeContinue.asStateFlow()
+    var randomIncludeContinue: Boolean
+        get() = _randomIncludeContinue.value
+        set(value) { prefs.edit().putBoolean(sk("pref_random_include_continue"), value).apply(); _randomIncludeContinue.value = value }
+
+    private val _randomIncludeWatchlist = MutableStateFlow(prefs.getBoolean(sk("pref_random_include_watchlist"), true))
+    /** Séries da Minha Lista entram no sorteio do Modo aleatório. */
+    val randomIncludeWatchlistFlow: StateFlow<Boolean> = _randomIncludeWatchlist.asStateFlow()
+    var randomIncludeWatchlist: Boolean
+        get() = _randomIncludeWatchlist.value
+        set(value) { prefs.edit().putBoolean(sk("pref_random_include_watchlist"), value).apply(); _randomIncludeWatchlist.value = value }
+
+    private val _randomUnwatchedOnly = MutableStateFlow(prefs.getBoolean(sk("pref_random_unwatched_only"), false))
+    /** Sortear só episódios ainda não vistos. Desligado, um episódio já visto pode sair (o sorteio tenta evitá-lo primeiro). */
+    val randomUnwatchedOnlyFlow: StateFlow<Boolean> = _randomUnwatchedOnly.asStateFlow()
+    var randomUnwatchedOnly: Boolean
+        get() = _randomUnwatchedOnly.value
+        set(value) { prefs.edit().putBoolean(sk("pref_random_unwatched_only"), value).apply(); _randomUnwatchedOnly.value = value }
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir
@@ -1196,6 +1253,7 @@ class PlatformPrefs @Inject constructor(
         _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
         _detailTabs.value = prefs.getBoolean(sk("pref_detail_tabs"), false)
         _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
+        _detailEpisodeRatings.value = prefs.getBoolean(sk("pref_detail_episode_ratings"), true)
         _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
         _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
         _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)
@@ -1226,6 +1284,10 @@ class PlatformPrefs @Inject constructor(
         _playerAutoSwitch.value = prefs.getBoolean(sk("pref_player_auto_switch"), true)
         _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
         _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
+        _privateMode.value = prefs.getBoolean(sk("pref_private_mode"), false)
+        _randomIncludeContinue.value = prefs.getBoolean(sk("pref_random_include_continue"), true)
+        _randomIncludeWatchlist.value = prefs.getBoolean(sk("pref_random_include_watchlist"), true)
+        _randomUnwatchedOnly.value = prefs.getBoolean(sk("pref_random_unwatched_only"), false)
     }
 
     private fun computeLayout(): List<HomeRowPref> {

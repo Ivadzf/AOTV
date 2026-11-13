@@ -180,6 +180,14 @@ fun MovieDetailScreen(
     val detailTabsOn by detailPrefs.tabs.collectAsStateWithLifecycle()
     val episodeStyleId by detailPrefs.episodeStyle.collectAsStateWithLifecycle()
     val episodeStyle = EpisodeCardStyle.fromId(episodeStyleId)
+    // Notas dos episódios (Lote 2 item 5, por perfil; padrão: mostrar).
+    val showEpisodeRatings by detailPrefs.episodeRatings.collectAsStateWithLifecycle()
+
+    // Navegador de episódios (Lote 2 item 3): busca + ordenação da TEMPORADA
+    // selecionada, em memória (sem recarregar a série). O estado vive aqui,
+    // na tela — não é pref: trocar de série recomeça a busca do zero.
+    var episodeQuery by rememberSaveable { mutableStateOf("") }
+    var episodeSortId by rememberSaveable { mutableStateOf(EpisodeSort.NUMBER.id) }
 
     // Transição do pôster (Fase B): escala 0.94→1 + fade na primeira composição.
     var detailEntered by remember { mutableStateOf(false) }
@@ -771,8 +779,87 @@ fun MovieDetailScreen(
                     }
                 }
 
+                // Lista exibida: temporada selecionada, filtrada pela busca e
+                // ordenada pelo modo escolhido — calculada 1x e usada pelo
+                // mapa, pelo contador e pelos cards (mesma ordem nos três).
+                val seasonEpisodes = state.seasons[state.selectedSeason] ?: emptyList()
+                val episodes = sortEpisodes(filterEpisodes(seasonEpisodes, episodeQuery), EpisodeSort.fromId(episodeSortId))
+
+                // ── Navegador de episódios (Lote 2 item 3) ─────────────────
+                // Busca + ordenação + Rating Map, SOBRE os cards da Fase B.
+                // Escopo: a temporada do chip selecionado (as temporadas
+                // carregam sob demanda; buscar em todas exigiria baixar todas).
+                // Tudo filtra em memória — trocar a busca não recarrega a série.
+                item {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = pad)
+                            .padding(top = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = episodeQuery,
+                            onValueChange = { episodeQuery = it },
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary) },
+                            trailingIcon = {
+                                if (episodeQuery.isNotEmpty()) IconButton(onClick = { episodeQuery = "" }) {
+                                    Icon(Icons.Default.Clear, "Limpar busca", tint = TextTertiary)
+                                }
+                            },
+                            placeholder = { Text("Buscar episódio…", color = TextTertiary, fontSize = 15.sp) },
+                            textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 15.sp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent, cursorColor = Accent,
+                                focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
+                            ),
+                            keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Ordenar:",
+                                color = TextSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = ManropeFontFamily,
+                            )
+                            EpisodeSort.entries.forEach { sort ->
+                                com.aotv.app.ui.common.FilterChipPill(
+                                    sort.label,
+                                    episodeSortId == sort.id,
+                                    onClick = { episodeSortId = sort.id },
+                                )
+                            }
+                        }
+                        // Rating Map (Lote 2 item 4): uma célula por episódio da
+                        // lista exibida, pintada pela nota. Some quando as notas
+                        // são desligadas (item 5) — o mapa É a nota, em cor.
+                        if (showEpisodeRatings && episodes.isNotEmpty()) {
+                            RatingMap(
+                                episodes = episodes,
+                                onEpisodeClick = { ep -> viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+                            )
+                        }
+                        if (episodeQuery.isNotBlank()) {
+                            Text(
+                                "${episodes.size} de ${seasonEpisodes.size} episódios",
+                                color = TextTertiary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = ManropeFontFamily,
+                            )
+                        }
+                    }
+                }
+
                 // Episode rows
-                val episodes = state.seasons[state.selectedSeason] ?: emptyList()
                 items(episodes, key = { it.episodeNumber }) { ep ->
                     EpisodeRowCard(
                         episode = ep,
@@ -780,6 +867,8 @@ fun MovieDetailScreen(
                         watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
                         watching = state.watchingEpisode == "${ep.seasonNumber}:${ep.episodeNumber}",
                         style = episodeStyle,
+                        // (Lote 2 item 5) notas desligadas somem da meta do card.
+                        showRating = showEpisodeRatings,
                         modifier = Modifier.padding(horizontal = pad, vertical = 5.dp),
                         onPlay = {
                             onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
@@ -789,9 +878,36 @@ fun MovieDetailScreen(
                     )
                 }
 
+                // Busca sem resultado: avisa e oferece limpar (diferente de
+                // temporada vazia, que é falha de carregamento — ver abaixo).
+                if (seasonEpisodes.isNotEmpty() && episodes.isEmpty() && episodeQuery.isNotBlank()) {
+                    item {
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                "Nenhum episódio corresponde à busca.",
+                                color = TextSecondary,
+                                fontSize = 14.sp,
+                                fontFamily = ManropeFontFamily,
+                            )
+                            Text(
+                                "Limpar busca",
+                                color = Accent,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = ManropeFontFamily,
+                                modifier = Modifier.clickable { episodeQuery = "" }.padding(8.dp),
+                            )
+                        }
+                    }
+                }
+
                 // Temporada sem episódios carregados e sem erro: avisa e oferece retry
                 // em vez de deixar a lista vazia sem explicação.
-                if (episodes.isEmpty() && !state.isLoading && state.error == null) {
+                if (seasonEpisodes.isEmpty() && !state.isLoading && state.error == null) {
                     item {
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 16.dp),
@@ -1815,6 +1931,9 @@ private fun EpisodeRowCard(
     watched: Boolean,
     watching: Boolean = false,
     style: EpisodeCardStyle = EpisodeCardStyle.HORIZONTAL,
+    // (Lote 2 item 5) notas desligadas: a "★ nota" some da meta do card
+    // (nos dois estilos). A nota da série no hero NÃO é afetada — só a do episódio.
+    showRating: Boolean = true,
     modifier: Modifier = Modifier,
     onPlay: () -> Unit,
     onSelect: () -> Unit,
@@ -1832,11 +1951,13 @@ private fun EpisodeRowCard(
         else -> Border
     }
     // Meta do episódio: data de lançamento · duração · nota (minimalista).
-    val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating) {
+    // A nota só entra quando as notas estão ligadas (item 5) — e só quando
+    // existe (rating 0 = sem votos no TMDB, não "nota zero").
+    val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating, showRating) {
         buildList {
             fmtIsoDateMobile(episode.airDate).takeIf { it.isNotBlank() }?.let { add(it) }
             if (episode.runtimeMin > 0) add("${episode.runtimeMin} min")
-            if (episode.rating > 0) add("★ %.1f".format(episode.rating))
+            if (showRating && episode.rating > 0) add("★ %.1f".format(episode.rating))
         }
     }
     // Empilhado com foco em texto (Fase B): sem arte, título + sinopse + duração.

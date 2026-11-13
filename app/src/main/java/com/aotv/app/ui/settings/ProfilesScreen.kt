@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +25,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +67,10 @@ class ProfilesViewModel @Inject constructor(
     fun hasPin() = prefs.hasParentalPin
     fun checkPin(pin: String) = prefs.checkParentalPin(pin)
     fun setPin(pin: String) = prefs.setParentalPin(pin)
+
+    // Modo privado (Lote 2, item 7 — v1.10.0): por perfil, vale p/ o perfil ativo.
+    val privateMode = prefs.privateModeFlow
+    fun setPrivateMode(v: Boolean) { prefs.privateMode = v }
 }
 
 /** Círculo com a inicial na cor do perfil. Usado na grade, na barra e nas Configurações. */
@@ -204,6 +210,43 @@ fun ProfilesScreen(
                 openSettings,
                 icon = Icons.Default.Settings,
                 tone = com.aotv.app.ui.common.ButtonTone.SECONDARY,
+            )
+        }
+        // Modo privado (Lote 2, item 7 — v1.10.0): toggle do perfil ativo, no
+        // mesmo lugar onde ficam as Configurações (a aba Perfil é o "hub" do
+        // perfil). Ligado, assistir não salva progresso, não atualiza o
+        // Continuar assistindo, não marca episódio como visto e não avisa o
+        // Trakt. Desligar volta ao normal; o que foi visto no privado NÃO
+        // aparece depois, porque nunca foi gravado. O progresso anterior
+        // (de antes de ligar) NÃO é apagado. O mesmo toggle existe no player
+        // (chip "Privado"), p/ ligar/desligar sem sair do vídeo.
+        val privateMode by vm.privateMode.collectAsStateWithLifecycle()
+        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BackgroundCard)
+                .clickable(role = Role.Button, onClick = { vm.setPrivateMode(!privateMode) })
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(Icons.Default.VisibilityOff, null, tint = TextPrimary, modifier = Modifier.size(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Modo privado", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    if (privateMode) "Ligado — assistir não salva progresso nem histórico"
+                    else "Assistir sem salvar progresso, Continuar assistindo ou episódios vistos",
+                    color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+            }
+            Switch(
+                checked = privateMode,
+                onCheckedChange = { vm.setPrivateMode(it) },
+                modifier = Modifier.focusProperties { canFocus = false },
             )
         }
     }

@@ -19,8 +19,24 @@ class PlayerProgressViewModel @Inject constructor(
     private val trakt: com.aotv.app.data.remote.TraktService,
 ) : ViewModel() {
 
+    /**
+     * Modo privado (Lote 2, v1.10.0): assistir não grava nada no perfil —
+     * nem progresso, nem Continuar assistindo, nem episódio visto, nem
+     * scrobble pro Trakt. O bloqueio mora AQUI (e no MovieDetailViewModel),
+     * no ponto central por onde passam TODOS os salvamentos do player (poll
+     * de 10s, saída, ON_STOP, troca de episódio/fonte): nenhum deles precisa
+     * saber do modo privado. Ler continua liberado — o progresso ANTERIOR
+     * (de antes de ligar o privado) segue valendo e o player retoma nele.
+     * Abertura aprendida (learnIntro) e som de outra fonte (saveExtAudio)
+     * NÃO são bloqueados: não são progresso nem histórico, são metadados
+     * de reprodução da série/título (o marcador de abertura é do aparelho,
+     * não do perfil, e não revela o que foi assistido).
+     */
+    private val privateMode get() = prefs.privateMode
+
     /** Avisa o Trakt (start, pause ou stop). Não faz nada sem conta conectada. */
     fun scrobble(action: String, tmdbId: Int, type: String, season: Int, episode: Int, positionMs: Long, durationMs: Long) {
+        if (privateMode) return
         if (durationMs <= 0) return
         trakt.scrobble(action, tmdbId, type, season, episode, positionMs * 100.0 / durationMs)
     }
@@ -94,6 +110,8 @@ class PlayerProgressViewModel @Inject constructor(
         sourceUrl: String,
         addon: String = "",
     ) {
+        // Modo privado: o poll de 10s, a saída e o ON_STOP passam todos por aqui.
+        if (privateMode) return
         if (tmdbId <= 0 || sourceUrl.isBlank() || positionMs <= 0) return
         viewModelScope.launch {
             library.saveProgress(
@@ -132,6 +150,7 @@ class PlayerProgressViewModel @Inject constructor(
 
     /** Marca o episódio como VISTO (chamado ao passar de 90% da duração). */
     fun markWatched(tmdbId: Int, season: Int, episode: Int) {
+        if (privateMode) return
         if (tmdbId <= 0 || season <= 0 || episode <= 0) return
         viewModelScope.launch { library.markEpisodeWatched(tmdbId, season, episode) }
     }

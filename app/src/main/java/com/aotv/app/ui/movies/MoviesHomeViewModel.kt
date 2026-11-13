@@ -31,6 +31,9 @@ class MoviesHomeViewModel @Inject constructor(
     private val tmdb: TmdbApiService,
     private val prefs: PlatformPrefs,
     private val library: com.aotv.app.data.repository.LibraryRepository,
+    /** Cache do detalhe de série (Lote 2, v1.10.0): compartilhado com o Calendário da
+     * Biblioteca — a série buscada aqui NÃO é buscada de novo lá (TTL 6h). */
+    private val seriesDetailCache: com.aotv.app.data.remote.SeriesDetailCache,
     private val youtubeTrailer: com.aotv.app.data.remote.YoutubeTrailer,
     private val stremio: com.aotv.app.data.remote.StremioAddonService,
     trakt: com.aotv.app.data.remote.TraktService,
@@ -229,13 +232,14 @@ class MoviesHomeViewModel @Inject constructor(
         val key = series.joinToString(",") { it.first.toString() }
         if (key == lastNewEpKey) return
         lastNewEpKey = key
-        val apiKey = prefs.tmdbApiKey
-        if (series.isEmpty() || apiKey.isBlank()) { _uiState.update { it.copy(newEpisodes = emptyList()) }; return }
+        if (series.isEmpty()) { _uiState.update { it.copy(newEpisodes = emptyList()) }; return }
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val out = series.map { (id, title, poster) ->
                 async {
-                    val d = runCatching { tmdb.getSeriesDetail(id, append = "", apiKey = apiKey) }.getOrNull() ?: return@async null
+                    // Detalhe via cache (Lote 2): a mesma série não é buscada 2x
+                    // entre a Início e o Calendário da Biblioteca.
+                    val d = seriesDetailCache.get(id) ?: return@async null
                     val last = d.lastEpisodeToAir
                     val seen = last != null && library.isEpisodeWatched(id, last.season, last.episode)
                     val item = MovieItem(

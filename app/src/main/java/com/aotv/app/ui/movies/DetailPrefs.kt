@@ -28,4 +28,6 @@ class DetailPrefsViewModel @Inject constructor(
     val iconActions: StateFlow<Boolean> = prefs.detailIconActionsFlow
     val tabs: StateFlow<Boolean> = prefs.detailTabsFlow
     val episodeStyle: StateFlow<String> = prefs.detailEpisodeStyleFlow
+    /** Notas dos episódios visíveis nos cards (Lote 2 item 5; padrão: mostrar). */
+    val episodeRatings: StateFlow<Boolean> = prefs.detailEpisodeRatingsFlow
 }

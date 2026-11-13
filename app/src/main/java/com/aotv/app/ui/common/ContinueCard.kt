@@ -5,18 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -27,10 +22,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.aotv.app.data.repository.ContinueArtwork
+import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.theme.*
 
-/** Cartão horizontal de episódio com altura suficiente para a fonte escolhida no celular. */
+/**
+ * Card horizontal do "Continuar assistindo" no padrão do Nuvio (Lote 2, v1.10.0):
+ * miniatura à esquerda, título da série, "T1 E1", título do episódio, barra de
+ * progresso fina e "% assistido" embaixo. Filme mostra "Filme" no lugar de T/E
+ * + título do episódio. Sem selo nem botão de play sobre a arte.
+ *
+ * MIGRAÇÃO: nenhuma. O card só muda o desenho — a fonte continua sendo o
+ * [com.aotv.app.data.local.entity.MovieHistoryEntity] (mesma tabela Room,
+ * mesmos campos, nada apagado nem recriado). O progresso, o episódio salvo e
+ * a fonte salva chegam aqui pelos mesmos mapas de antes (`progress`,
+ * `remaining`, `episode`, `artwork.episodeName`).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ContinueCard(
@@ -46,42 +53,64 @@ fun ContinueCard(
 ) {
     val width = continueCardWidth(compact)
     val font = LocalDensity.current.fontScale.coerceAtLeast(1f)
-    val height = maxOf(width.value * 9 / 16, 156f + 76f * (font - 1f)).dp
-    val shape = RoundedCornerShape(16.dp)
+    val height = maxOf(100f, 100f + 12f * (font - 1f)).dp
+    val shape = RoundedCornerShape(14.dp)
     var focused by remember { mutableStateOf(false) }
     var failed by remember(artwork?.imageUrl) { mutableStateOf(false) }
     val image = if (failed) artwork?.posterUrl.orEmpty().ifBlank { item.posterUrl }
         else artwork?.imageUrl.orEmpty().ifBlank { item.backdropUrl }.ifBlank { item.posterUrl }
-    Box(Modifier.width(width).height(height).clip(shape).background(BackgroundCard)
-        .onFocusChanged { focused = it.isFocused }
-        .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
-        .then(if (focused) Modifier.border(2.dp, Color.White, shape) else Modifier)) {
-        AsyncImage(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, onError = { failed = true })
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
-            0f to Color.Black.copy(alpha = .12f), .25f to Color.Transparent, 1f to Color.Black.copy(alpha = .94f),
-        )))
-        val pill = when {
-            remaining != null && remaining > 0 -> "Faltam $remaining min"
-            episode.isNotBlank() && (progress ?: 0f) <= 0f -> "Próximo episódio"
-            else -> "Continuar assistindo"
-        }
-        Text(pill, color = Color.White, fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Bold,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
-                .background(Color.Black.copy(alpha = .7f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 5.dp))
-        Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
-            if (episode.isNotBlank()) Text(episode.replace(':', ' '), color = TextSecondary, fontSize = 12.sp,
-                lineHeight = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(item.title.ifBlank { artwork?.title.orEmpty() }, color = Color.White, fontSize = 17.sp,
-                lineHeight = 21.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!artwork?.episodeName.isNullOrBlank()) Text(artwork!!.episodeName, color = TextSecondary,
-                fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Box(Modifier.align(Alignment.Center).size(44.dp).background(Color.Black.copy(alpha = .4f), CircleShape), contentAlignment = Alignment.Center) {
-            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(26.dp))
-        }
-        Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = .24f))) {
-            if (progress != null) Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White))
+    val isSeries = item.type == MediaType.SERIES
+    // Linha 2: "T1 E1" (já vem formatado pelo chamador) ou "Filme" / "Série".
+    val episodeLabel = when {
+        episode.isNotBlank() -> episode.replace(':', ' ')
+        isSeries -> "Série"
+        else -> "Filme"
+    }
+    val pctText = when {
+        progress != null -> "${(progress.coerceIn(0f, 1f) * 100).toInt()}% assistido"
+        remaining != null && remaining > 0 -> "Faltam $remaining min"
+        else -> ""
+    }
+    Row(
+        Modifier.width(width).height(height).clip(shape).background(BackgroundCard)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Color.White else Border, shape)
+            .onFocusChanged { focused = it.isFocused }
+            .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Miniatura: still do episódio (série) ou backdrop/pôster (filme).
+        AsyncImage(
+            image, null,
+            Modifier.width(108.dp).fillMaxHeight(),
+            contentScale = ContentScale.Crop, onError = { failed = true },
+        )
+        Column(
+            Modifier.weight(1f).fillMaxHeight().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                item.title.ifBlank { artwork?.title.orEmpty() },
+                color = Color.White, fontSize = 15.sp, lineHeight = 19.sp,
+                fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                episodeLabel, color = TextSecondary, fontSize = 13.sp, lineHeight = 16.sp,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (!artwork?.episodeName.isNullOrBlank()) Text(
+                artwork!!.episodeName, color = TextSecondary, fontSize = 13.sp, lineHeight = 16.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(1f))
+            if (progress != null) {
+                Box(Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = .24f), RoundedCornerShape(2.dp))) {
+                    Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White, RoundedCornerShape(2.dp)))
+                }
+            }
+            if (pctText.isNotBlank()) Text(
+                pctText, color = TextSecondary, fontSize = 11.sp, lineHeight = 14.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

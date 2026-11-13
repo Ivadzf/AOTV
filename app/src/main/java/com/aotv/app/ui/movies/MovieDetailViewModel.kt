@@ -645,8 +645,11 @@ class MovieDetailViewModel @Inject constructor(
      * Registra o título atual no histórico de reproduções (filme ou série). Chamado
      * no clique de "Assistir"/fonte — não depende do player abrir de fato.
      * [lastEpisode] ex "T1:E3" p/ série, vazio p/ filme.
+     * Modo privado (Lote 2, v1.10.0): não registra — o título não entra no
+     * Continuar assistindo nem no histórico.
      */
     fun recordPlayback(lastEpisode: String = "") {
+        if (prefs.privateMode) return
         val item = stubItem ?: return
         viewModelScope.launch {
             library.recordPlayback(item, lastEpisode = lastEpisode)
@@ -682,8 +685,13 @@ class MovieDetailViewModel @Inject constructor(
 
     // ───────────────────────── (D) EPISÓDIOS VISTOS ─────────────────────────
 
-    /** Marca um episódio como visto (chamado ao tocar o episódio). */
+    /**
+     * Marca um episódio como visto (chamado ao tocar o episódio).
+     * Modo privado (Lote 2, v1.10.0): não marca — o episódio não aparece
+     * como visto depois, nem a série entra no Continuar assistindo.
+     */
     fun markEpisodeWatched(season: Int, episode: Int) {
+        if (prefs.privateMode) return
         val item = stubItem ?: return
         viewModelScope.launch {
             library.markEpisodeWatched(item.tmdbId, season, episode)

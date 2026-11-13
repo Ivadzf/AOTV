@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ClosedCaptionOff
 import androidx.compose.material.icons.filled.FastForward
@@ -297,7 +298,13 @@ fun MoviePlayerScreen(
     val playerColorHue by playerPrefsVm.colorHue.collectAsState()
     val playerColorPreset by playerPrefsVm.colorPreset.collectAsState()
     val playerColorDaltonism by playerPrefsVm.colorDaltonism.collectAsState()
+    // Modo privado (Lote 2, item 7 — v1.10.0): o chip "Privado" do player lê
+    // daqui e a sessão avisa de volta por onPrivateModeToggle.
+    val playerPrivateMode by playerPrefsVm.privateMode.collectAsState()
     val playerSpeed by playerPrefsVm.speed.collectAsState()
+    // Notas dos episódios (Lote 2 item 5): a mesma pref do detalhe — o painel
+    // de episódios do player esconde o "★ nota" junto com os cards.
+    val showEpisodeRatings by playerPrefsVm.episodeRatings.collectAsState()
     s.playerButtonOrder = playerButtons
     s.playerTopActions = playerTopActionsPref
     s.routePlayId = playId
@@ -329,6 +336,11 @@ fun MoviePlayerScreen(
         playerPrefsVm.setColorPreset(ns.preset)
         playerPrefsVm.setColorDaltonism(ns.daltonism.id)
     }
+    // Modo privado (Lote 2, item 7 — v1.10.0): a tela lê o fluxo e entrega à
+    // sessão; o chip salva de volta por onPrivateModeToggle. Mudar no Perfil
+    // aplica na hora, mesmo com o player aberto.
+    s.privateMode = playerPrivateMode
+    s.onPrivateModeToggle = { playerPrefsVm.setPrivateMode(it) }
     // v1.9.0: velocidade salva do perfil — aplica ao abrir e quando muda nas
     // Configurações (o ExoPlayer novo começa em 1x; a troca de episódio mantém
     // a velocidade sozinha porque o player é o mesmo).
@@ -1673,6 +1685,21 @@ class PlayerSession(
     val colorState get() = ColorFilterState(colorBrightness, colorContrast, colorSaturation, colorHue, colorPreset, colorDaltonism)
     /** O painel chama p/ salvar (a tela liga ao PlayerPrefsViewModel). */
     var onColorFilterSave: (ColorFilterState) -> Unit = {}
+    // ── Modo privado (Lote 2, item 7 — v1.10.0) ────────────────────────────
+    // O chip "Privado" liga/desliga aqui; o bloqueio em si mora nos ViewModels
+    // (PlayerProgressViewModel.save/markWatched/scrobble e
+    // MovieDetailViewModel.recordPlayback/markEpisodeWatched) — a sessão só
+    // espelha o estado p/ o chip e avisa quem salva a pref do perfil.
+    var privateMode by run { mutableStateOf(false) }
+    /** A tela liga ao PlayerPrefsViewModel (salva a pref do perfil). */
+    var onPrivateModeToggle: (Boolean) -> Unit = {}
+    /** Liga/desliga o modo privado e avisa com um toast. */
+    fun togglePrivateMode() {
+        privateMode = !privateMode
+        onPrivateModeToggle(privateMode)
+        toastMsg = if (privateMode) "Modo privado ligado — nada será salvo no histórico"
+        else "Modo privado desligado — o progresso volta a ser salvo"
+    }
     /** Aplica um estado novo na sessão e salva (painel e D-pad usam este). */
     fun applyColorState(ns: ColorFilterState) {
         colorBrightness = ns.brightness; colorContrast = ns.contrast
@@ -2208,7 +2235,8 @@ class PlayerSession(
             val future = ep.airDate.isNotBlank() && ep.airDate > com.aotv.app.data.local.dayString()
             add(TvPlayerAction(ep.name.ifBlank { "Episódio ${ep.episodeNumber}" }, false, current,
                 sub = listOf("T$panelSeason E${ep.episodeNumber}", ep.runtimeMin.takeIf { it > 0 }?.let { "$it min" },
-                    ep.rating.takeIf { it > 0 }?.let { "★ " + com.aotv.app.ui.common.ratingText(it) },
+                    // (Lote 2 item 5) a nota some aqui também quando desligada.
+                    ep.rating.takeIf { it > 0 && showEpisodeRatings }?.let { "★ " + com.aotv.app.ui.common.ratingText(it) },
                     if (future) "Em breve" else if (current) "Tocando agora" else null).filterNotNull().joinToString(" · "),
                 image = ep.stillUrl.ifBlank { backdropUrl }.ifBlank { posterUrl }, detail = ep.overview,
                 episode = true, disabled = future, keepOpen = future) {
@@ -2270,6 +2298,11 @@ class PlayerSession(
         // canônica DEFAULT_PLAYER_BUTTONS (não mexida); o orderPlayerChips
         // põe ids fora do catálogo no fim, então ele aparece por último.
         add(PlayerChipItem(Icons.Default.Tune, "Cor", active = !colorState.isDefault, id = "color") { openDpadPanel("color") })
+        // Modo privado (Lote 2, item 7 — v1.10.0): mesmo padrão do chip "color"
+        // — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado nas
+        // Configurações (é um estado, não um botão configurável). Ligado, o
+        // player não salva progresso nem marca visto (ver togglePrivateMode).
+        add(PlayerChipItem(Icons.Default.VisibilityOff, if (privateMode) "Privado" else "Modo privado", active = privateMode, id = "private") { togglePrivateMode() })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource
             userLockedSource = pinnedSource

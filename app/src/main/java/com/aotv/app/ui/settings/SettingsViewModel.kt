@@ -114,6 +114,19 @@ class SettingsViewModel @Inject constructor(
     val detailEpisodeStyle: StateFlow<String> = platformPrefs.detailEpisodeStyleFlow
     fun setDetailEpisodeStyle(v: String) { platformPrefs.detailEpisodeStyle = v }
 
+    val detailEpisodeRatings: StateFlow<Boolean> = platformPrefs.detailEpisodeRatingsFlow
+    fun setDetailEpisodeRatings(v: Boolean) { platformPrefs.detailEpisodeRatings = v }
+
+    // ── Modo aleatório (Lote 2, v1.10.0) ───────────────────────────────────
+    val randomIncludeContinue: StateFlow<Boolean> = platformPrefs.randomIncludeContinueFlow
+    fun setRandomIncludeContinue(v: Boolean) { platformPrefs.randomIncludeContinue = v }
+
+    val randomIncludeWatchlist: StateFlow<Boolean> = platformPrefs.randomIncludeWatchlistFlow
+    fun setRandomIncludeWatchlist(v: Boolean) { platformPrefs.randomIncludeWatchlist = v }
+
+    val randomUnwatchedOnly: StateFlow<Boolean> = platformPrefs.randomUnwatchedOnlyFlow
+    fun setRandomUnwatchedOnly(v: Boolean) { platformPrefs.randomUnwatchedOnly = v }
+
     // ── Exibição da Início (Fase B, frente compacta; por perfil) ──
     /** Pôsteres, densidade, selos, herói, fundo e sublinhado da Início. */
     val homeDisplay: StateFlow<com.aotv.app.data.local.HomeDisplayPrefs> = platformPrefs.homeDisplayFlow

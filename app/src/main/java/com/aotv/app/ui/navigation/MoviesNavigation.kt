@@ -11,8 +11,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -221,6 +223,16 @@ fun MoviesNavigation(
                     onDiscoverClick = { navController.navigate(MoviesRoute.Descobrir.route) },
                     onCustomize     = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                     onFolderClick   = { c, f -> navController.navigate(MoviesRoute.CollectionFolder.create(c, f)) },
+                    // Modo aleatório (Lote 2): episódio sorteado abre DIRETO no
+                    // player, sem folha de fontes (mesmo caminho do detalhe).
+                    onPlayEpisode   = { item, season, episode, epTotal ->
+                        navigateToPlayer(
+                            "", item.title, tmdbId = item.tmdbId, type = "SERIES",
+                            posterUrl = item.posterUrl, lastEpisode = "T$season:E$episode",
+                            backdropUrl = item.backdropUrl,
+                            season = season, episode = episode, episodeTotal = epTotal,
+                        )
+                    },
                 )
             }
 
@@ -394,6 +406,15 @@ fun MoviesNavigation(
                 else MinhaListaScreen(
                     onItemClick = onListItem,
                     onDownloadsClick = { navController.navigate(MoviesRoute.Downloads.route) },
+                    // Modo aleatório (Lote 2): mesmo caminho direto ao player da Início.
+                    onPlayEpisode = { item, season, episode, epTotal ->
+                        navigateToPlayer(
+                            "", item.title, tmdbId = item.tmdbId, type = "SERIES",
+                            posterUrl = item.posterUrl, lastEpisode = "T$season:E$episode",
+                            backdropUrl = item.backdropUrl,
+                            season = season, episode = episode, episodeTotal = epTotal,
+                        )
+                    },
                 )
             }
 
@@ -935,12 +956,39 @@ private fun MoviesBottomBarItem(
 private fun MinhaListaScreen(
     onItemClick: (MovieItem) -> Unit,
     onDownloadsClick: () -> Unit = {},
+    /** Modo aleatório (Lote 2): episódio sorteado abre DIRETO no player. */
+    onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
 ) {
     val vm: com.aotv.app.ui.movies.MinhaListaViewModel =
+        androidx.hilt.navigation.compose.hiltViewModel()
+    val randomVm: com.aotv.app.ui.movies.RandomEpisodeViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
     val watchlist by vm.watchlist.collectAsStateWithLifecycle()
     val recent by vm.recentlyPlayed.collectAsStateWithLifecycle()
     val recentArtwork by vm.recentArtwork.collectAsStateWithLifecycle()
+    // Calendário (Lote 2, item 6): carrega 1x ao abrir a Biblioteca; o "Atualizar"
+    // da seção força a releitura (o cache de detalhe tem TTL de 6h).
+    val calendar by vm.calendar.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.loadCalendar() }
+    // Modo aleatório (Lote 2): o sorteio abre direto no player quando sai;
+    // sem série elegível, mostra o estado vazio em diálogo (não trava).
+    val randomState by randomVm.state.collectAsStateWithLifecycle()
+    LaunchedEffect(randomState) {
+        val ready = randomState as? com.aotv.app.ui.movies.RandomEpisodeViewModel.RandomState.Ready
+            ?: return@LaunchedEffect
+        onPlayEpisode(ready.item, ready.season, ready.episode, ready.episodeTotal)
+        randomVm.consume()
+    }
+    (randomState as? com.aotv.app.ui.movies.RandomEpisodeViewModel.RandomState.Empty)?.let { empty ->
+        AlertDialog(
+            onDismissRequest = { randomVm.consume() },
+            title = { Text("Nada para sortear") },
+            text = { Text(empty.message) },
+            confirmButton = {
+                TextButton(onClick = { randomVm.consume() }) { Text("Entendi") }
+            },
+        )
+    }
 
     // Itens pendentes de remoção (segurar → confirma), um por seção.
     var pendingRemove by remember { mutableStateOf<com.aotv.app.data.local.entity.MovieHistoryEntity?>(null) }
@@ -1019,6 +1067,12 @@ private fun MinhaListaScreen(
             }
             Icon(Icons.Default.ChevronRight, "Abrir downloads", tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(22.dp))
         }
+        // Modo aleatório (Lote 2): segunda entrada, na Biblioteca. Sempre
+        // visível, mesmo com a lista vazia — o estado vazio é do sorteio.
+        com.aotv.app.ui.movies.RandomEpisodeEntry(
+            rolling = randomState is com.aotv.app.ui.movies.RandomEpisodeViewModel.RandomState.Rolling,
+            onRoll = { randomVm.roll() },
+        )
         val pad = com.aotv.app.ui.common.pagePadding()
         val config = androidx.compose.ui.platform.LocalConfiguration.current
         val availableWidth = config.screenWidthDp - if (config.screenWidthDp >= 600 && config.screenHeightDp >= 480) tabletRailWidth().value.toInt() else 0
@@ -1070,6 +1124,56 @@ private fun MinhaListaScreen(
                                 onLongClick = { pendingRemove = h }, // segurar → remover
                             )
                         }
+                    }
+                }
+            }
+
+            // ── (D) Calendário — próximos episódios das séries acompanhadas ──
+            // (Lote 2, item 6): Minha Lista + Continuar assistindo, ordenado por
+            // data. Sem série acompanhada a seção nem aparece; sem data no TMDB
+            // o episódio não entra. Tocar abre o detalhe da série.
+            if (calendar.hasTrackedSeries) {
+                item {
+                    com.aotv.app.ui.common.SectionHeader(
+                        title = "Próximos episódios",
+                        eyebrow = "Calendário",
+                        action = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                CountPill(calendar.entries.size)
+                                IconButton(onClick = { vm.loadCalendar(force = true) }) {
+                                    Icon(
+                                        Icons.Default.Refresh, "Atualizar datas",
+                                        tint = com.aotv.app.ui.theme.TextTertiary,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                            }
+                        },
+                    )
+                }
+                if (calendar.loading) {
+                    item {
+                        Text(
+                            "Buscando datas…",
+                            color = com.aotv.app.ui.theme.TextTertiary, fontSize = 14.sp,
+                            modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
+                        )
+                    }
+                } else if (calendar.entries.isEmpty()) {
+                    item {
+                        EmptySavedHint("Nenhuma data de episódio nas séries acompanhadas. Séries sem previsão no TMDB não entram aqui.")
+                    }
+                } else {
+                    val today = todayMs()
+                    items(calendar.entries, key = { "${it.tmdbId}:${it.season}:${it.episode}" }) { e ->
+                        CalendarRow(
+                            entry = e,
+                            todayMs = today,
+                            onClick = { onItemClick(rebuild(e.tmdbId, MediaType.SERIES, e.title, e.posterUrl, "")) },
+                        )
                     }
                 }
             }
@@ -1132,6 +1236,47 @@ private fun MinhaListaScreen(
 
             item { Spacer(Modifier.height(24.dp)) }
         }
+    }
+}
+
+/** Linha do calendário: título + episódio + data, com o que já foi ao ar em estilo apagado. */
+@Composable
+private fun CalendarRow(
+    entry: com.aotv.app.ui.movies.CalendarEntry,
+    todayMs: Long,
+    onClick: () -> Unit,
+) {
+    val aired = entry.isAired(todayMs)
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+            .background(com.aotv.app.ui.theme.BackgroundCard)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(
+            Icons.Default.CalendarMonth, null,
+            tint = if (aired) com.aotv.app.ui.theme.TextTertiary else com.aotv.app.ui.theme.Accent,
+            modifier = Modifier.size(24.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.title,
+                color = if (aired) com.aotv.app.ui.theme.TextSecondary else com.aotv.app.ui.theme.TextPrimary,
+                fontSize = 16.sp, lineHeight = 22.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Text(entry.describe(), color = com.aotv.app.ui.theme.TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+        }
+        Text(
+            entry.dateLabel(todayMs),
+            color = if (aired) com.aotv.app.ui.theme.TextTertiary else com.aotv.app.ui.theme.Accent,
+            fontSize = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        )
     }
 }
 
