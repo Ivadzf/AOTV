@@ -87,8 +87,13 @@ private fun codecLabel(format: androidx.media3.common.Format): String? {
 fun collectTechInfo(player: ExoPlayer): TechInfo = runCatching {
     val video = player.videoFormat
     val audio = player.audioFormat
-    val (videoDecoder, videoHw) = decoderFor(video?.sampleMimeType)
-    val (audioDecoder, _) = decoderFor(audio?.sampleMimeType)
+    // decoderFor devolve Pair anulável — desmontar direto não compila
+    // (component1/component2 exigem valor não-nulo); ler com ?.first/?.second.
+    val videoDec = decoderFor(video?.sampleMimeType)
+    val videoDecoder = videoDec?.first
+    val videoHw = videoDec?.second
+    val audioDec = decoderFor(audio?.sampleMimeType)
+    val audioDecoder = audioDec?.first
     val fps = video?.frameRate?.takeIf { it > 0f }?.let {
         "%.3f".format(it).trimEnd('0').trimEnd('.')
     }
@@ -149,7 +154,10 @@ private fun TechInfoPanelBody(
         val rows: List<Pair<String, List<Pair<String, String>>>> = listOfNotNull(
             // PLAYBACK ENGINE sempre aparece (é o próprio player, não o stream).
             "PLAYBACK ENGINE" to listOf("Engine" to (info?.engine ?: "ExoPlayer")),
-            "VIDEO STREAM" to listOfNotNull(
+            // takeIf devolve lista anulável — o par só entra quando a lista existe
+            // (senão o tipo inferido é Pair<String, List<...>?>, que não bate com o
+            // tipo declarado de `rows`).
+            listOfNotNull(
                 info?.videoCodec?.let { "Codec" to it },
                 info?.videoResolution?.let { "Resolução" to it },
                 info?.videoFps?.let { "Frame Rate" to "$it fps" },
@@ -157,11 +165,11 @@ private fun TechInfoPanelBody(
                 info?.videoDecoderHw?.let { "Decoder de hardware" to if (it) "hardware" else "software" },
                 info?.videoDynamicRange?.let { "Faixa dinâmica" to it },
                 info?.videoBitrateKbps?.let { "Bitrate" to "$it kbps" },
-            ).takeIf { it.isNotEmpty() },
-            "AUDIO STREAM" to listOfNotNull(
+            ).takeIf { it.isNotEmpty() }?.let { "VIDEO STREAM" to it },
+            listOfNotNull(
                 info?.audioCodec?.let { "Codec" to it },
                 info?.audioDecoder?.let { "Decoder" to it },
-            ).takeIf { it.isNotEmpty() },
+            ).takeIf { it.isNotEmpty() }?.let { "AUDIO STREAM" to it },
         )
         LazyColumn(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (info == null || info.isEmpty) {

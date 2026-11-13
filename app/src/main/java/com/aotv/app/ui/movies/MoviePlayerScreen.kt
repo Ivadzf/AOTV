@@ -318,6 +318,7 @@ fun MoviePlayerScreen(
     // de episódios do player esconde o "★ nota" junto com os cards.
     val showEpisodeRatings by playerPrefsVm.episodeRatings.collectAsState()
     s.showEpisodeRatings = showEpisodeRatings
+    s.panelBlurOn = panelBlurOn
     s.playerButtonOrder = playerButtons
     s.playerTopActions = playerTopActionsPref
     s.routePlayId = playId
@@ -1728,6 +1729,10 @@ class PlayerSession(
     var tapSeekEnabled by run { mutableStateOf(true) }
     /** Notas dos episódios no painel (pref `pref_detail_episode_ratings`, Lote 2 item 5). */
     var showEpisodeRatings by run { mutableStateOf(true) }
+    /** Blur/vidro fosco nos painéis do player (pref `pref_panel_blur`, Lote 4 correção A).
+     * Campo da sessão porque a PlayerScreenContent é outra função e não enxerga o
+     * `val` local da MoviePlayerScreen (mesmo padrão do showEpisodeRatings, Lote 2). */
+    var panelBlurOn by run { mutableStateOf(true) }
     /** Deslizar na horizontal sobre o vídeo busca ±10 s (item 5). Por enquanto segue
      * o toggle tap-seek (pref `playerTapSeek`); a pref dedicada
      * `pref_player_swipe_seek` (a ser criada pelo coordenador — ver relatório
