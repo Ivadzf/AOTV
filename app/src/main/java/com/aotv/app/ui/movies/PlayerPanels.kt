@@ -38,7 +38,7 @@ import coil.compose.AsyncImage
 // Painel lateral do player (fontes, legendas, áudio) no desenho do .side-panel do webOS.
 
 /** Ação do painel do player. Episódio anterior ou próximo, uma fonte, uma legenda ou um ajuste. */
-internal data class TvPlayerAction(
+data class TvPlayerAction(
     val label: String,
     val isSource: Boolean,
     val active: Boolean,

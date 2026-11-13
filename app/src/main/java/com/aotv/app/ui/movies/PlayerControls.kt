@@ -56,7 +56,7 @@ import com.aotv.app.ui.tv.r
  * PlatformPrefs): "subs", "audio", "sources", "episodes", "prev", "next", "screen",
  * "speed", "pin", "skip". O chip principal (play/pause, [main]) não entra na pref
  * e fica sempre em primeiro. */
-internal data class PlayerChipItem(
+data class PlayerChipItem(
     val icon: ImageVector,
     val label: String,
     val active: Boolean = false,
