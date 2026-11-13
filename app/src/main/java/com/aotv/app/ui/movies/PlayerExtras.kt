@@ -78,7 +78,7 @@ internal fun hhmm(epochMs: Long, tz: java.util.TimeZone = java.util.TimeZone.get
 }
 
 /** Hora atual e, com duração conhecida, a hora em que o vídeo acaba na velocidade atual. */
-internal val PLAYBACK_SPEEDS = listOf(0.75f, 1f, 1.25f, 1.5f, 2f)
+internal val PLAYBACK_SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 /** Largura preserva a classificação do vídeo quando o filme tem barras de cinema. */
 internal fun videoResolutionLabel(width: Int, height: Int): String = when {

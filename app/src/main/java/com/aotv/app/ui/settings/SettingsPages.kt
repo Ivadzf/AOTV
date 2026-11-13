@@ -100,6 +100,9 @@ import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.ui.movies.PlayerPrefsViewModel
+import com.aotv.app.ui.movies.SUB_BG_OPACITIES
+import com.aotv.app.ui.movies.SUB_COLORS
+import com.aotv.app.ui.movies.SUB_FONTS
 import com.aotv.app.ui.movies.StreamPrefsViewModel
 import com.aotv.app.ui.movies.effectivePlayerButtons
 import com.aotv.app.ui.movies.effectivePlayerTopActions
@@ -956,6 +959,7 @@ private fun ReproducaoPage(
     val savedTopActions by playerPrefs.topActions.collectAsStateWithLifecycle()
     val effectiveTopActions = effectivePlayerTopActions(savedTopActions)
     val tapSeek by playerPrefs.tapSeek.collectAsStateWithLifecycle()
+    val swipeSeek by playerPrefs.swipeSeek.collectAsStateWithLifecycle()
     val volBoost by playerPrefs.volBoost.collectAsStateWithLifecycle()
     val volBoostLevel by playerPrefs.volBoostLevel.collectAsStateWithLifecycle()
     val mini by playerPrefs.mini.collectAsStateWithLifecycle()
@@ -964,6 +968,12 @@ private fun ReproducaoPage(
     val autoSwitch by playerPrefs.autoSwitch.collectAsStateWithLifecycle()
     val sourceTimeout by playerPrefs.sourceTimeout.collectAsStateWithLifecycle()
     val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
+    // Personalização de legenda e velocidade padrão (v1.9.0).
+    val subColor by playerPrefs.subColor.collectAsStateWithLifecycle()
+    val subBgOpacity by playerPrefs.subBgOpacity.collectAsStateWithLifecycle()
+    val subOutline by playerPrefs.subOutline.collectAsStateWithLifecycle()
+    val subFont by playerPrefs.subFont.collectAsStateWithLifecycle()
+    val playerSpeed by playerPrefs.speed.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
@@ -1003,6 +1013,29 @@ private fun ReproducaoPage(
             )
         }
         if (pickLang) SubLangDialog(subLang, onPick = { viewModel.setSubLang(it); pickLang = false }, onDismiss = { pickLang = false })
+
+        // Personalização de legenda (v1.9.0): cor, fonte, opacidade do fundo e
+        // contorno. Vale para a legenda embutida e para a externa, e também dá
+        // para mudar no player, em Legendas. Tamanho e fundo continuam no player.
+        SettingsSection("Legendas")
+        SettingsCard {
+            PrefRow("Cor da legenda", SUB_COLORS, subColor, playerPrefs::setSubColor)
+            Spacer(Modifier.height(14.dp))
+            PrefRow("Fonte da legenda", SUB_FONTS, subFont, playerPrefs::setSubFont)
+            Spacer(Modifier.height(14.dp))
+            PrefRow("Opacidade do fundo", SUB_BG_OPACITIES, subBgOpacity, playerPrefs::setSubBgOpacity)
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.ClosedCaption,
+                title = "Contorno da legenda",
+                sub = if (subOutline) "Contorno preto ao redor do texto quando não há fundo"
+                    else "Sem contorno. Sem fundo, o texto pode sumir em cena clara",
+                trailing = { Switch(checked = subOutline, onCheckedChange = { playerPrefs.setSubOutline(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSubOutline(!subOutline) },
+                grouped = true,
+            )
+        }
 
         // Botões do player (Fase C). Sobe e desce reordena, o switch tira da
         // barra. Desligado, o botão some do player mas continua aqui p/ religar.
@@ -1066,6 +1099,16 @@ private fun ReproducaoPage(
                 grouped = true,
             )
             com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Swipe,
+                title = "Deslizar para avançar/retroceder",
+                sub = if (swipeSeek) "Deslizar sobre o vídeo avança ou retrocede 10s"
+                    else "Deslizar sobre o vídeo não busca",
+                trailing = { Switch(checked = swipeSeek, onCheckedChange = { playerPrefs.setSwipeSeek(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSwipeSeek(!swipeSeek) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.VolumeUp,
                 title = "Volume Boost",
                 sub = if (volBoost) "Deixa o volume passar de 100%"
@@ -1104,6 +1147,14 @@ private fun ReproducaoPage(
                 onClick = { playerPrefs.setAutoSwitch(!autoSwitch) },
                 grouped = true,
                 divider = true,
+            )
+        }
+        // Velocidade padrão (v1.9.0): o player abre nela; mudar no player salva aqui.
+        SettingsCard {
+            PrefRow(
+                "Velocidade padrão",
+                listOf(0.5f to "0,5x", 1f to "1x", 1.5f to "1,5x", 2f to "2x"),
+                playerSpeed, playerPrefs::setSpeed,
             )
         }
         Column(Modifier.alpha(if (volBoost) 1f else 0.45f)) {

@@ -46,7 +46,9 @@ import kotlinx.coroutines.delay
 
 // Camadas que aparecem por cima do vídeo. Cada uma só desenha, a regra fica no player.
 
-/** Legenda externa desenhada pelo app, com o atraso escolhido (.pl-subs e .pl-sub-line). */
+/** Legenda externa desenhada pelo app, com o atraso escolhido (.pl-subs e .pl-sub-line).
+ * Cor, fonte e opacidade do fundo seguem a personalização de legenda (v1.9.0);
+ * os padrões mantêm o visual da v1.8.1 (branco, fonte padrão, fundo 0,78, sombra 8). */
 @Composable
 internal fun BoxScope.ExternalSubtitle(
     cues: List<SubCue>,
@@ -56,21 +58,25 @@ internal fun BoxScope.ExternalSubtitle(
     withBg: Boolean,
     isTv: Boolean,
     raised: Boolean,
+    textColorArgb: Int = 0xFFFFFFFF.toInt(),
+    font: String = "default",
+    bgOpacity: Float = 0.78f,
 ) {
     var subPos by remember { mutableLongStateOf(0L) }
     LaunchedEffect(cues) { while (true) { subPos = player.currentPosition; delay(100) } }
     val line = cueAt(cues, subPos, delayMs)
     if (line.isEmpty()) return
     Text(
-        line, color = Color.White, textAlign = TextAlign.Center,
+        line, color = subtitleTextColor(textColorArgb), textAlign = TextAlign.Center,
         fontSize = (if (isTv) 24 else 18).sp * sizeScale, lineHeight = (if (isTv) 30 else 23).sp * sizeScale,
         fontWeight = FontWeight.SemiBold,
+        fontFamily = subFontFamily(font),
         style = androidx.compose.ui.text.TextStyle(
             shadow = if (withBg) null else androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 8f),
         ),
         modifier = Modifier.align(Alignment.BottomCenter)
             .padding(start = 24.dp, end = 24.dp, bottom = if (raised) 190.dp else 32.dp)
-            .then(if (withBg) Modifier.clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.78f)) else Modifier)
+            .then(if (withBg) Modifier.clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = bgOpacity)) else Modifier)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }

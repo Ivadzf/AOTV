@@ -20,6 +20,7 @@ fun playerButtonLabel(id: String): String = when (id) {
     "speed" -> "Velocidade"
     "pin" -> "Fixar fonte"
     "skip" -> "Pular abertura"
+    "color" -> "Cor"
     else -> id
 }
 
@@ -102,6 +103,9 @@ class PlayerPrefsViewModel @Inject constructor(
     val tapSeek: StateFlow<Boolean> = prefs.playerTapSeekFlow
     fun setTapSeek(v: Boolean) { prefs.playerTapSeek = v }
 
+    val swipeSeek: StateFlow<Boolean> = prefs.playerSwipeSeekFlow
+    fun setSwipeSeek(v: Boolean) { prefs.playerSwipeSeek = v }
+
     val volBoost: StateFlow<Boolean> = prefs.playerVolBoostFlow
     fun setVolBoost(v: Boolean) { prefs.playerVolBoost = v }
 
@@ -130,4 +134,43 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Client ID do Anime-Skip, digitado pelo usuário ("" = desligado). */
     val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
     fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }
+
+    /** Cor do texto da legenda (ARGB; branco por padrão). v1.9.0. */
+    val subColor: StateFlow<Int> = prefs.subColorFlow
+    fun setSubColor(v: Int) { prefs.subColor = v }
+
+    /** Opacidade do fundo da legenda (0,5–0,9; 0,78 por padrão). v1.9.0. */
+    val subBgOpacity: StateFlow<Float> = prefs.subBgOpacityFlow
+    fun setSubBgOpacity(v: Float) { prefs.subBgOpacity = v }
+
+    /** Contorno preto ao redor do texto quando não há fundo. v1.9.0. */
+    val subOutline: StateFlow<Boolean> = prefs.subOutlineFlow
+    fun setSubOutline(v: Boolean) { prefs.subOutline = v }
+
+    /** Fonte da legenda ("default", "monospace", "serif" ou "sans"). v1.9.0. */
+    val subFont: StateFlow<String> = prefs.subFontFlow
+    fun setSubFont(v: String) { prefs.subFont = v }
+
+    /** Velocidade de reprodução salva do perfil (0,5x–2x; 1x por padrão). v1.9.0. */
+    val speed: StateFlow<Float> = prefs.playerSpeedFlow
+    fun setSpeed(v: Float) { prefs.playerSpeed = v }
+
+    /** Filtro de correção de cor do vídeo (Lote 1, v1.9.0). */
+    val colorBrightness: StateFlow<Float> = prefs.playerColorBrightnessFlow
+    fun setColorBrightness(v: Float) { prefs.playerColorBrightness = v.coerceIn(-1f, 1f) }
+
+    val colorContrast: StateFlow<Float> = prefs.playerColorContrastFlow
+    fun setColorContrast(v: Float) { prefs.playerColorContrast = v.coerceIn(0f, 2f) }
+
+    val colorSaturation: StateFlow<Float> = prefs.playerColorSaturationFlow
+    fun setColorSaturation(v: Float) { prefs.playerColorSaturation = v.coerceIn(0f, 2f) }
+
+    val colorHue: StateFlow<Float> = prefs.playerColorHueFlow
+    fun setColorHue(v: Float) { prefs.playerColorHue = v.coerceIn(-180f, 180f) }
+
+    val colorPreset: StateFlow<String> = prefs.playerColorPresetFlow
+    fun setColorPreset(v: String) { prefs.playerColorPreset = v }
+
+    val colorDaltonism: StateFlow<String> = prefs.playerColorDaltonismFlow
+    fun setColorDaltonism(v: String) { prefs.playerColorDaltonism = v }
 }

@@ -112,9 +112,17 @@ class StremioAddonService @Inject constructor(
     /**
      * Logo do manifest por NOME do addon (p/ a folha de fontes). Preenchido ao ler o
      * manifest, o que já acontece ao buscar os streams de cada addon — sem chamada extra.
-     * Só em memória: o manifest é relido a cada abertura do app.
+     * v1.9.0 (Lote 1): persistido junto com o manifest guardado (`addon_meta_v1`, via
+     * [com.aotv.app.data.local.PlatformPrefs.cacheManifest]) e hidratado aqui na abertura,
+     * então o logo sobrevive ao reinício do app — antes era só memória e sumia ao fechar.
      */
     private val addonLogos = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    init {
+        prefs.addonMetaFlow.value.values.forEach { cached ->
+            if (cached.name.isNotBlank() && cached.logo.isNotBlank()) addonLogos[cached.name] = cached.logo
+        }
+    }
 
     /** Logo do addon ("" quando não há logo ou o manifest ainda não foi lido). */
     fun logoForAddon(name: String): String = addonLogos[name].orEmpty()
@@ -156,7 +164,7 @@ class StremioAddonService @Inject constructor(
                 if (m.name.isNotBlank()) addonNames[baseOf(url)] = m.name
                 if (m.name.isNotBlank() && m.logo.isNotBlank()) addonLogos[m.name] = m.logo
                 // A Início monta as fileiras de addon a partir disso, sem esperar a rede.
-                prefs.cacheManifest(url, m.name, m.catalogs, m.id)
+                prefs.cacheManifest(url, m.name, m.catalogs, m.id, m.logo)
             }
         }.getOrNull()
     }

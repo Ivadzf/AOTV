@@ -47,6 +47,26 @@ class PlayerProgressViewModel @Inject constructor(
     var subBg: Boolean
         get() = prefs.subBg
         set(v) { prefs.subBg = v }
+    /** Cor do texto da legenda (ARGB; branco por padrão). v1.9.0. */
+    var subColor: Int
+        get() = prefs.subColor
+        set(v) { prefs.subColor = v }
+    /** Opacidade do fundo da legenda (0,5–0,9; 0,78 por padrão). v1.9.0. */
+    var subBgOpacity: Float
+        get() = prefs.subBgOpacity
+        set(v) { prefs.subBgOpacity = v }
+    /** Contorno preto ao redor do texto quando não há fundo. v1.9.0. */
+    var subOutline: Boolean
+        get() = prefs.subOutline
+        set(v) { prefs.subOutline = v }
+    /** Fonte da legenda ("default", "monospace", "serif" ou "sans"). v1.9.0. */
+    var subFont: String
+        get() = prefs.subFont
+        set(v) { prefs.subFont = v }
+    /** Velocidade de reprodução salva do perfil (0,5x–2x; 1x por padrão). v1.9.0. */
+    var playerSpeed: Float
+        get() = prefs.playerSpeed
+        set(v) { prefs.playerSpeed = v }
     var subtitleOn: Boolean
         get() = prefs.subtitleOn
         set(v) { prefs.subtitleOn = v }

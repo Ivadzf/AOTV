@@ -280,6 +280,7 @@ fun MoviePlayerScreen(
     val playerButtons by playerPrefsVm.buttons.collectAsState()
     val playerTopActionsPref by playerPrefsVm.topActions.collectAsState()
     val playerTapSeek by playerPrefsVm.tapSeek.collectAsState()
+    val playerSwipeSeek by playerPrefsVm.swipeSeek.collectAsState()
     val playerVolBoost by playerPrefsVm.volBoost.collectAsState()
     val playerVolBoostLevel by playerPrefsVm.volBoostLevel.collectAsState()
     val playerMini by playerPrefsVm.mini.collectAsState()
@@ -288,10 +289,20 @@ fun MoviePlayerScreen(
     val playerAutoSwitch by playerPrefsVm.autoSwitch.collectAsState()
     val playerSourceTimeout by playerPrefsVm.sourceTimeout.collectAsState()
     val playerAnimeSkipClientId by playerPrefsVm.animeSkipClientId.collectAsState()
+    // Correção de cor do vídeo (v1.9.0, Lote 1 item 1): fluxos do
+    // PlayerPrefsViewModel (contrato de prefs no relatório da v1.9.0).
+    val playerColorBrightness by playerPrefsVm.colorBrightness.collectAsState()
+    val playerColorContrast by playerPrefsVm.colorContrast.collectAsState()
+    val playerColorSaturation by playerPrefsVm.colorSaturation.collectAsState()
+    val playerColorHue by playerPrefsVm.colorHue.collectAsState()
+    val playerColorPreset by playerPrefsVm.colorPreset.collectAsState()
+    val playerColorDaltonism by playerPrefsVm.colorDaltonism.collectAsState()
+    val playerSpeed by playerPrefsVm.speed.collectAsState()
     s.playerButtonOrder = playerButtons
     s.playerTopActions = playerTopActionsPref
     s.routePlayId = playId
     s.tapSeekEnabled = playerTapSeek
+    s.swipeSeekEnabled = playerSwipeSeek
     s.volBoostEnabled = playerVolBoost
     s.volBoostLevel = playerVolBoostLevel
     s.miniEnabled = playerMini
@@ -301,6 +312,30 @@ fun MoviePlayerScreen(
     s.autoSwitchEnabled = playerAutoSwitch
     s.sourceTimeoutSec = playerSourceTimeout
     s.animeSkipClientId = playerAnimeSkipClientId
+    // Correção de cor do vídeo (v1.9.0, Lote 1 item 1): a tela lê os fluxos e
+    // entrega à sessão, como as outras prefs do player. O painel salva de
+    // volta por [PlayerSession.onColorFilterSave].
+    s.colorBrightness = playerColorBrightness
+    s.colorContrast = playerColorContrast
+    s.colorSaturation = playerColorSaturation
+    s.colorHue = playerColorHue
+    s.colorPreset = playerColorPreset
+    s.colorDaltonism = DaltonismMode.fromId(playerColorDaltonism)
+    s.onColorFilterSave = { ns ->
+        playerPrefsVm.setColorBrightness(ns.brightness)
+        playerPrefsVm.setColorContrast(ns.contrast)
+        playerPrefsVm.setColorSaturation(ns.saturation)
+        playerPrefsVm.setColorHue(ns.hueDegrees)
+        playerPrefsVm.setColorPreset(ns.preset)
+        playerPrefsVm.setColorDaltonism(ns.daltonism.id)
+    }
+    // v1.9.0: velocidade salva do perfil — aplica ao abrir e quando muda nas
+    // Configurações (o ExoPlayer novo começa em 1x; a troca de episódio mantém
+    // a velocidade sozinha porque o player é o mesmo).
+    LaunchedEffect(playerSpeed) {
+        s.speedIdx = PLAYBACK_SPEEDS.indexOf(playerSpeed).takeIf { it >= 0 } ?: PLAYBACK_SPEEDS.indexOf(1f)
+        runCatching { s.currentPlayer().setPlaybackSpeed(playerSpeed) }
+    }
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
     // Fase 2 (Kodi): o xbmc.Player reflete o ExoPlayer de verdade — o addon
@@ -442,6 +477,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             } else {
                 cleanPlay to playHeaders
             }
+            // Correção de cor (v1.9.0): o setVideoEffects precisa ser chamado
+            // pelo menos 1x antes do prepare; depois os sliders reaplicam ao
+            // vivo (LaunchedEffect junto do Volume Boost, abaixo).
+            exoPlayer.setVideoEffects(buildColorEffects(colorState))
             exoPlayer.setMediaSource(mediaSourceFactory(context, factoryHeaders).createMediaSource(mediaItemFor(context, playUrl)))
             exoPlayer.prepare()
             if (!didSeek && pendingSeekMs > 0) { exoPlayer.seekTo(pendingSeekMs); didSeek = true }
@@ -488,6 +527,12 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     // Configurações. A 1ª aplicação acontece quando a sessão de áudio fica
     // pronta (onAudioSessionIdChanged, no listener acima).
     LaunchedEffect(volBoostEnabled, volBoostLevel) { applyVolBoost() }
+
+    // Correção de cor (v1.9.0): reaplica ao vivo quando um slider, o preset
+    // ou o modo de daltonismo muda — sem reiniciar o vídeo. O runCatching
+    // (em applyColorEffects) protege a reprodução se o renderer não aceitar
+    // os efeitos.
+    LaunchedEffect(colorBrightness, colorContrast, colorSaturation, colorHue, colorDaltonism) { applyColorEffects() }
 
     DisposableEffect(castPlayer, streamUrl) {
         val cp = castPlayer ?: return@DisposableEffect onDispose {}
@@ -555,6 +600,8 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
 
     // Some o HUD de gesto após 800ms parado
     LaunchedEffect(gestureHud) { if (gestureHud != null) { delay(800); gestureHud = null } }
+    // Some o indicador de busca do gesto ("−10s" / "+10s") após 800ms parado
+    LaunchedEffect(seekHud) { if (seekHud != null) { delay(800); seekHud = null } }
 
 }
 
@@ -882,6 +929,15 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
             .onKeyEvent { ev ->
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
                 val kc = ev.nativeKeyEvent.keyCode
+                // TELA TRAVADA (item 4): D-pad/teclado não mexe em nada — só BACK/ESC
+                // sai do player e OK/CENTER mostra o cadeado. O Voltar nunca trava.
+                if (locked) {
+                    return@onKeyEvent when (kc) {
+                        KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { onBack(); true }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { lockHintVisible = !lockHintVisible; true }
+                        else -> true
+                    }
+                }
                 // Barra de sincronia do som. Setas mudam o atraso e segurar acelera.
                 if (syncBarOpen) {
                     val r = ev.nativeKeyEvent.repeatCount
@@ -922,6 +978,29 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 }
                 // Painel de Fontes/Episódios aberto: ↑↓ navega, OK executa, ←/Back fecha.
                 if (sourcePanelOpen) {
+                    // Painel de COR (v1.9.0): navegação própria — ↑↓ muda o foco
+                    // (sliders, Redefinir, presets, daltonismo), ←→ ajusta o
+                    // slider com foco, OK aplica a linha (preset/modo/Redefinir).
+                    // Sem esta guarda, o OK executaria uma ação de fonte.
+                    if (panelKind == "color") {
+                        return@onKeyEvent when (kc) {
+                            KeyEvent.KEYCODE_DPAD_UP -> { colorFocusIdx = (colorFocusIdx - 1 + COLOR_FILTER_ROWS) % COLOR_FILTER_ROWS; true }
+                            KeyEvent.KEYCODE_DPAD_DOWN -> { colorFocusIdx = (colorFocusIdx + 1) % COLOR_FILTER_ROWS; true }
+                            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                val delta = if (kc == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                                if (colorFocusIdx < COLOR_FILTER_SLIDERS) {
+                                    applyColorState(adjustColorState(colorState, colorFocusIdx, delta)); true
+                                } else if (colorFocusIdx == COLOR_FILTER_SLIDERS) {
+                                    sourcePanelOpen = false; true
+                                } else true
+                            }
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                                applyColorState(activateColorRow(colorState, colorFocusIdx)); true
+                            }
+                            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
+                            else -> true
+                        }
+                    }
                     val n = panelActions.size
                     return@onKeyEvent when (kc) {
                         KeyEvent.KEYCODE_DPAD_UP -> { if (n > 0) sourcePanelIdx = (sourcePanelIdx - 1 + n) % n; true }
@@ -993,6 +1072,26 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         },
                     )
                 } else Modifier
+            )
+            // Gesto de deslizar p/ buscar ±10 s (item 5): horizontal sobre o vídeo, um
+            // passo a cada 8% da largura arrastada. Detector separado do vertical
+            // (cada um só dispara depois do limiar na sua direção, como os dois
+            // detectores já separados da barra de progresso). Off se travado ou com
+            // o tap-seek desligado; o toque p/ mostrar/esconder controles não muda.
+            .then(
+                if (streamUrl != null && !locked && swipeSeekEnabled) Modifier.pointerInput(Unit) {
+                    var accum = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { accum = 0f },
+                        onDragEnd = { accum = 0f },
+                        onDragCancel = { accum = 0f },
+                    ) { _, dragAmount ->
+                        accum += dragAmount
+                        val step = size.width * 0.08f
+                        while (accum >= step) { accum -= step; swipeSeekStep(true) }
+                        while (accum <= -step) { accum += step; swipeSeekStep(false) }
+                    }
+                } else Modifier
             ),
     ) {
         when {
@@ -1018,13 +1117,9 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                             // também para a legenda embutida (antes só valiam para a externa).
                             setApplyEmbeddedStyles(false)
                             setApplyEmbeddedFontSizes(false)
-                            setStyle(androidx.media3.ui.CaptionStyleCompat(
-                                android.graphics.Color.WHITE,
-                                if (subBg) 0xB3000000.toInt() else android.graphics.Color.TRANSPARENT,
-                                android.graphics.Color.TRANSPARENT,
-                                if (subBg) androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_NONE else androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                                android.graphics.Color.BLACK, null,
-                            ))
+                            // Estilo da legenda (v1.9.0): cor, fundo com opacidade,
+                            // contorno e fonte — ver buildCaptionStyle em SubtitleStyle.kt.
+                            setStyle(buildCaptionStyle(subColor, subBg, subBgOpacity, subOutline, subFont))
                         }
                     },
                     modifier = Modifier.fillMaxSize().clipToBounds(),
@@ -1032,7 +1127,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
 
                 // Legenda externa desenhada aqui, com o atraso escolhido.
                 if (selectedSubUrl != null && externalCues.isNotEmpty()) {
-                    ExternalSubtitle(externalCues, exoPlayer, (subDelay * 1000).toLong(), subSize, subBg, isTv, controlsVisible || syncBarOpen)
+                    ExternalSubtitle(externalCues, exoPlayer, (subDelay * 1000).toLong(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
                 }
 
                 // Transmitindo p/ Chromecast: a mídia roda na TV; celular vira controle.
@@ -1066,6 +1161,25 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
 
                 // HUD de gesto: volume / brilho
                 gestureHud?.let { (label, frac) -> GestureHud(label, frac) }
+
+                // HUD do gesto de busca ("−10s" / "+10s")
+                seekHud?.let { SeekHud(it) }
+
+                // TELA TRAVADA: destravar e voltar ficam SEMPRE visíveis (o bloqueio
+                // nunca pode esconder a saída do player nem o desbloqueio).
+                if (locked) {
+                    Row(
+                        Modifier.align(Alignment.TopEnd)
+                            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))
+                            .padding(top = 8.dp, end = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CtlButton(Icons.Default.LockOpen, "Destravar a tela", 48.dp, onClick = {
+                            locked = false; lockHintVisible = false; controlsVisible = true
+                        })
+                        CtlButton(Icons.AutoMirrored.Filled.ArrowBack, "Voltar", 48.dp, onClick = onBack)
+                    }
+                }
 
                 // TELA TRAVADA: cadeado central aparece ao tocar; clicar destrava.
                 if (locked && lockHintVisible) {
@@ -1186,7 +1300,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                                 else
                                     android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                         },
-                        onLock = { locked = true; controlsVisible = false },
+                        onLock = { locked = true; controlsVisible = false; sourcePanelOpen = false; syncBarOpen = false; lockHintVisible = false },
                         onBack = onBack,
                     )
                 }
@@ -1214,7 +1328,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
         // exceto no play Kodi — v1.2.7 — que fica na tela p/ o Davi ler o diagnóstico).
         if (sourceFailed) SourceFailedOverlay(diag = kodiDiag + proxyDiagLine(), playerError = playerError, onBack = onBack)
 
-        if (syncBarOpen && extUrl != null && !inPip) {
+        if (syncBarOpen && extUrl != null && !inPip && !locked) {
             SyncBar(
                 delaySec = audioDelay,
                 onShift = { audioDelay = addDelay(audioDelay, it) },
@@ -1226,7 +1340,19 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
         }
 
         // ── Seletor de FONTE (dentro do player) — troca mantendo o tempo ──
-        if (sourcePanelOpen) {
+        // Travado, o painel não abre (o onLock já o fecha; a guarda cobre o caso
+        // de ele estar aberto por outro caminho quando a tela trava).
+        // O painel de COR tem sliders e não cabe na lista de ações: tem
+        // composable próprio ([ColorFilterPanel]).
+        if (sourcePanelOpen && !locked && panelKind == "color") {
+            ColorFilterPanel(
+                state = colorState,
+                focusIdx = colorFocusIdx,
+                onStateChange = ::applyColorState,
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked) {
             PlayerActionPanel(
                 title = panelTitle,
                 showCount = panelKind == "sources",
@@ -1239,6 +1365,16 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 television = isTv,
             )
         }
+    }
+}
+
+/** Indicador do gesto de busca ("−10s" / "+10s"), no centro da tela. Some sozinho em 800 ms. */
+@Composable
+private fun BoxScope.SeekHud(label: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(label, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(alpha = 0.72f))
+                .padding(horizontal = 24.dp, vertical = 12.dp))
     }
 }
 
@@ -1280,7 +1416,8 @@ class PlayerSession(
     var streamUrl by run { mutableStateOf(embedUrl.ifBlank { null }) }
     // Abre LIMPO (sem controles) — mostra logo + animação de carregamento; controles só ao mexer.
     var controlsVisible by run { mutableStateOf(false) }
-    // Velocidade de reprodução (chip "1x") — cicla 1x/1.25x/1.5x/2x.
+    // Velocidade de reprodução (chip "1x") — presets 0,5x a 2x (PLAYBACK_SPEEDS),
+    // salva no perfil e aplicada ao abrir.
     val speeds get() = PLAYBACK_SPEEDS
     var speedIdx by run { mutableIntStateOf(PLAYBACK_SPEEDS.indexOf(1f)) }
     var didSeek by run { mutableStateOf(false) }
@@ -1453,6 +1590,12 @@ class PlayerSession(
     var subDelay by run { mutableDoubleStateOf(0.0) }
     var subSize by run { mutableFloatStateOf(progressVm.subSize) }
     var subBg by run { mutableStateOf(progressVm.subBg) }
+    // Personalização de legenda (v1.9.0): cor, opacidade do fundo, contorno e fonte.
+    // Como tamanho e fundo, ficam salvos no perfil e valem para a próxima sessão.
+    var subColor by run { mutableIntStateOf(progressVm.subColor) }
+    var subBgOpacity by run { mutableFloatStateOf(progressVm.subBgOpacity) }
+    var subOutline by run { mutableStateOf(progressVm.subOutline) }
+    var subFont by run { mutableStateOf(progressVm.subFont) }
 
     // Som de outra fonte. [extSync] segue o player principal, [audioDelay] em segundos.
     var extSync by run { mutableStateOf<ExtAudioSync?>(null) }
@@ -1489,6 +1632,13 @@ class PlayerSession(
     var playerTopActions by run { mutableStateOf<List<String>>(emptyList()) }
     /** Tocar na barra busca (pref `playerTapSeek`). */
     var tapSeekEnabled by run { mutableStateOf(true) }
+    /** Deslizar na horizontal sobre o vídeo busca ±10 s (item 5). Por enquanto segue
+     * o toggle tap-seek (pref `playerTapSeek`); a pref dedicada
+     * `pref_player_swipe_seek` (a ser criada pelo coordenador — ver relatório
+     * v1.9.0 itens 4/5) desacopla os dois quando existir. */
+    var swipeSeekEnabled by run { mutableStateOf(true) }
+    /** Indicador do gesto de busca ("−10s" / "+10s") — null = escondido. */
+    var seekHud by run { mutableStateOf<String?>(null) }
     /** Volume Boost ligado (pref `playerVolBoost`). */
     var volBoostEnabled by run { mutableStateOf(false) }
     /** Nível do boost como multiplicador 1,0–2,0 (pref `playerVolBoostLevel`). */
@@ -1505,6 +1655,35 @@ class PlayerSession(
     var routePlayId by run { mutableIntStateOf(-1) }
     /** O aparelho não aceitou o LoudnessEnhancer (aviso 1x, ver [applyVolBoost]). */
     var volBoostUnavailable by run { mutableStateOf(false) }
+
+    // ── Correção de cor do vídeo (v1.9.0, Lote 1 item 1) ────────────────
+    // Vale SÓ p/ o vídeo (decisão do Davi): brilho/contraste/saturação/
+    // matiz + presets + correção p/ daltonismo, por perfil (prefs
+    // `pref_player_color_*` — contrato no relatório da v1.9.0).
+    // O painel do player edita aqui e salva por [onColorFilterSave].
+    var colorBrightness by run { mutableFloatStateOf(0f) } // -1..1
+    var colorContrast by run { mutableFloatStateOf(1f) } // 0..2
+    var colorSaturation by run { mutableFloatStateOf(1f) } // 0..2
+    var colorHue by run { mutableFloatStateOf(0f) } // -180..180°
+    var colorPreset by run { mutableStateOf(ColorPreset.PADRAO.id) }
+    var colorDaltonism by run { mutableStateOf(DaltonismMode.OFF) }
+    /** Foco D-pad no painel de cor (0..12: 4 sliders, Redefinir, 4 presets, 4 modos). */
+    var colorFocusIdx by run { mutableIntStateOf(0) }
+    /** Estado atual do filtro, p/ construir os efeitos e p/ o painel. */
+    val colorState get() = ColorFilterState(colorBrightness, colorContrast, colorSaturation, colorHue, colorPreset, colorDaltonism)
+    /** O painel chama p/ salvar (a tela liga ao PlayerPrefsViewModel). */
+    var onColorFilterSave: (ColorFilterState) -> Unit = {}
+    /** Aplica um estado novo na sessão e salva (painel e D-pad usam este). */
+    fun applyColorState(ns: ColorFilterState) {
+        colorBrightness = ns.brightness; colorContrast = ns.contrast
+        colorSaturation = ns.saturation; colorHue = ns.hueDegrees
+        colorPreset = ns.preset; colorDaltonism = ns.daltonism
+        onColorFilterSave(ns)
+    }
+    /** (Re)aplica os efeitos no ExoPlayer sem reiniciar o vídeo. */
+    fun applyColorEffects() {
+        runCatching { exoPlayer.setVideoEffects(buildColorEffects(colorState)) }
+    }
 
     val exoPlayer = run {
         // Foco de áudio do sistema: pausa sozinho numa ligação ou quando outro app toca som, e
@@ -1649,11 +1828,20 @@ class PlayerSession(
     }
     // Poll de posição + salva progresso a cada ~10s (Continuar assistindo)
     var markedWatchedEp by run { mutableIntStateOf(-1) }
-    fun seekBy(deltaMs: Long) {
+    fun seekBy(deltaMs: Long, showControls: Boolean = true) {
         val p = currentPlayer()
         val d = if (duration > 0) duration else p.duration.coerceAtLeast(0L)
         val target = (p.currentPosition + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
-        p.seekTo(target); position = target; controlsVisible = true
+        p.seekTo(target); position = target
+        if (showControls) controlsVisible = true
+    }
+    /** Um passo do gesto de deslizar p/ buscar (item 5): ±10 s, o mesmo passo dos
+     * botões ±10 s. Respeita o bloqueio e o toggle tap-seek; NÃO abre os
+     * controles (só o indicador [seekHud]) p/ o gesto não piscar a UI. */
+    fun swipeSeekStep(forward: Boolean) {
+        if (locked || !swipeSeekEnabled) return
+        seekBy(if (forward) 10_000 else -10_000, showControls = false)
+        seekHud = if (forward) "+10s" else "−10s"
     }
     fun togglePlay() { currentPlayer().let { it.playWhenReady = !it.playWhenReady }; controlsVisible = true }
 
@@ -1905,6 +2093,21 @@ class PlayerSession(
             add(TvPlayerAction("Fundo", false, false, sub = if (subBg) "Com fundo" else "Sem fundo", keepOpen = true) {
                 subBg = !subBg; progressVm.subBg = subBg
             })
+            // Personalização de legenda (v1.9.0): cor, fonte, opacidade do fundo e
+            // contorno. Vale na hora para a embutida e para a externa, e fica salva
+            // no perfil (mesmo caminho do tamanho e do fundo).
+            add(TvPlayerAction("Cor", false, false, sub = subColorLabel(subColor), keepOpen = true) {
+                subColor = nextSubColor(subColor); progressVm.subColor = subColor
+            })
+            add(TvPlayerAction("Fonte", false, false, sub = subFontLabel(subFont), keepOpen = true) {
+                subFont = nextSubFont(subFont); progressVm.subFont = subFont
+            })
+            add(TvPlayerAction("Opacidade do fundo", false, false, sub = subBgOpacityLabel(subBgOpacity), keepOpen = true) {
+                subBgOpacity = nextSubBgOpacity(subBgOpacity); progressVm.subBgOpacity = subBgOpacity
+            })
+            add(TvPlayerAction("Contorno", false, false, sub = if (subOutline) "Com contorno" else "Sem contorno", keepOpen = true) {
+                subOutline = !subOutline; progressVm.subOutline = subOutline
+            })
             val onlyExt = if (selectedSubUrl == null) "  ·  vale para legenda externa" else ""
             add(TvPlayerAction("Atrasar 0,5 s", false, false, sub = subDelayLabel(subDelay) + onlyExt, keepOpen = true) { subDelay = addDelay(subDelay, 0.5) })
             add(TvPlayerAction("Adiantar 0,5 s", false, false, sub = "Use quando a legenda aparece depois da fala", keepOpen = true) { subDelay = addDelay(subDelay, -0.5) })
@@ -1966,6 +2169,8 @@ class PlayerSession(
         TvPlayerAction(playbackSpeedText(speed), false, i == speedIdx,
             sub = if (speed == 1f) "Velocidade normal" else if (speed < 1f) "Mais devagar" else "Mais rápido") {
             speedIdx = i
+            // Salva no perfil: a próxima sessão abre na mesma velocidade.
+            progressVm.playerSpeed = speed
             runCatching { currentPlayer().setPlaybackSpeed(speed) }
         }
     }
@@ -2026,6 +2231,7 @@ class PlayerSession(
         "speed" -> "Velocidade"
         "screen" -> "Tela"
         "episodes" -> "Episódios"
+        "color" -> "Cor do vídeo"
         else -> "Fontes"
     }
 
@@ -2035,6 +2241,7 @@ class PlayerSession(
         sourcePanelIdx = 0
         sourcePanelOpen = true
         if (kind == "sources") sourceLimit = 30
+        if (kind == "color") colorFocusIdx = 0
         if (kind == "episodes") selectPanelSeason(curSeason.coerceAtLeast(1))
     }
     // Chips do player (celular E TV: a mesma lista alimenta os dois — o toque
@@ -2059,6 +2266,10 @@ class PlayerSession(
         val speed = speeds[speedIdx]
         add(PlayerChipItem(WebPlayerIcons.Speed, "Velocidade ${playbackSpeedText(speed)}", active = speed != 1f,
             value = if (speed != 1f) playbackSpeedText(speed) else "", id = "speed") { openDpadPanel("speed") })
+        // Correção de cor (v1.9.0): chip novo "color" — NÃO está na lista
+        // canônica DEFAULT_PLAYER_BUTTONS (não mexida); o orderPlayerChips
+        // põe ids fora do catálogo no fim, então ele aparece por último.
+        add(PlayerChipItem(Icons.Default.Tune, "Cor", active = !colorState.isDefault, id = "color") { openDpadPanel("color") })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource
             userLockedSource = pinnedSource

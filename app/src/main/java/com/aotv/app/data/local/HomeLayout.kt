@@ -43,7 +43,7 @@ data class HomeRowPref(
 }
 
 /** O que o app guarda do manifest de um addon para montar a Início sem ir na rede. [id] é o id do manifest. */
-data class CachedAddon(val name: String, val catalogs: List<AddonCatalog>, val id: String = "")
+data class CachedAddon(val name: String, val catalogs: List<AddonCatalog>, val id: String = "", val logo: String = "")
 
 object HomeLayout {
 
@@ -173,7 +173,7 @@ object HomeLayout {
         map.forEach { (base, a) ->
             val cats = org.json.JSONArray()
             a.catalogs.forEach { c -> cats.put(org.json.JSONObject().put("t", c.type).put("i", c.id).put("n", c.name)) }
-            root.put(base, org.json.JSONObject().put("n", a.name).put("c", cats).put("id", a.id))
+            root.put(base, org.json.JSONObject().put("n", a.name).put("c", cats).put("id", a.id).put("logo", a.logo))
         }
         return root.toString()
     }
@@ -192,6 +192,7 @@ object HomeLayout {
                         AddonCatalog(c.optString("t"), c.optString("i"), c.optString("n")).takeIf { it.id.isNotBlank() }
                     },
                     o.optString("id"),
+                    o.optString("logo"),
                 )
             }
         }.getOrDefault(emptyMap())

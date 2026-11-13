@@ -43,6 +43,7 @@ fun scopedKey(key: String, profileId: String): String =
 /** Preferências que são de cada perfil. O resto (addons, modo, chave TMDB, aberturas) é do aparelho. */
 internal val SCOPED_KEYS = listOf(
     "recent_searches", "ext_audio_v1", "home_catalogs_v1", "sub_size", "sub_bg",
+    "sub_color", "sub_bg_opacity", "sub_outline", "sub_font",
     "pref_audio", "pref_max_quality", "pref_hero_trailer", "trakt_v1",
     "home_layout_v1", "home_hero_v1", "pref_subtitle_on", "pref_sub_lang", "collections_v1",
     "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
@@ -56,7 +57,13 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
     "pref_player_auto_switch", "pref_player_source_timeout",
-    "pref_player_animeskip_client_id",
+    "pref_player_animeskip_client_id", "pref_player_speed", "pref_player_swipe_seek",
+    "pref_player_color_brightness", "pref_player_color_contrast", "pref_player_color_saturation",
+    "pref_player_color_hue", "pref_player_color_preset", "pref_player_color_daltonism",
+    // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
+    "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
+    "anilist_v1", "wetrakr_v1", "publicmetadb_v1",
+    "discord_v1", "jellyfin_v1", "emby_v1",
 )
 
 /**
@@ -256,6 +263,60 @@ class PlatformPrefs @Inject constructor(
     var traktSession: String
         get() = prefs.getString(sk("trakt_v1"), "") ?: ""
         set(value) { prefs.edit().putString(sk("trakt_v1"), value).apply() }
+
+    // ── Fase D — trackers, Discord e servidores de mídia (por perfil) ─────────
+    // Sessões em JSON cru, como o Trakt. IDs/chaves são configuráveis pelo usuário
+    // em Configurações e NUNCA vão para o código (regra dura do projeto): vazio =
+    // serviço desligado. Nenhum destes campos tem valor padrão embutido.
+    /** Sessão do SIMKL do perfil (JSON cru: access/refresh/expires/user). */
+    var simklSession: String
+        get() = prefs.getString(sk("simkl_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("simkl_v1"), value).apply() }
+
+    /** Client ID do SIMKL, colado pelo usuário em Configurações. Vazio = desligado. */
+    var simklClientId: String
+        get() = prefs.getString(sk("simkl_client_id_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("simkl_client_id_v1"), value.trim()).apply() }
+
+    /** Chave de API do MDBList, colada pelo usuário. Vazio = desligado. */
+    var mdblistApiKey: String
+        get() = prefs.getString(sk("mdblist_key_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("mdblist_key_v1"), value.trim()).apply() }
+
+    /** Chave de API do OMDb, colada pelo usuário. Vazio = desligado. */
+    var omdbApiKey: String
+        get() = prefs.getString(sk("omdb_key_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("omdb_key_v1"), value.trim()).apply() }
+
+    /** Token do AniList do perfil (JSON cru). Vazio sem login. */
+    var anilistSession: String
+        get() = prefs.getString(sk("anilist_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("anilist_v1"), value).apply() }
+
+    /** Token do WeTrakr do perfil (JSON cru). Vazio sem login. */
+    var wetrakrSession: String
+        get() = prefs.getString(sk("wetrakr_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("wetrakr_v1"), value).apply() }
+
+    /** Token do PublicMetaDB do perfil (JSON cru). Vazio sem login. */
+    var publicMetaDbSession: String
+        get() = prefs.getString(sk("publicmetadb_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("publicmetadb_v1"), value).apply() }
+
+    /** Sessão do Discord do perfil (JSON cru). Vazio sem login. */
+    var discordSession: String
+        get() = prefs.getString(sk("discord_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("discord_v1"), value).apply() }
+
+    /** Servidor Jellyfin do perfil (JSON cru: url/userId/token/user). Vazio sem servidor. */
+    var jellyfinSession: String
+        get() = prefs.getString(sk("jellyfin_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("jellyfin_v1"), value).apply() }
+
+    /** Servidor Emby do perfil (JSON cru: url/userId/token/user). Vazio sem servidor. */
+    var embySession: String
+        get() = prefs.getString(sk("emby_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("emby_v1"), value).apply() }
 
     var platformMode: PlatformMode
         get() = PlatformMode.valueOf(prefs.getString("platform_mode", PlatformMode.AUTO.name)!!)
@@ -468,6 +529,64 @@ class PlatformPrefs @Inject constructor(
         get() = _playerTapSeek.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_tap_seek"), value).apply(); _playerTapSeek.value = value }
 
+    private val _playerSwipeSeek = MutableStateFlow(prefs.getBoolean(sk("pref_player_swipe_seek"), true))
+    /** Deslizar horizontalmente sobre o vídeo avança/retrocede 10s (Lote 1, v1.9.0). */
+    val playerSwipeSeekFlow: StateFlow<Boolean> = _playerSwipeSeek.asStateFlow()
+    var playerSwipeSeek: Boolean
+        get() = _playerSwipeSeek.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_swipe_seek"), value).apply(); _playerSwipeSeek.value = value }
+
+    private val _playerSpeed = MutableStateFlow(prefs.getFloat(sk("pref_player_speed"), 1f))
+    /** Velocidade de reprodução salva do perfil (0,5x–2x; Lote 1, v1.9.0). */
+    val playerSpeedFlow: StateFlow<Float> = _playerSpeed.asStateFlow()
+    var playerSpeed: Float
+        get() = _playerSpeed.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_speed"), value).apply(); _playerSpeed.value = value }
+
+    // ── Filtro de correção de cor do player (Lote 1, v1.9.0) — por perfil ──
+
+    private val _playerColorBrightness = MutableStateFlow(prefs.getFloat(sk("pref_player_color_brightness"), 0f))
+    /** Brilho do vídeo (−1..1; 0 = sem mudança). */
+    val playerColorBrightnessFlow: StateFlow<Float> = _playerColorBrightness.asStateFlow()
+    var playerColorBrightness: Float
+        get() = _playerColorBrightness.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_color_brightness"), value).apply(); _playerColorBrightness.value = value }
+
+    private val _playerColorContrast = MutableStateFlow(prefs.getFloat(sk("pref_player_color_contrast"), 1f))
+    /** Contraste do vídeo (0..2; 1 = sem mudança). */
+    val playerColorContrastFlow: StateFlow<Float> = _playerColorContrast.asStateFlow()
+    var playerColorContrast: Float
+        get() = _playerColorContrast.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_color_contrast"), value).apply(); _playerColorContrast.value = value }
+
+    private val _playerColorSaturation = MutableStateFlow(prefs.getFloat(sk("pref_player_color_saturation"), 1f))
+    /** Saturação do vídeo (0..2; 1 = sem mudança). */
+    val playerColorSaturationFlow: StateFlow<Float> = _playerColorSaturation.asStateFlow()
+    var playerColorSaturation: Float
+        get() = _playerColorSaturation.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_color_saturation"), value).apply(); _playerColorSaturation.value = value }
+
+    private val _playerColorHue = MutableStateFlow(prefs.getFloat(sk("pref_player_color_hue"), 0f))
+    /** Matiz do vídeo em graus (−180..180; 0 = sem mudança). */
+    val playerColorHueFlow: StateFlow<Float> = _playerColorHue.asStateFlow()
+    var playerColorHue: Float
+        get() = _playerColorHue.value
+        set(value) { prefs.edit().putFloat(sk("pref_player_color_hue"), value).apply(); _playerColorHue.value = value }
+
+    private val _playerColorPreset = MutableStateFlow(prefs.getString(sk("pref_player_color_preset"), "padrao") ?: "padrao")
+    /** Preset de cor do vídeo ("padrao", "vivo", "cinema", "pb" ou "custom"). */
+    val playerColorPresetFlow: StateFlow<String> = _playerColorPreset.asStateFlow()
+    var playerColorPreset: String
+        get() = _playerColorPreset.value
+        set(value) { prefs.edit().putString(sk("pref_player_color_preset"), value).apply(); _playerColorPreset.value = value }
+
+    private val _playerColorDaltonism = MutableStateFlow(prefs.getString(sk("pref_player_color_daltonism"), "off") ?: "off")
+    /** Correção p/ daltonismo no vídeo ("off", "deuteranomalia", "protanomalia", "tritanomalia"). */
+    val playerColorDaltonismFlow: StateFlow<String> = _playerColorDaltonism.asStateFlow()
+    var playerColorDaltonism: String
+        get() = _playerColorDaltonism.value
+        set(value) { prefs.edit().putString(sk("pref_player_color_daltonism"), value).apply(); _playerColorDaltonism.value = value }
+
     private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
     /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
     val playerVolBoostFlow: StateFlow<Boolean> = _playerVolBoost.asStateFlow()
@@ -629,6 +748,36 @@ class PlatformPrefs @Inject constructor(
     var subBg: Boolean
         get() = prefs.getBoolean(sk("sub_bg"), true)
         set(value) { prefs.edit().putBoolean(sk("sub_bg"), value).apply() }
+
+    // ── Personalização de legenda (Lote 1, v1.9.0) — por perfil, com Flow p/ o player ──
+
+    private val _subColor = MutableStateFlow(prefs.getInt(sk("sub_color"), -1))
+    /** Cor do texto da legenda (ARGB; -1 = branco). */
+    val subColorFlow: StateFlow<Int> = _subColor.asStateFlow()
+    var subColor: Int
+        get() = _subColor.value
+        set(value) { prefs.edit().putInt(sk("sub_color"), value).apply(); _subColor.value = value }
+
+    private val _subBgOpacity = MutableStateFlow(prefs.getFloat(sk("sub_bg_opacity"), 0.78f))
+    /** Opacidade do fundo da legenda (0,5–0,9). */
+    val subBgOpacityFlow: StateFlow<Float> = _subBgOpacity.asStateFlow()
+    var subBgOpacity: Float
+        get() = _subBgOpacity.value
+        set(value) { prefs.edit().putFloat(sk("sub_bg_opacity"), value).apply(); _subBgOpacity.value = value }
+
+    private val _subOutline = MutableStateFlow(prefs.getBoolean(sk("sub_outline"), true))
+    /** Contorno preto ao redor do texto da legenda quando não há fundo. */
+    val subOutlineFlow: StateFlow<Boolean> = _subOutline.asStateFlow()
+    var subOutline: Boolean
+        get() = _subOutline.value
+        set(value) { prefs.edit().putBoolean(sk("sub_outline"), value).apply(); _subOutline.value = value }
+
+    private val _subFont = MutableStateFlow(prefs.getString(sk("sub_font"), "default") ?: "default")
+    /** Fonte da legenda ("default", "monospace", "serif" ou "sans"). */
+    val subFontFlow: StateFlow<String> = _subFont.asStateFlow()
+    var subFont: String
+        get() = _subFont.value
+        set(value) { prefs.edit().putString(sk("sub_font"), value).apply(); _subFont.value = value }
 
     /** Escolhas de som de outra fonte por título, chave "TIPO:tmdbId". */
     var extAudioPicks: Map<String, ExtAudioPick>
@@ -954,9 +1103,9 @@ class PlatformPrefs @Inject constructor(
      * Guarda o que o manifest diz. Chamado toda vez que um manifest é lido com sucesso, às vezes
      * vários ao mesmo tempo (o gerenciador lê todos em paralelo), daí o synchronized.
      */
-    fun cacheManifest(url: String, name: String, catalogs: List<com.aotv.app.data.remote.AddonCatalog>, id: String = "") {
+    fun cacheManifest(url: String, name: String, catalogs: List<com.aotv.app.data.remote.AddonCatalog>, id: String = "", logo: String = "") {
         val base = baseOf(url)
-        val now = CachedAddon(name, catalogs, id)
+        val now = CachedAddon(name, catalogs, id, logo)
         synchronized(_addonMeta) {
             if (_addonMeta.value[base] == now) return
             val map = _addonMeta.value + (base to now)
@@ -1057,6 +1206,18 @@ class PlatformPrefs @Inject constructor(
         _playerButtons.value = readStringList("pref_player_buttons")
         _playerTopActions.value = readStringList("pref_player_top_actions")
         _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)
+        _playerSwipeSeek.value = prefs.getBoolean(sk("pref_player_swipe_seek"), true)
+        _playerSpeed.value = prefs.getFloat(sk("pref_player_speed"), 1f)
+        _playerColorBrightness.value = prefs.getFloat(sk("pref_player_color_brightness"), 0f)
+        _playerColorContrast.value = prefs.getFloat(sk("pref_player_color_contrast"), 1f)
+        _playerColorSaturation.value = prefs.getFloat(sk("pref_player_color_saturation"), 1f)
+        _playerColorHue.value = prefs.getFloat(sk("pref_player_color_hue"), 0f)
+        _playerColorPreset.value = prefs.getString(sk("pref_player_color_preset"), "padrao") ?: "padrao"
+        _playerColorDaltonism.value = prefs.getString(sk("pref_player_color_daltonism"), "off") ?: "off"
+        _subColor.value = prefs.getInt(sk("sub_color"), -1)
+        _subBgOpacity.value = prefs.getFloat(sk("sub_bg_opacity"), 0.78f)
+        _subOutline.value = prefs.getBoolean(sk("sub_outline"), true)
+        _subFont.value = prefs.getString(sk("sub_font"), "default") ?: "default"
         _playerVolBoost.value = prefs.getBoolean(sk("pref_player_vol_boost"), false)
         _playerVolBoostLevel.value = prefs.getFloat(sk("pref_player_vol_boost_level"), 1.5f)
         _playerMini.value = prefs.getBoolean(sk("pref_player_mini"), true)

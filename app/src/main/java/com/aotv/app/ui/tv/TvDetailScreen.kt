@@ -277,6 +277,9 @@ private fun TvDetailScreenBody(
                                     television = true,
                                     kodiAddons = state.kodiVideoAddons,
                                     onOpenKodiAddon = { addonId -> onOpenKodiAddon(addonId, title) },
+                                    // v1.9.0 (Lote 1) — botão Recarregar na TV: igual ao do celular.
+                                    onReloadSources = { viewModel.reloadMovieSources() },
+                                    loading = state.stremioLoading,
                                 )
                             }
                             when {
@@ -343,6 +346,9 @@ private fun TvDetailScreenBody(
                         viewModel.clearSelectedEpisode()
                         onOpenKodiAddon(addonId, title)
                     },
+                    // v1.9.0 (Lote 1) — botão Recarregar no painel de fontes do episódio na TV.
+                    onReloadSources = { viewModel.reloadEpisodeSources() },
+                    loading = state.episodeStremioLoading,
                 )
                 when {
                     state.episodeStremioLoading -> TvSpinner("Buscando fontes")
