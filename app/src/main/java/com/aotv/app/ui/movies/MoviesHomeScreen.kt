@@ -441,9 +441,9 @@ private fun HomeSectionsTab(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize()
-            .background(
-                if (display.dynamicBackground) com.aotv.app.ui.common.dynamicHomeBackground(heroHue)
-                else Background,
+            .then(
+                if (display.dynamicBackground) Modifier.background(com.aotv.app.ui.common.dynamicHomeBackground(heroHue))
+                else Modifier.background(Background),
             ),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeSectionSpacing(display.density)),
@@ -693,7 +693,7 @@ private fun HeroCarousel(
     // Cartão: o herói vira um card com margem lateral e cantos arredondados, no lugar
     // de ocupar a largura toda. Tela cheia mantém o comportamento de sempre.
     val heroBox = if (heroStyle == HeroStyle.CARD) {
-        Modifier.fillMaxWidth().padding(horizontal = pad, top = 8.dp)
+        Modifier.fillMaxWidth().padding(horizontal = pad).padding(top = 8.dp)
             .clip(RoundedCornerShape(20.dp)).height(heroHeight)
     } else {
         Modifier.fillMaxWidth().height(heroHeight)

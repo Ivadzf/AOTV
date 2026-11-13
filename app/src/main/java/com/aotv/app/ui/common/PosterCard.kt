@@ -232,9 +232,8 @@ fun PosterCard(
             imageBottom = unit * 22,
             onImage = visual.onImage,
             cornerRadius = cornerRadius,
-        ) {
-            PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22)
-        }
+            decor = { PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22) },
+        )
         if (caption != null) PosterCaption(caption, sub, highlight)
     }
 }
