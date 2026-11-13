@@ -43,10 +43,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aotv.app.data.local.HomeDisplayPrefs
+import com.aotv.app.data.local.HeroStyle
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.Badge
@@ -375,8 +378,15 @@ private fun CatalogTab(
 
 // ── Media card (poster) ────────────────────────────────────────────────────
 @Composable
-fun MediaCard(item: MovieItem, onClick: () -> Unit) {
-    com.aotv.app.ui.common.PosterCard(item = item, onClick = onClick)
+fun MediaCard(
+    item: MovieItem,
+    onClick: () -> Unit,
+    showBadges: Boolean = true,
+    cornerRadius: Dp = 14.dp,
+) {
+    com.aotv.app.ui.common.PosterCard(
+        item = item, onClick = onClick, showBadges = showBadges, cornerRadius = cornerRadius,
+    )
 }
 
 // ── Aba "Início": catálogo estilo Netflix (fileiras por gênero, cresce ao rolar) ──
@@ -420,11 +430,23 @@ private fun HomeSectionsTab(
         if (bd.isBlank()) null else item.copy(backdropUrl = bd)
     }.take(8)
 
+    val display = state.display
+    // Fundo dinâmico (opt-in, desligado por padrão): gradiente com a matiz do
+    // pôster do destaque. Sem matiz ainda, o fundo sólido aparece no lugar.
+    val heroHue = if (display.dynamicBackground && heroItems.isNotEmpty()) {
+        com.aotv.app.ui.common.rememberPosterHue(heroItems.first())
+    } else {
+        null
+    }
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize()
+            .background(
+                if (display.dynamicBackground) com.aotv.app.ui.common.dynamicHomeBackground(heroHue)
+                else Background,
+            ),
         contentPadding = PaddingValues(bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(22.dp),
+        verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeSectionSpacing(display.density)),
     ) {
         // Sem chave TMDB as fileiras do sistema voltam vazias em silêncio — avisa no topo.
         if (!state.hasTmdbKey) {
@@ -479,6 +501,7 @@ private fun HomeSectionsTab(
                     heroItems, state.heroLogos, onItemClick,
                     trailerOn = state.heroTrailer && atTop,
                     trailerFor = viewModel::heroTrailerStream,
+                    heroStyle = display.heroStyle,
                 )
             }
         }
@@ -487,45 +510,46 @@ private fun HomeSectionsTab(
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
-                    ContinueRow(row.displayTitle, state, onItemClick)
+                    ContinueRow(row.displayTitle, state, onItemClick, display)
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
                         row.displayTitle, state.newEpisodes.map { it.item }, onItemClick,
+                        display = display,
                         badges = state.newEpisodes.associate { it.item.tmdbId to it.badge },
                         subs = state.newEpisodes.associate { it.item.tmdbId to it.sub },
                     )
                 }
                 SystemRow.RECOMMENDED -> if (state.recommended.isNotEmpty()) item(key = row.key) {
-                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, state.recommended, onItemClick)
+                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, state.recommended, onItemClick, display = display)
                 }
                 SystemRow.TRAILERS -> if (state.trailersLoading || state.latestTrailers.isNotEmpty()) item(key = row.key) {
-                    LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle)
+                    LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle, display = display)
                 }
                 SystemRow.TRENDING_MOVIES -> if (state.trendingMovies.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.trendingMovies, onItemClick) {
+                    SectionRow(row.displayTitle, state.trendingMovies, onItemClick, display = display) {
                         onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.TRENDING))
                     }
                 }
                 SystemRow.TRENDING_TV -> if (state.trendingTv.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.trendingTv, onItemClick) {
+                    SectionRow(row.displayTitle, state.trendingTv, onItemClick, display = display) {
                         onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.SERIES, MoviesHomeViewModel.CatalogEndpoint.TRENDING))
                     }
                 }
                 SystemRow.NOW_PLAYING -> if (state.nowPlaying.isNotEmpty()) item(key = row.key) {
-                    SectionRow(row.displayTitle, state.nowPlaying, onItemClick) {
+                    SectionRow(row.displayTitle, state.nowPlaying, onItemClick, display = display) {
                         onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.NOW_PLAYING))
                     }
                 }
                 SystemRow.RELEASES -> if (state.releases2026.isNotEmpty()) item(key = row.key) {
                     val t = custom.ifBlank { "Lançamentos ${state.releasesYear}" }
-                    SectionRow(t, state.releases2026, onItemClick) {
+                    SectionRow(t, state.releases2026, onItemClick, display = display) {
                         onSeeMore(MoviesHomeViewModel.CatalogQuery(t, MoviesHomeViewModel.CatalogType.MOVIE, genreId = null, sort = MoviesHomeViewModel.SORT_RELEASE_MOVIE, year = state.releasesYear))
                     }
                 }
                 SystemRow.GENRES -> {
                     items(state.homeSections, key = { it.id }) { sec ->
-                        SectionRow(sec.title, sec.items, onItemClick) { onSeeMore(sec.query) }
+                        SectionRow(sec.title, sec.items, onItemClick, display = display) { onSeeMore(sec.query) }
                     }
                     if (state.isLoadingSections) items(2, key = { "genres_skel_$it" }) { com.aotv.app.ui.common.SkeletonRail() }
                 }
@@ -539,6 +563,7 @@ private fun HomeSectionsTab(
                         if (ar.items.isEmpty()) com.aotv.app.ui.common.SkeletonRail()
                         else SectionRow(
                             ar.title, ar.items, onItemClick,
+                            display = display,
                             onNearEnd = if (ar.more) ({ viewModel.loadAddonRow(ar.ref.key) }) else null,
                         )
                     }
@@ -596,16 +621,23 @@ private fun HeroTitle(title: String, compact: Boolean = false) {
 }
 
 @Composable
-private fun ContinueRow(title: String, state: MoviesHomeViewModel.UiState, onItemClick: (MovieItem) -> Unit) {
+private fun ContinueRow(
+    title: String,
+    state: MoviesHomeViewModel.UiState,
+    onItemClick: (MovieItem) -> Unit,
+    display: HomeDisplayPrefs = HomeDisplayPrefs(),
+) {
     Column {
-        com.aotv.app.ui.common.SectionHeader(title)
+        com.aotv.app.ui.common.SectionHeader(
+            title, underline = display.sectionUnderline, compact = display.compact,
+        )
         LazyRow(contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding()),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            horizontalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeRowSpacing(display.density))) {
             items(state.continueWatching, key = { com.aotv.app.data.local.posterKey(it) }) { item ->
                 com.aotv.app.ui.common.ContinueCard(item, { onItemClick(item) },
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
-                    episode = state.continueEpisode[item.tmdbId].orEmpty())
+                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact)
             }
         }
     }
@@ -623,6 +655,8 @@ private fun HeroCarousel(
     onItemClick: (MovieItem) -> Unit,
     trailerOn: Boolean = false,
     trailerFor: suspend (MovieItem) -> com.aotv.app.data.remote.YoutubeTrailer.TrailerStream? = { null },
+    /** Estilo do herói (Fase B): tela cheia (o atual) ou cartão com cantos arredondados. */
+    heroStyle: HeroStyle = HeroStyle.FULL_BLEED,
 ) {
     val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { items.size })
     // Trailer mudo depois de 5 s parado no mesmo destaque. Trocar de página, rolar a Início ou
@@ -655,7 +689,16 @@ private fun HeroCarousel(
     val fallbackHeight = with(androidx.compose.ui.platform.LocalDensity.current) { (if (compactHero) 32.sp else 37.sp).toDp() * 2 }
     val logoHeight = maxOf(if (compactHero) 64.dp else if (wide) 84.dp else 100.dp, fallbackHeight)
     val pad = com.aotv.app.ui.common.pagePadding()
-    Box(Modifier.fillMaxWidth().height(com.aotv.app.ui.common.homeHeroHeight(config.screenWidthDp, config.screenHeightDp, config.fontScale).dp)) {
+    val heroHeight = com.aotv.app.ui.common.homeHeroHeight(config.screenWidthDp, config.screenHeightDp, config.fontScale).dp
+    // Cartão: o herói vira um card com margem lateral e cantos arredondados, no lugar
+    // de ocupar a largura toda. Tela cheia mantém o comportamento de sempre.
+    val heroBox = if (heroStyle == HeroStyle.CARD) {
+        Modifier.fillMaxWidth().padding(horizontal = pad, top = 8.dp)
+            .clip(RoundedCornerShape(20.dp)).height(heroHeight)
+    } else {
+        Modifier.fillMaxWidth().height(heroHeight)
+    }
+    Box(heroBox) {
         androidx.compose.foundation.pager.HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             val item = items[page]
             Box(Modifier.fillMaxSize()) {
@@ -758,6 +801,7 @@ private fun SectionRow(
     title: String,
     items: List<MovieItem>,
     onItemClick: (MovieItem) -> Unit,
+    display: HomeDisplayPrefs = HomeDisplayPrefs(),
     progressMap: Map<Int, Float>? = null,   // Continuar assistindo: fração assistida por tmdbId
     remainingMap: Map<Int, Int>? = null,    // Continuar assistindo: minutos restantes por tmdbId
     onNearEnd: (() -> Unit)? = null,        // paginação da fileira (catálogo de addon)
@@ -778,16 +822,18 @@ private fun SectionRow(
         LaunchedEffect(nearEnd, items.size) { if (nearEnd) onNearEnd() }
     }
     val pad = com.aotv.app.ui.common.pagePadding()
-    val cardWidth = com.aotv.app.ui.common.posterWidth()
+    val cardWidth = com.aotv.app.ui.common.posterWidthFor(display.posterSize)
     Column {
         com.aotv.app.ui.common.SectionHeader(
             title = title,
             action = onSeeMore?.let { f -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", f) } },
+            underline = display.sectionUnderline,
+            compact = display.compact,
         )
         LazyRow(
             state = rowState,
             contentPadding = PaddingValues(horizontal = pad),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeRowSpacing(display.density)),
         ) {
             items(items, key = { it.tmdbId }) { item ->
                 val remain = remainingMap?.get(item.tmdbId)
@@ -799,6 +845,8 @@ private fun SectionRow(
                     sub = subs?.get(item.tmdbId),
                     badge = badges?.get(item.tmdbId),
                     progress = progressMap?.get(item.tmdbId),
+                    showBadges = display.showPosterBadges,
+                    cornerRadius = display.posterRadiusDp.dp,
                 )
             }
         }
@@ -815,6 +863,7 @@ private fun CatalogGridView(
     onBack: () -> Unit,
 ) {
     val gridState = rememberLazyGridState()
+    val display = state.display
     val loadMore by remember {
         derivedStateOf {
             val li = gridState.layoutInfo
@@ -848,13 +897,18 @@ private fun CatalogGridView(
                 }
             else -> LazyVerticalGrid(
                 state = gridState,
-                columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidth()),
+                columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidthFor(display.posterSize)),
                 contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (display.compact) 8.dp else 12.dp),
+                verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeGridSpacing(display.density)),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(state.gridItems, key = { it.tmdbId }) { item -> MediaCard(item = item, onClick = { onItemClick(item) }) }
+                items(state.gridItems, key = { it.tmdbId }) { item ->
+                    MediaCard(
+                        item = item, onClick = { onItemClick(item) },
+                        showBadges = display.showPosterBadges, cornerRadius = display.posterRadiusDp.dp,
+                    )
+                }
                 if (state.gridLoadingMore) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
@@ -880,10 +934,14 @@ private fun LatestTrailersRow(
     viewModel: MoviesHomeViewModel,
     onPlay: (MoviesHomeViewModel.TrailerCard) -> Unit,
     title: String = "Últimos trailers",
+    display: HomeDisplayPrefs = HomeDisplayPrefs(),
 ) {
     val pad = com.aotv.app.ui.common.pagePadding()
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        com.aotv.app.ui.common.SectionHeader(title)
+    val rowSpace = com.aotv.app.ui.common.homeRowSpacing(display.density)
+    Column(verticalArrangement = Arrangement.spacedBy(if (display.compact) 4.dp else 6.dp)) {
+        com.aotv.app.ui.common.SectionHeader(
+            title, underline = display.sectionUnderline, compact = display.compact,
+        )
         // Abas roláveis (cabem 5 sem espremer em tela pequena).
         androidx.compose.foundation.lazy.LazyRow(
             contentPadding = PaddingValues(horizontal = pad),
@@ -903,7 +961,7 @@ private fun LatestTrailersRow(
                 val brush = com.aotv.app.ui.common.skeletonBrush()
                 androidx.compose.foundation.lazy.LazyRow(
                     contentPadding = PaddingValues(horizontal = pad),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(rowSpace),
                     userScrollEnabled = false,
                 ) {
                     items(3) {
@@ -923,7 +981,7 @@ private fun LatestTrailersRow(
 
             else -> androidx.compose.foundation.lazy.LazyRow(
                 contentPadding = PaddingValues(horizontal = pad),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(rowSpace),
             ) {
                 items(state.latestTrailers, key = { "${it.tmdbId}:${it.videoKey}" }) { card ->
                     TrailerCardView(card, onClick = { onPlay(card) })

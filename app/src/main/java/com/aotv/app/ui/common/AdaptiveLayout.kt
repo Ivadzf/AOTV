@@ -20,6 +20,14 @@ fun continueCardWidth(): Dp {
     return (width * .82f).coerceIn(240f, 360f).coerceAtMost(width - 32f).dp
 }
 
+/** Continuar assistindo no modo compacto: card mais estreito, cabe mais título na tela. */
+@Composable
+fun continueCardWidth(compact: Boolean): Dp {
+    if (!compact) return continueCardWidth()
+    val width = LocalConfiguration.current.screenWidthDp.toFloat()
+    return (width * .72f).coerceIn(200f, 300f).coerceAtMost(width - 32f).dp
+}
+
 internal fun posterColumns(widthDp: Int, fontScale: Float, minimumWidth: Int = 136): Int =
     ((widthDp - 32 + 12) / (minimumWidth * fontScale.coerceIn(1f, 1.65f) + 12)).toInt().coerceIn(1, 8)
 

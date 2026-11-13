@@ -1,5 +1,8 @@
 package com.aotv.app.ui.movies
 
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import androidx.compose.ui.focus.focusProperties
 import kotlin.math.roundToInt
 import androidx.compose.animation.core.*
@@ -51,6 +54,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,6 +97,8 @@ fun MovieDetailScreen(
     // o título no Vulgata; outros addons abrem na raiz.
     onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
+    // Preferências da página de detalhes (Fase B): fundo, transição, ícones, abas, episódios.
+    detailPrefs: DetailPrefsViewModel = hiltViewModel(),
 ) {
     // Passa o item completo (título/poster/ano/tipo) p/ a ViewModel poder salvar na
     // Minha Lista e registrar reprodução; também abre os coletores reativos da BIBLIOTECA.
@@ -153,6 +159,41 @@ fun MovieDetailScreen(
         label = "kenburns_scale",
     )
 
+    // Preferências da página de detalhes (Fase B). Mudam na hora, sem reabrir.
+    val cinematicBg by detailPrefs.cinematic.collectAsStateWithLifecycle()
+    val posterTransition by detailPrefs.posterTransition.collectAsStateWithLifecycle()
+    val iconActions by detailPrefs.iconActions.collectAsStateWithLifecycle()
+    val detailTabsOn by detailPrefs.tabs.collectAsStateWithLifecycle()
+    val episodeStyleId by detailPrefs.episodeStyle.collectAsStateWithLifecycle()
+    val episodeStyle = EpisodeCardStyle.fromId(episodeStyleId)
+
+    // Transição do pôster (Fase B): escala 0.94→1 + fade na primeira composição.
+    var detailEntered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { detailEntered = true }
+    val introScale by animateFloatAsState(
+        targetValue = if (posterTransition && !detailEntered) 0.94f else 1f,
+        animationSpec = tween(350, easing = FastOutSlowInEasing),
+        label = "detail_intro_scale",
+    )
+    val introAlpha by animateFloatAsState(
+        targetValue = if (posterTransition && !detailEntered) 0f else 1f,
+        animationSpec = tween(350),
+        label = "detail_intro_alpha",
+    )
+
+    // Layout de abas (Fase B, opt-in): agrupa as seções em abas; desligado, a rolagem única atual.
+    val detailTabList = buildList {
+        if (isSeries) add("episodios" to "Episódios") else {
+            if (overview.isNotBlank()) add("sobre" to "Sobre")
+            add("fontes" to "Fontes")
+        }
+        if (state.cast.isNotEmpty()) add("elenco" to "Elenco")
+        if (state.collectionItems.size > 1 || state.related.isNotEmpty()) add("mais" to "Mais como isto")
+    }
+    var detailTab by rememberSaveable { mutableStateOf("") }
+    val activeDetailTab = detailTabList.firstOrNull { it.first == detailTab }?.first
+        ?: detailTabList.firstOrNull()?.first.orEmpty()
+
     // Na TV o botão aceita foco mesmo travado ("Carregando fontes…"), então basta a tela carregar.
     LaunchedEffect(state.isLoading, primary.enabled) {
         if (state.isLoading) return@LaunchedEffect
@@ -163,6 +204,17 @@ fun MovieDetailScreen(
         }
     }
 
+    // Abrir o trailer (extrai p/ o ExoPlayer; WebView = fallback). Usado pelo
+    // botão em vidro (layout atual) e pelo ícone (ações em ícones, Fase B).
+    fun openTrailer() {
+        if (!trailerLoading) detailScope.launch {
+            trailerLoading = true
+            val s = viewModel.trailerStream()
+            trailerLoading = false
+            if (s != null) trailerExo = s else trailerOpen = true
+        }
+    }
+
     // Lambda de download p/ SourceRow: só retorna ação se a URL for .mp4 baixável.
     fun dl(url: String): (() -> Unit)? =
         if (viewModel.isDownloadable(url)) ({ viewModel.downloadSource(url) }) else null
@@ -170,8 +222,13 @@ fun MovieDetailScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Background),
+            .background(if (cinematicBg) Color.Black else Background),
     ) {
+        // Fundo cinematográfico (Fase B, opt-in): arte desfocada em tela cheia
+        // atrás da página. O LazyColumn não tem fundo próprio, então a arte aparece.
+        if (cinematicBg && backdropUrl.isNotBlank()) {
+            CinematicBackdrop(backdropUrl)
+        }
         LazyColumn(
             Modifier.fillMaxSize(),
             state = detailList,
@@ -187,10 +244,17 @@ fun MovieDetailScreen(
                         .height(((if (wide) (configuration.screenHeightDp * .95f).coerceIn(280f, 400f) else 420f) + (fontScale - 1f) * 180f).dp)
                         // clipToBounds: a imagem com .scale() (Ken Burns) não vaza p/ baixo
                         // do hero (era a "faixa" esverdeada atrás da sinopse).
-                        .clipToBounds(),
+                        .clipToBounds()
+                        // Transição do pôster (Fase B): cresce e aparece ao abrir.
+                        .graphicsLayer {
+                            scaleX = introScale
+                            scaleY = introScale
+                            alpha = introAlpha
+                        },
                 ) {
-                    // Ken Burns backdrop image
-                    if (backdropUrl.isNotBlank()) {
+                    // Ken Burns backdrop image. No modo cinematográfico a arte já está
+                    // desfocada atrás da página inteira, então aqui não repete.
+                    if (!cinematicBg && backdropUrl.isNotBlank()) {
                         AsyncImage(
                             model = backdropUrl,
                             contentDescription = null,
@@ -199,7 +263,9 @@ fun MovieDetailScreen(
                                 .fillMaxSize()
                                 .scale(scale),
                         )
-                    } else {
+                    } else if (backdropUrl.isBlank()) {
+                        // Sem arte: o gradiente azul escuro de antes. Com arte no modo
+                        // cinematográfico não entra nada aqui (a arte já cobre a tela).
                         Box(
                             Modifier
                                 .fillMaxSize()
@@ -250,8 +316,9 @@ fun MovieDetailScreen(
                             ),
                     )
 
-                    // Bottom fade vertical to Background
-                    Box(
+                    // Bottom fade vertical to Background. Fora no modo cinematográfico:
+                    // o conteúdo abaixo precisa continuar vendo a arte desfocada.
+                    if (!cinematicBg) Box(
                         Modifier
                             .fillMaxSize()
                             .background(
@@ -437,31 +504,53 @@ fun MovieDetailScreen(
                             modifier = Modifier.fillMaxWidth(if (fontScale > 1.3f || configuration.screenWidthDp < 420) 1f else .62f).focusRequester(primaryFocus)
                                 .onFocusChanged { if (it.isFocused) primaryGotFocus = true },
                         )
-                        // Trailer (YouTube) — extrai e toca no NOSSO ExoPlayer; WebView = fallback.
-                        if (state.trailerKey.isNotBlank()) {
-                            GlassCircleButton(
-                                icon = Icons.Default.Theaters,
-                                onClick = {
-                                    if (!trailerLoading) detailScope.launch {
-                                        trailerLoading = true
-                                        val s = viewModel.trailerStream()
-                                        trailerLoading = false
-                                        if (s != null) trailerExo = s else trailerOpen = true
-                                    }
-                                },
-                                size = 52.dp,
-                                iconTint = TextPrimary,
-                                contentDescription = if (trailerLoading) "Carregando trailer" else "Trailer",
-                                busy = trailerLoading,
+                        // Ações em vidro (layout atual). Com ações em ícones (Fase B) elas
+                        // descem p/ uma fileira de ícones com rótulo, abaixo do Reproduzir.
+                        if (!iconActions) {
+                            // Trailer (YouTube) — extrai e toca no NOSSO ExoPlayer; WebView = fallback.
+                            if (state.trailerKey.isNotBlank()) {
+                                GlassCircleButton(
+                                    icon = Icons.Default.Theaters,
+                                    onClick = { openTrailer() },
+                                    size = 52.dp,
+                                    iconTint = TextPrimary,
+                                    contentDescription = if (trailerLoading) "Carregando trailer" else "Trailer",
+                                    busy = trailerLoading,
+                                )
+                            }
+                            // Botão "Transmitir" removido daqui: era sem ação (o Cast real fica no player).
+                            // (B) Botão Minha Lista — reflete estado salvo (preenchido + Accent) /
+                            // não salvo (contorno). Liga ao toggleSave da ViewModel.
+                            SaveListButton(
+                                saved = state.isSaved,
+                                onClick = { viewModel.toggleSave() },
                             )
                         }
-                        // Botão "Transmitir" removido daqui: era sem ação (o Cast real fica no player).
-                        // (B) Botão Minha Lista — reflete estado salvo (preenchido + Accent) /
-                        // não salvo (contorno). Liga ao toggleSave da ViewModel.
-                        SaveListButton(
-                            saved = state.isSaved,
-                            onClick = { viewModel.toggleSave() },
-                        )
+                    }
+
+                    // Ações em ícones (Fase B): as mesmas ações de cima, em ícones com
+                    // rótulo pequeno — nada novo, nada removido.
+                    if (iconActions) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(22.dp),
+                        ) {
+                            if (state.trailerKey.isNotBlank()) {
+                                DetailActionIcon(
+                                    icon = Icons.Default.Theaters,
+                                    label = "Trailer",
+                                    busy = trailerLoading,
+                                    onClick = { openTrailer() },
+                                )
+                            }
+                            DetailActionIcon(
+                                icon = if (state.isSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                                label = if (state.isSaved) "Salvo" else "Minha Lista",
+                                tint = if (state.isSaved) Accent else TextPrimary,
+                                onClick = { viewModel.toggleSave() },
+                            )
+                        }
                     }
 
                     // Erro de carregamento (TMDB falhou / load travou): nunca tela preta
@@ -516,8 +605,9 @@ fun MovieDetailScreen(
                         Spacer(Modifier.height(22.dp))
                     }
 
-                    // Título da seção de episódios (séries) — sem aba "Sobre" (sinopse já está acima)
-                    if (isSeries) {
+                    // Título da seção de episódios (séries) — sem aba "Sobre" (sinopse já está acima).
+                    // Com abas (Fase B) o título some: a aba "Episódios" já diz tudo.
+                    if (isSeries && !detailTabsOn) {
                         com.aotv.app.ui.common.Eyebrow("Temporadas", Modifier.padding(bottom = 3.dp))
                         Text(
                             "Episódios",
@@ -529,8 +619,27 @@ fun MovieDetailScreen(
                 }
             }
 
+            // ── Abas do detalhe (Fase B, opt-in) ─────────────────────────────
+            // Fixa no topo ao rolar; com uma aba só, nem aparece.
+            if (detailTabsOn && detailTabList.size > 1) {
+                stickyHeader(key = "detail-tabs") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(if (cinematicBg) Background.copy(alpha = 0.85f) else Background)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = pad, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        detailTabList.forEach { (id, label) ->
+                            com.aotv.app.ui.common.FilterChipPill(label, activeDetailTab == id, onClick = { detailTab = id })
+                        }
+                    }
+                }
+            }
+
             // ── Seção "Sobre" (sinopse + fontes) — SÓ filme (série tem sinopse acima) ──
-            if (!isSeries) {
+            if (!isSeries && (!detailTabsOn || activeDetailTab == "sobre")) {
                 // Synopsis
                 item {
                     if (overview.isNotBlank()) {
@@ -551,9 +660,10 @@ fun MovieDetailScreen(
                         }
                     }
                 }
+            }
 
-                // Fontes do FILME (séries têm fontes por episódio na aba Episódios)
-                if (!isSeries) {
+            // Fontes do FILME (séries têm fontes por episódio na aba Episódios)
+            if (!isSeries && (!detailTabsOn || activeDetailTab == "fontes")) {
                 // Fontes disponíveis — section header
                 item {
                     val sourceCount = state.stremioStreams.size
@@ -617,11 +727,10 @@ fun MovieDetailScreen(
 
                 // Spacer before bottom
                 item { Spacer(Modifier.height(28.dp)) }
-                }
             }
 
             // ── Episódios tab (series only) ─────────────────────────────────
-            if (isSeries) {
+            if (isSeries && (!detailTabsOn || activeDetailTab == "episodios")) {
                 // Season chips (FilterChipPill pattern)
                 item {
                     Row(
@@ -651,6 +760,7 @@ fun MovieDetailScreen(
                         // (D) visto (≥90%) vs vendo (em andamento)
                         watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
                         watching = state.watchingEpisode == "${ep.seasonNumber}:${ep.episodeNumber}",
+                        style = episodeStyle,
                         modifier = Modifier.padding(horizontal = pad, vertical = 5.dp),
                         onPlay = {
                             onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
@@ -691,7 +801,7 @@ fun MovieDetailScreen(
             }
 
             // ── Elenco (TMDB credits) ──────────────────────────────────────────
-            if (state.cast.isNotEmpty()) {
+            if (state.cast.isNotEmpty() && (!detailTabsOn || activeDetailTab == "elenco")) {
                 item {
                     com.aotv.app.ui.common.SectionHeader("Elenco", Modifier.padding(top = 14.dp), eyebrow = "Quem está no título")
                     androidx.compose.foundation.lazy.LazyRow(
@@ -706,7 +816,7 @@ fun MovieDetailScreen(
             }
 
             // ── Coleção/franquia em ordem cronológica ──────────────────────────
-            if (state.collectionItems.size > 1) {
+            if (state.collectionItems.size > 1 && (!detailTabsOn || activeDetailTab == "mais")) {
                 item {
                     Column {
                         com.aotv.app.ui.common.Eyebrow("Coleção", Modifier.padding(start = pad, top = 22.dp, bottom = 3.dp))
@@ -745,7 +855,7 @@ fun MovieDetailScreen(
             }
 
             // ── Relacionados (TMDB recommendations) ────────────────────────────
-            if (state.related.isNotEmpty()) {
+            if (state.related.isNotEmpty() && (!detailTabsOn || activeDetailTab == "mais")) {
                 item {
                     com.aotv.app.ui.common.SectionHeader("Relacionados", Modifier.padding(top = 18.dp), eyebrow = "Você também pode gostar")
                     androidx.compose.foundation.lazy.LazyRow(
@@ -1501,6 +1611,7 @@ private fun EpisodeRowCard(
     episode: EpisodeItem,
     watched: Boolean,
     watching: Boolean = false,
+    style: EpisodeCardStyle = EpisodeCardStyle.HORIZONTAL,
     modifier: Modifier = Modifier,
     onPlay: () -> Unit,
     onSelect: () -> Unit,
@@ -1516,6 +1627,107 @@ private fun EpisodeRowCard(
         watched -> Accent.copy(alpha = 0.35f)
         watching -> watchingColor.copy(alpha = 0.55f)
         else -> Border
+    }
+    // Meta do episódio: data de lançamento · duração · nota (minimalista).
+    val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating) {
+        buildList {
+            fmtIsoDateMobile(episode.airDate).takeIf { it.isNotBlank() }?.let { add(it) }
+            if (episode.runtimeMin > 0) add("${episode.runtimeMin} min")
+            if (episode.rating > 0) add("★ %.1f".format(episode.rating))
+        }
+    }
+    // Empilhado com foco em texto (Fase B): sem arte, título + sinopse + duração.
+    if (style == EpisodeCardStyle.STACKED) {
+        Column(
+            modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(BackgroundCard)
+                .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
+                // (A) tocar o card abre o painel de fontes/servidores do episódio
+                .clickable(interactionSource = rowSrc, indication = androidx.compose.foundation.LocalIndication.current, onClick = onSelect)
+                .padding(12.dp)
+                .alpha(cardAlpha),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "${episode.episodeNumber}. ${episode.name}",
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 14.sp,
+                    color = TextPrimary,
+                    maxLines = 2,
+                    lineHeight = 19.sp,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = SoraFontFamily,
+                    modifier = Modifier.weight(1f),
+                )
+                // Badge: VISTO (≥90%) ou VENDO (em andamento)
+                if (watched || watching) {
+                    val badgeColor = if (watched) Accent else watchingColor
+                    Text(
+                        if (watched) "VISTO" else "VENDO",
+                        color = badgeColor,
+                        fontSize = 8.5.sp,
+                        lineHeight = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = ManropeFontFamily,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(badgeColor.copy(alpha = 0.16f))
+                            .border(1.dp, badgeColor.copy(alpha = 0.35f), RoundedCornerShape(5.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            if (epMeta.isNotEmpty()) {
+                Text(
+                    epMeta.joinToString("  ·  "),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    color = TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = ManropeFontFamily,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (episode.overview.isNotBlank()) {
+                Text(
+                    episode.overview,
+                    fontSize = 12.sp,
+                    color = TextTertiary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = ManropeFontFamily,
+                    lineHeight = 17.sp,
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    when {
+                        watched -> "Visto"
+                        watching -> "Continuando"
+                        else -> "Episódio ${episode.episodeNumber}"
+                    },
+                    fontSize = 11.sp,
+                    color = TextSecondary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = ManropeFontFamily,
+                )
+                SmallPlayBtn("PLAY", Accent, onPlay)
+            }
+        }
+        return
     }
     FlowRow(
         modifier
@@ -1635,14 +1847,6 @@ private fun EpisodeRowCard(
                     )
                 }
             }
-            // Meta do episódio: data de lançamento · duração · nota (minimalista).
-            val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating) {
-                buildList {
-                    fmtIsoDateMobile(episode.airDate).takeIf { it.isNotBlank() }?.let { add(it) }
-                    if (episode.runtimeMin > 0) add("${episode.runtimeMin} min")
-                    if (episode.rating > 0) add("★ %.1f".format(episode.rating))
-                }
-            }
             if (epMeta.isNotEmpty()) {
                 Text(
                     epMeta.joinToString("  ·  "),
@@ -1706,6 +1910,78 @@ private fun SmallPlayBtn(label: String, accentColor: Color, onClick: () -> Unit,
             fontFamily = ManropeFontFamily,
             letterSpacing = 0.4.sp,
         )
+    }
+}
+
+// ── Fundo cinematográfico (Fase B) ────────────────────────────────────────────
+// Arte em tela cheia atrás da página, desfocada (RenderEffect, API 31+) e
+// escurecida p/ o texto continuar legível. Em API mais baixa fica só a arte
+// escurecida — sem blur, sem biblioteca nova. A escala 1.18 cobre as bordas
+// que o blur deixaria transparentes.
+@Composable
+private fun CinematicBackdrop(backdropUrl: String) {
+    Box(Modifier.fillMaxSize()) {
+        AsyncImage(
+            model = backdropUrl,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .scale(1.18f)
+                .then(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        Modifier.graphicsLayer {
+                            renderEffect = RenderEffect.createBlurEffect(28f, 28f, Shader.TileMode.CLAMP)
+                        }
+                    } else Modifier
+                ),
+        )
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Background.copy(alpha = 0.55f),
+                            Background.copy(alpha = 0.68f),
+                        ),
+                    ),
+                ),
+        )
+    }
+}
+
+// ── Ação em ícone com rótulo (Fase B) ─────────────────────────────────────────
+@Composable
+private fun DetailActionIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = TextPrimary,
+    busy: Boolean = false,
+) {
+    val src = remember { MutableInteractionSource() }
+    Column(
+        Modifier
+            .pressScale(src)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(interactionSource = src, indication = null, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(CircleShape)
+                .background(Surface2)
+                .border(1.dp, Border, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Accent)
+            else Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(21.dp))
+        }
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = TextSecondary, fontFamily = ManropeFontFamily)
     }
 }
 

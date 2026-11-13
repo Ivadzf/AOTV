@@ -97,6 +97,37 @@ class SettingsViewModel @Inject constructor(
     val heroTrailer: StateFlow<Boolean> = _heroTrailer.asStateFlow()
     fun setHeroTrailer(v: Boolean) { platformPrefs.heroTrailer = v; _heroTrailer.value = v }
 
+    // ── Página de detalhes (Fase B, por perfil) ──
+    // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
+    val detailCinematic: StateFlow<Boolean> = platformPrefs.detailCinematicFlow
+    fun setDetailCinematic(v: Boolean) { platformPrefs.detailCinematic = v }
+
+    val detailPosterTransition: StateFlow<Boolean> = platformPrefs.detailPosterTransitionFlow
+    fun setDetailPosterTransition(v: Boolean) { platformPrefs.detailPosterTransition = v }
+
+    val detailIconActions: StateFlow<Boolean> = platformPrefs.detailIconActionsFlow
+    fun setDetailIconActions(v: Boolean) { platformPrefs.detailIconActions = v }
+
+    val detailTabs: StateFlow<Boolean> = platformPrefs.detailTabsFlow
+    fun setDetailTabs(v: Boolean) { platformPrefs.detailTabs = v }
+
+    val detailEpisodeStyle: StateFlow<String> = platformPrefs.detailEpisodeStyleFlow
+    fun setDetailEpisodeStyle(v: String) { platformPrefs.detailEpisodeStyle = v }
+
+    // ── Exibição da Início (Fase B, frente compacta; por perfil) ──
+    /** Pôsteres, densidade, selos, herói, fundo e sublinhado da Início. */
+    val homeDisplay: StateFlow<com.aotv.app.data.local.HomeDisplayPrefs> = platformPrefs.homeDisplayFlow
+    fun setPosterSize(v: com.aotv.app.data.local.PosterSize) =
+        platformPrefs.updateHomeDisplay { it.copy(posterSize = v) }
+    fun setPosterRadius(v: Int) = platformPrefs.updateHomeDisplay { it.copy(posterRadiusDp = v) }
+    fun setHomeDensity(v: com.aotv.app.data.local.HomeDensity) =
+        platformPrefs.updateHomeDisplay { it.copy(density = v) }
+    fun setShowPosterBadges(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(showPosterBadges = v) }
+    fun setHeroStyle(v: com.aotv.app.data.local.HeroStyle) =
+        platformPrefs.updateHomeDisplay { it.copy(heroStyle = v) }
+    fun setDynamicBackground(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(dynamicBackground = v) }
+    fun setSectionUnderline(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(sectionUnderline = v) }
+
     // Legenda do perfil. Ligada ao abrir e o idioma em que ela liga sozinha.
     private val _subOn = MutableStateFlow(platformPrefs.subtitleOn)
     val subOn: StateFlow<Boolean> = _subOn.asStateFlow()

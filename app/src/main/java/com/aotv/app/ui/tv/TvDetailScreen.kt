@@ -1,5 +1,8 @@
 package com.aotv.app.ui.tv
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
@@ -32,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +50,7 @@ import coil.compose.AsyncImage
 import com.aotv.app.data.remote.YoutubeTrailer
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
+import com.aotv.app.ui.movies.DetailPrefsViewModel
 import com.aotv.app.ui.movies.MovieDetailViewModel
 import com.aotv.app.ui.movies.MoviePlayerSource
 import com.aotv.app.ui.movies.SourceList
@@ -73,8 +78,10 @@ fun TvDetailScreen(
     // v1.5 — busca automática: leva (addonId, título da série ou do filme).
     onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
+    // Só a transição do pôster (Fase B) faz sentido na TV; o resto fica no celular.
+    detailPrefs: DetailPrefsViewModel = hiltViewModel(),
 ) {
-    TvText { TvDetailScreenBody(item, onPlayEpisode, onPlayDirect, onRelatedClick, onOpenKodiAddon, viewModel) }
+    TvText { TvDetailScreenBody(item, onPlayEpisode, onPlayDirect, onRelatedClick, onOpenKodiAddon, viewModel, detailPrefs) }
 }
 
 @Composable
@@ -85,6 +92,7 @@ private fun TvDetailScreenBody(
     onRelatedClick: (MovieItem) -> Unit,
     onOpenKodiAddon: (String, String) -> Unit = { _, _ -> },
     viewModel: MovieDetailViewModel = hiltViewModel(),
+    detailPrefs: DetailPrefsViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(item.tmdbId) { viewModel.load(item) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -119,6 +127,21 @@ private fun TvDetailScreenBody(
     }
     val sourcesFocus = remember { FocusRequester() }
 
+    // Transição do pôster (Fase B): o destaque cresce e aparece ao abrir.
+    val posterTransition by detailPrefs.posterTransition.collectAsStateWithLifecycle()
+    var detailEntered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { detailEntered = true }
+    val introScale by animateFloatAsState(
+        targetValue = if (posterTransition && !detailEntered) 0.94f else 1f,
+        animationSpec = tween(350, easing = FastOutSlowInEasing),
+        label = "tv_detail_intro_scale",
+    )
+    val introAlpha by animateFloatAsState(
+        targetValue = if (posterTransition && !detailEntered) 0f else 1f,
+        animationSpec = tween(350),
+        label = "tv_detail_intro_alpha",
+    )
+
     var trailer by remember { mutableStateOf<YoutubeTrailer.TrailerStream?>(null) }
     var trailerFrame by remember { mutableStateOf(false) }
     var trailerBusy by remember { mutableStateOf(false) }
@@ -131,6 +154,11 @@ private fun TvDetailScreenBody(
                     item(key = "hero") {
                         Box(
                             Modifier.fillMaxWidth().height(heroH)
+                                .graphicsLayer {
+                                    scaleX = introScale
+                                    scaleY = introScale
+                                    alpha = introAlpha
+                                }
                                 .tvScrollTop { list.animateScrollToItem(0) },
                         ) {
                             if (backdrop.isNotBlank()) AsyncImage(

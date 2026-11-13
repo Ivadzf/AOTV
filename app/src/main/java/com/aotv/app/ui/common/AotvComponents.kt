@@ -317,20 +317,29 @@ fun SectionHeader(
     modifier: Modifier = Modifier,
     eyebrow: String? = null,
     action: (@Composable () -> Unit)? = null,
+    /** Barra na cor do tema abaixo do título (Fase B, ligada por padrão na Início). */
+    underline: Boolean = false,
+    /** Título um pouco menor e respiro menor (Fase B, densidade compacta da Início). */
+    compact: Boolean = false,
 ) {
     Row(
         modifier
             .fillMaxWidth()
             .padding(start = pagePadding(), end = pagePadding() - 6.dp)
-            .padding(top = 8.dp, bottom = 6.dp),
+            .padding(top = if (compact) 4.dp else 8.dp, bottom = if (compact) 4.dp else 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom,
     ) {
         Column(Modifier.weight(1f, fill = false)) {
             if (eyebrow != null) Eyebrow(eyebrow, Modifier.padding(bottom = 3.dp))
             Text(
-                title, color = TextPrimary, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.Bold,
+                title, color = TextPrimary, fontSize = if (compact) 16.sp else 17.sp,
+                lineHeight = if (compact) 21.sp else 22.sp, fontWeight = FontWeight.Bold,
                 fontFamily = Inter, letterSpacing = (-0.2).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+            if (underline) Box(
+                Modifier.padding(top = 5.dp).width(28.dp).height(3.dp)
+                    .clip(RoundedCornerShape(999.dp)).background(Accent),
             )
         }
         if (action != null) Box(contentAlignment = Alignment.Center) { action() }
@@ -438,12 +447,14 @@ fun MediaPosterCard(
     onImage: ((android.graphics.drawable.Drawable) -> Unit)? = null,
     /** Desenhado por cima da arte (etiqueta, faixa e selos do pôster). */
     decor: (@Composable BoxScope.() -> Unit)? = null,
+    /** Raio dos cantos, em dp (Fase B: configurável na página Layout, padrão 14dp). */
+    cornerRadius: Dp = 14.dp,
 ) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     var focused by remember { mutableStateOf(false) }
     val s = pressFocusScale(pressed, focused)
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(cornerRadius)
     Box(
         modifier
             .layerScale(s)

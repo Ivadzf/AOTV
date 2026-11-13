@@ -213,8 +213,12 @@ fun PosterCard(
     showTag: Boolean = true,
     progress: Float? = null,
     onLongClick: (() -> Unit)? = null,
+    /** Falso esconde a etiqueta do topo e os selos de qualidade (Fase B, modo compacto). */
+    showBadges: Boolean = true,
+    /** Raio dos cantos do pôster (Fase B, configurável na página Layout). */
+    cornerRadius: Dp = 14.dp,
 ) {
-    val visual = rememberPosterVisual(item, badge, typeBadge, showTag)
+    val visual = rememberPosterVisual(item, badge, typeBadge, showTag, showBadges = showBadges)
     val unit = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f).dp
     Column(modifier) {
         MediaPosterCard(
@@ -227,11 +231,40 @@ fun PosterCard(
             progress = progress,
             imageBottom = unit * 22,
             onImage = visual.onImage,
+            cornerRadius = cornerRadius,
         ) {
             PosterDecorations(item, visual, unit = unit, imageBottom = unit * 22)
         }
         if (caption != null) PosterCaption(caption, sub, highlight)
     }
+}
+
+/**
+ * Matiz dominante do pôster (0–359, null sem cor ou sem leitura). A cor sai de uma
+ * leitura de 8 por 12 pixels, vinda do cache em disco, que nunca é desenhada.
+ * O cartão parado na tela usa a mesma leitura em [rememberPosterVisual].
+ */
+@Composable
+internal fun rememberPosterHue(item: MovieItem): Int? {
+    val info = LocalPosterInfo.current
+    val key = posterKey(item)
+    var hue by remember(key) { mutableStateOf(if (key.isEmpty()) null else info?.tint(key)) }
+    // Só pôster do TMDB e só enquanto não tem cor salva.
+    val readHue = remember(key) { hue == null && info != null && key.isNotEmpty() && item.posterUrl.startsWith("https://image.tmdb.org/") }
+    val context = LocalContext.current
+    // Sem pôster exibido aqui para esperar (o destaque mostra o backdrop): a leitura
+    // de 8 por 12 pixels baixa sozinha e grava no cache, para o cartão reaproveitar.
+    if (readHue) LaunchedEffect(key) {
+        val small = context.imageLoader.execute(
+            ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
+        )
+        val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
+        val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@LaunchedEffect
+        hue = h
+        info?.putTint(key, h)
+    }
+    return hue
 }
 
 internal data class PosterVisual(
@@ -248,14 +281,16 @@ internal fun rememberPosterVisual(
     typeBadge: Boolean = false,
     showTag: Boolean = true,
     requestQuality: Boolean = true,
+    /** Falso esconde a etiqueta automática do topo e os selos de qualidade (Fase B, compacto). */
+    showBadges: Boolean = true,
 ): PosterVisual {
     val info = LocalPosterInfo.current
     val key = posterKey(item)
     val ranks = LocalPosterRanks.current?.value
     val qualityMap = LocalPosterQuality.current
     // O cartão só recompõe quando o resumo dele muda, e não a cada resumo novo de qualquer título.
-    val quality by remember(key, qualityMap, badge) {
-        derivedStateOf { qualityMap?.value?.get(key)?.takeIf { badge == null && it.fresh(System.currentTimeMillis()) } }
+    val quality by remember(key, qualityMap, badge, showBadges) {
+        derivedStateOf { qualityMap?.value?.get(key)?.takeIf { showBadges && badge == null && it.fresh(System.currentTimeMillis()) } }
     }
 
     var hue by remember(key) { mutableStateOf(if (key.isEmpty()) null else info?.tint(key)) }
@@ -265,6 +300,8 @@ internal fun rememberPosterVisual(
     val context = LocalContext.current
     // O pôster que aparece na tela pode ser bitmap de hardware (sem subir textura na hora de desenhar). A cor sai de uma
     // leitura de 8 por 12 pixels, vinda do cache em disco, que nunca é desenhada.
+    // A Início usa a mesma leitura sozinha em rememberPosterHue (fundo dinâmico); aqui ela
+    // espera o pôster exibido carregar, para a leitura sair do cache e não baixar de novo.
     if (readHue) LaunchedEffect(loaded) {
         if (!loaded) return@LaunchedEffect
         val small = context.imageLoader.execute(
@@ -277,7 +314,8 @@ internal fun rememberPosterVisual(
         info?.putTint(key, h)
     }
     // Cartão parado na tela por 0,7 s pede a leitura das fontes. Saiu antes da vez, sai da fila.
-    if (requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
+    // Sem selos (compacto) nem pede: a leitura não aparece em lugar nenhum.
+    if (showBadges && requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
         delay(700)
         info.want(item)
         try { awaitCancellation() } finally { info.unwant(item) }
@@ -288,6 +326,7 @@ internal fun rememberPosterVisual(
         !showTag -> null
         badge != null -> PosterTag(badge)
         typeBadge -> PosterTag(if (item.type == MediaType.SERIES) "Série" else "Filme")
+        !showBadges -> null
         else -> posterTag(item, info?.rankOf(ranks, item) ?: 0, days.first, days.second)
     }
     // A cor da faixa entra na hora. Animada, recompunha o cartão inteiro a cada quadro por 300 ms.

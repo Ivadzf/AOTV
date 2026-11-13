@@ -45,6 +45,10 @@ internal val SCOPED_KEYS = listOf(
     "recent_searches", "ext_audio_v1", "home_catalogs_v1", "sub_size", "sub_bg",
     "pref_audio", "pref_max_quality", "pref_hero_trailer", "trakt_v1",
     "home_layout_v1", "home_hero_v1", "pref_subtitle_on", "pref_sub_lang", "collections_v1",
+    "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
+    "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
+    "pref_detail_cinematic", "pref_detail_poster_transition", "pref_detail_icon_actions",
+    "pref_detail_tabs", "pref_detail_episode_style",
 )
 
 @Singleton
@@ -263,6 +267,95 @@ class PlatformPrefs @Inject constructor(
     var themePaletteId: String
         get() = _themePalette.value
         set(value) { prefs.edit().putString(KEY_THEME_PALETTE, value).apply(); _themePalette.value = value }
+
+    // ── Exibição da Início (por perfil, Fase B) ─────────────────────────────
+    // Pôster pequeno por padrão (o Davi achou a Início grande demais). Um fluxo
+    // só carrega as 7 prefs juntas; cada setter reescreve o conjunto e avisa.
+    // Troca de perfil passa por refreshLayout() e recarrega as dele.
+    private fun readHomeDisplay(): HomeDisplayPrefs {
+        val size = runCatching { PosterSize.valueOf(prefs.getString(sk("pref_poster_size"), null) ?: "") }
+            .getOrDefault(PosterSize.SMALL)
+        val density = runCatching { HomeDensity.valueOf(prefs.getString(sk("pref_home_density"), null) ?: "") }
+            .getOrDefault(HomeDensity.COMPACT)
+        val hero = runCatching { HeroStyle.valueOf(prefs.getString(sk("pref_hero_style"), null) ?: "") }
+            .getOrDefault(HeroStyle.FULL_BLEED)
+        return HomeDisplayPrefs(
+            posterSize = size,
+            posterRadiusDp = prefs.getInt(sk("pref_poster_radius"), 14).coerceIn(4, 24),
+            density = density,
+            showPosterBadges = prefs.getBoolean(sk("pref_poster_badges"), false),
+            heroStyle = hero,
+            dynamicBackground = prefs.getBoolean(sk("pref_dynamic_bg"), false),
+            sectionUnderline = prefs.getBoolean(sk("pref_section_underline"), true),
+        )
+    }
+
+    private val _homeDisplay = MutableStateFlow(readHomeDisplay())
+    /** Exibição da Início do perfil ativo, que avisa quem observa. */
+    val homeDisplayFlow: StateFlow<HomeDisplayPrefs> = _homeDisplay.asStateFlow()
+
+    /** Exibição da Início do perfil ativo. Gravar aqui já avisa quem observa. */
+    var homeDisplay: HomeDisplayPrefs
+        get() = _homeDisplay.value
+        set(value) {
+            prefs.edit()
+                .putString(sk("pref_poster_size"), value.posterSize.name)
+                .putInt(sk("pref_poster_radius"), value.posterRadiusDp)
+                .putString(sk("pref_home_density"), value.density.name)
+                .putBoolean(sk("pref_poster_badges"), value.showPosterBadges)
+                .putString(sk("pref_hero_style"), value.heroStyle.name)
+                .putBoolean(sk("pref_dynamic_bg"), value.dynamicBackground)
+                .putBoolean(sk("pref_section_underline"), value.sectionUnderline)
+                .apply()
+            _homeDisplay.value = value
+        }
+
+    /** Reescreve a exibição da Início a partir da atual. */
+    fun updateHomeDisplay(transform: (HomeDisplayPrefs) -> HomeDisplayPrefs) {
+        homeDisplay = transform(homeDisplay)
+    }
+
+    // ── Página de detalhes (por perfil, Fase B) ─────────────────────────────
+    // Fundo cinematográfico, transição do pôster, ações em ícones, layout de
+    // abas e estilo do card de episódio. Cada pref tem um fluxo que avisa quem
+    // observa (o detalhe lê daqui e aplica na hora, mesmo voltando das
+    // Configurações); o var é o valor guardado, no mesmo padrão do heroTrailer.
+    // Troca de perfil passa por refreshLayout() e recarrega as dele.
+
+    private val _detailCinematic = MutableStateFlow(prefs.getBoolean(sk("pref_detail_cinematic"), false))
+    /** Fundo cinematográfico ligado. Desligado, fica o backdrop no topo. */
+    val detailCinematicFlow: StateFlow<Boolean> = _detailCinematic.asStateFlow()
+    var detailCinematic: Boolean
+        get() = _detailCinematic.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_cinematic"), value).apply(); _detailCinematic.value = value }
+
+    private val _detailPosterTransition = MutableStateFlow(prefs.getBoolean(sk("pref_detail_poster_transition"), true))
+    /** Transição do pôster ao abrir os detalhes. */
+    val detailPosterTransitionFlow: StateFlow<Boolean> = _detailPosterTransition.asStateFlow()
+    var detailPosterTransition: Boolean
+        get() = _detailPosterTransition.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_poster_transition"), value).apply(); _detailPosterTransition.value = value }
+
+    private val _detailIconActions = MutableStateFlow(prefs.getBoolean(sk("pref_detail_icon_actions"), true))
+    /** Ações em ícones com rótulo abaixo do Reproduzir (em vez dos botões em vidro). */
+    val detailIconActionsFlow: StateFlow<Boolean> = _detailIconActions.asStateFlow()
+    var detailIconActions: Boolean
+        get() = _detailIconActions.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_icon_actions"), value).apply(); _detailIconActions.value = value }
+
+    private val _detailTabs = MutableStateFlow(prefs.getBoolean(sk("pref_detail_tabs"), false))
+    /** Seções do detalhe em abas. Desligado, fica a rolagem única atual. */
+    val detailTabsFlow: StateFlow<Boolean> = _detailTabs.asStateFlow()
+    var detailTabs: Boolean
+        get() = _detailTabs.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_tabs"), value).apply(); _detailTabs.value = value }
+
+    private val _detailEpisodeStyle = MutableStateFlow(prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal")
+    /** Estilo do card de episódio: "horizontal" (com arte, o atual) ou "stacked" (foco em texto). */
+    val detailEpisodeStyleFlow: StateFlow<String> = _detailEpisodeStyle.asStateFlow()
+    var detailEpisodeStyle: String
+        get() = _detailEpisodeStyle.value
+        set(value) { prefs.edit().putString(sk("pref_detail_episode_style"), value).apply(); _detailEpisodeStyle.value = value }
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir
@@ -781,6 +874,12 @@ class PlatformPrefs @Inject constructor(
         _collections.value = readCollections()
         _homeLayout.value = computeLayout()
         _heroSource.value = prefs.getString(sk("home_hero_v1"), "").orEmpty()
+        _homeDisplay.value = readHomeDisplay()
+        _detailCinematic.value = prefs.getBoolean(sk("pref_detail_cinematic"), false)
+        _detailPosterTransition.value = prefs.getBoolean(sk("pref_detail_poster_transition"), true)
+        _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
+        _detailTabs.value = prefs.getBoolean(sk("pref_detail_tabs"), false)
+        _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
     }
 
     private fun computeLayout(): List<HomeRowPref> {

@@ -157,13 +157,8 @@ fun SettingsPageScreen(
         return
     }
     when (pageId) {
-        SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack)
-        SettingsPageIds.Detalhe -> PlaceholderPage(
-            title = "Página de detalhes",
-            sub = "Fundo, abas e ações do título",
-            note = "Nada aqui ainda. As opções da página de detalhes — fundo cinematográfico, transição do pôster, ações em ícones, trailer em destaque, layout de abas, notas, Rating Map e modo aleatório — chegam na Fase B.",
-            onBack = onBack,
-        )
+        SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel)
+        SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel)
         SettingsPageIds.Streams -> PlaceholderPage(
             title = "Streams",
             sub = "Emblemas, pesquisa e ordem das fontes",
@@ -256,7 +251,9 @@ private fun LayoutPage(
     onOpenHomeCustomize: () -> Unit,
     onOpenCollections: () -> Unit,
     onBack: () -> Unit,
+    viewModel: SettingsViewModel = hiltViewModel(),
 ) {
+    val display by viewModel.homeDisplay.collectAsStateWithLifecycle()
     SettingsPageScaffold("Layout", "Personalizar Início e Coleções", onBack) {
         SettingsSection("Início")
         com.aotv.app.ui.common.SettingsGroup {
@@ -277,6 +274,151 @@ private fun LayoutPage(
                 onClick = onOpenCollections,
                 grouped = true,
                 divider = true,
+            )
+        }
+
+        // Pôsteres e densidade (Fase B, frente compacta). O padrão é o compacto:
+        // pôster pequeno, fileiras apertadas, sem selos nem etiqueta no pôster.
+        // Muda na hora, sem reabrir o app. Vale para o perfil ativo.
+        SettingsSection("Pôsteres")
+        SettingsCard {
+            PrefRow(
+                "Tamanho do pôster",
+                listOf(
+                    com.aotv.app.data.local.PosterSize.SMALL to "Pequeno",
+                    com.aotv.app.data.local.PosterSize.MEDIUM to "Médio",
+                    com.aotv.app.data.local.PosterSize.LARGE to "Grande",
+                ),
+                display.posterSize, viewModel::setPosterSize,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Raio dos cantos",
+                listOf(8 to "Pequeno", 14 to "Médio", 20 to "Grande"),
+                display.posterRadiusDp, viewModel::setPosterRadius,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Densidade",
+                listOf(
+                    com.aotv.app.data.local.HomeDensity.COMPACT to "Compacta",
+                    com.aotv.app.data.local.HomeDensity.COMFORTABLE to "Confortável",
+                ),
+                display.density, viewModel::setHomeDensity,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Mostrar selos nos pôsteres",
+                sub = if (display.showPosterBadges) "Etiqueta do topo e selos 4K, Dolby, HDR e DUB visíveis"
+                    else "Só nota e ano + gênero. Liga para ver etiqueta e selos de novo",
+                // A linha liga e desliga. O Switch fica fora do caminho do controle.
+                trailing = { Switch(checked = display.showPosterBadges, onCheckedChange = { viewModel.setShowPosterBadges(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setShowPosterBadges(!display.showPosterBadges) },
+                grouped = true,
+            )
+        }
+
+        // Destaque do topo.
+        SettingsSection("Destaque")
+        SettingsCard {
+            PrefRow(
+                "Estilo do herói",
+                listOf(
+                    com.aotv.app.data.local.HeroStyle.FULL_BLEED to "Tela cheia",
+                    com.aotv.app.data.local.HeroStyle.CARD to "Cartão",
+                ),
+                display.heroStyle, viewModel::setHeroStyle,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Movie,
+                title = "Fundo dinâmico",
+                sub = if (display.dynamicBackground) "A Início ganha um gradiente com as cores do destaque"
+                    else "Fundo sólido de sempre. Liga para tingir com as cores do destaque",
+                trailing = { Switch(checked = display.dynamicBackground, onCheckedChange = { viewModel.setDynamicBackground(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDynamicBackground(!display.dynamicBackground) },
+                grouped = true,
+            )
+        }
+
+        // Títulos das seções.
+        SettingsSection("Títulos das seções")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.CheckCircle,
+                title = "Sublinhado de destaque",
+                sub = if (display.sectionUnderline) "Barra na cor do tema abaixo do título de cada seção"
+                    else "Sem barra abaixo dos títulos das seções",
+                trailing = { Switch(checked = display.sectionUnderline, onCheckedChange = { viewModel.setSectionUnderline(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSectionUnderline(!display.sectionUnderline) },
+                grouped = true,
+            )
+        }
+    }
+}
+
+// ── Página de detalhes (Fase B) ─────────────────────────────────────────────
+
+@Composable
+private fun DetalhePage(
+    onBack: () -> Unit,
+    viewModel: SettingsViewModel,
+) {
+    val cinematic by viewModel.detailCinematic.collectAsStateWithLifecycle()
+    val posterTransition by viewModel.detailPosterTransition.collectAsStateWithLifecycle()
+    val iconActions by viewModel.detailIconActions.collectAsStateWithLifecycle()
+    val tabs by viewModel.detailTabs.collectAsStateWithLifecycle()
+    val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
+    SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack) {
+        SettingsSection("Fundo e entrada")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Movie,
+                title = "Fundo cinematográfico",
+                sub = "Arte desfocada em tela cheia atrás da página. Desligado, fica o backdrop no topo.",
+                trailing = { Switch(checked = cinematic, onCheckedChange = { viewModel.setDetailCinematic(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailCinematic(!cinematic) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Transição do pôster",
+                sub = "O pôster cresce e aparece ao abrir os detalhes",
+                trailing = { Switch(checked = posterTransition, onCheckedChange = { viewModel.setDetailPosterTransition(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailPosterTransition(!posterTransition) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsSection("Ações e organização")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Dashboard,
+                title = "Ações em ícones",
+                sub = "Minha Lista e Trailer viram ícones com rótulo abaixo do Reproduzir, em vez dos botões em vidro",
+                trailing = { Switch(checked = iconActions, onCheckedChange = { viewModel.setDetailIconActions(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailIconActions(!iconActions) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.ViewModule,
+                title = "Layout de abas",
+                sub = "Episódios, Elenco e Mais como isto em abas. Desligado, tudo numa rolagem só.",
+                trailing = { Switch(checked = tabs, onCheckedChange = { viewModel.setDetailTabs(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailTabs(!tabs) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsSection("Episódios")
+        SettingsCard {
+            PrefRow(
+                "Estilo do card de episódio",
+                listOf("horizontal" to "Horizontal com arte", "stacked" to "Empilhado com texto"),
+                episodeStyle, viewModel::setDetailEpisodeStyle,
             )
         }
     }

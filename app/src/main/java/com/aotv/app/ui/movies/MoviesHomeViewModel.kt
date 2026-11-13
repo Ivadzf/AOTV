@@ -141,6 +141,8 @@ class MoviesHomeViewModel @Inject constructor(
         val newEpisodes: List<NewEpisode> = emptyList(),
         /** Trailer mudo no destaque, conforme a preferência do perfil. */
         val heroTrailer: Boolean = true,
+        /** Exibição da Início (Fase B, frente compacta): tamanho do pôster, densidade, selos, herói, fundo e sublinhado. */
+        val display: com.aotv.app.data.local.HomeDisplayPrefs = com.aotv.app.data.local.HomeDisplayPrefs(),
         /** Fileiras que aparecem, na ordem do perfil (Personalizar Início). Já sem as desligadas. */
         val layout: List<com.aotv.app.data.local.HomeRowPref> = emptyList(),
         /** Catálogo AOTV ligado (fileiras do TMDB). */
@@ -486,7 +488,11 @@ class MoviesHomeViewModel @Inject constructor(
             ) { layout, catalogOn, addons, hero -> HomeInputs(layout, catalogOn, addons, hero) }
                 .collect { applyLayout(it) }
         }
-        _uiState.update { it.copy(heroTrailer = prefs.heroTrailer) }
+        _uiState.update { it.copy(heroTrailer = prefs.heroTrailer, display = prefs.homeDisplay) }
+        // A Início aplica a exibição na hora: mudou na página Layout, a fileira recompõe.
+        viewModelScope.launch {
+            prefs.homeDisplayFlow.collect { d -> _uiState.update { it.copy(display = d) } }
+        }
         load()
         if (prefs.catalogOn) selectTrailerTab(TrailerTab.POPULAR)
         viewModelScope.launch {

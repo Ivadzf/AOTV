@@ -41,8 +41,10 @@ fun ContinueCard(
     remaining: Int? = null,
     episode: String = "",
     onLongClick: (() -> Unit)? = null,
+    /** Modo compacto (Fase B): card mais estreito. */
+    compact: Boolean = false,
 ) {
-    val width = continueCardWidth()
+    val width = continueCardWidth(compact)
     val font = LocalDensity.current.fontScale.coerceAtLeast(1f)
     val height = maxOf(width.value * 9 / 16, 156f + 76f * (font - 1f)).dp
     val shape = RoundedCornerShape(16.dp)
