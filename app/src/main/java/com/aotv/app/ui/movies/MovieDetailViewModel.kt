@@ -344,6 +344,16 @@ class MovieDetailViewModel @Inject constructor(
         load(stub.embedId, stub.tmdbId, stub.type)
     }
 
+    /**
+     * Recarrega as fontes do filme (botão Recarregar da lista, v1.8.1): re-roda
+     * load() no mesmo item — o load de filme não tem cache, então addons e plugins
+     * buscam de novo do zero e a lista antiga fica visível até as novas chegarem.
+     */
+    fun reloadMovieSources() {
+        val stub = stubItem ?: return
+        load(stub)
+    }
+
     /** Abre os Flows reativos da BIBLIOTECA (uma única vez por tela). */
     private fun startLibraryObservers(tmdbId: Int, type: MediaType) {
         if (observersStarted) return
@@ -791,6 +801,19 @@ class MovieDetailViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /**
+     * Recarrega as fontes do episódio selecionado (botão Recarregar da folha, v1.8.1).
+     * Invalida o cache de plugins p/ os jobs relançarem de verdade — selectEpisode
+     * sozinho reaproveitaria o cache do mesmo episódio — e re-chama selectEpisode
+     * no mesmo episódio. A folha não fecha (selectedEpisode continua setado) e o
+     * estado de carregamento aparece como na 1ª busca.
+     */
+    fun reloadEpisodeSources() {
+        val (season, episode) = _uiState.value.selectedEpisode ?: return
+        episodePluginCacheKey = null
+        selectEpisode(season, episode)
     }
 
     /** Fecha o painel de servidores do episódio selecionado. */

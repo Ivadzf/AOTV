@@ -961,6 +961,10 @@ private fun ReproducaoPage(
     val mini by playerPrefs.mini.collectAsStateWithLifecycle()
     val autoNext by playerPrefs.autoNext.collectAsStateWithLifecycle()
     val autoNextDelay by playerPrefs.autoNextDelay.collectAsStateWithLifecycle()
+    val autoSwitch by playerPrefs.autoSwitch.collectAsStateWithLifecycle()
+    val sourceTimeout by playerPrefs.sourceTimeout.collectAsStateWithLifecycle()
+    val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
+    var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
         SettingsSection("Reprodução")
@@ -1091,6 +1095,16 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Refresh,
+                title = "Troca automática de fonte",
+                sub = if (autoSwitch) "Se a fonte não iniciar ou travar, troca sozinha por outra"
+                    else "Se a fonte travar, espera nela sem trocar",
+                trailing = { Switch(checked = autoSwitch, onCheckedChange = { playerPrefs.setAutoSwitch(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoSwitch(!autoSwitch) },
+                grouped = true,
+                divider = true,
+            )
         }
         Column(Modifier.alpha(if (volBoost) 1f else 0.45f)) {
             SettingsCard {
@@ -1117,6 +1131,59 @@ private fun ReproducaoPage(
                     Text("Ligue o \"A seguir\" automático para mudar o atraso.", fontSize = 13.sp, color = TextSecondary)
                 }
             }
+        }
+        Column(Modifier.alpha(if (autoSwitch) 1f else 0.45f)) {
+            SettingsCard {
+                PrefRow(
+                    "Tempo para trocar de fonte",
+                    listOf(8 to "8 s", 12 to "12 s", 20 to "20 s", 30 to "30 s", 45 to "45 s", 60 to "60 s"),
+                    sourceTimeout, { if (autoSwitch) playerPrefs.setSourceTimeout(it) },
+                )
+                if (!autoSwitch) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Ligue a troca automática de fonte para mudar o tempo.", fontSize = 13.sp, color = TextSecondary)
+                }
+            }
+        }
+        SettingsSection("Pular trechos")
+        Text(
+            "O player busca os trechos (resumo, abertura, encerramento e pós-créditos) no IntroDB e no SkipDB, sem chave. O Anime-Skip (só séries) precisa de um client ID seu — vazio, ele fica desligado.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                OutlinedTextField(
+                    value = animeSkipDraft,
+                    onValueChange = { animeSkipDraft = it },
+                    label = { Text("Client ID do Anime-Skip (opcional)") },
+                    placeholder = { Text("Cole seu client ID aqui", color = TextTertiary) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = gate,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Border,
+                        focusedContainerColor = Surface2,
+                        unfocusedContainerColor = Surface2,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLabelColor = Accent,
+                        unfocusedLabelColor = TextTertiary,
+                        cursorColor = Accent,
+                    ),
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            com.aotv.app.ui.common.AotvButton(
+                "Salvar ID", onClick = { playerPrefs.setAnimeSkipClientId(animeSkipDraft) },
+                enabled = animeSkipDraft.trim() != animeSkipId,
+                compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+            )
+            if (animeSkipId.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                "Desligar Anime-Skip", onClick = { playerPrefs.setAnimeSkipClientId(""); animeSkipDraft = "" },
+                compact = true,
+            )
         }
     }
 }

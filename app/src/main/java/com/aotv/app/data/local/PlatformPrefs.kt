@@ -55,6 +55,8 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_buttons", "pref_player_top_actions", "pref_player_tap_seek",
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
+    "pref_player_auto_switch", "pref_player_source_timeout",
+    "pref_player_animeskip_client_id",
 )
 
 /**
@@ -500,6 +502,27 @@ class PlatformPrefs @Inject constructor(
     var playerAutoNextDelay: Int
         get() = _playerAutoNextDelay.value
         set(value) { prefs.edit().putInt(sk("pref_player_auto_next_delay"), value).apply(); _playerAutoNextDelay.value = value }
+
+    private val _playerAutoSwitch = MutableStateFlow(prefs.getBoolean(sk("pref_player_auto_switch"), true))
+    /** Troca automática de fonte (v1.8.1): com o toggle ligado, o watchdog troca de fonte quando a atual não inicia/trava; desligado, o player espera sem trocar. */
+    val playerAutoSwitchFlow: StateFlow<Boolean> = _playerAutoSwitch.asStateFlow()
+    var playerAutoSwitch: Boolean
+        get() = _playerAutoSwitch.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_auto_switch"), value).apply(); _playerAutoSwitch.value = value }
+
+    private val _playerSourceTimeout = MutableStateFlow(prefs.getInt(sk("pref_player_source_timeout"), 12))
+    /** Tempo que o watchdog espera antes de trocar de fonte, em segundos (8/12/20/30/45/60). */
+    val playerSourceTimeoutFlow: StateFlow<Int> = _playerSourceTimeout.asStateFlow()
+    var playerSourceTimeout: Int
+        get() = _playerSourceTimeout.value
+        set(value) { prefs.edit().putInt(sk("pref_player_source_timeout"), value).apply(); _playerSourceTimeout.value = value }
+
+    private val _playerAnimeSkipClientId = MutableStateFlow(prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: "")
+    /** Client ID do Anime-Skip (v1.8.1), digitado pelo usuário em Configurações. "" = Anime-Skip desligado. NUNCA embutir um ID no código. */
+    val playerAnimeSkipClientIdFlow: StateFlow<String> = _playerAnimeSkipClientId.asStateFlow()
+    var playerAnimeSkipClientId: String
+        get() = _playerAnimeSkipClientId.value
+        set(value) { prefs.edit().putString(sk("pref_player_animeskip_client_id"), value).apply(); _playerAnimeSkipClientId.value = value }
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir
@@ -1039,6 +1062,9 @@ class PlatformPrefs @Inject constructor(
         _playerMini.value = prefs.getBoolean(sk("pref_player_mini"), true)
         _playerAutoNext.value = prefs.getBoolean(sk("pref_player_auto_next"), true)
         _playerAutoNextDelay.value = prefs.getInt(sk("pref_player_auto_next_delay"), 10)
+        _playerAutoSwitch.value = prefs.getBoolean(sk("pref_player_auto_switch"), true)
+        _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
+        _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
     }
 
     private fun computeLayout(): List<HomeRowPref> {

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.PlayArrow
@@ -729,6 +730,9 @@ fun MovieDetailScreen(
                             onDownload = { dl(it.url) },
                             kodiAddons = state.kodiVideoAddons,
                             onOpenKodiAddon = { addonId -> onOpenKodiAddon(addonId, title) },
+                            // v1.8.1 — botão Recarregar da lista: re-busca as fontes do filme.
+                            onReloadSources = { viewModel.reloadMovieSources() },
+                            loading = state.stremioLoading,
                         )
                         if (state.stremioLoading) {
                             Text(
@@ -901,6 +905,8 @@ fun MovieDetailScreen(
                 pluginDone = state.episodePluginDone,
                 pluginTotal = state.episodePluginTotal,
                 onDismiss = { viewModel.clearSelectedEpisode() },
+                // v1.8.1 — botão Recarregar da folha: re-busca as fontes do episódio.
+                onReloadSources = { viewModel.reloadEpisodeSources() },
                 onPlayStremio = { s ->
                     // Não marca "visto" ao clicar — só ao passar de 90% no player.
                     viewModel.clearSelectedEpisode()
@@ -1011,6 +1017,9 @@ private fun EpisodeServersSheet(
     pluginDone: Int = 0,
     pluginTotal: Int = 0,
     onDismiss: () -> Unit,
+    // v1.8.1 — botão Recarregar: re-busca as fontes do episódio (ViewModel).
+    // null = sem botão (só aparece quando há de onde recarregar).
+    onReloadSources: (() -> Unit)? = null,
     onPlayStremio: (com.aotv.app.data.remote.StremioStream) -> Unit,
     isDownloadable: (String) -> Boolean = { false },
     onDownloadStremio: (com.aotv.app.data.remote.StremioStream) -> Unit = {},
@@ -1099,7 +1108,12 @@ private fun EpisodeServersSheet(
             val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
             val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
             val cardPrefs = rememberStreamCardPrefs(streamPrefs)
-            val sourceData = rememberSourceListData(stremioStreams, facts, pinned)
+            val sourceData = rememberSourceListData(
+                stremioStreams, facts, pinned,
+                // Recarregar fica ocupado enquanto addons ou plugins ainda respondem.
+                loading = stremioLoading || (pluginTotal > 0 && pluginDone < pluginTotal),
+                onReloadSources = onReloadSources,
+            )
             val cols = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1
 
             // LazyColumn com keys estáveis: a posição do scroll sobrevive quando
@@ -1234,6 +1248,10 @@ private class SourceListData(
     val onQueryChange: (String) -> Unit,
     val limit: Int,
     val onMore: () -> Unit,
+    /** true enquanto as fontes ainda estão chegando (o Recarregar gira e trava). */
+    val loading: Boolean,
+    /** Recarrega as fontes e reseta o "Mostrar mais". null = sem botão Recarregar. */
+    val onReload: (() -> Unit)?,
     val fact: (com.aotv.app.data.remote.StremioStream) -> com.aotv.app.data.remote.SourceFacts,
     val playable: (ReleaseGroup) -> com.aotv.app.data.remote.StremioStream,
     val addonOf: (ReleaseGroup) -> String,
@@ -1283,6 +1301,10 @@ private fun rememberSourceListData(
     facts: List<com.aotv.app.data.remote.SourceFacts>,
     /** Addons fixados, na ordem escolhida (Fase C): as seções deles vão p/ o topo. */
     pinned: List<String> = emptyList(),
+    /** true enquanto as fontes ainda estão chegando (botão Recarregar ocupado). */
+    loading: Boolean = false,
+    /** Re-busca as fontes (ViewModel). null = sem botão Recarregar. */
+    onReloadSources: (() -> Unit)? = null,
 ): SourceListData {
     var filter by rememberSaveable { mutableStateOf("all") }
     var showWrong by rememberSaveable { mutableStateOf(false) }
@@ -1347,6 +1369,10 @@ private fun rememberSourceListData(
         sourceFilter = sourceFilter, onSourceFilterChange = { sourceFilter = it },
         query = query, onQueryChange = { query = it },
         limit = limit, onMore = { limit += 24 },
+        loading = loading,
+        // Recarregar reseta o "Mostrar mais" (volta a 24) e MANTÉM busca, filtro
+        // por addon, filtro de idioma e fixadas (nenhum deles é tocado aqui).
+        onReload = onReloadSources?.let { src -> { limit = 24; src() } },
         fact = { s -> fact(s) }, playable = { g -> playable(g) }, addonOf = { g -> addonOf(g) },
     )
 }
@@ -1428,32 +1454,54 @@ private fun SourceCardRow(
 /** Fileiras de filtros: busca por texto (Fase C), por fonte (novo) e por idioma (existente). */
 @Composable
 private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false) {
-    // Busca por texto livre (Fase C): addon, qualidade, idioma, codec, servidor e arquivo.
-    // TvTextFieldGate deixa o campo usável na TV sem roubar o foco do D-pad.
-    if (showSearch) {
-        val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-        com.aotv.app.ui.common.TvTextFieldGate(Modifier.fillMaxWidth()) { gate ->
-            OutlinedTextField(
-                value = data.query,
-                onValueChange = data.onQueryChange,
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary) },
-                trailingIcon = {
-                    if (data.query.isNotEmpty()) IconButton(onClick = { data.onQueryChange("") }) {
-                        Icon(Icons.Default.Clear, "Limpar busca", tint = TextTertiary)
-                    }
-                },
-                placeholder = { Text("Buscar nas fontes…", color = TextTertiary, fontSize = 15.sp) },
-                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 15.sp),
-                shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent, cursorColor = Accent,
-                    focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
-                modifier = gate,
-            )
+    // Busca por texto livre (Fase C) + botão Recarregar (v1.8.1), lado a lado e
+    // visíveis sem rolar, acima dos chips. O Recarregar é um GlassCircleButton
+    // (foco D-pad na TV; gira e trava enquanto carrega) e não mexe em busca,
+    // filtros nem fixadas — só re-busca as fontes e reseta o "Mostrar mais".
+    if (showSearch || data.onReload != null) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (showSearch) {
+                val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+                com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                    OutlinedTextField(
+                        value = data.query,
+                        onValueChange = data.onQueryChange,
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary) },
+                        trailingIcon = {
+                            if (data.query.isNotEmpty()) IconButton(onClick = { data.onQueryChange("") }) {
+                                Icon(Icons.Default.Clear, "Limpar busca", tint = TextTertiary)
+                            }
+                        },
+                        placeholder = { Text("Buscar nas fontes…", color = TextTertiary, fontSize = 15.sp) },
+                        textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 15.sp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent, cursorColor = Accent,
+                            focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                        modifier = gate,
+                    )
+                }
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            data.onReload?.let { reload ->
+                GlassCircleButton(
+                    icon = Icons.Default.Refresh,
+                    onClick = reload,
+                    size = 38.dp,
+                    iconTint = TextSecondary,
+                    contentDescription = "Recarregar fontes",
+                    busy = data.loading,
+                )
+            }
         }
     }
     // Por fonte: um chip por addon/provider presente, com contagem. Só aparece
@@ -1494,15 +1542,19 @@ internal fun SourceList(
     onOpenKodiAddon: (String) -> Unit = {},
     // Fase C — prefs da lista (busca, emblemas, logo, fixadas).
     streamPrefs: StreamPrefsViewModel = hiltViewModel(),
+    // v1.8.1 — botão Recarregar: re-busca as fontes (ViewModel). null = sem botão.
+    onReloadSources: (() -> Unit)? = null,
+    /** true enquanto as fontes ainda estão chegando (botão Recarregar ocupado). */
+    loading: Boolean = false,
 ) {
     if (television) {
-        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon, streamPrefs = streamPrefs) }
+        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon, streamPrefs = streamPrefs, onReloadSources = onReloadSources, loading = loading) }
         return
     }
     val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
     val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
     val cardPrefs = rememberStreamCardPrefs(streamPrefs)
-    val data = rememberSourceListData(streams, facts, pinned)
+    val data = rememberSourceListData(streams, facts, pinned, loading = loading, onReloadSources = onReloadSources)
     if (data.groups.isNotEmpty()) Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
     SourceListFilters(data, showSearch = searchOn)
     data.sections.forEach { (addon, gs) ->

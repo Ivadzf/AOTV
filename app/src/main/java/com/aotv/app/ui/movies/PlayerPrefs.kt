@@ -116,4 +116,18 @@ class PlayerPrefsViewModel @Inject constructor(
 
     val autoNextDelay: StateFlow<Int> = prefs.playerAutoNextDelayFlow
     fun setAutoNextDelay(v: Int) { prefs.playerAutoNextDelay = v }
+
+    val autoSwitch: StateFlow<Boolean> = prefs.playerAutoSwitchFlow
+    fun setAutoSwitch(v: Boolean) { prefs.playerAutoSwitch = v }
+
+    /** Tempo do watchdog antes de trocar de fonte, em segundos (8/12/20/30/45/60). */
+    val sourceTimeout: StateFlow<Int> = prefs.playerSourceTimeoutFlow
+    fun setSourceTimeout(v: Int) {
+        val allowed = listOf(8, 12, 20, 30, 45, 60)
+        prefs.playerSourceTimeout = allowed.minByOrNull { kotlin.math.abs(it - v) } ?: 12
+    }
+
+    /** Client ID do Anime-Skip, digitado pelo usuário ("" = desligado). */
+    val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
+    fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }
 }

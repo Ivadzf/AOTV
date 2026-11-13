@@ -285,6 +285,9 @@ fun MoviePlayerScreen(
     val playerMini by playerPrefsVm.mini.collectAsState()
     val playerAutoNext by playerPrefsVm.autoNext.collectAsState()
     val playerAutoNextDelay by playerPrefsVm.autoNextDelay.collectAsState()
+    val playerAutoSwitch by playerPrefsVm.autoSwitch.collectAsState()
+    val playerSourceTimeout by playerPrefsVm.sourceTimeout.collectAsState()
+    val playerAnimeSkipClientId by playerPrefsVm.animeSkipClientId.collectAsState()
     s.playerButtonOrder = playerButtons
     s.playerTopActions = playerTopActionsPref
     s.routePlayId = playId
@@ -294,6 +297,10 @@ fun MoviePlayerScreen(
     s.miniEnabled = playerMini
     s.autoNextEnabled = playerAutoNext
     s.autoNextDelaySec = playerAutoNextDelay
+    // v1.8.1: troca automática de fonte (toggle + tempo) e client ID do Anime-Skip.
+    s.autoSwitchEnabled = playerAutoSwitch
+    s.sourceTimeoutSec = playerSourceTimeout
+    s.animeSkipClientId = playerAnimeSkipClientId
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
     // Fase 2 (Kodi): o xbmc.Player reflete o ExoPlayer de verdade — o addon
@@ -331,6 +338,18 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         val imdb = episodeVm.imdbId(tmdbId, type) ?: return@LaunchedEffect
         if (logoUrl.isBlank()) logoUrl = "https://images.metahub.space/logo/medium/$imdb/img"
         metaBg = "https://images.metahub.space/background/medium/$imdb/img"
+    }
+
+    // Pular trechos (v1.8.1): segmentos IntroDB/SkipDB/Anime-Skip por IMDb id.
+    // Filmes também têm segmentos (resumo/abertura/encerramento) — sem restrição
+    // a séries, exceto o Anime-Skip (só séries, e só com client ID digitado).
+    LaunchedEffect(tmdbId, curSeason, curEpisode) {
+        skipSegments = com.aotv.app.data.remote.SkipSegments()
+        val imdb = runCatching { episodeVm.imdbId(tmdbId, type) }.getOrNull() ?: return@LaunchedEffect
+        val durSec = exoPlayer.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0
+        skipSegments = runCatching {
+            skipSegmentsService.get(imdb, title, type == "SERIES", curSeason, curEpisode, durSec, animeSkipClientId)
+        }.getOrDefault(com.aotv.app.data.remote.SkipSegments())
     }
 
     // Resume de SÉRIE: as fontes recebidas vêm do estado de FILME (vazias p/ série). Carrega
@@ -713,16 +732,17 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     // Erro de reprodução (fonte direta) → pula pra próxima; sem próxima → marca indisponível.
     // Fonte travada à mão (userLockedSource) NUNCA auto-troca — o usuário mandou manter, mas o
     // erro precisa aparecer (sourceFailed), senão o player fica preso sem explicação.
+    // v1.8.1: com a troca automática DESLIGADA (autoSwitchEnabled), também espera sem trocar.
     LaunchedEffect(movieErrored) {
         if (!movieErrored) return@LaunchedEffect
         movieErrored = false
-        if (userLockedSource) sourceFailed = true
+        if (userLockedSource || !autoSwitchEnabled) sourceFailed = true
         else if (!nextMovieSource()) sourceFailed = true
     }
     // Fonte que não inicia. Os espelhos do mesmo arquivo às vezes demoram 15 s para entregar o
     // começo, e qual deles fica lento muda a cada pedido. Havendo outro espelho igual (mesmo
-    // addon, idioma e resolução), a espera cai para 5 s e troca por ele. Sem espelho, 12 s e
-    // pula pra próxima fonte.
+    // addon, idioma e resolução), a espera cai para 5 s e troca por ele. Sem espelho, espera o
+    // tempo configurado (sourceTimeoutSec) e pula pra próxima fonte.
     LaunchedEffect(streamUrl) {
         movieStarted = false
         val u = streamUrl ?: return@LaunchedEffect
@@ -746,14 +766,14 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
                 if (waited >= 45_000 && !alive) break
             }
             if (movieStarted || streamUrl != u) return@LaunchedEffect
-            if (userLockedSource) sourceFailed = true
+            if (userLockedSource || !autoSwitchEnabled) sourceFailed = true
             else if (!nextMovieSource(slow = true)) sourceFailed = true
             return@LaunchedEffect
         }
         val hasMirror = !userLockedSource && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
-        kotlinx.coroutines.delay(if (hasMirror) 5_000 else 12_000)
+        kotlinx.coroutines.delay(if (hasMirror) 5_000 else sourceTimeoutSec * 1_000L)
         if (movieStarted || streamUrl != u) return@LaunchedEffect
-        if (userLockedSource) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
+        if (userLockedSource || !autoSwitchEnabled) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
         val m = sameMirror(facts(), currentSourceIdx, triedUrls)
         if (m >= 0) {
             toastMsg = "Servidor lento. Tentando outro espelho da mesma fonte."
@@ -812,21 +832,24 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             if (consider()) return@LaunchedEffect
         }
     }
-    // Buffering TRAVADO: fonte conectou (READY) mas empaca >12s sem avançar (stall infinito,
+    // Buffering TRAVADO: fonte conectou (READY) mas empaca sem avançar (stall infinito,
     // sem erro) → pula pra próxima. Cobre o caso "1ª fonte abre e fica no preto carregando".
+    // Tempo = sourceTimeoutSec (v1.8.1); P2P continua 30 s.
     LaunchedEffect(buffering, streamUrl) {
         if (!buffering || streamUrl == null) return@LaunchedEffect
         val u = streamUrl
         val p2p = TorrentMagnet.isMagnet(u) && playVia != "debrid"
         var startPos = position
         while (true) {
-            kotlinx.coroutines.delay(if (p2p) 30_000 else 12_000)
+            kotlinx.coroutines.delay(if (p2p) 30_000 else sourceTimeoutSec * 1_000L)
             if (!buffering || streamUrl != u || position > startPos + 500) return@LaunchedEffect
             // P2P que ainda recebe dado num ritmo razoável segue esperando em vez de trocar.
             if (p2p && (Torrents.ifStarted()?.status(u)?.downloadBps ?: 0) > 64_000) { startPos = position; continue }
-            // Ainda travando na mesma fonte e sem progredir → troca (ou avisa, se travada à mão).
-            if (userLockedSource) { noteTimeout("Timeout: o stream travou no buffering por 12s (sem erro do player)"); sourceFailed = true }
-            else if (!nextMovieSource(slow = true)) { noteTimeout("Timeout: o stream travou no buffering por 12s (sem erro do player)"); sourceFailed = true }
+            // Ainda travando na mesma fonte e sem progredir → troca (ou avisa, se travada à mão
+            // ou com a troca automática desligada — v1.8.1).
+            val bufferingMsg = "Timeout: o stream travou no buffering por ${sourceTimeoutSec}s (sem erro do player)"
+            if (userLockedSource || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
+            else if (!nextMovieSource(slow = true)) { noteTimeout(bufferingMsg); sourceFailed = true }
             return@LaunchedEffect
         }
     }
@@ -991,6 +1014,10 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         // Legenda embutida segue o tamanho e o fundo escolhidos.
                         it.subtitleView?.apply {
                             setFractionalTextSize(androidx.media3.ui.SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * subSize)
+                            // Sem os estilos embutidos, o tamanho e o fundo escolhidos valem
+                            // também para a legenda embutida (antes só valiam para a externa).
+                            setApplyEmbeddedStyles(false)
+                            setApplyEmbeddedFontSizes(false)
                             setStyle(androidx.media3.ui.CaptionStyleCompat(
                                 android.graphics.Color.WHITE,
                                 if (subBg) 0xB3000000.toInt() else android.graphics.Color.TRANSPARENT,
@@ -1011,21 +1038,25 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 // Transmitindo p/ Chromecast: a mídia roda na TV; celular vira controle.
                 if (casting) CastingOverlay(title)
 
-                // PULAR ABERTURA: aparece só quando a série tem marcador aprendido e a posição
-                // está dentro dele. Fica na tela mesmo com os controles escondidos (tipo Netflix).
-                val mark = introMark
-                val inIntro = mark != null && type == "SERIES" && introSkippedEp != curEpisode &&
-                    position >= (mark.first - 2_000L) && position < (mark.second - 1_000L)
+                // Pular trechos (v1.8.1): aparece quando há um segmento ativo na posição
+                // atual (resumo/abertura/encerramento/pós-créditos dos serviços, ou o
+                // marcador de abertura aprendido como fallback). Fica na tela mesmo com os
+                // controles escondidos (tipo Netflix).
+                val skipTarget = activeSkipTarget()
                 AnimatedVisibility(
-                    visible = inIntro && !inPip && !locked,
+                    visible = skipTarget != null && !inPip && !locked,
                     enter = fadeIn(), exit = fadeOut(),
                     modifier = Modifier.align(Alignment.BottomEnd),
                 ) {
-                    SkipIntroButton(raised = controlsVisible) {
-                        mark?.let { m ->
-                            currentPlayer().seekTo(m.second)
-                            position = m.second
-                            introSkippedEp = curEpisode
+                    SkipIntroButton(raised = controlsVisible, label = skipTarget?.label ?: "Pular abertura") {
+                        skipTarget?.let { t ->
+                            if (t.goNext) {
+                                if (hasNextEpisode) playNextEpisode() else goToNextSeason()
+                            } else {
+                                currentPlayer().seekTo(t.targetMs)
+                                position = t.targetMs
+                                if (t.learnedMark) introSkippedEp = curEpisode
+                            }
                         }
                     }
                 }
@@ -1317,6 +1348,45 @@ class PlayerSession(
         mutableStateOf(if (type == "SERIES") progressVm.introMarker(tmdbId) else null)
     }
     var introSkippedEp by run { mutableIntStateOf(-1) } // já pulou nesse episódio
+    // Pular trechos (v1.8.1): segmentos IntroDB/SkipDB/Anime-Skip do título atual.
+    var skipSegments by run { mutableStateOf(com.aotv.app.data.remote.SkipSegments()) }
+    val skipSegmentsService = com.aotv.app.data.remote.SkipSegmentsService()
+    // Troca automática de fonte (v1.8.1): toggle + tempo do watchdog (segundos).
+    var autoSwitchEnabled by run { mutableStateOf(true) }
+    var sourceTimeoutSec by run { mutableIntStateOf(12) }
+    /** Client ID do Anime-Skip digitado pelo usuário ("" = desligado). */
+    var animeSkipClientId by run { mutableStateOf("") }
+    /** Alvo do botão de pular trechos: rótulo, alvo em ms, ir p/ o próximo episódio. */
+    data class SkipTarget(val label: String, val targetMs: Long, val goNext: Boolean = false, val learnedMark: Boolean = false)
+    /**
+     * Trecho pulável ativo na posição atual, ou null. Ordem: resumo, abertura,
+     * encerramento (vira "Ir para pós-créditos" quando há pós-créditos),
+     * pós-créditos (vai p/ o próximo episódio, se houver). O marcador de
+     * abertura aprendido continua como fallback quando não há segmento de
+     * abertura dos serviços. Filmes também têm segmentos — sem restrição a séries.
+     */
+    fun activeSkipTarget(): SkipTarget? {
+        val pos = position
+        val segs = skipSegments
+        fun inside(s: com.aotv.app.data.remote.SkipSegment?): Boolean =
+            s != null && pos >= s.start - 2_000L && pos < s.end - 1_000L
+        if (inside(segs.recap)) return SkipTarget("Pular resumo", segs.recap!!.end)
+        if (inside(segs.intro)) return SkipTarget("Pular abertura", segs.intro!!.end)
+        if (inside(segs.outro)) {
+            val pc = segs.postCredits
+            return if (pc != null) SkipTarget("Ir para pós-créditos", pc.start)
+            else SkipTarget("Pular encerramento", segs.outro!!.end)
+        }
+        if (inside(segs.postCredits)) {
+            return SkipTarget("Pular pós-créditos", segs.postCredits!!.end, goNext = hasNextEpisode || hasNextSeason)
+        }
+        val mark = introMark
+        if (type == "SERIES" && mark != null && introSkippedEp != curEpisode &&
+            pos >= mark.first - 2_000L && pos < mark.second - 1_000L) {
+            return SkipTarget("Pular abertura", mark.second, learnedMark = true)
+        }
+        return null
+    }
     var toastMsg by run { mutableStateOf("") }          // aviso curto (ex "Abertura marcada")
     // Trocando de episódio/temporada: mostra o loading NA HORA, sem ficar preso na cena anterior.
     var switching by run { mutableStateOf(false) }
@@ -1334,7 +1404,7 @@ class PlayerSession(
     // Nulo quando a falha foi por timeout (sem exceção) — aí o noteTimeout() registra.
     var playerError by run { mutableStateOf<String?>(null) }
     /** Marca falha por timeout (stream não iniciou/travou) sem sobrescrever um erro real do player. */
-    fun noteTimeout(msg: String = "Timeout: o stream não iniciou em 12s (sem erro do player)") {
+    fun noteTimeout(msg: String = "Timeout: o stream não iniciou em ${sourceTimeoutSec}s (sem erro do player)") {
         if (playerError == null) playerError = msg
     }
     /** v1.2.8: linha do proxy p/ o diag da tela de erro ("" se o proxy
@@ -1838,6 +1908,19 @@ class PlayerSession(
             val onlyExt = if (selectedSubUrl == null) "  ·  vale para legenda externa" else ""
             add(TvPlayerAction("Atrasar 0,5 s", false, false, sub = subDelayLabel(subDelay) + onlyExt, keepOpen = true) { subDelay = addDelay(subDelay, 0.5) })
             add(TvPlayerAction("Adiantar 0,5 s", false, false, sub = "Use quando a legenda aparece depois da fala", keepOpen = true) { subDelay = addDelay(subDelay, -0.5) })
+            // Baixa de novo a legenda externa selecionada pelo mesmo caminho do carregamento
+            // inicial (episodeVm.subtitleCues). Só aparece com legenda externa selecionada:
+            // o LaunchedEffect de selectedSubUrl só dispara quando a URL muda, então o
+            // recarregamento é feito aqui, sem trocar a seleção.
+            if (selectedSubUrl != null) add(TvPlayerAction("Recarregar legendas", false, false,
+                sub = "Baixa de novo a legenda selecionada", keepOpen = true) {
+                scope.launch {
+                    val u = selectedSubUrl ?: return@launch
+                    val cues = episodeVm.subtitleCues(u)
+                    if (cues.isNotEmpty()) externalCues = cues
+                    else toastMsg = "Não deu para recarregar essa legenda"
+                }
+            })
         }
     }
     // Faixas da fonte atual e, abaixo, o som de outra fonte. Serve para ver a imagem boa de uma
@@ -1981,11 +2064,18 @@ class PlayerSession(
             userLockedSource = pinnedSource
             toastMsg = if (pinnedSource) "Fonte fixada. O player não troca sozinho." else "Fonte solta. Volta a trocar quando a atual falhar."
         })
-        introMark?.let { (_, end) ->
-            if (type == "SERIES" && introSkippedEp != curEpisode && position < end - 1_000L)
-                add(PlayerChipItem(WebPlayerIcons.Skip, "Pular abertura", id = "skip") {
-                    currentPlayer().seekTo(end); position = end; introSkippedEp = curEpisode
-                })
+        // Pular trechos (v1.8.1): rótulo e alvo dependem do segmento ativo na posição
+        // atual (resumo/abertura/encerramento/pós-créditos); o marcador aprendido
+        // continua como fallback da abertura. O id "skip" é o da config da Fase C.
+        activeSkipTarget()?.let { target ->
+            add(PlayerChipItem(WebPlayerIcons.Skip, target.label, id = "skip") {
+                if (target.goNext) {
+                    if (hasNextEpisode) playNextEpisode() else goToNextSeason()
+                } else {
+                    currentPlayer().seekTo(target.targetMs); position = target.targetMs
+                    if (target.learnedMark) introSkippedEp = curEpisode
+                }
+            })
         }
     }, playerButtonOrder)
 

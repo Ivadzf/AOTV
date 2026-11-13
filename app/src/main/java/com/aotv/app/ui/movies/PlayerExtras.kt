@@ -166,10 +166,10 @@ internal fun parseSubs(body: String): List<SubCue> {
     return out.sortedBy { it.start }
 }
 
-/** Fala na tela no instante [posMs] com a legenda atrasada [delayMs]. */
+/** Fala na tela no instante [posMs] com a legenda atrasada [delayMs]. Falas sobrepostas se juntam com "\n". */
 internal fun cueAt(cues: List<SubCue>, posMs: Long, delayMs: Long): String {
     val t = posMs - delayMs
-    return cues.lastOrNull { it.start <= t }?.takeIf { t <= it.end }?.text.orEmpty()
+    return cues.filter { it.start <= t && t <= it.end }.joinToString("\n") { it.text }
 }
 
 // ── Som de outra fonte ────────────────────────────────────────────────────────
