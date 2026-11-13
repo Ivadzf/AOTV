@@ -348,7 +348,7 @@ private fun SearchPill(
             .fillMaxWidth()
             .height(52.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(if (focused) Color(0xFF2B3644) else Surface2)
+            .background(if (focused) SearchFocused else Surface2)
             .border(if (focused) 2.dp else 0.dp, if (focused) borderColor else Color.Transparent, RoundedCornerShape(14.dp))
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -399,7 +399,7 @@ private fun SearchPill(
                     .pressScale(clearSrc)
                     .size(24.dp)
                     .clip(CircleShape)
-                    .background(Color(0x14FFFFFF))
+                    .background(FillSubtle)
                     .clickable(
                         interactionSource = clearSrc,
                         indication = null,

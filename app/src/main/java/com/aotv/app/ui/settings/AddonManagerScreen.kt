@@ -235,7 +235,7 @@ private fun InstallCard(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(AccentSoft, Color(0xFF141414))))
+            .background(Brush.linearGradient(listOf(AccentSoft, BackgroundCard2)))
             .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -591,7 +591,7 @@ private fun AddonCard(
                 Modifier
                     .align(Alignment.End)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White)
+                    .background(FocusSurface)
                     .clickable {
                         if (editText.isNotBlank() && editText != addon.url) onEdit(editText)
                         editing = false
@@ -600,7 +600,7 @@ private fun AddonCard(
             ) {
                 Text(
                     "Salvar endereço",
-                    color = Color(0xFF06070A), fontSize = 14.sp,
+                    color = OnFocusSurface, fontSize = 14.sp,
                     fontWeight = FontWeight.ExtraBold, fontFamily = ManropeFontFamily,
                 )
             }

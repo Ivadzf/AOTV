@@ -87,6 +87,12 @@ class PlatformPrefs @Inject constructor(
 
         /** Último resultado de cada plugin (JSON id -> PluginLastRun, p/ diagnóstico). */
         private const val KEY_PLUGIN_LAST_RUN = "plugin_last_run_v1"
+
+        /** Id da paleta de cores ativa (ver [com.aotv.app.ui.theme.AotvPalette]). */
+        private const val KEY_THEME_PALETTE = "theme_palette_v1"
+
+        /** Paleta padrão (Padrão, id "default"). */
+        private const val DEFAULT_THEME_PALETTE = "default"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -240,6 +246,23 @@ class PlatformPrefs @Inject constructor(
     var onboarded: Boolean
         get() = prefs.getBoolean("onboarded", prefs.all.isNotEmpty())
         set(value) { prefs.edit().putBoolean("onboarded", value).apply() }
+
+    // ── Tema (do aparelho) ───────────────────────────────────────────────────
+    // Paleta de cores do app (Fase A, Frente 3). É do aparelho, não do perfil:
+    // troca o app inteiro e vale para todo mundo que usa o aparelho. O id
+    // guardado aqui é o [com.aotv.app.ui.theme.AotvPalette.id]; id desconhecido
+    // volta ao Padrão na leitura (ver AotvPalette.fromId).
+
+    private val _themePalette = MutableStateFlow(
+        prefs.getString(KEY_THEME_PALETTE, DEFAULT_THEME_PALETTE) ?: DEFAULT_THEME_PALETTE,
+    )
+    /** Id da paleta ativa, que avisa quem observa. */
+    val themePalette: StateFlow<String> = _themePalette.asStateFlow()
+
+    /** Id da paleta ativa. Gravar aqui já avisa quem observa. */
+    var themePaletteId: String
+        get() = _themePalette.value
+        set(value) { prefs.edit().putString(KEY_THEME_PALETTE, value).apply(); _themePalette.value = value }
 
     // ── PIN dos pais ─────────────────────────────────────────────────────────
     // Vale pro aparelho inteiro (não é por perfil): trava sair do infantil e abrir

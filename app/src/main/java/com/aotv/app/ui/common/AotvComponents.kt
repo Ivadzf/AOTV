@@ -392,8 +392,8 @@ fun FilterChipPill(
     val pressed by src.collectIsPressedAsState()
     var focused by remember { mutableStateOf(false) }
     val s = pressFocusScale(pressed, focused)
-    val bg = if (focused) Color.White else if (selected) AccentFill else Surface2
-    val fg = if (focused) TextOnLight else if (selected) Color.White else TextSecondary
+    val bg = if (focused) FocusSurface else if (selected) AccentFill else Surface2
+    val fg = if (focused) OnFocusSurface else if (selected) Color.White else TextSecondary
     Box(
         modifier
             .heightIn(min = 48.dp)
@@ -451,7 +451,7 @@ fun MediaPosterCard(
             .shadow(if (focused) 18.dp else 0.dp, shape)
             .clip(shape)
             .background(BackgroundCard2)
-            .then(if (focused) Modifier.border(3.dp, Color.White, shape) else Modifier)
+            .then(if (focused) Modifier.border(3.dp, FocusRing, shape) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .then(
                 if (onLongClick != null)
@@ -573,15 +573,16 @@ fun AotvButton(
     val s = pressFocusScale(pressed && enabled, showFocus, 1.05f)
     val bg = when {
         !enabled -> Surface2
-        tone == ButtonTone.PRIMARY -> Color.White
+        tone == ButtonTone.PRIMARY -> FocusSurface
         tone == ButtonTone.ON -> AccentSoft
         tone == ButtonTone.DANGER -> Danger.copy(alpha = .9f)
         else -> Surface2
     }
     val fg = when {
         !enabled -> TextTertiary
-        tone == ButtonTone.PRIMARY -> TextOnLight
-        else -> Color.White
+        tone == ButtonTone.PRIMARY -> OnFocusSurface
+        tone == ButtonTone.DANGER -> Color.White
+        else -> TextPrimary
     }
     val shape = RoundedCornerShape(999.dp)
     Row(
@@ -590,7 +591,7 @@ fun AotvButton(
             .heightIn(min = if (compact) 48.dp else 52.dp)
             .clip(shape)
             .background(bg)
-            .then(if (showFocus) Modifier.border(3.dp, if (tone == ButtonTone.PRIMARY && enabled) Accent else Color.White, shape) else Modifier)
+            .then(if (showFocus) Modifier.border(3.dp, if (tone == ButtonTone.PRIMARY && enabled) Accent else FocusRing, shape) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .then(if (tv && !(enabled && !busy)) Modifier.semantics { disabled() } else Modifier)
             .clickable(
@@ -638,7 +639,7 @@ fun skeletonBrush(): Brush {
     val w = 1200f
     val start = x * w * 2 - w
     return Brush.linearGradient(
-        listOf(Color(0xFF1C1C1C), Color(0xFF262626), Color(0xFF1C1C1C)),
+        listOf(BackgroundCard2, Surface2, BackgroundCard2),
         start = Offset(start, 0f), end = Offset(start + w, 0f),
     )
 }
@@ -749,11 +750,11 @@ fun SettingsRow(
                     if (grouped) {
                         // Sem fundo próprio; só o foco acende (anel branco + fundo suave).
                         if (focused) Modifier.clip(RoundedCornerShape(10.dp)).background(AccentSoft)
-                            .border(2.dp, Color.White, RoundedCornerShape(10.dp)) else Modifier
+                            .border(2.dp, FocusRing, RoundedCornerShape(10.dp)) else Modifier
                     } else {
                         Modifier.clip(shape)
                             .background(if (focused) AccentSoft else BackgroundCard2)
-                            .then(if (focused) Modifier.border(2.dp, Color.White, shape) else Modifier)
+                            .then(if (focused) Modifier.border(2.dp, FocusRing, shape) else Modifier)
                     }
                 )
                 .onFocusChanged { focused = it.isFocused }
@@ -803,7 +804,7 @@ fun SummaryCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(AccentSoft, Color(0xFF141414)), start = Offset(0f, 0f), end = Offset(600f, 900f)))
+            .background(Brush.linearGradient(listOf(AccentSoft, BackgroundCard2), start = Offset(0f, 0f), end = Offset(600f, 900f)))
             .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
             .padding(20.dp),
         content = content,

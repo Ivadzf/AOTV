@@ -491,7 +491,7 @@ private fun SeeAllCard(onClick: () -> Unit) {
     val shape = RoundedCornerShape(0.9.r)
     Column(
         Modifier.width(12.5.r).aspectRatio(2f / 3f).scale(s).clip(shape).background(BackgroundCard)
-            .border(if (focused) 0.22.r else 0.1.r, if (focused) Color.White else Border, shape)
+            .border(if (focused) 0.22.r else 0.1.r, if (focused) FocusRing else Border, shape)
             .onFocusChanged { focused = it.isFocused }.tvClick(onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

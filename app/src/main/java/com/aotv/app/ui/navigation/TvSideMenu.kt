@@ -60,7 +60,10 @@ class TvMenuItem(
 val TvMenuClosed: androidx.compose.ui.unit.Dp
     @Composable @ReadOnlyComposable get() = 6.5.r
 
-/** Cápsula flutuante do webOS, com seleção que acompanha o foco do controle remoto. */
+/** Cápsula flutuante do webOS, com seleção que acompanha o foco do controle remoto.
+ *  Fase A: a pílula de seleção usa a cor de acento (turquesa), igual à aba
+ *  selecionada da pílula do celular — o menu lateral continua, adaptado, porque
+ *  a pílula inferior flutuante quebraria o modelo de foco por D-pad da TV. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun TvSideMenu(
@@ -93,7 +96,7 @@ fun TvSideMenu(
             .clip(RoundedCornerShape(2.6.r)).background(Color(0xF7191919))
             .then(Modifier.border(.06.r, Color.White.copy(alpha = .09f), RoundedCornerShape(2.6.r)))) {
             Box(Modifier.offset(x = .4.r, y = pillY).width(dockWidth - .8.r).height(3.9.r)
-                .background(Color(0xFFF5F5F5), RoundedCornerShape(2.r)))
+                .background(Accent, RoundedCornerShape(2.r)))
             Column(Modifier.width(dockWidth).padding(vertical = .7.r)
                 .onFocusChanged { onOpenChange(it.hasFocus) }
                 .focusProperties { enter = { requesters[active.route] ?: FocusRequester.Default } }.focusGroup()) {

@@ -138,7 +138,7 @@ private fun TvMyListScreenBody(
                     if (saved.isEmpty()) "Nada salvo ainda. Abra um título e use Minha Lista para guardar aqui." else "Nenhum título salvo nesse filtro.",
                     color = TextTertiary, fontSize = 1.05.rs, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().border(1.dp, Border, RoundedCornerShape(1.r))
-                        .background(Color(0x08FFFFFF), RoundedCornerShape(1.r)).padding(1.5.r),
+                        .background(FillTint.copy(alpha = 0.03f), RoundedCornerShape(1.r)).padding(1.5.r),
                 )
             } else {
                 items(list.size, key = { "s:${list[it].tmdbId}:${list[it].type}" }) { i ->

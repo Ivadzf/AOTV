@@ -180,8 +180,8 @@ fun TvKeyboard(
 @Composable
 private fun TvKey(modifier: Modifier, label: String, icon: ImageVector? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) Color.White else Surface2
-    val fg = if (focused) TextOnLight else TextPrimary
+    val bg = if (focused) FocusSurface else Surface2
+    val fg = if (focused) OnFocusSurface else TextPrimary
     Row(
         modifier
             .height(44.dp)
@@ -223,7 +223,7 @@ fun TvTextPrompt(
         ) {
             Text(title, color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, fontFamily = Inter)
             Box(
-                Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF2B3644)).padding(horizontal = 16.dp),
+                Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(14.dp)).background(SearchFocused).padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
                 Text(

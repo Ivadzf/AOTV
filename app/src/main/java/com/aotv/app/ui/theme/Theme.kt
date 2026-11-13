@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -35,27 +36,48 @@ val SoraFontFamily    = Inter
 val ManropeFontFamily = Inter
 val InterFontFamily   = Inter
 
-private val AotvColorScheme = darkColorScheme(
-    primary            = Accent,
-    onPrimary          = Color.White,
-    primaryContainer   = PrimaryContainer,
-    onPrimaryContainer = TextPrimary,
-    secondary          = AccentDark,
-    onSecondary        = Color.White,
-    background         = Background,
-    onBackground       = TextPrimary,
-    surface            = BackgroundCard,
-    onSurface          = TextPrimary,
-    surfaceVariant     = BackgroundCard2,
-    surfaceContainerHighest = Surface2,
-    surfaceContainerHigh = BackgroundCard2,
-    surfaceContainer   = BackgroundCard,
-    onSurfaceVariant   = TextSecondary,
-    error              = ErrorCol,
-    onError            = Color.White,
-    outline            = Border,
-    outlineVariant     = BorderSubtle,
-)
+private fun aotvColorScheme(palette: AotvPalette) =
+    if (palette.isLight) lightColorScheme(
+        primary            = palette.accent,
+        onPrimary          = palette.onAccent,
+        primaryContainer   = palette.accentSoft,
+        onPrimaryContainer = palette.textPrimary,
+        secondary          = palette.accentDark,
+        onSecondary        = palette.onAccent,
+        background         = palette.background,
+        onBackground       = palette.textPrimary,
+        surface            = palette.backgroundCard,
+        onSurface          = palette.textPrimary,
+        surfaceVariant     = palette.backgroundCard2,
+        surfaceContainerHighest = palette.surface2,
+        surfaceContainerHigh = palette.backgroundCard2,
+        surfaceContainer   = palette.backgroundCard,
+        onSurfaceVariant   = palette.textSecondary,
+        error              = palette.danger,
+        onError            = Color.White,
+        outline            = palette.border,
+        outlineVariant     = palette.borderSubtle,
+    ) else darkColorScheme(
+        primary            = palette.accent,
+        onPrimary          = palette.onAccent,
+        primaryContainer   = palette.accentSoft,
+        onPrimaryContainer = palette.textPrimary,
+        secondary          = palette.accentDark,
+        onSecondary        = palette.onAccent,
+        background         = palette.background,
+        onBackground       = palette.textPrimary,
+        surface            = palette.backgroundCard,
+        onSurface          = palette.textPrimary,
+        surfaceVariant     = palette.backgroundCard2,
+        surfaceContainerHighest = palette.surface2,
+        surfaceContainerHigh = palette.backgroundCard2,
+        surfaceContainer   = palette.backgroundCard,
+        onSurfaceVariant   = palette.textSecondary,
+        error              = palette.danger,
+        onError            = Color.White,
+        outline            = palette.border,
+        outlineVariant     = palette.borderSubtle,
+    )
 
 // Títulos em ExtraBold com letra mais junta, como no webOS.
 private val AotvTypography = Typography(
@@ -87,8 +109,12 @@ private val AotvShapes = Shapes(
 
 @Composable
 fun AotvTheme(content: @Composable () -> Unit) {
+    // A paleta vem do holder (publicado pela MainActivity a partir do
+    // PlatformPrefs): ler aqui assina o State e recompõe a árvore inteira
+    // quando o tema troca. As cores dos vals de Color.kt leem o mesmo holder.
+    val palette = currentPaletteState.value
     MaterialTheme(
-        colorScheme = AotvColorScheme,
+        colorScheme = aotvColorScheme(palette),
         typography  = AotvTypography,
         shapes      = AotvShapes,
         content     = content,

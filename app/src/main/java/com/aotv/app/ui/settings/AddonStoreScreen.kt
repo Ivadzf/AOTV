@@ -456,7 +456,7 @@ private fun ConfigFormDialog(a: CommunityAddon, onDismiss: () -> Unit, onDone: (
                         }
                         onDone(AddonLinks.configuredUrl(a.url, out))
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = TextOnLight),
+                    colors = ButtonDefaults.buttonColors(containerColor = FocusSurface, contentColor = OnFocusSurface),
                     shape = RoundedCornerShape(999.dp),
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) { Text("Salvar e instalar", fontWeight = FontWeight.ExtraBold) }

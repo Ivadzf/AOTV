@@ -11,8 +11,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -44,6 +45,7 @@ import com.aotv.app.ui.common.vodNavItems
 import com.aotv.app.ui.common.DeviceLayout
 import com.aotv.app.ui.theme.Background
 import com.aotv.app.ui.movies.*
+import com.aotv.app.ui.settings.SettingsPageScreen
 import com.aotv.app.ui.settings.SettingsScreen
 
 private sealed class MoviesRoute(val route: String) {
@@ -62,6 +64,10 @@ private sealed class MoviesRoute(val route: String) {
     }
     object Search   : MoviesRoute("movies_search")
     object Settings : MoviesRoute("movies_settings")
+    // Páginas das Configurações (Fase A, Frente 2) — o hub é movies_settings.
+    object SettingsPage : MoviesRoute("movies_settings/{page}") {
+        fun create(page: String) = "movies_settings/$page"
+    }
     object Addons : MoviesRoute("movies_addons")
     object Plugins : MoviesRoute("movies_plugins")
     object KodiSpike : MoviesRoute("movies_kodi_spike")
@@ -140,11 +146,12 @@ fun MoviesNavigation(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
+    // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
+    // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
+    // Configurações cobre o hub e as páginas (movies_settings/*).
     val isFullscreen = currentRoute?.startsWith("movies_player") == true ||
         currentRoute?.startsWith("movies_detail") == true ||
-        currentRoute == MoviesRoute.Search.route ||
-        currentRoute == MoviesRoute.Settings.route ||
-        currentRoute == MoviesRoute.Profiles.route ||
+        currentRoute?.startsWith("movies_settings") == true ||
         currentRoute == MoviesRoute.AddonStore.route ||
         currentRoute == MoviesRoute.HomeCustomize.route ||
         currentRoute == MoviesRoute.Debrid.route ||
@@ -207,6 +214,7 @@ fun MoviesNavigation(
                     onSearchClick   = { navController.navigate(MoviesRoute.Search.route) },
                     onSettingsClick = { navController.navigate(MoviesRoute.Settings.route) },
                     onLibraryClick  = { navController.navigate(MoviesRoute.MinhaLista.route) },
+                    onDiscoverClick = { navController.navigate(MoviesRoute.Descobrir.route) },
                     onCustomize     = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                     onFolderClick   = { c, f -> navController.navigate(MoviesRoute.CollectionFolder.create(c, f)) },
                 )
@@ -375,18 +383,36 @@ fun MoviesNavigation(
                     navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
                 }
                 if (isTV) com.aotv.app.ui.tv.TvMyListScreen(onItemClick = { onListItem(movieCache[cacheKey(it.tmdbId, it.type, it.embedId)] ?: it) })
-                else MinhaListaScreen(onItemClick = onListItem)
+                else MinhaListaScreen(
+                    onItemClick = onListItem,
+                    onDownloadsClick = { navController.navigate(MoviesRoute.Downloads.route) },
+                )
             }
 
+            // Hub das Configurações (Fase A, Frente 2) — as páginas são movies_settings/{page}.
             composable(MoviesRoute.Settings.route) {
                 tvScale(isTV) {
                     SettingsScreen(
-                        onBack            = { navController.popBackStack() },
+                        onBack = { navController.popBackStack() },
+                        onOpenPage = { navController.navigate(MoviesRoute.SettingsPage.create(it)) },
+                    )
+                }
+            }
+
+            // Uma página das Configurações (Frente 2) — `page` é um dos ids de SettingsPageIds.
+            composable(
+                MoviesRoute.SettingsPage.route,
+                arguments = listOf(navArgument("page") { type = NavType.StringType }),
+            ) { backStackEntry ->
+                tvScale(isTV) {
+                    SettingsPageScreen(
+                        pageId = backStackEntry.arguments?.getString("page") ?: "",
+                        onBack = { navController.popBackStack() },
                         onPlatformChanged = onRestartApp,
-                        onOpenAddons      = { navController.navigate(MoviesRoute.Addons.route) },
-                        onOpenPlugins     = { navController.navigate(MoviesRoute.Plugins.route) },
-                        onOpenKodiAddons  = { navController.navigate(MoviesRoute.KodiAddons.route) },
-                        onOpenProfiles    = { navController.navigate(MoviesRoute.Profiles.route) },
+                        onOpenAddons = { navController.navigate(MoviesRoute.Addons.route) },
+                        onOpenPlugins = { navController.navigate(MoviesRoute.Plugins.route) },
+                        onOpenKodiAddons = { navController.navigate(MoviesRoute.KodiAddons.route) },
+                        onOpenProfiles = { navController.navigate(MoviesRoute.Profiles.route) },
                         onOpenHomeCustomize = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                         onOpenDebrid = { navController.navigate(MoviesRoute.Debrid.route) },
                         onOpenAccounts = { navController.navigate(MoviesRoute.Accounts.route) },
@@ -398,7 +424,10 @@ fun MoviesNavigation(
 
             // Quem está assistindo. Escolher outro perfil remonta a navegação (key no MainActivity).
             composable(MoviesRoute.Profiles.route) {
-                tvScale(isTV) { com.aotv.app.ui.settings.ProfilesScreen(onPicked = { navController.popBackStack() }) }
+                tvScale(isTV) { com.aotv.app.ui.settings.ProfilesScreen(
+                    onPicked = { navController.popBackStack() },
+                    onOpenSettings = { navController.navigate(MoviesRoute.Settings.route) },
+                ) }
             }
 
             // Gerenciador de addons (celular) — instala por manifest URL, ordena e ativa/desativa.
@@ -548,7 +577,9 @@ fun MoviesNavigation(
         }
     }
 
-    // Barra inferior do celular (Início, Descobrir, Minha Lista, Downloads, Busca e Configurações).
+    // Pílula inferior do celular (Fase A): Início, Busca, Biblioteca e Perfil (+ Ao vivo
+    // condicional). Descobrir e Downloads saíram da barra (viraram entradas na Início
+    // e na Biblioteca); o "Mais" foi removido — Configurações sai pela aba Perfil.
     // "Cinema" foi removido: apontava para a mesma rota de "Início" (destaque duplo + aba morta).
     val liveBar: com.aotv.app.ui.live.LiveBarViewModel = androidx.hilt.navigation.compose.hiltViewModel()
     val liveOn by liveBar.show.collectAsStateWithLifecycle()
@@ -568,6 +599,20 @@ fun MoviesNavigation(
     val vodItems = if (!liveOn) baseItems else baseItems.take(1) +
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Live.route, "Ao vivo", androidx.compose.material.icons.Icons.Default.LiveTv) { navTab(MoviesRoute.Live.route) } +
         baseItems.drop(1)
+
+    // Pílula da Fase A (4 abas): Início, Busca, Biblioteca, Perfil. "Ao vivo" entra
+    // como extra logo após Início só com fonte de canais (mesma condição de antes).
+    // Descobrir e Downloads saíram da barra: Descobrir virou entrada na Início e
+    // Downloads, entrada na Biblioteca (Minha Lista). As rotas continuam existindo.
+    // Perfil é item à parte (usa o avatar do perfil em uso, não um ícone).
+    val pillItems = listOf(
+        com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Home.route, "Início", Icons.Default.Home) { navTab(MoviesRoute.Home.route) },
+    ) + (if (liveOn) listOf(
+        com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Live.route, "Ao vivo", Icons.Default.LiveTv) { navTab(MoviesRoute.Live.route) },
+    ) else emptyList()) + listOf(
+        com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Search.route, "Busca", Icons.Default.Search) { navTab(MoviesRoute.Search.route) },
+        com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.MinhaLista.route, "Biblioteca", Icons.Default.BookmarkBorder) { navTab(MoviesRoute.MinhaLista.route) },
+    )
 
     // IMPORTANTE: o NavHost precisa ficar SEMPRE no mesmo slot de composição. Se ele
     // trocar de pai (ex.: dentro do Scaffold vs. direto) quando isFullscreen muda, o
@@ -648,9 +693,10 @@ fun MoviesNavigation(
                 false
             } else Modifier),
     ) {
-        // Reserva p/ a barra: altura do conteúdo (~62dp) + inset da navigation bar do
-        // sistema, para a última linha do grid não ficar escondida atrás da barra.
-        val barReserve = 88.dp + WindowInsets.navigationBars.asPaddingValues()
+        // Reserva p/ a pílula: altura dela (~98dp: item 70 + margens) + inset da
+        // navigation bar do sistema, para a última linha do grid não ficar escondida
+        // atrás da pílula.
+        val barReserve = 104.dp + WindowInsets.navigationBars.asPaddingValues()
             .calculateBottomPadding()
         // Na TV a barra vira o menu lateral próprio (TvSideMenu).
         val hideBar = isFullscreen || isTV || showTabletRail
@@ -712,7 +758,7 @@ fun MoviesNavigation(
                     if (liveOn) add(TvMenuItem(MoviesRoute.Live.route, "Ao vivo", Icons.Default.LiveTv, go(MoviesRoute.Live.route)))
                     add(TvMenuItem(MoviesRoute.Search.route, "Buscar", Icons.Default.Search, go(MoviesRoute.Search.route)))
                     add(TvMenuItem(MoviesRoute.Descobrir.route, "Descobrir", Icons.Default.Explore, go(MoviesRoute.Descobrir.route)))
-                    add(TvMenuItem(MoviesRoute.MinhaLista.route, "Minha Lista", Icons.Default.Bookmark, go(MoviesRoute.MinhaLista.route)))
+                    add(TvMenuItem(MoviesRoute.MinhaLista.route, "Biblioteca", Icons.Default.Bookmark, go(MoviesRoute.MinhaLista.route)))
                     add(TvMenuItem(MoviesRoute.Addons.route, "Addons", Icons.Default.Extension, go(MoviesRoute.Addons.route)))
                 },
                 bottom = listOf(
@@ -735,11 +781,10 @@ fun MoviesNavigation(
             Box(Modifier.align(Alignment.BottomCenter)) {
                 MoviesBottomBar(
                     currentRoute = currentRoute,
-                    items = vodItems,
-                    onSettings = { navTab(MoviesRoute.Settings.route) },
-                    settingsRoute = MoviesRoute.Settings.route,
+                    items = pillItems,
                     profile = profile,
-                    onProfile = { navController.navigate(MoviesRoute.Profiles.route) },
+                    profilesRoute = MoviesRoute.Profiles.route,
+                    onProfile = { navTab(MoviesRoute.Profiles.route) },
                 )
             }
         }
@@ -800,82 +845,55 @@ private fun TouchRailItem(
     }
 }
 
-/** Cápsula inferior por toque. As ações extras ficam na lista rolável de Mais. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Pílula flutuante da Fase A: 4 abas (Início, Busca, Biblioteca, Perfil) + Ao vivo
+ *  condicional. A aba selecionada leva o fundo na cor de acento (turquesa) com
+ *  ícone e rótulo escuros; Perfil usa o avatar do perfil em uso. Sem "Mais":
+ *  Configurações sai pela aba Perfil. */
 @Composable
 private fun MoviesBottomBar(
     currentRoute: String?,
     items: List<com.aotv.app.ui.common.PhoneNavItem>,
-    onSettings: () -> Unit,
-    settingsRoute: String,
     profile: com.aotv.app.data.local.Profile,
+    profilesRoute: String,
     onProfile: () -> Unit,
 ) {
-    var more by remember { mutableStateOf(false) }
-    val primaryRoutes = setOf(MoviesRoute.Home.route, MoviesRoute.Descobrir.route, MoviesRoute.MinhaLista.route, MoviesRoute.Search.route)
-    val primaryCount = if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 300) 3 else 4
-    val primary = items.filter { it.route in primaryRoutes }.take(primaryCount)
-    val extra = items.filter { it !in primary }
-    val moreSelected = currentRoute == settingsRoute || extra.any { it.route == currentRoute }
     // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
     // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
     // próprio conteúdo (ícones inclusos), não o que está atrás da barra.
     Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
-        .shadow(16.dp, androidx.compose.foundation.shape.RoundedCornerShape(32.dp))
-        .clip(androidx.compose.foundation.shape.RoundedCornerShape(32.dp)).background(com.aotv.app.ui.theme.GlassBg)
-        .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, androidx.compose.foundation.shape.RoundedCornerShape(32.dp))
+        .shadow(16.dp, MaterialTheme.shapes.extraLarge)
+        .clip(MaterialTheme.shapes.extraLarge).background(com.aotv.app.ui.theme.GlassBg)
+        .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
         .padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-        primary.forEach { item ->
+        items.forEach { item ->
             MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
         }
-        MoviesBottomBarItem(Icons.Default.MoreHoriz, "Mais", moreSelected || more, { more = true }, Modifier.weight(1f), contentDescription = "Mais opções")
-    }
-    if (more) ModalBottomSheet(onDismissRequest = { more = false }, containerColor = com.aotv.app.ui.theme.BackgroundElevated,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Text("Navegação", color = com.aotv.app.ui.theme.TextPrimary, fontSize = 22.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            extra.forEach { item ->
-                TouchMenuRow(item.icon, item.label, currentRoute == item.route) { more = false; item.onClick() }
-            }
-            TouchMenuRow(Icons.Default.Settings, "Configurações", currentRoute == settingsRoute) { more = false; onSettings() }
-            TouchMenuRow(Icons.Default.Bookmark, "Perfil · "+profile.name, false) { more = false; onProfile() }
-        }
-    }
-}
-
-@Composable
-private fun TouchMenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
-        .background(if (selected) com.aotv.app.ui.theme.AccentSoft else com.aotv.app.ui.theme.BackgroundCard)
-        .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Icon(icon, null, tint = com.aotv.app.ui.theme.TextPrimary, modifier = Modifier.size(24.dp))
-        Text(label, color = com.aotv.app.ui.theme.TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        MoviesBottomBarItem(
+            icon = null, label = "Perfil", selected = currentRoute == profilesRoute,
+            onClick = onProfile, modifier = Modifier.weight(1f), profile = profile,
+        )
     }
 }
 
 @Composable
 private fun MoviesBottomBarItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.vector.ImageVector?,
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    contentDescription: String? = null,
+    profile: com.aotv.app.data.local.Profile? = null,
 ) {
-    Column(modifier.heightIn(min = 56.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
-        .background(if (selected) androidx.compose.ui.graphics.Color.White.copy(alpha = .10f) else androidx.compose.ui.graphics.Color.Transparent)
+    Column(modifier.heightIn(min = 56.dp).clip(MaterialTheme.shapes.large)
+        .background(if (selected) com.aotv.app.ui.theme.Accent else androidx.compose.ui.graphics.Color.Transparent)
         .semantics { this.selected = selected }
         .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
         .padding(horizontal = 4.dp, vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Icon(icon, contentDescription = contentDescription ?: label,
-            tint = if (selected) androidx.compose.ui.graphics.Color.White else com.aotv.app.ui.theme.TextSecondary,
-            modifier = Modifier.size(22.dp))
-        Text(label, color = if (selected) androidx.compose.ui.graphics.Color.White else com.aotv.app.ui.theme.TextSecondary,
+        val fg = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary
+        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 22.dp)
+        else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(22.dp))
+        Text(label, color = fg,
             fontSize = 10.sp, lineHeight = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
             fontFamily = com.aotv.app.ui.theme.Inter, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
@@ -895,6 +913,7 @@ private fun MoviesBottomBarItem(
 @Composable
 private fun MinhaListaScreen(
     onItemClick: (MovieItem) -> Unit,
+    onDownloadsClick: () -> Unit = {},
 ) {
     val vm: com.aotv.app.ui.movies.MinhaListaViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
@@ -959,6 +978,26 @@ private fun MinhaListaScreen(
             title = "Minha Lista",
             sub = if (watchlist.isEmpty() && recent.isEmpty()) null else "${watchlist.size} salvos  ·  ${recent.size} em andamento",
         )
+        // Downloads saiu da barra (Fase A, pílula de 4 abas): a entrada fica aqui,
+        // na Biblioteca. Sempre visível, mesmo com a lista vazia.
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                .background(com.aotv.app.ui.theme.BackgroundCard)
+                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDownloadsClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(Icons.Default.Download, null, tint = com.aotv.app.ui.theme.TextPrimary, modifier = Modifier.size(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Downloads", color = com.aotv.app.ui.theme.TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text("Vídeos baixados no aparelho", color = com.aotv.app.ui.theme.TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+            Icon(Icons.Default.ChevronRight, "Abrir downloads", tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(22.dp))
+        }
         val pad = com.aotv.app.ui.common.pagePadding()
         val config = androidx.compose.ui.platform.LocalConfiguration.current
         val availableWidth = config.screenWidthDp - if (config.screenWidthDp >= 600 && config.screenHeightDp >= 480) tabletRailWidth().value.toInt() else 0

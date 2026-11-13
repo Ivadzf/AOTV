@@ -24,7 +24,10 @@ import com.aotv.app.ui.common.LocalPosterQuality
 import com.aotv.app.ui.common.LocalPosterRanks
 import com.aotv.app.ui.common.currentDeviceLayout
 import com.aotv.app.ui.navigation.MoviesNavigation
+import com.aotv.app.ui.theme.AotvPalette
 import com.aotv.app.ui.theme.AotvTheme
+import com.aotv.app.ui.theme.currentPalette
+import com.aotv.app.ui.theme.setCurrentPalette
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -40,6 +43,12 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
 
         setContent {
+            // Paleta de cores (Fase A, Frente 3): publica a escolha salva no
+            // holder que os vals de Color.kt e o AotvTheme leem. O `if` evita
+            // escrever o State em toda recomposição — só quando a paleta muda.
+            val paletteId by platformPrefs.themePalette.collectAsStateWithLifecycle()
+            val palette = AotvPalette.fromId(paletteId)
+            if (currentPalette != palette) setCurrentPalette(palette)
             AotvTheme {
                 val deviceLayout = currentDeviceLayout(platformPrefs.platformMode)
                 // 1ª abertura: nome do perfil + confirmar a plataforma detectada. Só uma vez.

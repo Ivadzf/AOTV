@@ -234,7 +234,7 @@ fun TvRail(
 fun TvCountPill(text: String) {
     Text(
         text, color = TextTertiary, fontSize = 0.95.rs, fontFamily = Inter, maxLines = 1,
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0x0DFFFFFF)).padding(horizontal = 0.9.r, vertical = 0.35.r),
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(FillTint.copy(alpha = 0.05f)).padding(horizontal = 0.9.r, vertical = 0.35.r),
     )
 }
 
@@ -301,7 +301,7 @@ fun TvPoster(
                 .shadow(if (focused) 1.2.r else 0.dp, shape)
                 .clip(shape)
                 .background(BackgroundCard2)
-                .then(if (focused) Modifier.border(0.22.r, Color.White, shape) else Modifier)
+                .then(if (focused) Modifier.border(0.22.r, FocusRing, shape) else Modifier)
                 .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() }
                 .tvClick(onClick, onLongClick),
         ) {
@@ -318,7 +318,7 @@ fun TvPoster(
                 Modifier.align(Alignment.TopStart).padding(0.6.r).size(2.r).clip(CircleShape)
                     .background(if (current) Accent else Color.Black.copy(alpha = .72f)),
                 contentAlignment = Alignment.Center,
-            ) { Text("$order", color = if (current) Color(0xFF06070A) else Color.White, fontSize = 0.9.rs, fontWeight = FontWeight.ExtraBold) }
+            ) { Text("$order", color = if (current) OnAccent else Color.White, fontSize = 0.9.rs, fontWeight = FontWeight.ExtraBold) }
             if (progress != null) Box(Modifier.align(Alignment.BottomStart).padding(bottom = 2.09.r).fillMaxWidth().height(0.32.r).background(Color.Black.copy(alpha = .55f))) {
                 Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(Accent))
             }
@@ -379,7 +379,7 @@ fun TvWideCard(
         Box(
             Modifier.fillMaxWidth().aspectRatio(16f / 9f).scale(s)
                 .shadow(if (focused) 1.2.r else 0.dp, shape).clip(shape).background(BackgroundCard2)
-                .then(if (focused) Modifier.border(0.22.r, Color.White, shape) else Modifier)
+                .then(if (focused) Modifier.border(0.22.r, FocusRing, shape) else Modifier)
                 .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() }
                 .tvClick(onClick, onLongClick),
         ) {
@@ -422,7 +422,7 @@ fun TvCastCard(name: String, role: String, photo: String, onClick: () -> Unit) {
     ) {
         Box(
             Modifier.size(8.6.r).scale(s).clip(CircleShape).background(Surface2)
-                .then(if (focused) Modifier.border(0.22.r, Color.White, CircleShape) else Modifier),
+                .then(if (focused) Modifier.border(0.22.r, FocusRing, CircleShape) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             if (photo.isNotBlank()) AsyncImage(photo, name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -454,20 +454,20 @@ fun TvButton(
     val s = tvFocusScale(focused, 1.05f)
     val bg = when {
         !enabled -> Surface2
-        primary -> Color.White
+        primary -> FocusSurface
         on -> AccentSoft
         else -> Surface2
     }
     val fg = when {
         !enabled -> TextTertiary
-        primary -> TextOnLight
-        else -> Color.White
+        primary -> OnFocusSurface
+        else -> TextPrimary
     }
     val shape = RoundedCornerShape(50)
     Row(
         modifier
             .scale(s)
-            .then(if (focused) Modifier.border(0.22.r, Color.White, shape).padding(0.2.r) else Modifier.padding(0.2.r))
+            .then(if (focused) Modifier.border(0.22.r, FocusRing, shape).padding(0.2.r) else Modifier.padding(0.2.r))
             .height(3.6.r)
             .clip(shape)
             .background(bg)
@@ -495,14 +495,14 @@ fun TvChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modi
     Row(
         modifier.scale(s).height(2.7.r).clip(shape)
             .background(if (selected) Accent else Surface2)
-            .then(if (focused) Modifier.border(0.2.r, Color.White, shape) else Modifier)
+            .then(if (focused) Modifier.border(0.2.r, FocusRing, shape) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .tvClick(onClick)
             .padding(horizontal = 1.2.r),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(1.2.r)); Spacer(Modifier.width(0.5.r)) }
-        Text(label, color = if (selected || focused) Color.White else TextSecondary, fontSize = 1.rs, fontWeight = FontWeight.SemiBold, fontFamily = Inter, maxLines = 1)
+        if (icon != null) { Icon(icon, null, tint = if (selected) Color.White else TextPrimary, modifier = Modifier.size(1.2.r)); Spacer(Modifier.width(0.5.r)) }
+        Text(label, color = if (selected) Color.White else if (focused) TextPrimary else TextSecondary, fontSize = 1.rs, fontWeight = FontWeight.SemiBold, fontFamily = Inter, maxLines = 1)
     }
 }
 

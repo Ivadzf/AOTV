@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -103,11 +104,13 @@ fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
 /**
  * "Quem está assistindo?". Abre sozinha quando há mais de um perfil e também pela barra e pelas
  * Configurações. Em modo edição, tocar num perfil abre o painel para renomear, trocar a cor,
- * marcar infantil ou remover.
+ * marcar infantil ou remover. Fase A: a aba Perfil dá acesso às Configurações
+ * (o "Mais" da barra antiga foi removido) via [onOpenSettings].
  */
 @Composable
 fun ProfilesScreen(
     onPicked: () -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
     startEditing: Boolean = false,
     vm: ProfilesViewModel = hiltViewModel(),
 ) {
@@ -127,7 +130,7 @@ fun ProfilesScreen(
 
     Column(
         Modifier.fillMaxSize()
-            .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(Color(0xFF17212E), Background), radius = 1400f))
+            .background(androidx.compose.ui.graphics.Brush.radialGradient(listOf(AccentSoft, Background), radius = 1400f))
             .verticalScroll(rememberScrollState())
             .topInsetsPadding().padding(horizontal = 16.dp, vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -192,6 +195,17 @@ fun ProfilesScreen(
             icon = if (editing) Icons.Default.Check else Icons.Default.Edit,
             tone = if (editing) com.aotv.app.ui.common.ButtonTone.PRIMARY else com.aotv.app.ui.common.ButtonTone.SECONDARY,
         )
+        // Configurações (Fase A): sem o "Mais" da barra, o caminho p/ Configurações é a aba Perfil.
+        val openSettings = onOpenSettings
+        if (openSettings != null) {
+            Spacer(Modifier.height(16.dp))
+            com.aotv.app.ui.common.AotvButton(
+                "Configurações",
+                openSettings,
+                icon = Icons.Default.Settings,
+                tone = com.aotv.app.ui.common.ButtonTone.SECONDARY,
+            )
+        }
     }
 
     panel?.let { p ->

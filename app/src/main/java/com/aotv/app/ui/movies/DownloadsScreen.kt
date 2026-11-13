@@ -163,16 +163,16 @@ private fun DownloadRow(
                     progress = { if (percent > 0) percent / 100f else 0f },
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(3.dp)),
                     color = Accent,
-                    trackColor = Color.White.copy(alpha = 0.12f),
+                    trackColor = FillTint.copy(alpha = 0.12f),
                 )
             }
         }
         if (d.status == "done") {
             Box(
-                Modifier.size(44.dp).clip(CircleShape).background(Color.White),
+                Modifier.size(44.dp).clip(CircleShape).background(FocusSurface),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Default.PlayArrow, "Assistir", tint = TextOnLight, modifier = Modifier.size(22.dp))
+                Icon(Icons.Default.PlayArrow, "Assistir", tint = OnFocusSurface, modifier = Modifier.size(22.dp))
             }
         } else if (d.status == "downloading") {
             // Anel determinado quando há %, indeterminado enquanto o total é desconhecido.

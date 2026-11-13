@@ -213,7 +213,7 @@ private fun DiscoverTopBar(
         Row(
             Modifier
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (filterCount > 0) AccentSoft else Color(0x0AFFFFFF))
+                .background(if (filterCount > 0) AccentSoft else FillSubtle)
                 .border(1.dp, if (filterCount > 0) Accent else Border, RoundedCornerShape(999.dp))
                 .clickable(onClick = onToggleFilters)
                 .padding(start = 14.dp, end = 10.dp, top = 11.dp, bottom = 11.dp),
@@ -343,7 +343,7 @@ private fun FilterGroup(
             if (count > 0) {
                 Text(
                     count.toString(),
-                    color = Color(0xFF06070A),
+                    color = OnAccent,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.ExtraBold,
                     fontFamily = ManropeFontFamily,

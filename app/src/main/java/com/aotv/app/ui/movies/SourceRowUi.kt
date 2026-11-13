@@ -190,7 +190,7 @@ fun SourceCard(
     Column(
         modifier.fillMaxWidth().pressScale(interaction).clip(shape)
             .background(if (focus || selected) AccentSoft else BackgroundCard2)
-            .border(if (focus) 2.dp else 1.dp, if (focus) Color.White else if (selected) Accent else Border, shape)
+            .border(if (focus) 2.dp else 1.dp, if (focus) FocusRing else if (selected) Accent else Border, shape)
             .onFocusChanged { focused = it.isFocused }
             .then(if (manualFocus) Modifier.focusProperties { canFocus = false } else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
@@ -227,8 +227,8 @@ fun SourceCard(
             if (onDownload != null) Box(Modifier.size(48.dp).clip(CircleShape).clickable(onClick = onDownload), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Download, "Baixar", tint = TextPrimary, modifier = Modifier.size(20.dp))
             }
-            Box(Modifier.size(48.dp).clip(CircleShape).background(if (focus) Color.White else Color.White.copy(alpha = .1f)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.PlayArrow, null, tint = if (focus) TextOnLight else TextPrimary, modifier = Modifier.size(24.dp))
+            Box(Modifier.size(48.dp).clip(CircleShape).background(if (focus) FocusSurface else FillTint.copy(alpha = .1f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.PlayArrow, null, tint = if (focus) OnFocusSurface else TextPrimary, modifier = Modifier.size(24.dp))
             }
         }
         if (note != null) Text(note, color = Gold, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -268,7 +268,7 @@ private fun SourcePill(text: String) {
         maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(5.dp))
-            .background(Color(0x12FFFFFF))
+            .background(FillSubtle)
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
@@ -302,7 +302,7 @@ fun CollectionPoster(
         ) {
             Text(
                 order.toString(),
-                color = if (isCurrent) Color(0xFF06070A) else Color.White,
+                color = if (isCurrent) OnAccent else Color.White,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.ExtraBold,
                 fontFamily = SoraFontFamily,

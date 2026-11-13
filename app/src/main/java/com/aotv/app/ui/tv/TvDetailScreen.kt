@@ -399,7 +399,7 @@ private fun TvHint(text: String) {
         text, color = TextTertiary, fontSize = 1.05.rs, lineHeight = 1.6.rs,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(horizontal = tvPad, vertical = 0.6.r)
-            .border(1.dp, Border, RoundedCornerShape(1.r)).background(Color(0x08FFFFFF), RoundedCornerShape(1.r)).padding(1.5.r),
+            .border(1.dp, Border, RoundedCornerShape(1.r)).background(FillTint.copy(alpha = 0.03f), RoundedCornerShape(1.r)).padding(1.5.r),
     )
 }
 

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Search
@@ -66,6 +67,7 @@ fun MoviesHomeScreen(
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLibraryClick: () -> Unit = {},
+    onDiscoverClick: () -> Unit = {},
     onCustomize: () -> Unit = {},
     onFolderClick: (collectionId: String, folderId: String) -> Unit = { _, _ -> },
     viewModel: MoviesHomeViewModel = hiltViewModel(),
@@ -111,6 +113,7 @@ fun MoviesHomeScreen(
             else -> HomeSectionsTab(
                 state = state, viewModel = viewModel, onItemClick = onItemClick,
                 onSearchClick = onSearchClick, onSettingsClick = onSettingsClick,
+                onDiscoverClick = onDiscoverClick,
                 onSeeMore = { query -> viewModel.openCatalog(query) },
                 onPlayTrailer = { card -> playTrailer(card) },
                 onCustomize = onCustomize,
@@ -384,6 +387,7 @@ private fun HomeSectionsTab(
     onItemClick: (MovieItem) -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onDiscoverClick: () -> Unit = {},
     onSeeMore: (MoviesHomeViewModel.CatalogQuery) -> Unit,
     onPlayTrailer: (MoviesHomeViewModel.TrailerCard) -> Unit,
     onCustomize: () -> Unit,
@@ -443,6 +447,28 @@ private fun HomeSectionsTab(
                         lineHeight = 17.sp,
                     )
                 }
+            }
+        }
+        // Descobrir saiu da barra (Fase A, pílula de 4 abas): a entrada fica aqui,
+        // no topo da Início.
+        item(key = "discover_entry") {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(BackgroundCard)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDiscoverClick)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Icon(Icons.Default.Explore, null, tint = TextPrimary, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Descobrir", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Text("Explorar o catálogo por gênero e novidades", color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                Icon(Icons.Default.ChevronRight, "Abrir Descobrir", tint = TextTertiary, modifier = Modifier.size(22.dp))
             }
         }
         if (heroItems.isNotEmpty()) {

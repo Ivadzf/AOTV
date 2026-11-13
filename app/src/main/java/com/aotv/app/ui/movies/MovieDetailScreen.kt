@@ -1691,7 +1691,7 @@ private fun SmallPlayBtn(label: String, accentColor: Color, onClick: () -> Unit,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        val fg = if (focused) Color(0xFF06070A) else accentColor
+        val fg = if (focused) OnAccent else accentColor
         Icon(
             Icons.Default.PlayArrow,
             null,
