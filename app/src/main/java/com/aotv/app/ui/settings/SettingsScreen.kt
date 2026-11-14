@@ -161,6 +161,7 @@ fun SettingsScreen(
                 },
                 trakt = if (viewModel.traktConfigured) traktUser else null,
                 traktConfigured = viewModel.traktConfigured,
+                traktConnected = viewModel.traktConnected,
             )
         }
         com.aotv.app.ui.common.ContentWithSummary(summary) { below ->
@@ -361,9 +362,9 @@ private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Trackers,
         title = "Trackers e Sincronização",
-        sub = "Simkl por código e QR",
+        sub = "Simkl e Trakt por código e QR",
         icon = Icons.Default.Sync,
-        keywords = listOf("Trackers", "Simkl", "sincronização", "scrobble", "PIN", "QR", "client ID"),
+        keywords = listOf("Trackers", "Simkl", "Trakt", "sincronização", "scrobble", "PIN", "QR", "client ID"),
         kidsHidden = true,
     ),
 )
@@ -399,6 +400,7 @@ private fun SettingsSummary(
     platform: String,
     trakt: String?,
     traktConfigured: Boolean,
+    traktConnected: Boolean,
 ) {
     com.aotv.app.ui.common.SummaryCard {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 16.dp)) {
@@ -419,7 +421,7 @@ private fun SettingsSummary(
             if (checking || total == 0) TextPrimary else if (online == total) Ok else DangerText,
         )
         com.aotv.app.ui.common.SummaryRow("Aparelho", platform)
-        if (traktConfigured) com.aotv.app.ui.common.SummaryRow("Trakt", trakt?.ifBlank { "Conectado" } ?: "Desconectado", if (trakt != null) Ok else TextPrimary)
+        if (traktConfigured) com.aotv.app.ui.common.SummaryRow("Trakt", if (traktConnected) trakt?.ifBlank { "Conectado" } ?: "Conectado" else "Desconectado", if (traktConnected) Ok else TextPrimary)
         Text(
             "As escolhas de reprodução valem só para o perfil ativo.",
             color = TextTertiary, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(top = 12.dp),

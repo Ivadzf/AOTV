@@ -1,5 +1,7 @@
 package com.aotv.app.ui.live
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Refresh
@@ -19,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -26,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.aotv.app.data.live.LiveSource
 import com.aotv.app.data.live.LiveSourceType
 import com.aotv.app.ui.common.ButtonTone
 import com.aotv.app.ui.common.AotvButton
@@ -46,9 +51,32 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var confirmRemove by remember { mutableStateOf<String?>(null) }
+    // Edição (v1.17.0): fonte sendo editada; null = formulário de adição.
+    var editingSource by remember { mutableStateOf<LiveSource?>(null) }
+    val editing = editingSource
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val context = LocalContext.current
+    // Importar lista M3U por arquivo (SAF): o ViewModel guarda a URI e os canais.
+    val pickM3uFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.addM3uFromFile(context, uri, name, epg)
+    }
+    // Pré-preenche o formulário com a fonte; o tipo fica travado.
+    fun startEdit(s: LiveSource) {
+        editingSource = s
+        kind = s.type
+        name = s.name
+        url = if (s.type == LiveSourceType.M3U) s.url else ""
+        epg = s.epgUrl
+        server = if (s.type == LiveSourceType.XTREAM) s.server else ""
+        user = if (s.type == LiveSourceType.XTREAM) s.user else ""
+        pass = if (s.type == LiveSourceType.XTREAM) s.pass else ""
+    }
+    fun cancelEdit() {
+        editingSource = null
+        name = ""; url = ""; epg = ""; server = ""; user = ""; pass = ""
+    }
     // Deu certo, limpa o formulário e fecha o teclado.
-    LaunchedEffect(ui.message) { if (ui.message != null) { name = ""; url = ""; epg = ""; server = ""; user = ""; pass = ""; focus.clearFocus() } }
+    LaunchedEffect(ui.message) { if (ui.message != null) { name = ""; url = ""; epg = ""; server = ""; user = ""; pass = ""; editingSource = null; focus.clearFocus() } }
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = Accent, unfocusedBorderColor = Border,
         focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
@@ -116,6 +144,10 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                                 checked = s.enabled, onCheckedChange = { viewModel.setEnabled(s.id, it) },
                                 colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Accent, uncheckedThumbColor = TextTertiary, uncheckedTrackColor = BackgroundCard2, uncheckedBorderColor = Border),
                             )
+                            // Edição — lápis (v1.17.0): pré-preenche o formulário abaixo.
+                            IconButton(onClick = { startEdit(s) }, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.Default.Edit, "Editar ${s.name}", tint = TextSecondary, modifier = Modifier.size(20.dp))
+                            }
                             IconButton(onClick = { confirmRemove = s.id }, modifier = Modifier.size(48.dp)) {
                                 Icon(Icons.Default.Delete, "Remover ${s.name}", tint = LiveRed)
                             }
@@ -135,14 +167,22 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                     )
                 }
 
-                com.aotv.app.ui.common.SettingsSection("Adicionar fonte")
+                com.aotv.app.ui.common.SettingsSection(if (editing == null) "Adicionar fonte" else "Editar fonte")
                 Column(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BackgroundCard2).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        com.aotv.app.ui.common.FilterChipPill("Lista M3U", kind == LiveSourceType.M3U, { kind = LiveSourceType.M3U })
-                        com.aotv.app.ui.common.FilterChipPill("Conta Xtream", kind == LiveSourceType.XTREAM, { kind = LiveSourceType.XTREAM })
+                    if (editing == null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            com.aotv.app.ui.common.FilterChipPill("Lista M3U", kind == LiveSourceType.M3U, { kind = LiveSourceType.M3U })
+                            com.aotv.app.ui.common.FilterChipPill("Conta Xtream", kind == LiveSourceType.XTREAM, { kind = LiveSourceType.XTREAM })
+                        }
+                    } else {
+                        // Tipo travado na edição: só nome, endereço/credenciais e guia mudam.
+                        Text(
+                            if (editing.type == LiveSourceType.M3U) "Lista M3U — o tipo não muda" else "Conta Xtream — o tipo não muda",
+                            color = TextSecondary, fontSize = 13.sp,
+                        )
                     }
                     OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Nome (opcional)") }, modifier = Modifier.fillMaxWidth(), colors = fieldColors)
                     if (kind == LiveSourceType.M3U) {
@@ -154,10 +194,23 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                             epg, { epg = it.trim() }, singleLine = true, label = { Text("Guia XMLTV (opcional)") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth(), colors = fieldColors,
                         )
-                        AotvButton(
-                            "Adicionar lista", { viewModel.addM3u(name, url, epg) }, tone = ButtonTone.PRIMARY,
-                            busy = ui.busy == "m3u", busyLabel = "Carregando canais…", enabled = (ui.busy == null || ui.busy == "m3u") && url.startsWith("http", true), compact = true,
-                        )
+                        if (editing == null) {
+                            AotvButton(
+                                "Escolher arquivo .m3u", { pickM3uFile.launch(arrayOf("*/*")) }, tone = ButtonTone.SECONDARY,
+                                busy = ui.busy == "m3u-file", busyLabel = "Lendo arquivo…", enabled = ui.busy == null, compact = true,
+                            )
+                            AotvButton(
+                                "Adicionar lista", { viewModel.addM3u(name, url, epg) }, tone = ButtonTone.PRIMARY,
+                                busy = ui.busy == "m3u", busyLabel = "Carregando canais…", enabled = (ui.busy == null || ui.busy == "m3u") && url.startsWith("http", true), compact = true,
+                            )
+                        } else {
+                            AotvButton(
+                                "Salvar alterações", { viewModel.updateM3u(editing.id, name, url, epg) }, tone = ButtonTone.PRIMARY,
+                                busy = ui.busy == "m3u", busyLabel = "Salvando…",
+                                enabled = (ui.busy == null || ui.busy == "m3u") && (url.startsWith("http", true) || url.startsWith("content://")),
+                                compact = true,
+                            )
+                        }
                     } else {
                         OutlinedTextField(
                             server, { server = it.trim() }, singleLine = true, label = { Text("Servidor (com a porta)") }, placeholder = { Text("http://servidor.com:8080") },
@@ -168,10 +221,20 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                             pass, { pass = it }, singleLine = true, label = { Text("Senha") }, visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth(), colors = fieldColors,
                         )
-                        AotvButton(
-                            "Conectar conta", { viewModel.addXtream(name, server, user, pass) }, tone = ButtonTone.PRIMARY,
-                            busy = ui.busy == "xtream", busyLabel = "Conferindo…", enabled = (ui.busy == null || ui.busy == "xtream") && server.isNotBlank() && user.isNotBlank() && pass.isNotBlank(), compact = true,
-                        )
+                        if (editing == null) {
+                            AotvButton(
+                                "Conectar conta", { viewModel.addXtream(name, server, user, pass) }, tone = ButtonTone.PRIMARY,
+                                busy = ui.busy == "xtream", busyLabel = "Conferindo…", enabled = (ui.busy == null || ui.busy == "xtream") && server.isNotBlank() && user.isNotBlank() && pass.isNotBlank(), compact = true,
+                            )
+                        } else {
+                            AotvButton(
+                                "Salvar alterações", { viewModel.updateXtream(editing.id, name, server, user, pass) }, tone = ButtonTone.PRIMARY,
+                                busy = ui.busy == "xtream", busyLabel = "Salvando…", enabled = (ui.busy == null || ui.busy == "xtream") && server.isNotBlank() && user.isNotBlank() && pass.isNotBlank(), compact = true,
+                            )
+                        }
+                    }
+                    if (editing != null) {
+                        TextButton(onClick = { cancelEdit() }) { Text("Cancelar edição", color = TextSecondary) }
                     }
                     Text(
                         "Use só listas e contas que você tem direito de assistir. O AOTV não fornece canais.",

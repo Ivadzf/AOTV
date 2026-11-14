@@ -1,5 +1,7 @@
 package com.aotv.app.ui.live
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.live.LiveChannel
@@ -123,6 +125,10 @@ class LivePlayerViewModel @Inject constructor(private val repo: LiveTvRepository
     fun watched(id: String) = repo.markWatched(id)
     fun toggleFavorite(id: String) = repo.toggleFavorite(id)
     fun nowNext(id: String, now: Long) = repo.nowNext(id, now)
+
+    /** URL de catch-up de um programa ([startSec]/[stopSec] em epoch segundos, como na rota). */
+    fun getCatchupUrl(channel: LiveChannel, startSec: Long, stopSec: Long): String? =
+        repo.catchupUrl(channel, LiveProgram(startSec * 1000, stopSec * 1000, ""))
 }
 
 @HiltViewModel
@@ -138,13 +144,58 @@ class LiveSourcesViewModel @Inject constructor(private val repo: LiveTvRepositor
         if (!url.trim().startsWith("http", true)) { _ui.update { it.copy(error = "Cole o endereço da lista (http ou https)") }; return }
         _ui.update { it.copy(busy = "m3u", error = null, message = null) }
         viewModelScope.launch {
-            val s = repo.addM3u(name, url, epg)
+            val s = repo.addM3u(name, url, epg).getOrElse { e ->
+                _ui.update { it.copy(busy = null, error = e.message) }; return@launch
+            }
             repo.refresh(true)
             val n = repo.state.value.channels.count { it.sourceId == s.id }
             _ui.update {
                 if (n == 0) it.copy(busy = null, error = "A lista não trouxe canais. Confira o endereço.")
                 else it.copy(busy = null, message = "$n canais de ${s.name}")
             }
+        }
+    }
+
+    /** Importa uma lista M3U de um arquivo (SAF); o repo guarda a URI e relê no refresh. */
+    fun addM3uFromFile(context: Context, uri: Uri, name: String, epg: String) {
+        if (_ui.value.busy != null) return
+        _ui.update { it.copy(busy = "m3u-file", error = null, message = null) }
+        viewModelScope.launch {
+            val s = repo.addM3uFromFile(context, uri, name, epg).getOrElse { e ->
+                _ui.update { it.copy(busy = null, error = e.message) }; return@launch
+            }
+            repo.refresh(true)
+            val n = repo.state.value.channels.count { it.sourceId == s.id }
+            _ui.update {
+                if (n == 0) it.copy(busy = null, error = "A lista não trouxe canais. Confira o arquivo.")
+                else it.copy(busy = null, message = "$n canais de ${s.name}")
+            }
+        }
+    }
+
+    /** Edita uma fonte M3U existente (o repo revalida e recarrega os canais se o endereço mudou). */
+    fun updateM3u(id: String, name: String, url: String, epg: String) {
+        if (_ui.value.busy != null) return
+        _ui.update { it.copy(busy = "m3u", error = null, message = null) }
+        viewModelScope.launch {
+            val s = repo.updateM3u(id, name, url, epg).getOrElse { e ->
+                _ui.update { it.copy(busy = null, error = e.message) }; return@launch
+            }
+            val n = repo.state.value.channels.count { it.sourceId == s.id }
+            _ui.update { it.copy(busy = null, message = "$n canais de ${s.name}") }
+        }
+    }
+
+    /** Edita uma conta Xtream existente (o repo revalida e recarrega os canais). */
+    fun updateXtream(id: String, name: String, server: String, user: String, pass: String) {
+        if (_ui.value.busy != null) return
+        _ui.update { it.copy(busy = "xtream", error = null, message = null) }
+        viewModelScope.launch {
+            val s = repo.updateXtream(id, name, server, user, pass).getOrElse { e ->
+                _ui.update { it.copy(busy = null, error = e.message) }; return@launch
+            }
+            val n = repo.state.value.channels.count { it.sourceId == s.id }
+            _ui.update { it.copy(busy = null, message = "$n canais de ${s.name}") }
         }
     }
 

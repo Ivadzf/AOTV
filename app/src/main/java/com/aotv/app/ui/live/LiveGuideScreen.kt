@@ -37,8 +37,9 @@ import com.aotv.app.ui.theme.*
  * inventar programação. Respeita os filtros e a busca da aba Ao vivo, porque
  * usa as mesmas fileiras ([LiveTvViewModel.View.rows]).
  *
- * Toques: no canal ou no programa atual abre ao vivo; no programa passado
- * ou futuro mostra o detalhe, sem tocar nada.
+ * Toques: no canal ou no programa atual abre ao vivo; no programa passado COM
+ * catch-up abre a gravação ([livePlayerCatchupRoute]); no programa passado sem
+ * catch-up ou futuro mostra o detalhe, sem tocar nada.
  *
  * A grade é a mesma tela no celular e na TV (a rota "Ao vivo" não tem tela
  * própria de TV): as células são clicáveis e focáveis, mas o scroll
@@ -48,6 +49,8 @@ import com.aotv.app.ui.theme.*
 fun LiveGuideScreen(
     onPlay: (String) -> Unit,
     viewModel: LiveTvViewModel = hiltViewModel(),
+    /** Rota de catch-up pronta (ver [livePlayerCatchupRoute]); sem ele, passado com catch-up cai no ao vivo. */
+    onPlayCatchup: ((String) -> Unit)? = null,
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
     // Janela: 1 h para trás, 3 h para a frente; ‹ › deslocam 1 h por vez.
@@ -131,11 +134,22 @@ fun LiveGuideScreen(
                                 )
                             }
                             programs.forEach { p ->
+                                val isCurrent = p.isNow(now)
+                                val isPast = p.stop <= now
+                                val hasCatchup = channel.catchupDays > 0 && isPast &&
+                                    (now - p.start) <= channel.catchupDays * 86_400_000L
                                 GuideProgramCell(
                                     program = p, now = now, windowStart = windowStart,
+                                    hasCatchup = hasCatchup,
                                     onClick = {
-                                        if (p.isNow(now)) onPlay(channel.id)
-                                        else detail = channel to p
+                                        when {
+                                            isCurrent -> onPlay(channel.id)
+                                            hasCatchup -> {
+                                                val route = livePlayerCatchupRoute(channel.id, p.start / 1000, p.stop / 1000)
+                                                if (onPlayCatchup != null) onPlayCatchup(route) else onPlay(channel.id)
+                                            }
+                                            else -> detail = channel to p
+                                        }
                                     },
                                 )
                             }
@@ -178,6 +192,7 @@ private fun GuideProgramCell(
     now: Long,
     windowStart: Long,
     onClick: () -> Unit,
+    hasCatchup: Boolean = false,
 ) {
     val isCurrent = program.isNow(now)
     val isPast = program.stop <= now
@@ -187,6 +202,8 @@ private fun GuideProgramCell(
     val x = ((visibleStart - windowStart).toFloat() / HOUR_MS * HOUR_WIDTH_DP.value).dp
     val w = ((visibleEnd - visibleStart).toFloat() / HOUR_MS * HOUR_WIDTH_DP.value).dp
     val bg = when {
+        // Dourado: programa passado com catch-up disponível.
+        hasCatchup -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f)
         isCurrent -> AccentSoft
         isPast -> Surface2
         else -> BackgroundCard2
@@ -215,3 +232,7 @@ private const val WINDOW_HOURS = 4
 private val WINDOW_MS = WINDOW_HOURS * HOUR_MS
 private val HOUR_WIDTH_DP = 150.dp
 private val CHANNEL_WIDTH_DP = 132.dp
+
+/** Rota do player ao vivo com catch-up. [startSec]/[stopSec] em epoch segundos. */
+fun livePlayerCatchupRoute(channelId: String, startSec: Long, stopSec: Long): String =
+    "movies_live_player/$channelId?start=$startSec&stop=$stopSec"

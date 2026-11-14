@@ -97,8 +97,11 @@ private sealed class MoviesRoute(val route: String) {
     object Accounts : MoviesRoute("movies_accounts")
     object Live : MoviesRoute("movies_live")
     object LiveSources : MoviesRoute("movies_live_sources")
-    object LivePlayer : MoviesRoute("movies_live_player/{id}") {
+    object LivePlayer : MoviesRoute("movies_live_player/{id}?start={start}&stop={stop}") {
         fun create(id: String) = "movies_live_player/" + android.net.Uri.encode(id)
+        // Catch-up (v1.17.0): [start]/[stop] em epoch segundos; 0 = ao vivo normal.
+        fun create(id: String, start: Long, stop: Long) =
+            "movies_live_player/" + android.net.Uri.encode(id) + "?start=$start&stop=$stop"
     }
     object Collections : MoviesRoute("movies_collections")
     object CollectionEdit : MoviesRoute("movies_collection_edit/{collectionId}") {
@@ -551,6 +554,7 @@ fun MoviesNavigation(
                 com.aotv.app.ui.live.LiveTvScreen(
                     onPlay = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
                     onSources = { navController.navigate(MoviesRoute.LiveSources.route) },
+                    onPlayCatchup = { route -> navController.navigate(route) },
                 )
             }
             composable(MoviesRoute.LiveSources.route) {
@@ -558,11 +562,17 @@ fun MoviesNavigation(
             }
             composable(
                 MoviesRoute.LivePlayer.route,
-                arguments = listOf(navArgument("id") { type = NavType.StringType }),
+                arguments = listOf(
+                    navArgument("id") { type = NavType.StringType },
+                    navArgument("start") { type = NavType.LongType; defaultValue = 0L },
+                    navArgument("stop") { type = NavType.LongType; defaultValue = 0L },
+                ),
             ) { entry ->
                 com.aotv.app.ui.live.LivePlayerScreen(
                     channelId = entry.arguments?.getString("id").orEmpty(),
                     onBack = { navController.popBackStack() },
+                    catchupStart = entry.arguments?.getLong("start") ?: 0L,
+                    catchupStop = entry.arguments?.getLong("stop") ?: 0L,
                 )
             }
 

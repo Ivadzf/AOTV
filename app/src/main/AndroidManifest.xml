@@ -43,6 +43,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- AniList (v1.17.0): retorno do OAuth no navegador para o app (aotv://anilist/callback). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="aotv" android:host="anilist" android:path="/callback" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

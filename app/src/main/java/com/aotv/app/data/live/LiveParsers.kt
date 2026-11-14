@@ -75,6 +75,9 @@ object M3uParser {
                                 epgId = attrs["tvg-id"].orEmpty(),
                                 number = attrs["tvg-chno"]?.toIntOrNull() ?: ++index,
                                 headers = HashMap(headers),
+                                catchupDays = attrs["catchup-days"]?.toIntOrNull() ?: 0,
+                                catchupSource = attrs["catchup-source"].orEmpty(),
+                                catchupTemplate = attrs["catchup-template"].orEmpty(),
                             )
                         }
                     }

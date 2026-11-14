@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Star
@@ -31,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,7 +60,14 @@ import kotlinx.coroutines.delay
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlayerViewModel = hiltViewModel()) {
+fun LivePlayerScreen(
+    channelId: String,
+    onBack: () -> Unit,
+    viewModel: LivePlayerViewModel = hiltViewModel(),
+    // Catch-up (v1.17.0): início e fim do programa, em epoch segundos; 0 = ao vivo normal.
+    catchupStart: Long = 0L,
+    catchupStop: Long = 0L,
+) {
     com.aotv.app.ui.common.ImmersiveFullscreen()
     com.aotv.app.ui.common.KeepScreenOn()
     val context = LocalContext.current
@@ -74,6 +83,14 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
     var retries by remember { mutableIntStateOf(0) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
+    // Catch-up: programa passado vira uma sessão com início/fim; sem URL de catch-up,
+    // cai para o ao vivo e avisa. "Voltar ao vivo" desliga o modo na sessão.
+    val isCatchup = catchupStart > 0L
+    val catchupDurationMs = if (isCatchup) (catchupStop - catchupStart) * 1000L else 0L
+    var showCatchupUnavailable by remember { mutableStateOf(false) }
+    var forceLive by remember { mutableStateOf(false) }
+    val inCatchup = isCatchup && !forceLive
+    var positionMs by remember { mutableLongStateOf(0L) }
 
     val activity = context as? android.app.Activity
     val player = remember {
@@ -81,6 +98,15 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
         // v1.14.0): a TV ao vivo tem o próprio player, sem LoadControl
         // configurado — o ajuste só vale p/ filmes e episódios.
         ExoPlayer.Builder(context).build().apply { playWhenReady = true }
+    }
+    // Duração do programa p/ o slider de catch-up (o player ainda não sabe: usa o programa).
+    val durationMs = player.duration.takeIf { it > 0 } ?: catchupDurationMs
+    // Posição do slider de catch-up, atualizada 1x por segundo.
+    LaunchedEffect(inCatchup) {
+        while (inCatchup) {
+            positionMs = player.currentPosition
+            delay(1_000)
+        }
     }
     // Ao entrar, trava em paisagem; ao sair, solta o player e volta a tela para o automático.
     DisposableEffect(Unit) {
@@ -105,11 +131,19 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
     fun play(c: LiveChannel) {
         failed = false
         buffering = true
+        // Catch-up: resolve a URL da gravação; sem ela, toca o ao vivo e avisa.
+        val targetUrl = if (inCatchup) {
+            val resolved = viewModel.getCatchupUrl(c, catchupStart, catchupStop)
+            if (resolved == null) {
+                showCatchupUnavailable = true
+                c.url
+            } else resolved
+        } else c.url
         val http = OkHttpDataSource.Factory(com.aotv.app.data.remote.AppDns.mediaClient)
             .setDefaultRequestProperties(c.headers)
             .setUserAgent(c.headers["User-Agent"] ?: "Mozilla/5.0 (Linux; Android) AOTV")
-        val item = MediaItem.Builder().setUri(c.url).apply {
-            val path = c.url.substringBefore('?').lowercase()
+        val item = MediaItem.Builder().setUri(targetUrl).apply {
+            val path = targetUrl.substringBefore('?').lowercase()
             if (path.endsWith(".m3u8") || path.endsWith(".m3u")) setMimeType(MimeTypes.APPLICATION_M3U8)
         }.build()
         player.setMediaSource(DefaultMediaSourceFactory(http).createMediaSource(item))
@@ -207,7 +241,7 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                "AO VIVO", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                                if (inCatchup) "CATCH-UP" else "AO VIVO", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
                                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(AccentSecondary).padding(horizontal = 7.dp, vertical = 2.dp),
                             )
                             Text(n?.title ?: "Sem guia para este canal", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -217,6 +251,12 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
                             Text("${hhmm(n.start)} até ${hhmm(n.stop)}", color = TextSecondary, fontSize = 12.sp)
                         }
                         nx?.let { Text("A seguir ${hhmm(it.start)} ${it.title}", color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        if (inCatchup) CatchupControls(
+                            positionMs = positionMs,
+                            durationMs = durationMs,
+                            onSeek = { player.seekTo(it) },
+                            onBackToLive = { forceLive = true; channel?.let { play(it) } },
+                        )
                     }
                     IconButton(onClick = { step(-1) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowUp, "Canal anterior", tint = Color.White) }
                     IconButton(onClick = { step(1) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowDown, "Próximo canal", tint = Color.White) }
@@ -257,5 +297,91 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
                 }
             }
         }
+
+        // Catch-up sem URL: caiu para o ao vivo e avisa.
+        // (catch-up indisponível: sem URL de gravação, toca o ao vivo.)
+        if (showCatchupUnavailable) Snackbar(
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp, start = 16.dp, end = 16.dp),
+            action = { TextButton(onClick = { showCatchupUnavailable = false }) { Text("Ok", color = Color.White) } },
+        ) { Text("Catch-up indisponível para este programa — tocando ao vivo") }
     }
+}
+
+/** Controles do modo catch-up: selo, voltar ao vivo e slider mm:ss. */
+@Composable
+private fun CatchupControls(
+    positionMs: Long,
+    durationMs: Long,
+    onSeek: (Long) -> Unit,
+    onBackToLive: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Selo CATCH-UP + voltar ao vivo
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 4.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.tertiary,
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            ) {
+                Text(
+                    text = "CATCH-UP",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiary,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            TextButton(onClick = onBackToLive) {
+                Icon(
+                    imageVector = Icons.Default.LiveTv,
+                    contentDescription = "Ao vivo",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("Ao vivo", color = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        // Slider de progresso com timestamp mm:ss
+        val positionSec = positionMs / 1000
+        val durationSec = if (durationMs > 0) durationMs / 1000 else 1
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = formatCatchupTime(positionSec),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.width(44.dp),
+            )
+            Slider(
+                value = positionSec.toFloat(),
+                onValueChange = { onSeek((it * 1000).toLong()) },
+                valueRange = 0f..durationSec.toFloat(),
+                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            )
+            Text(
+                text = formatCatchupTime(durationSec),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.width(44.dp),
+                textAlign = TextAlign.End,
+            )
+        }
+    }
+}
+
+/** Segundos em mm:ss. */
+private fun formatCatchupTime(seconds: Long): String {
+    val m = seconds / 60
+    val s = seconds % 60
+    return "%d:%02d".format(m, s)
 }

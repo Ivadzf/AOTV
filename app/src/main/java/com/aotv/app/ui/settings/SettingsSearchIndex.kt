@@ -392,6 +392,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.INTEGR_LIVE,
         kidsHidden = true,
     ),
+    // ── IPTV catch-up e edição de fonte (v1.17.0) ───────────────────────
+    SettingOptionEntry(
+        title = "Catch-up",
+        sub = "Rever programas passados que a lista permite gravar",
+        keywords = listOf("catch-up", "catchup", "replay", "reprisa", "arquivo", "rever", "gravado"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Editar fonte",
+        sub = "Alterar nome, endereço ou credenciais de uma fonte de canais",
+        keywords = listOf("editar fonte", "edit source", "modificar", "atualizar m3u", "credenciais xtream", "editar lista"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Trocar de perfil",

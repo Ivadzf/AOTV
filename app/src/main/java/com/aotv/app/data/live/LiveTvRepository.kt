@@ -1,6 +1,9 @@
 package com.aotv.app.data.live
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +18,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
@@ -26,7 +30,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class LiveTvRepository @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
 ) {
     data class State(
         val sources: List<LiveSource> = emptyList(),
@@ -69,10 +73,246 @@ class LiveTvRepository @Inject constructor(
 
     // ── Fontes ──────────────────────────────────────────────────────────────────
 
-    fun addM3u(name: String, url: String, epgUrl: String): LiveSource {
-        val src = LiveSource(newId(), name.trim().ifBlank { hostOf(url) }, LiveSourceType.M3U, url = url.trim(), epgUrl = epgUrl.trim())
+    /**
+     * Adiciona lista M3U por endereço. Valida o endereço antes de guardar: URL
+     * inacessível ou sem `#EXTM3U` volta em [Result.failure] com a mensagem real.
+     */
+    suspend fun addM3u(name: String, url: String, epgUrl: String): Result<LiveSource> = try {
+        val cleanUrl = url.trim()
+        require(cleanUrl.startsWith("http", true)) { "Cole o endereço da lista (http ou https)" }
+        validateM3uUrl(cleanUrl)
+        val src = LiveSource(newId(), name.trim().ifBlank { hostOf(cleanUrl) }, LiveSourceType.M3U, url = cleanUrl, epgUrl = epgUrl.trim())
         writeSources(_state.value.sources + src)
-        return src
+        Result.success(src)
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
+     * Testa acessibilidade da URL M3U antes de salvar.
+     * Retorna o começo do conteúdo em caso de sucesso (vazio quando o HEAD bastou).
+     */
+    private suspend fun validateM3uUrl(url: String): String = withContext(Dispatchers.IO) {
+        val headReq = Request.Builder().url(url).head().build()
+        val headResp = runCatching { client.newCall(headReq).execute() }.getOrNull()
+        // Se HEAD não for suportado (405) ou falhar, tenta GET com range mínimo.
+        if (headResp == null || headResp.code == 405) {
+            headResp?.close()
+            val getReq = Request.Builder().url(url).addHeader("Range", "bytes=0-511").build()
+            client.newCall(getReq).execute().use { r ->
+                if (!r.isSuccessful) throw Exception("URL inacessível (${r.code}): ${r.message}")
+                val preview = r.body?.string() ?: ""
+                if (preview.isNotBlank() && !preview.trimStart().startsWith("#EXTM3U")) {
+                    throw Exception("URL não retornou uma playlist M3U válida")
+                }
+                return@withContext preview
+            }
+        }
+        headResp?.use {
+            if (!it.isSuccessful) throw Exception("URL inacessível (${it.code}): ${it.message}")
+        }
+        ""
+    }
+
+    /**
+     * Importa playlist M3U por arquivo via SAF (Storage Access Framework).
+     * [uri] vem de Intent.ACTION_OPEN_DOCUMENT. A URI fica guardada na fonte
+     * ([LiveSource.isFileUri]) e o [refresh] a relê pelo ContentResolver.
+     */
+    suspend fun addM3uFromFile(
+        context: Context,
+        uri: Uri,
+        name: String,
+        epgUrl: String = "",
+    ): Result<LiveSource> = try {
+        withContext(Dispatchers.IO) {
+            val doc = DocumentFile.fromSingleUri(context, uri)
+                ?: throw Exception("Arquivo não encontrado")
+            val mimeType = doc.type ?: ""
+            require(
+                mimeType.contains("mpegurl", ignoreCase = true)
+                    || mimeType.contains("text", ignoreCase = true)
+                    || doc.name?.endsWith(".m3u", ignoreCase = true) == true
+                    || doc.name?.endsWith(".m3u8", ignoreCase = true) == true
+            ) { "Arquivo não reconhecido como playlist M3U (tipo: $mimeType)" }
+            val content = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw Exception("Não foi possível ler o arquivo")
+            require(content.isNotEmpty()) { "Arquivo vazio" }
+            val text = content.toString(Charsets.UTF_8)
+            require(text.trimStart().startsWith("#EXTM3U")) {
+                "Arquivo não começa com #EXTM3U — verifique se é uma playlist válida"
+            }
+            // Permissão persistida p/ reler o arquivo depois (o refresh usa a URI guardada).
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val source = LiveSource(
+                id = UUID.randomUUID().toString(),
+                name = name.ifBlank { doc.name ?: "M3U" },
+                type = LiveSourceType.M3U,
+                url = uri.toString(),
+                epgUrl = epgUrl,
+                enabled = true,
+                isFileUri = true,
+            )
+            val parsed = M3uParser.parse(text, source.id)
+            writeSources(_state.value.sources + source)
+            writeChannels(source.id, parsed.channels, parsed.epgUrls)
+            _state.update { it.copy(channels = it.channels + parsed.channels) }
+            val epgUrls = (parsed.epgUrls + listOfNotNull(epgUrl.takeIf { it.startsWith("http", true) })).distinct()
+            refreshEpg(parsed.channels, epgUrls, false)
+            Result.success(source)
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
+     * Monta a URL de catch-up para um canal e programa.
+     * [LiveProgram.start]/[stop] são epoch ms (como no resto do app); aqui viram segundos.
+     * Suporta template explícito (`catchup-template`), `catchup-source=default`
+     * (`?utc=&utcend=`), `append`, `timeshift` e Xtream nativo (`/live/` → `/timeshift/`).
+     * Retorna null se o canal não tem catch-up ou o programa não é passado.
+     */
+    fun catchupUrl(channel: LiveChannel, program: LiveProgram): String? {
+        if (channel.catchupDays <= 0) return null
+        val start = program.start / 1000
+        val stop = program.stop / 1000
+        if (start <= 0 || stop <= 0) return null
+        val nowSec = System.currentTimeMillis() / 1000
+        if (start >= nowSec) return null // programa futuro — sem catch-up
+        if (nowSec - start > channel.catchupDays * 86400L) return null // mais velho que catchupDays
+
+        val baseUrl = channel.url.ifBlank { return null }
+        val catchupSource = channel.catchupSource.ifBlank { null }
+        val catchupTemplate = channel.catchupTemplate.ifBlank { null }
+
+        return when {
+            // 1. Template explícito na M3U (catchup-source + catchup-template)
+            catchupTemplate != null -> catchupTemplate
+                .replace("{utc}", "$start")
+                .replace("{utcend}", "$stop")
+                .replace("{Y}", java.time.format.DateTimeFormatter.ofPattern("yyyy")
+                    .format(java.time.Instant.ofEpochSecond(start).atZone(java.time.ZoneOffset.UTC)))
+                .replace("{m}", java.time.format.DateTimeFormatter.ofPattern("MM")
+                    .format(java.time.Instant.ofEpochSecond(start).atZone(java.time.ZoneOffset.UTC)))
+                .replace("{d}", java.time.format.DateTimeFormatter.ofPattern("dd")
+                    .format(java.time.Instant.ofEpochSecond(start).atZone(java.time.ZoneOffset.UTC)))
+                .replace("{hh}", java.time.format.DateTimeFormatter.ofPattern("HH")
+                    .format(java.time.Instant.ofEpochSecond(start).atZone(java.time.ZoneOffset.UTC)))
+                .replace("{duration}", "${stop - start}")
+
+            // 2. catchup-source=default (ou ausente) → params utc/utcend
+            catchupSource == "default" || catchupSource == null -> {
+                val sep = if (baseUrl.contains('?')) '&' else '?'
+                "$baseUrl${sep}utc=$start&utcend=$stop"
+            }
+
+            // 3. catchup-source=append
+            catchupSource == "append" -> "$baseUrl$start-${stop - start}"
+
+            // 4. catchup-source=timeshift
+            catchupSource == "timeshift" -> {
+                val duration = (stop - start) / 60
+                val sep = if (baseUrl.contains('?')) '&' else '?'
+                "$baseUrl${sep}timeshift=$duration"
+            }
+
+            // 5. Xtream: detecta padrão /live/ e usa action timeshift
+            baseUrl.contains("/live/") -> {
+                val parts = baseUrl.split("/live/")
+                if (parts.size == 2) {
+                    val serverPart = parts[0]
+                    val rest = parts[1].split("/")
+                    if (rest.size >= 3) {
+                        val user = rest[0]
+                        val pass = rest[1]
+                        val streamId = rest[2].split(".")[0]
+                        "$serverPart/timeshift/$user/$pass/${(stop - start) / 60}/$start/$streamId.ts"
+                    } else null
+                } else null
+            }
+
+            else -> null
+        }
+    }
+
+    /**
+     * Edita metadados de uma fonte M3U existente.
+     * Mantém o id e o estado enabled/disabled. Recarrega os canais se a URL mudou.
+     */
+    suspend fun updateM3u(
+        id: String,
+        name: String,
+        url: String,
+        epgUrl: String,
+    ): Result<LiveSource> = try {
+        val existing = getSource(id) ?: throw Exception("Fonte $id não encontrada")
+        require(existing.type == LiveSourceType.M3U) { "Fonte $id não é M3U" }
+        val cleanUrl = url.trim()
+        val urlChanged = existing.url != cleanUrl
+        if (urlChanged && cleanUrl.isNotBlank() && !cleanUrl.startsWith("content://")) {
+            validateM3uUrl(cleanUrl)
+        }
+        val updated = existing.copy(name = name.trim().ifBlank { existing.name }, url = cleanUrl, epgUrl = epgUrl.trim())
+        writeSources(_state.value.sources.map { if (it.id == id) updated else it })
+        if (urlChanged) {
+            deleteChannelsBySource(id)
+            refresh(true)
+        }
+        Result.success(updated)
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /**
+     * Edita credenciais de uma fonte Xtream existente.
+     * Revalida antes de salvar (mesmo padrão do addXtream) e recarrega os canais.
+     */
+    suspend fun updateXtream(
+        id: String,
+        name: String,
+        server: String,
+        user: String,
+        pass: String,
+    ): Result<LiveSource> = try {
+        val existing = getSource(id) ?: throw Exception("Fonte $id não encontrada")
+        require(existing.type == LiveSourceType.XTREAM) { "Fonte $id não é Xtream" }
+        val (base, acc) = validateXtreamAccount(server, user, pass).getOrThrow()
+        val updated = existing.copy(
+            name = name.trim().ifBlank { existing.name },
+            server = base,
+            user = user.trim(),
+            pass = pass,
+        )
+        writeSources(_state.value.sources.map { if (it.id == id) updated else it })
+        _state.update { it.copy(accounts = it.accounts + (id to acc)) }
+        deleteChannelsBySource(id)
+        refresh(true)
+        Result.success(updated)
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    /** Confere usuário e senha no servidor Xtream. Devolve a base normalizada e a conta. */
+    private suspend fun validateXtreamAccount(
+        server: String,
+        user: String,
+        pass: String,
+    ): Result<Pair<String, XtreamAccount>> = withContext(Dispatchers.IO) {
+        val base = normalizeServer(server)
+            ?: return@withContext Result.failure(IllegalArgumentException("Endereço do servidor inválido"))
+        val acc = getText("$base/player_api.php?username=${enc(user)}&password=${enc(pass)}")?.let(XtreamParser::account)
+            ?: return@withContext Result.failure(IllegalStateException("Servidor não aceitou usuário e senha"))
+        Result.success(base to acc)
+    }
+
+    private fun getSource(id: String): LiveSource? = _state.value.sources.firstOrNull { it.id == id }
+
+    /** Apaga o cache de canais de uma fonte (p/ recarregar depois de editar). */
+    private fun deleteChannelsBySource(id: String) {
+        File(dir, "ch_$id.json").delete()
+        _state.update { st -> st.copy(channels = st.channels.filterNot { it.sourceId == id }) }
     }
 
     /** Confere a conta no servidor antes de guardar. */
@@ -137,7 +377,16 @@ class LiveTvRepository @Inject constructor(
     }
 
     private fun fetch(s: LiveSource): Pair<List<LiveChannel>, List<String>>? = when (s.type) {
-        LiveSourceType.M3U -> getText(s.url)?.let { M3uParser.parse(it, s.id) }?.takeIf { it.channels.isNotEmpty() }?.let { it.channels to it.epgUrls }
+        LiveSourceType.M3U -> {
+            // Lista por arquivo (SAF): relê pelo ContentResolver, não por HTTP.
+            val text = if (s.isFileUri || s.url.startsWith("content://", true)) {
+                runCatching {
+                    context.contentResolver.openInputStream(Uri.parse(s.url))
+                        ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                }.getOrNull()
+            } else getText(s.url)
+            text?.let { M3uParser.parse(it, s.id) }?.takeIf { it.channels.isNotEmpty() }?.let { it.channels to it.epgUrls }
+        }
         LiveSourceType.XTREAM -> {
             val base = "${s.server}/player_api.php?username=${enc(s.user)}&password=${enc(s.pass)}"
             val acc = getText(base)?.let(XtreamParser::account)
@@ -224,6 +473,7 @@ class LiveTvRepository @Inject constructor(
             LiveSource(
                 o.getString("id"), o.optString("name"), runCatching { LiveSourceType.valueOf(o.optString("type")) }.getOrDefault(LiveSourceType.M3U),
                 o.optString("url"), o.optString("server"), o.optString("user"), o.optString("pass"), o.optString("epg"), o.optBoolean("on", true),
+                o.optBoolean("file", false),
             )
         }
     }.getOrDefault(emptyList())
@@ -234,6 +484,7 @@ class LiveTvRepository @Inject constructor(
             a.put(
                 JSONObject().put("id", it.id).put("name", it.name).put("type", it.type.name).put("url", it.url)
                     .put("server", it.server).put("user", it.user).put("pass", it.pass).put("epg", it.epgUrl).put("on", it.enabled)
+                    .put("file", it.isFileUri)
             )
         }
         prefs.edit().putString("sources", a.toString()).apply()
@@ -248,6 +499,7 @@ class LiveTvRepository @Inject constructor(
             a.put(
                 JSONObject().put("i", c.id).put("n", c.name).put("u", c.url).put("l", c.logo).put("g", c.group)
                     .put("e", c.epgId).put("c", c.number).put("h", h)
+                    .put("cd", c.catchupDays).put("cs", c.catchupSource).put("ct", c.catchupTemplate)
             )
         }
         File(dir, "ch_$sourceId.json").writeText(
@@ -267,6 +519,7 @@ class LiveTvRepository @Inject constructor(
             LiveChannel(
                 c.getString("i"), sourceId, c.optString("n"), c.optString("u"), c.optString("l"), c.optString("g"),
                 c.optString("e"), c.optInt("c"), h?.keys()?.asSequence()?.associateWith { k -> h.optString(k) }.orEmpty(),
+                c.optInt("cd"), c.optString("cs"), c.optString("ct"),
             )
         }
         val epg = o.optJSONArray("epg")?.let { e -> (0 until e.length()).map { e.optString(it) } }.orEmpty()

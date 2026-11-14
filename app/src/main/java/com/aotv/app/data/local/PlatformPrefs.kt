@@ -72,7 +72,9 @@ fun scopedKey(key: String, profileId: String): String =
 internal val SCOPED_KEYS = listOf(
     "recent_searches", "ext_audio_v1", "home_catalogs_v1", "sub_size", "sub_bg",
     "sub_color", "sub_bg_opacity", "sub_outline", "sub_font",
-    "pref_audio", "pref_max_quality", "pref_hero_trailer", "trakt_v1",
+    "pref_audio", "pref_max_quality", "pref_hero_trailer",
+    "trakt_access_token_v1", "trakt_refresh_token_v1", "trakt_expires_at_v1",
+    "trakt_enabled_v1", "trakt_user_v1",
     "home_layout_v1", "home_hero_v1", "pref_subtitle_on", "pref_sub_lang", "collections_v1",
     "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
     "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
@@ -107,6 +109,13 @@ internal val SCOPED_KEYS = listOf(
     "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
     "anilist_v1", "wetrakr_v1", "publicmetadb_v1",
     "discord_v1", "jellyfin_v1", "emby_v1",
+    // v1.17.0 — MDBList, AniList, TheTVDB e avaliação pós-filme (por perfil).
+    // As chaves de conta (API key / client ID / token) são DO APARELHO e
+    // vivem nas listas do AotvBackup, não aqui — ver o comentário lá.
+    "mdblist_enabled", "mdblist_rating_sources",
+    "anilist_access_token", "anilist_enabled",
+    "tvdb_episode_ordering", "tvdb_ordering_enabled",
+    "post_play_rating_enabled",
 )
 
 /**
@@ -366,10 +375,119 @@ class PlatformPrefs @Inject constructor(
     fun sortStreams(list: List<com.aotv.app.data.remote.StremioStream>) =
         com.aotv.app.data.remote.sortByPrefs(list, audioPref, maxQuality, { it.label }, { it.qualityRank })
 
-    /** Sessão do Trakt do perfil (JSON cru). Vazio sem login. */
-    var traktSession: String
-        get() = prefs.getString(sk("trakt_v1"), "") ?: ""
-        set(value) { prefs.edit().putString(sk("trakt_v1"), value).apply() }
+    // ── Trakt (v1.17.0) ───────────────────────────────────────────────────
+    // Client ID/secret são DO APARELHO (não por perfil): a conta do Trakt é
+    // de cada perfil, mas o app registrado em trakt.tv/oauth/applications é
+    // um só. Sessão (tokens, expiração, ligado, usuário) é POR PERFIL, como
+    // o Simkl. A sessão antiga ("trakt_v1", JSON cru) foi removida: quem
+    // tinha login precisa conectar de novo (o formato mudou e a chave não
+    // existe mais). Nenhum destes campos tem valor padrão embutido.
+
+    /** Client ID do Trakt, colado pelo usuário em Configurações. Vazio = desligado. */
+    var traktClientId: String
+        get() = prefs.getString("trakt_client_id_v1", "") ?: ""
+        set(value) { prefs.edit().putString("trakt_client_id_v1", value.trim()).apply() }
+
+    /** Client secret do Trakt, colado pelo usuário. Opcional: sem ele o refresh não roda e o usuário reconecta quando o token expira. */
+    var traktClientSecret: String
+        get() = prefs.getString("trakt_client_secret_v1", "") ?: ""
+        set(value) { prefs.edit().putString("trakt_client_secret_v1", value.trim()).apply() }
+
+    /** Access token do Trakt do perfil. Vazio sem login. */
+    var traktAccessToken: String
+        get() = prefs.getString(sk("trakt_access_token_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("trakt_access_token_v1"), value).apply() }
+
+    /** Refresh token do Trakt do perfil. Vazio sem login (ou quando o fluxo não devolveu um). */
+    var traktRefreshToken: String
+        get() = prefs.getString(sk("trakt_refresh_token_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("trakt_refresh_token_v1"), value).apply() }
+
+    /** Expiração do access token do perfil (ms desde epoch). 0 = sem token. */
+    var traktExpiresAt: Long
+        get() = prefs.getLong(sk("trakt_expires_at_v1"), 0L)
+        set(value) { prefs.edit().putLong(sk("trakt_expires_at_v1"), value).apply() }
+
+    /** Scrobble do Trakt ligado neste perfil (só vale com login). */
+    var traktEnabled: Boolean
+        get() = prefs.getBoolean(sk("trakt_enabled_v1"), false)
+        set(value) { prefs.edit().putBoolean(sk("trakt_enabled_v1"), value).apply() }
+
+    /** Nome da conta do Trakt conectada neste perfil. Vazio quando o Trakt não deu o nome. */
+    var traktUser: String
+        get() = prefs.getString(sk("trakt_user_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("trakt_user_v1"), value).apply() }
+
+    // ── MDBList / AniList / TheTVDB (v1.17.0) ───────────────────────────────
+    // Mesmo padrão do Trakt: chave de conta é DO APARELHO (a chave de API
+    // ou o client ID é um só p/ o aparelho), sessão e toggles são POR
+    // PERFIL (sk). Os nomes das chaves são os dos companions dos serviços
+    // (MDBListService.PREF_*, AniListService.PREF_*, TvdbService.PREF_*),
+    // repetidos aqui como literais, no mesmo padrão dos vars do Trakt —
+    // se um lado mudar, o outro tem que mudar junto. Nenhum destes campos
+    // tem valor padrão embutido; vazio = serviço desligado. As chaves
+    // antigas da Fase D ("mdblist_key_v1", "anilist_v1") continuam onde
+    // estão, inertes: os serviços novos NÃO as leem.
+
+    /** Chave de API do MDBList, colada pelo usuário. Vazio = desligado. */
+    var mdbListApiKey: String
+        get() = prefs.getString("mdblist_api_key", "") ?: ""
+        set(value) { prefs.edit().putString("mdblist_api_key", value.trim()).apply() }
+
+    /** MDBList ligado neste perfil (só vale com chave de API). */
+    var mdbListEnabled: Boolean
+        get() = prefs.getBoolean(sk("mdblist_enabled"), false)
+        set(value) { prefs.edit().putBoolean(sk("mdblist_enabled"), value).apply() }
+
+    /** Fontes de nota do MDBList ativas neste perfil, em CSV. "" = padrão do serviço. */
+    var mdbListRatingSources: String
+        get() = prefs.getString(sk("mdblist_rating_sources"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("mdblist_rating_sources"), value).apply() }
+
+    /** Client ID do AniList, colado pelo usuário. Vazio = desligado. */
+    var anilistClientId: String
+        get() = prefs.getString("anilist_client_id", "") ?: ""
+        set(value) { prefs.edit().putString("anilist_client_id", value.trim()).apply() }
+
+    /** Access token do AniList do perfil. Vazio sem login. */
+    var anilistAccessToken: String
+        get() = prefs.getString(sk("anilist_access_token"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("anilist_access_token"), value).apply() }
+
+    /** AniList ligado neste perfil (só vale com login). */
+    var anilistEnabled: Boolean
+        get() = prefs.getBoolean(sk("anilist_enabled"), false)
+        set(value) { prefs.edit().putBoolean(sk("anilist_enabled"), value).apply() }
+
+    /** Chave de API do TheTVDB, colada pelo usuário. Vazio = desligado. */
+    var tvdbApiKey: String
+        get() = prefs.getString("tvdb_api_key", "") ?: ""
+        set(value) { prefs.edit().putString("tvdb_api_key", value.trim()).apply() }
+
+    /** Token de auth do TheTVDB, cacheado (renovado pelo serviço). Vazio sem login. */
+    var tvdbAuthToken: String
+        get() = prefs.getString("tvdb_auth_token", "") ?: ""
+        set(value) { prefs.edit().putString("tvdb_auth_token", value).apply() }
+
+    /** Expiração do token do TheTVDB (ms desde epoch). 0 = sem token. */
+    var tvdbTokenExpiry: Long
+        get() = prefs.getLong("tvdb_token_expiry", 0L)
+        set(value) { prefs.edit().putLong("tvdb_token_expiry", value).apply() }
+
+    /** Ordem de episódios do TheTVDB neste perfil: "official", "dvd" ou "absolute". */
+    var tvdbOrdering: String
+        get() = prefs.getString(sk("tvdb_episode_ordering"), "official") ?: "official"
+        set(value) { prefs.edit().putString(sk("tvdb_episode_ordering"), value).apply() }
+
+    /** Ordenação do TheTVDB ligada neste perfil (só vale com chave de API). */
+    var tvdbOrderingEnabled: Boolean
+        get() = prefs.getBoolean(sk("tvdb_ordering_enabled"), false)
+        set(value) { prefs.edit().putBoolean(sk("tvdb_ordering_enabled"), value).apply() }
+
+    /** Avaliação pós-filme ligada neste perfil (o diálogo é de outra frente). */
+    var postPlayRatingEnabled: Boolean
+        get() = prefs.getBoolean(sk("post_play_rating_enabled"), false)
+        set(value) { prefs.edit().putBoolean(sk("post_play_rating_enabled"), value).apply() }
 
     // ── Fase D — trackers, Discord e servidores de mídia (por perfil) ─────────
     // Sessões em JSON cru, como o Trakt. IDs/chaves são configuráveis pelo usuário

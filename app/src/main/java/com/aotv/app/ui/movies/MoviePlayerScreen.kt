@@ -91,6 +91,7 @@ import com.aotv.app.data.torrent.TorrentMagnet
 import com.aotv.app.data.torrent.Torrents
 import com.aotv.app.ui.common.ImmersiveFullscreen
 import com.aotv.app.ui.common.KeepScreenOn
+import com.aotv.app.ui.common.PostPlayRatingDialog
 import com.aotv.app.ui.theme.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -403,6 +404,16 @@ fun MoviePlayerScreen(
     }
     PlayerSourceEffects(s)
     PlayerPlaybackEffects(s)
+    // Avaliação pós-filme (v1.17.0): o diálogo abre quando o título passa
+    // de 90% e a avaliação está ligada (o pedido vem de progressVm).
+    val ratingReq by progressVm.ratingRequest.collectAsState()
+    ratingReq?.let { req ->
+        PostPlayRatingDialog(
+            movieTitle = title,
+            onRate = { progressVm.sendRating(req, title, null, it) },
+            onDismiss = { progressVm.dismissRating() },
+        )
+    }
     PlayerScreenContent(s)
 }
 
@@ -700,6 +711,13 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             ) {
                 progressVm.markWatched(tmdbId, curSeason, curEpisode)
                 markedWatchedEp = curEpisode
+            }
+            // Filme passou de 90% — 1x por título; abre o pedido de nota.
+            if (type != "SERIES" && duration > 0 &&
+                position >= duration * 0.9 && !markedWatchedMovie
+            ) {
+                progressVm.markMovieWatched(tmdbId)
+                markedWatchedMovie = true
             }
             // AUTO-PLAY: aviso de próximo episódio só no ÚLTIMO 1 MINUTO (antes aparecia a 90%,
             // cedo demais em episódios longos).
@@ -2084,6 +2102,8 @@ class PlayerSession(
     }
     // Poll de posição + salva progresso a cada ~10s (Continuar assistindo)
     var markedWatchedEp by run { mutableIntStateOf(-1) }
+    // Avaliação pós-filme (v1.17.0): o gatilho de filme dispara 1x por título.
+    var markedWatchedMovie by run { mutableStateOf(false) }
     fun seekBy(deltaMs: Long, showControls: Boolean = true) {
         val p = currentPlayer()
         val d = if (duration > 0) duration else p.duration.coerceAtLeast(0L)

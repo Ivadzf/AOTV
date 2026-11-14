@@ -48,14 +48,22 @@ object AotvBackup {
 
     /** Chaves por perfil que são segredo: só entram com o toggle ligado. */
     val SECRET_SCOPED_KEYS = setOf(
-        "trakt_v1", "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
+        "trakt_access_token_v1", "trakt_refresh_token_v1", "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
         "anilist_v1", "wetrakr_v1", "publicmetadb_v1", "discord_v1", "jellyfin_v1",
         "emby_v1", "pref_player_animeskip_client_id",
+        // v1.17.0 — token do AniList (por perfil): segredo, como os tokens do Trakt.
+        "anilist_access_token",
     )
 
     /** Chaves do aparelho que são segredo: só entram com o toggle ligado. */
     val SECRET_GLOBAL_KEYS = setOf(
         "tmdb_api_key", "parental_pin_hash", "plugin_settings_v1",
+        "trakt_client_id_v1", "trakt_client_secret_v1",
+        // v1.17.0 — chaves de conta do aparelho: segredo, como as do Trakt.
+        // O doc das chaves pedia estas em GLOBAL_KEYS; vão p/ SECRET_GLOBAL_KEYS
+        // de propósito: GLOBAL_KEYS entra no backup SEMPRE, e chave de API
+        // nunca viaja sem o toggle de segredos (mesma regra do Trakt).
+        "mdblist_api_key", "anilist_client_id", "tvdb_api_key", "tvdb_auth_token",
     )
 
     /** Globais que o backup leva (fora os segredos): tema, blur e o resto do aparelho. */
@@ -71,6 +79,9 @@ object AotvBackup {
         "downloads_wifi_only", "downloads_folder_uri", "downloads_folder_name",
         "mobile_data_today_bytes", "mobile_data_month_bytes",
         "mobile_data_day", "mobile_data_month", "mobile_data_limit_mb",
+        // v1.17.0 — expiração do token do TheTVDB: só um timestamp, não é
+        // segredo (o token em si está em SECRET_GLOBAL_KEYS).
+        "tvdb_token_expiry",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */

@@ -19,11 +19,13 @@ class SettingsViewModel @Inject constructor(
     private val history: com.aotv.app.data.local.dao.MovieHistoryDao,
 ) : ViewModel() {
 
-    // ── Trakt (só aparece com as chaves no local.properties) ──
+    // ── Trakt (v1.17.0: Client ID/Secret do usuário, por perfil, na tela de Trackers) ──
     val traktConfigured = trakt.configured
     private val _traktUser = MutableStateFlow(trakt.user())
     /** Conta conectada no perfil ativo. null sem login. */
     val traktUser: StateFlow<String?> = _traktUser.asStateFlow()
+    /** Conta conectada neste perfil (tem token), mesmo sem nome. */
+    val traktConnected: Boolean get() = trakt.isConnected
     /** Código do login em andamento. null fora do login. */
     private val _traktCode = MutableStateFlow<com.aotv.app.data.remote.TraktService.DeviceCode?>(null)
     val traktCode: StateFlow<com.aotv.app.data.remote.TraktService.DeviceCode?> = _traktCode.asStateFlow()
@@ -49,10 +51,22 @@ class SettingsViewModel @Inject constructor(
 
     fun traktCancel() { loginJob?.cancel(); _traktCode.value = null; _traktBusy.value = null }
 
+    /**
+     * "Sincronizar agora" (Acompanhamento). Chama o sync de verdade do
+     * TraktService (v1.17.0, Frente A: suspend fun sync(): Boolean) e
+     * relê a conta conectada quando dá certo. Trava o segundo clique
+     * enquanto sincroniza, como o traktConnect(). Se a conta não tem
+     * nome (user() null), mantém o valor atual em vez de apagar — nulo
+     * aqui significaria "desconectado" na tela.
+     */
     fun traktSync() {
         if (_traktBusy.value != null) return
-        _traktBusy.value = "Salvando…"
-        viewModelScope.launch { trakt.sync(); _traktBusy.value = null }
+        _traktBusy.value = "Sincronizando…"
+        viewModelScope.launch {
+            val ok = runCatching { trakt.sync() }.getOrDefault(false)
+            if (ok) trakt.user()?.let { _traktUser.value = it }
+            _traktBusy.value = null
+        }
     }
 
     fun traktLogout() { trakt.logout(); _traktUser.value = null }

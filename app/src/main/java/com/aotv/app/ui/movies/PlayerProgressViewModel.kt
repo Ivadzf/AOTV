@@ -4,9 +4,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.repository.LibraryRepository
+import com.aotv.app.ui.common.sendRatingToAllTrackers
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/** Pedido de avaliação pós-filme: o título passou de 90% e a avaliação está ligada. */
+data class RatingRequest(
+    val tmdbId: Int,
+    val type: String,
+    val season: Int,
+    val episode: Int,
+)
 
 /**
  * Salva o progresso de reprodução (posição + fonte) do player de filme/episódio.
@@ -18,7 +30,49 @@ class PlayerProgressViewModel @Inject constructor(
     private val prefs: PlatformPrefs,
     private val trakt: com.aotv.app.data.remote.TraktService,
     private val simkl: com.aotv.app.data.remote.SimklService,
+    private val aniList: com.aotv.app.data.remote.AniListService,
 ) : ViewModel() {
+
+    /**
+     * Pedido de avaliação pós-filme (v1.17.0): [markWatched] preenche quando
+     * o título passa de 90% e a avaliação está ligada
+     * ([PlatformPrefs.postPlayRatingEnabled]). O player observa e abre o
+     * [com.aotv.app.ui.common.PostPlayRatingDialog] com o título atual;
+     * [dismissRating] limpa sem enviar. No modo privado o pedido nunca
+     * existe: [markWatched] já retorna antes, pelo gate central — nenhum
+     * gate novo aqui.
+     */
+    private val _ratingRequest = MutableStateFlow<RatingRequest?>(null)
+    val ratingRequest: StateFlow<RatingRequest?> = _ratingRequest.asStateFlow()
+
+    /** Fecha o diálogo de avaliação sem enviar a nota. */
+    fun dismissRating() {
+        _ratingRequest.value = null
+    }
+
+    /**
+     * Envia a nota do diálogo aos trackers (Trakt e AniList; o MDBList é
+     * read-only e não recebe nota) e fecha o pedido. O id AniList do
+     * título não é conhecido no player, então o AniList é pulado por aqui
+     * (ver [sendRatingToAllTrackers]).
+     */
+    fun sendRating(request: RatingRequest, title: String, year: Int?, rating: Int) {
+        viewModelScope.launch {
+            sendRatingToAllTrackers(
+                tmdbId = request.tmdbId,
+                title = title,
+                year = year,
+                rating = rating,
+                isMovie = request.type != "SERIES",
+                season = request.season,
+                episode = request.episode,
+                traktService = trakt,
+                aniListService = aniList,
+                aniListMediaId = null,
+            )
+            _ratingRequest.value = null
+        }
+    }
 
     /**
      * Modo privado (Lote 2, v1.10.0): assistir não grava nada no perfil —
@@ -178,10 +232,30 @@ class PlayerProgressViewModel @Inject constructor(
         return pb.positionMs.coerceAtLeast(0L)
     }
 
-    /** Marca o episódio como VISTO (chamado ao passar de 90% da duração). */
+    /**
+     * Marca o episódio como VISTO (chamado ao passar de 90% da duração).
+     * Com a avaliação pós-filme ligada, abre também o pedido de nota
+     * ([ratingRequest]) — o player mostra o diálogo e [sendRating] envia.
+     */
     fun markWatched(tmdbId: Int, season: Int, episode: Int) {
         if (privateMode) return
         if (tmdbId <= 0 || season <= 0 || episode <= 0) return
         viewModelScope.launch { library.markEpisodeWatched(tmdbId, season, episode) }
+        if (prefs.postPlayRatingEnabled) {
+            _ratingRequest.value = RatingRequest(tmdbId, "SERIES", season, episode)
+        }
+    }
+
+    /**
+     * Filme passou de 90% da duração: com a avaliação pós-filme ligada, abre
+     * o pedido de nota ([ratingRequest]) — o player mostra o diálogo e
+     * [sendRating] envia. Não marca nada como visto (filmes não têm episódio).
+     */
+    fun markMovieWatched(tmdbId: Int) {
+        if (privateMode) return
+        if (tmdbId <= 0) return
+        if (prefs.postPlayRatingEnabled) {
+            _ratingRequest.value = RatingRequest(tmdbId, "MOVIE", 0, 0)
+        }
     }
 }

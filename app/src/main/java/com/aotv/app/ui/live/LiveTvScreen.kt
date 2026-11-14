@@ -40,6 +40,8 @@ import com.aotv.app.ui.theme.*
 fun LiveTvScreen(
     onPlay: (String) -> Unit,
     onSources: () -> Unit,
+    /** Rota de catch-up pronta (ver [livePlayerCatchupRoute]); sem ele, passado com catch-up cai no ao vivo. */
+    onPlayCatchup: ((String) -> Unit)? = null,
     viewModel: LiveTvViewModel = hiltViewModel(),
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
@@ -128,7 +130,7 @@ fun LiveTvScreen(
             return@Column
         }
         if (guide) {
-            LiveGuideScreen(onPlay = onPlay)
+            LiveGuideScreen(onPlay = onPlay, onPlayCatchup = onPlayCatchup)
             return@Column
         }
         // Celular em uma coluna, tela larga em mais de uma.
