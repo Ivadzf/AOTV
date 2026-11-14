@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** Estado da tela "Trackers e Sincronização" (só Simkl na v1.13.0). */
+/** Estado da tela "Trackers e Sincronização" (só Simkl na v1.13.1). */
 data class TrackersUiState(
     val profileName: String = "",
     val clientId: String = "",
@@ -26,7 +26,7 @@ data class TrackersUiState(
 )
 
 /**
- * ViewModel da tela de trackers (v1.13.0, Frente B — Simkl).
+ * ViewModel da tela de trackers (v1.13.1, Frente B — Simkl, device flow V2).
  *
  * O client ID vive na pref existente [PlatformPrefs.simklClientId] (por
  * perfil, vazio por padrão) e a sessão em [PlatformPrefs.simklSession].
@@ -72,7 +72,9 @@ class TrackersViewModel @Inject constructor(
 
     /**
      * Abre o diálogo do PIN. Sem client ID, mostra a instrução de cadastro
-     * em vez de chamar o Simkl (sem ID nada é chamado).
+     * em vez de chamar o Simkl (sem ID nada é chamado). Com client ID,
+     * chama o device flow V2: Started mostra o diálogo e aguarda a
+     * confirmação; Failed exibe o erro real vindo do serviço, sem reescrever.
      */
     fun startConnect() {
         if (prefs.simklClientId.isBlank()) {
@@ -88,27 +90,35 @@ class TrackersViewModel @Inject constructor(
         _ui.update { it.copy(busy = true, error = null, message = null) }
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
-            val code = simkl.startLogin()
-            if (code == null) {
-                _ui.update {
-                    it.copy(
-                        busy = false,
-                        error = "O Simkl não respondeu. Confira a conexão e se o Client ID está certo, e tente de novo.",
-                    )
+            when (val started = simkl.startLogin()) {
+                is SimklService.LoginResult.Failed -> {
+                    _ui.update { it.copy(busy = false, error = started.message) }
                 }
-                return@launch
-            }
-            _ui.update { it.copy(pin = code) }
-            val name = simkl.waitLogin(code)
-            _ui.update { it.copy(pin = null, busy = false) }
-            if (name != null) {
-                refreshStatus()
-                _ui.update {
-                    it.copy(message = if (name.isBlank()) "Simkl conectado neste perfil." else "Simkl conectado como $name.")
-                }
-            } else {
-                _ui.update {
-                    it.copy(error = "O código expirou ou não foi confirmado. Toque em Conectar para gerar um novo.")
+                is SimklService.LoginResult.Started -> {
+                    val code = started.code
+                    _ui.update { it.copy(pin = code) }
+                    when (val outcome = simkl.waitLogin(code)) {
+                        is SimklService.LoginOutcome.Connected -> {
+                            _ui.update { it.copy(pin = null, busy = false) }
+                            refreshStatus()
+                            _ui.update {
+                                it.copy(message = if (outcome.name.isBlank()) "Simkl conectado neste perfil." else "Simkl conectado como ${outcome.name}.")
+                            }
+                        }
+                        SimklService.LoginOutcome.Expired -> {
+                            _ui.update {
+                                it.copy(pin = null, busy = false, error = "O código expirou. Toque em Conectar para gerar um novo.")
+                            }
+                        }
+                        SimklService.LoginOutcome.Denied -> {
+                            _ui.update {
+                                it.copy(pin = null, busy = false, error = "Você negou a conexão no Simkl. Toque em Conectar para tentar de novo.")
+                            }
+                        }
+                        is SimklService.LoginOutcome.Failed -> {
+                            _ui.update { it.copy(pin = null, busy = false, error = outcome.message) }
+                        }
+                    }
                 }
             }
         }

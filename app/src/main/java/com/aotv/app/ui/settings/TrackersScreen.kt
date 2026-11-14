@@ -66,7 +66,7 @@ import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
 
 /**
- * Tela "Trackers e Sincronização" (v1.13.0, Frente B — só Simkl).
+ * Tela "Trackers e Sincronização" (v1.13.1, Frente B — só Simkl, device flow V2).
  *
  * Ponto de entrada p/ a navegação (o coordenador faz a fiação da rota e do
  * hub; esta tela NÃO se conecta à navegação sozinha):
@@ -238,8 +238,10 @@ private fun formatSimklDate(at: Long): String = runCatching {
 /**
  * Diálogo "Conectar ao Simkl", igual à foto de referência: URL com o código
  * + código grande + QR da URL + "Esperando você confirmar no celular" +
- * Cancelar. O QR codifica a mesma URL mostrada (simkl.com/pin com o
- * user_code); apontar a câmera abre a página já com o código.
+ * Cancelar. No device flow V2 (v1.13.1) o user_code tem o formato
+ * "XXXX-YYYY" (9 caracteres com o hífen) e a URL é a verification_uri_complete
+ * — a URL completa com o código embutido, que o QR codifica e o texto mostra
+ * (pin.pinUrl); apontar a câmera abre a página já com o código.
  */
 @Composable
 private fun SimklPinDialog(pin: SimklService.DeviceCode, onCancel: () -> Unit) {
