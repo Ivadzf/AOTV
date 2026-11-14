@@ -37,6 +37,8 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
         val epgLoading: Boolean = false,
         val error: String? = null,
         val now: Long = System.currentTimeMillis(),
+        /** Guia completo por canal (a grade usa a lista inteira, não só agora/a seguir). */
+        val epg: Map<String, List<LiveProgram>> = emptyMap(),
     )
 
     private val filter = MutableStateFlow(ALL)
@@ -69,6 +71,7 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
             recentCount = st.recents.count { it in byId },
             total = st.channels.size,
             filter = f, query = q, loading = st.loading, epgLoading = st.epgLoading, error = st.error, now = now,
+            epg = st.epg,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), View())
 

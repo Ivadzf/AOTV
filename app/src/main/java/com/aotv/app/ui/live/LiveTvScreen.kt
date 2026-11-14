@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -43,6 +45,8 @@ fun LiveTvScreen(
     val v by viewModel.view.collectAsStateWithLifecycle()
     val pad = com.aotv.app.ui.common.pagePadding()
     var searching by remember { mutableStateOf(false) }
+    // Lote 7: lista de canais ou grade do guia (mesma ViewModel, mesmos filtros).
+    var guide by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -98,6 +102,8 @@ fun LiveTvScreen(
             contentPadding = PaddingValues(horizontal = pad, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            item { com.aotv.app.ui.common.FilterChipPill("Canais", !guide, { guide = false }, icon = Icons.Default.List) }
+            item { com.aotv.app.ui.common.FilterChipPill("Guia", guide, { guide = true }, icon = Icons.Default.GridView) }
             item { com.aotv.app.ui.common.FilterChipPill("Todos ${v.total}", v.filter == LiveTvViewModel.ALL, { viewModel.setFilter(LiveTvViewModel.ALL) }) }
             if (v.favoriteCount > 0) item {
                 com.aotv.app.ui.common.FilterChipPill("Favoritos ${v.favoriteCount}", v.filter == LiveTvViewModel.FAV, { viewModel.setFilter(LiveTvViewModel.FAV) }, icon = Icons.Default.Star)
@@ -119,6 +125,10 @@ fun LiveTvScreen(
                 if (v.loading) "Carregando canais…" else "Nenhum canal aqui.",
                 color = TextTertiary, fontSize = 14.sp, modifier = Modifier.padding(pad),
             )
+            return@Column
+        }
+        if (guide) {
+            LiveGuideScreen(onPlay = onPlay)
             return@Column
         }
         // Celular em uma coluna, tela larga em mais de uma.

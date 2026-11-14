@@ -341,6 +341,57 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.INTEGR_LIVE,
         kidsHidden = true,
     ),
+    // ── IPTV (Lote 7) ────────────────────────────────────────────────
+    // Todas caem na seção "TV ao vivo" de Integrações, que abre as fontes
+    // (LiveSourcesScreen: adicionar/remover, EPG, atualizar, aba).
+    SettingOptionEntry(
+        title = "Ao vivo",
+        sub = "Abrir a aba de canais ao vivo e o guia de programação",
+        keywords = listOf("iptv", "ao vivo", "live", "tv", "canais", "guia"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Fontes de canais",
+        sub = "Adicionar ou remover listas M3U e contas Xtream",
+        keywords = listOf("fontes", "m3u", "xtream", "lista", "conta", "iptv"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Guia XMLTV",
+        sub = "Endereço do guia de programação (XMLTV) da lista",
+        keywords = listOf("guia", "xmltv", "epg", "programação", "grade"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Guia de programação",
+        sub = "Grade por horário com o que está passando agora",
+        keywords = listOf("guia", "grade", "programação", "epg", "agora", "horários"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Atualizar canais",
+        sub = "Baixar de novo as listas e o guia",
+        keywords = listOf("atualizar", "recarregar", "refresh", "canais", "sincronizar"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Aba Ao vivo na barra",
+        sub = "Mostra ou esconde os canais na barra de baixo",
+        keywords = listOf("aba", "barra", "mostrar", "esconder", "navegação"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Trocar de perfil",
