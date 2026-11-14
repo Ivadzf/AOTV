@@ -55,7 +55,7 @@ fun LiveGuideScreen(
     val now = v.now
     val windowStart = now - HOUR_MS + shiftHours * HOUR_MS
     val windowEnd = windowStart + WINDOW_MS
-    val totalWidth = WINDOW_HOURS * HOUR_WIDTH_DP
+    val totalWidth = HOUR_WIDTH_DP * WINDOW_HOURS
     // Um só ScrollState para o cabeçalho e todas as linhas: as colunas ficam alinhadas.
     val scroll = rememberScrollState()
     val density = LocalDensity.current
