@@ -177,6 +177,8 @@ dependencies {
     // QR code da configuração de addon na TV (abre a página no celular).
     implementation("com.google.zxing:core:3.5.3")
 
+    implementation("androidx.documentfile:documentfile:1.0.1") // M3U por arquivo (SAF) — v1.17.0
+
     // Google Fonts (downloadable fonts via GMS)
     implementation("androidx.compose.ui:ui-text-google-fonts")
 

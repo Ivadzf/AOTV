@@ -75,17 +75,25 @@ data class TraktScrobblePayload(
     @SerializedName("progress") val progress: Double,
 )
 
+/** Tipo comum de filme/série do Trakt — sem ele, `e.movie ?: e.show` vira Any e
+ *  `m.ids/title/year` não resolve (build #231). */
+interface TraktMediaRef {
+    val title: String?
+    val year: Int?
+    val ids: TraktIds
+}
+
 data class TraktMovieRef(
-    @SerializedName("title") val title: String? = null,
-    @SerializedName("year") val year: Int? = null,
-    @SerializedName("ids") val ids: TraktIds,
-)
+    @SerializedName("title") override val title: String? = null,
+    @SerializedName("year") override val year: Int? = null,
+    @SerializedName("ids") override val ids: TraktIds,
+) : TraktMediaRef
 
 data class TraktShowRef(
-    @SerializedName("title") val title: String? = null,
-    @SerializedName("year") val year: Int? = null,
-    @SerializedName("ids") val ids: TraktIds,
-)
+    @SerializedName("title") override val title: String? = null,
+    @SerializedName("year") override val year: Int? = null,
+    @SerializedName("ids") override val ids: TraktIds,
+) : TraktMediaRef
 
 data class TraktEpisodeRef(
     @SerializedName("season") val season: Int,
@@ -804,7 +812,7 @@ class TraktService @Inject constructor(
     fun watchlistChanged(tmdbId: Int, type: String, added: Boolean) {
         if (!configured || !isConnected || tmdbId <= 0) return
         val one = mapOf<String, Any>("ids" to mapOf("tmdb" to tmdbId))
-        val payload = mapOf<String, Any>(if (type == MediaType.MOVIE.name) "movies" else "shows" to listOf(one))
+        val payload = mapOf<String, Any>(if (type == MediaType.MOVIE.name) "movies" to listOf(one) else "shows" to listOf(one))
         scope.launch {
             runCatching {
                 withAuth { auth, key ->
