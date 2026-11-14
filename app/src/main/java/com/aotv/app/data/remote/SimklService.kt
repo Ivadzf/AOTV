@@ -21,7 +21,7 @@ import java.security.SecureRandom
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * Simkl (v1.13.1 — device flow AUTH V2, PKCE + refresh).
@@ -199,7 +199,7 @@ class SimklService @Inject constructor(
         val r = try {
             raw("POST", "$API/oauth2/token", form, null)
         } catch (e: Exception) {
-            coroutineContext().ensureActive()
+            currentCoroutineContext().ensureActive()
             return false
         }
         if (r.code !in 200..299) {
@@ -307,7 +307,7 @@ class SimklService @Inject constructor(
         val r = try {
             raw("POST", deviceUrl, FormBody.Builder().build(), null)
         } catch (e: Exception) {
-            coroutineContext().ensureActive()
+            currentCoroutineContext().ensureActive()
             return LoginResult.Failed(
                 "Sem conexão com o Simkl — confira a internet e tente de novo.",
             )
@@ -364,9 +364,9 @@ class SimklService @Inject constructor(
         try {
             var every = c.intervalSec * 1000L
             while (System.currentTimeMillis() < c.expiresAt) {
-                coroutineContext().ensureActive()
+                currentCoroutineContext().ensureActive()
                 delay(every)
-                coroutineContext().ensureActive()
+                currentCoroutineContext().ensureActive()
                 val form = FormBody.Builder()
                     .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
                     .add("device_code", deviceCode)
@@ -376,7 +376,7 @@ class SimklService @Inject constructor(
                 val r = try {
                     raw("POST", "$API/oauth2/token", form, null)
                 } catch (e: Exception) {
-                    coroutineContext().ensureActive()
+                    currentCoroutineContext().ensureActive()
                     continue // sem rede: tenta de novo no próximo intervalo
                 }
                 if (r.code == 200) {
@@ -403,7 +403,7 @@ class SimklService @Inject constructor(
                         call("GET", "/users/settings").optJSONObject("user")
                             ?.let { it.optString("name").ifBlank { it.optString("login").ifBlank { it.optString("username") } } }
                     }.getOrNull().orEmpty()
-                    coroutineContext().ensureActive()
+                    currentCoroutineContext().ensureActive()
                     session()?.let { saveSession(it.copy(user = name)) }
                     return LoginOutcome.Connected(name)
                 }
