@@ -24,7 +24,9 @@ import androidx.compose.material.icons.outlined.LocalMovies
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -516,6 +518,18 @@ private fun RecentSearches(
     }
 
     Column(Modifier.fillMaxSize()) {
+        // Confirmar antes de limpar o histórico (v1.13.0).
+        var confirmClear by remember { mutableStateOf(false) }
+        if (confirmClear) AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            containerColor = BackgroundCard,
+            title = { Text("Limpar buscas recentes?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+            text = { Text("O histórico de buscas será apagado.", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { onClearAll(); confirmClear = false }) { Text("Limpar", color = DangerText) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
+        )
         Row(
             Modifier
                 .fillMaxWidth()
@@ -548,7 +562,7 @@ private fun RecentSearches(
                 fontFamily = ManropeFontFamily,
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .clickable(onClick = onClearAll)
+                    .clickable(onClick = { confirmClear = true })
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             )
         }

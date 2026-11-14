@@ -793,6 +793,21 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         if (!autoNextEnabled) return@LaunchedEffect
         while (nextCountdown > 0) { delay(1000); nextCountdown -= 1 }
         showNextPrompt = false
+        // v1.13.0 (JOTV 1.0.19 §3.4): o avanço automático preserva a cena
+        // pós-créditos ainda não vista — em vez de trocar de episódio, vai
+        // para o início dela. Se já estiver dentro da cena, só esconde o
+        // cartão; o fim da reprodução mostra o cartão de novo. Avanço à mão
+        // (botão "Próximo", chip, "Pular pós-créditos") não muda: é escolha
+        // do usuário e avança direto.
+        val pc = skipSegments.postCredits
+        if (pc != null && position < pc.end) {
+            if (position < pc.start) {
+                currentPlayer().seekTo(pc.start)
+                position = pc.start
+                toastMsg = "Cena pós-créditos"
+            }
+            return@LaunchedEffect
+        }
         if (promptIsSeason) goToNextSeason() else playNextEpisode()
     }
     // Fim da reprodução: série com próximo → mostra o card "Próximo episódio" (BOTÃO + contagem),
@@ -978,9 +993,13 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     // Todas as fontes falharam → avisa e volta ao detalhe (não deixa preso no preto).
     // v1.2.7 (Kodi): com diag, NÃO volta sozinho — o Davi precisa ler e mandar
     // o print do diagnóstico na tela de erro; ele volta pelo botão "Voltar".
+    // v1.13.0 (JOTV 1.0.19 §3.7): com "Tentar novamente"/"Escolher outra fonte"
+    // na tela, NÃO volta sozinho — 2,5 s não dá tempo de ler e tocar. Sem ação
+    // possível no overlay (nenhuma fonte), volta como antes.
     LaunchedEffect(sourceFailed) {
         if (!sourceFailed) return@LaunchedEffect
         if (kodiDiag.isNotBlank()) return@LaunchedEffect
+        if (sourceFailedHasActions) return@LaunchedEffect
         kotlinx.coroutines.delay(2500)
         onBack()
     }
@@ -1395,7 +1414,17 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
 
         // Todas as fontes falharam: aviso central (o efeito acima volta ao detalhe em ~2.5s,
         // exceto no play Kodi — v1.2.7 — que fica na tela p/ o Davi ler o diagnóstico).
-        if (sourceFailed) SourceFailedOverlay(diag = kodiDiag + proxyDiagLine(), playerError = playerError, onBack = onBack)
+        // v1.13.0 (JOTV 1.0.19 §3.7): na falha da troca automática, o overlay
+        // oferece "Tentar novamente" (mesma fonte) e "Escolher outra fonte"
+        // (abre o painel de fontes, sem redesenhá-lo). "Tentar novamente" só
+        // aparece quando há uma fonte atual para retentar; "Escolher outra
+        // fonte" só quando há mais de uma fonte. Sem nenhuma das duas, o
+        // overlay fica só com "Voltar" e a volta automática de 2,5 s continua.
+        if (sourceFailed) SourceFailedOverlay(
+            diag = kodiDiag + proxyDiagLine(), playerError = playerError, onBack = onBack,
+            onRetry = if (currentSources.getOrNull(currentSourceIdx) != null) ({ retryCurrentSource() }) else null,
+            onChooseSource = if (currentSources.size > 1) ({ sourceFailed = false; openDpadPanel("sources") }) else null,
+        )
 
         if (syncBarOpen && extUrl != null && !inPip && !locked) {
             SyncBar(
@@ -2234,6 +2263,25 @@ class PlayerSession(
         applyMovieSource(next)
         return true
     }
+    /** v1.13.0 (JOTV 1.0.19 §3.7): "Tentar novamente" na falha da troca
+     *  automática — tenta de novo a fonte atual, que pode responder na 2ª
+     *  vez, sem perder o ponto. O streamUrl vai a null antes de reaplicar:
+     *  o efeito que prepara a mídia é keyado por streamUrl, e reaplicar a
+     *  mesma URL não o redispararia. Sem fonte atual, não faz nada. */
+    fun retryCurrentSource() {
+        if (currentSources.getOrNull(currentSourceIdx) == null) return
+        sourceFailed = false
+        playerError = null
+        movieStarted = false
+        movieErrored = false
+        streamUrl?.let { triedUrls.remove(it) }
+        streamUrl = null
+        applyMovieSource(currentSourceIdx)
+    }
+    /** v1.13.0: o overlay de falha tem algo a oferecer (tentar a mesma fonte
+     *  ou escolher outra). Sem nada disso, a volta automática de 2,5 s continua. */
+    val sourceFailedHasActions get() =
+        currentSources.getOrNull(currentSourceIdx) != null || currentSources.size > 1
     /**
      * SÉRIE: completa a lista de fontes com as do EPISÓDIO atual.
      *

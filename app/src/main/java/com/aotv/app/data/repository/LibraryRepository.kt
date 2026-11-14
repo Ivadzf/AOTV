@@ -80,6 +80,14 @@ class LibraryRepository @Inject constructor(
     /** Reproducoes recentes (max 30), mais recentes primeiro. */
     fun recentlyPlayed(): Flow<List<MovieHistoryEntity>> = prefs.profileId.flatMapLatest { movieHistoryDao.getAll(it) }
 
+    /** Listas de uma vez (p/ o backup): Minha Lista, Continuar e episódios vistos. */
+    suspend fun watchlistNow(profileId: String? = null): List<WatchlistEntity> = watchlist(profileId).first()
+
+    suspend fun recentlyPlayedNow(): List<MovieHistoryEntity> = recentlyPlayed().first()
+
+    suspend fun allWatchedEpisodes(profileId: String? = null): List<WatchedEpisodeEntity> =
+        watchedEpisodeDao.getAllForProfile(profileId ?: pid)
+
     /** Progresso salvo de um item (posição/fonte/episódio), ou null. Com [profileId], lê desse
      * perfil em vez do ativo. */
     suspend fun getPlayback(tmdbId: Int, type: String, profileId: String? = null): MovieHistoryEntity? =
@@ -97,6 +105,8 @@ class LibraryRepository @Inject constructor(
         lastSourceUrl: String = "",
         lastAddon: String = "",
     ) {
+        // Assistir de novo libera o título que tinha sido removido do Continuar (v1.13.0).
+        prefs.unhideContinue(item.tmdbId, item.type.name)
         val prev = movieHistoryDao.get(pid, item.tmdbId, item.type.name)
         movieHistoryDao.upsert(
             MovieHistoryEntity(
@@ -123,6 +133,9 @@ class LibraryRepository @Inject constructor(
         profileId: String? = null,
     ) {
         val targetPid = profileId ?: pid
+        // Assistir de novo libera o título que tinha sido removido do Continuar (v1.13.0).
+        // Só vale p/ o perfil ativo: a sincronia (outro perfil) NÃO traz o título de volta.
+        if (targetPid == pid) prefs.unhideContinue(tmdbId, type)
         val prev = movieHistoryDao.get(targetPid, tmdbId, type)
         movieHistoryDao.upsert(
             MovieHistoryEntity(

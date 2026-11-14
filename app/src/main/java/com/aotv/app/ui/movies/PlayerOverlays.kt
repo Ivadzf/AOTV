@@ -282,7 +282,9 @@ internal fun NextEpisodeCard(isSeason: Boolean, line: String, countdown: Int, on
 
 /** Nenhuma fonte serviu (.pl-fail). O player volta ao detalhe sozinho —
  *  exceto no play Kodi (v1.2.7, `diag` não vazio), que fica na tela p/ o
- *  Davi ler o diagnóstico e voltar pelo botão "Voltar".
+ *  Davi ler o diagnóstico e voltar pelo botão "Voltar" — e, desde a v1.13.0,
+ *  exceto quando há ação a oferecer ([onRetry]/[onChooseSource]): aí fica na
+ *  tela até o usuário escolher, porque 2,5 s não dá tempo de ler e tocar.
  *  `playerError` é o erro do ExoPlayer (código + mensagem + causa raiz);
  *  `diag` é o diagnóstico do dispatch Kodi (resolveu= + http:). */
 @Composable
@@ -290,6 +292,8 @@ internal fun SourceFailedOverlay(
     diag: String = "",
     playerError: String? = null,
     onBack: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onChooseSource: (() -> Unit)? = null,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.86f)), contentAlignment = Alignment.Center) {
         Column(
@@ -325,6 +329,21 @@ internal fun SourceFailedOverlay(
                         .padding(12.dp),
                 ) {
                     Text(diag, color = Color.White, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+            // v1.13.0 (JOTV 1.0.19 §3.7): falha da troca automática oferece
+            // tentar a mesma fonte ou escolher outra — sem redesenhar a folha.
+            if (onRetry != null || onChooseSource != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (onRetry != null) {
+                        com.aotv.app.ui.common.AotvButton(
+                            "Tentar novamente", onRetry,
+                            tone = com.aotv.app.ui.common.ButtonTone.PRIMARY, compact = true,
+                        )
+                    }
+                    if (onChooseSource != null) {
+                        com.aotv.app.ui.common.AotvButton("Escolher outra fonte", onChooseSource, compact = true)
+                    }
                 }
             }
             if (onBack != null) {

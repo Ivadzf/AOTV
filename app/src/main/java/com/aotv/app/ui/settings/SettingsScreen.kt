@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -248,6 +250,22 @@ private val hubEntries = listOf(
         sub = "Áudio, qualidade, trailer e legendas",
         icon = Icons.Default.ClosedCaption,
         keywords = listOf("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma"),
+    ),
+    HubEntry(
+        id = SettingsPageIds.Backup,
+        title = "Backup e restauração",
+        sub = "Arquivo JSON ou Wi-Fi direto",
+        icon = Icons.Default.Backup,
+        keywords = listOf("Backup", "restauração", "exportar", "importar", "JSON", "Wi-Fi", "QR", "PIN", "sincronizar"),
+        kidsHidden = true,
+    ),
+    HubEntry(
+        id = SettingsPageIds.Trackers,
+        title = "Trackers e Sincronização",
+        sub = "Simkl por código e QR",
+        icon = Icons.Default.Sync,
+        keywords = listOf("Trackers", "Simkl", "sincronização", "scrobble", "PIN", "QR", "client ID"),
+        kidsHidden = true,
     ),
 )
 

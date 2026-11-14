@@ -182,6 +182,8 @@ private fun ProviderCard(
 ) {
     var keyOpen by remember(provider) { mutableStateOf(false) }
     var key by remember(provider) { mutableStateOf("") }
+    // Confirmar antes de desconectar (v1.13.0).
+    var confirmDisconnect by remember { mutableStateOf(false) }
     LaunchedEffect(account) { if (account != null) { keyOpen = false; key = "" } }
     Column(
         Modifier
@@ -249,10 +251,21 @@ private fun ProviderCard(
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (many && !inUse) com.aotv.app.ui.common.AotvButton("Usar este", onUse, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY, compact = true)
-                com.aotv.app.ui.common.AotvButton("Desconectar", onDisconnect, compact = true)
+                com.aotv.app.ui.common.AotvButton("Desconectar", { confirmDisconnect = true }, compact = true)
             }
         }
     }
+    // Confirmar antes de desconectar (v1.13.0): a chave sai do aparelho.
+    if (confirmDisconnect) AlertDialog(
+        onDismissRequest = { confirmDisconnect = false },
+        containerColor = BackgroundCard,
+        title = { Text("Desconectar do ${provider.label}?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = { Text("A conta debrid sai deste aparelho. Para usar de novo, cole a chave outra vez.", color = TextSecondary) },
+        confirmButton = {
+            TextButton(onClick = { onDisconnect(); confirmDisconnect = false }) { Text("Desconectar", color = DangerText) }
+        },
+        dismissButton = { TextButton(onClick = { confirmDisconnect = false }) { Text("Cancelar", color = TextSecondary) } },
+    )
 }
 
 @Composable

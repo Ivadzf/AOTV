@@ -112,6 +112,8 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
                     onCode = { viewModel.stremioCode() },
                     showServer = false,
                 ) {
+                    // Confirmar antes de sair (v1.13.0).
+                    var confirmLogout by remember { mutableStateOf(false) }
                     ActionRow {
                         AotvButton("Importar addons", viewModel::stremioImportAddons, icon = Icons.Default.Extension, tone = ButtonTone.PRIMARY,
                             busy = st.busy == "stremio_addons", busyLabel = "Importando…", enabled = st.busy == null || st.busy == "stremio_addons", compact = true)
@@ -119,8 +121,18 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
                             busy = st.busy == "stremio_library", busyLabel = "Importando…", enabled = st.busy == null || st.busy == "stremio_library", compact = true)
                         AotvButton("Enviar meus addons", viewModel::stremioPushAddons, icon = Icons.Default.CloudUpload,
                             busy = st.busy == "stremio_push", busyLabel = "Enviando…", enabled = st.busy == null || st.busy == "stremio_push", compact = true)
-                        AotvButton("Sair", viewModel::stremioLogout, icon = Icons.AutoMirrored.Filled.Logout, enabled = st.busy == null, compact = true)
+                        AotvButton("Sair", { confirmLogout = true }, icon = Icons.AutoMirrored.Filled.Logout, enabled = st.busy == null, compact = true)
                     }
+                    if (confirmLogout) AlertDialog(
+                        onDismissRequest = { confirmLogout = false },
+                        containerColor = BackgroundCard,
+                        title = { Text("Sair da conta Stremio?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+                        text = { Text("A conta sai deste aparelho. Os addons importados e a lista ficam.", color = TextSecondary) },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.stremioLogout(); confirmLogout = false }) { Text("Sair", color = DangerText) }
+                        },
+                        dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancelar", color = TextSecondary) } },
+                    )
                 }
 
                 com.aotv.app.ui.common.SettingsSection("Nuvio")
@@ -134,6 +146,8 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
                     onCode = { s -> viewModel.nuvioCode(s) },
                     showServer = true,
                 ) {
+                    // Confirmar antes de sair (v1.13.0).
+                    var confirmNuvioLogout by remember { mutableStateOf(false) }
                     if (st.nuvioProfiles.size > 1) {
                         Text("Perfil do Nuvio", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -151,8 +165,18 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
                             busy = st.busy == "nuvio_debrid", busyLabel = "Conferindo…", enabled = st.busy == null || st.busy == "nuvio_debrid", compact = true)
                         AotvButton("Importar coleções", viewModel::nuvioImportCollections, icon = Icons.Default.ViewModule,
                             busy = st.busy == "nuvio_collections", busyLabel = "Importando…", enabled = st.busy == null || st.busy == "nuvio_collections", compact = true)
-                        AotvButton("Sair", viewModel::nuvioLogout, icon = Icons.AutoMirrored.Filled.Logout, enabled = st.busy == null, compact = true)
+                        AotvButton("Sair", { confirmNuvioLogout = true }, icon = Icons.AutoMirrored.Filled.Logout, enabled = st.busy == null, compact = true)
                     }
+                    if (confirmNuvioLogout) AlertDialog(
+                        onDismissRequest = { confirmNuvioLogout = false },
+                        containerColor = BackgroundCard,
+                        title = { Text("Sair da conta Nuvio?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+                        text = { Text("A conta sai deste aparelho. Os addons importados e a lista ficam.", color = TextSecondary) },
+                        confirmButton = {
+                            TextButton(onClick = { viewModel.nuvioLogout(); confirmNuvioLogout = false }) { Text("Sair", color = DangerText) }
+                        },
+                        dismissButton = { TextButton(onClick = { confirmNuvioLogout = false }) { Text("Cancelar", color = TextSecondary) } },
+                    )
                 }
                 below?.let { Spacer(Modifier.height(8.dp)); it() }
             }

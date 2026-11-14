@@ -315,15 +315,14 @@ internal fun PlayerChip(icon: ImageVector, label: String, active: Boolean = fals
  * só "cast"/"rotate"/"lock", na ordem escolhida; "Voltar" sempre aparece.
  * [onMinimize] é o botão de minimizar p/ o mini player (Fase C): só aparece
  * quando não é nulo (mini player ligado e celular); não entra na pref.
- * O "cast" NÃO é um CtlButton: é o [MediaRouteButton] de verdade (Lote 4,
- * v1.12.0) — ele some sozinho quando não há rota de Cast por perto, mostra
- * o estado conectado e abre o diálogo do sistema (escolher a TV /
- * desconectar). A sessão em si continua a mesma de antes
- * (SessionAvailabilityListener + LaunchedEffect em MoviePlayerScreen):
- * conectar manda a fonte atual p/ a TV e silencia o local; desconectar
- * volta p/ o celular no ponto onde a TV estava. Sem ele, o caminho antigo
- * (diálogo manual de escolha de rota) era um segundo caminho de descoberta
- * que duplicava o do botão — removido. */
+ * O "cast" é um CtlButton comum (fix do crash da v1.12.0): o [MediaRouteButton]
+ * de verdade (AndroidView, Lote 4) crashava o app ao aparecer junto com os
+ * controles no toque — confirmado pelo Davi ao desligar o "Transmitir". O botão
+ * abre o diálogo do sistema (escolher a TV / desconectar) só quando tocado,
+ * sob runCatching. NUNCA voltar o MediaRouteButton aqui. A sessão em si
+ * continua a mesma de antes (SessionAvailabilityListener + LaunchedEffect em
+ * MoviePlayerScreen): conectar manda a fonte atual p/ a TV e silencia o local;
+ * desconectar volta p/ o celular no ponto onde a TV estava. */
 @Composable
 internal fun PlayerTopActions(
     isTv: Boolean,

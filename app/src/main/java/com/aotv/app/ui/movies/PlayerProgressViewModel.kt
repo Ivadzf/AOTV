@@ -17,6 +17,7 @@ class PlayerProgressViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val prefs: PlatformPrefs,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    private val simkl: com.aotv.app.data.remote.SimklService,
 ) : ViewModel() {
 
     /**
@@ -34,11 +35,18 @@ class PlayerProgressViewModel @Inject constructor(
      */
     private val privateMode get() = prefs.privateMode
 
-    /** Avisa o Trakt (start, pause ou stop). Não faz nada sem conta conectada. */
+    /**
+     * Avisa os trackers (start, pause ou stop). O Simkl é INDEPENDENTE do
+     * Trakt: dispara mesmo sem conta Trakt, e o modo privado bloqueia os
+     * dois (o `return` acima vale p/ ambos). O Simkl recebe as mesmas
+     * ações (start/pause/stop) e, no stop com ≥90%, marca como assistido.
+     */
     fun scrobble(action: String, tmdbId: Int, type: String, season: Int, episode: Int, positionMs: Long, durationMs: Long) {
         if (privateMode) return
         if (durationMs <= 0) return
-        trakt.scrobble(action, tmdbId, type, season, episode, positionMs * 100.0 / durationMs)
+        val progress = positionMs * 100.0 / durationMs
+        trakt.scrobble(action, tmdbId, type, season, episode, progress)
+        simkl.scrobble(action, tmdbId, type, season, episode, progress)
     }
 
     /** Abertura aprendida da série (inicioMs, fimMs). null = ainda não aprendeu. */

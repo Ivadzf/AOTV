@@ -548,7 +548,10 @@ class MoviesHomeViewModel @Inject constructor(
                 // vez do já visto (mesmo critério e cálculo de "terminado"/"próximo episódio" de
                 // DetailPrimary.kt: posição >= 90% da duração, próximo = +1 na temporada ou E1 da
                 // seguinte). Recomendações abaixo seguem usando o histórico cru (`list`).
-                val continueList = list.mapNotNull { resolveHistoryItem(it) }
+                // Removido do Continuar (v1.13.0): o oculto por perfil some da fileira
+                // (e um backup antigo não traz de volta); assistir de novo libera.
+                val continueList = list.filterNot { prefs.isContinueHidden(it.tmdbId, it.type) }
+                    .mapNotNull { resolveHistoryItem(it) }
                 val items = continueList.map { h ->
                     MovieItem(
                         tmdbId = h.tmdbId,
@@ -843,10 +846,17 @@ class MoviesHomeViewModel @Inject constructor(
         }
     }
 
+    /** Remove do Continuar assistindo e guarda o oculto por perfil (long-press no card, v1.13.0). */
+    fun removeFromContinue(tmdbId: Int, type: String) {
+        viewModelScope.launch {
+            prefs.hideContinue(tmdbId, type)
+            library.removePlayback(tmdbId, type)
+        }
+    }
+
     fun load() {
         // Ranking de hoje para a etiqueta "#3 Hoje" dos pôsteres (vale também para fileira de addon).
-        posterInfo.loadRanks()
-        viewModelScope.launch {
+        posterInfo.loadRanks()        viewModelScope.launch {
             val apiKey = prefs.tmdbApiKey
             // Catálogo AOTV desligado. A Início fica com o progresso e as fileiras de addon.
             if (!prefs.catalogOn) {

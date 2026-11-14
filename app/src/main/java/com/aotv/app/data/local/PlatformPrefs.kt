@@ -99,6 +99,8 @@ internal val SCOPED_KEYS = listOf(
     "pref_private_mode",
     // Lote 2 — Biblioteca e Descoberta: Continuar assistindo novo + Modo aleatório.
     "pref_random_include_continue", "pref_random_include_watchlist", "pref_random_unwatched_only",
+    // v1.13.0 — Backup: títulos removidos do Continuar assistindo (por perfil).
+    "hidden_continue_v1",
     // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
     "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
     "anilist_v1", "wetrakr_v1", "publicmetadb_v1",
@@ -172,6 +174,9 @@ class PlatformPrefs @Inject constructor(
 
         /** Blur real atrás das folhas/painéis (Lote 3, v1.11.0). Do aparelho, como o tema. */
         private const val KEY_PANEL_BLUR = "pref_panel_blur"
+
+        /** Incluir chaves e sessões no backup (v1.13.0). Do aparelho. DESLIGADO por padrão. */
+        private const val KEY_BACKUP_INCLUDE_SECRETS = "backup_include_secrets"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -459,6 +464,92 @@ class PlatformPrefs @Inject constructor(
     var panelBlur: Boolean
         get() = _panelBlur.value
         set(value) { prefs.edit().putBoolean(KEY_PANEL_BLUR, value).apply(); _panelBlur.value = value }
+
+    // ── Backup e restauração (v1.13.0) ───────────────────────────────────────
+    // Títulos removidos do Continuar assistindo: segurar o card esconde o
+    // título por perfil, para um backup antigo (ou a sincronia) não trazer
+    // ele de volta. Assistir de novo libera o progresso (ver
+    // LibraryRepository.recordPlayback/saveProgress).
+
+    /** Chave estável de um título no oculto: "TIPO:tmdbId". */
+    fun continueKey(tmdbId: Int, type: String) = "$type:$tmdbId"
+
+    private val _hiddenContinue = MutableStateFlow(readStringList("hidden_continue_v1").toSet())
+    /** Títulos ocultos do Continuar assistindo no perfil ativo, que avisam quem observa. */
+    val hiddenContinueFlow: StateFlow<Set<String>> = _hiddenContinue.asStateFlow()
+
+    /** Títulos ocultos do Continuar assistindo no perfil ativo. */
+    var hiddenContinue: Set<String>
+        get() = _hiddenContinue.value
+        set(value) { writeStringList("hidden_continue_v1", value.sorted()); _hiddenContinue.value = value }
+
+    /** Esconde um título do Continuar assistindo (long-press no card). */
+    fun hideContinue(tmdbId: Int, type: String) { hiddenContinue = hiddenContinue + continueKey(tmdbId, type) }
+
+    /** Libera o título (assistir de novo chama isto via LibraryRepository). */
+    fun unhideContinue(tmdbId: Int, type: String) { hiddenContinue = hiddenContinue - continueKey(tmdbId, type) }
+
+    /** O título está oculto do Continuar assistindo neste perfil? */
+    fun isContinueHidden(tmdbId: Int, type: String): Boolean = continueKey(tmdbId, type) in hiddenContinue
+
+    /** Incluir chaves e sessões no backup. DESLIGADO por padrão (ver BackupViewModel). */
+    var backupIncludeSecrets: Boolean
+        get() = prefs.getBoolean(KEY_BACKUP_INCLUDE_SECRETS, false)
+        set(value) { prefs.edit().putBoolean(KEY_BACKUP_INCLUDE_SECRETS, value).apply() }
+
+    /** Substitui a lista de perfis pela do backup (o hash do PIN só vem com segredos). */
+    fun restoreProfiles(list: List<Profile>) {
+        if (list.isEmpty()) return
+        saveProfiles(list)
+        if (_profiles.value.none { it.id == _profileId.value }) selectProfile(list.first().id)
+    }
+
+    // ── Acesso cru às prefs (p/ o backup) ────────────────────────────────────
+    // O backup lê e grava as prefs cruas (por perfil via SCOPED_KEYS + as
+    // globais da lista do BackupViewModel), sem passar pelos vars tipados:
+    // são dezenas de chaves e o formato precisa sobreviver a prefs novas
+    // sem tocar no backup. O que é segredo (sessões, chaves) só entra com
+    // o toggle `backupIncludeSecrets` ligado (ver BackupViewModel).
+
+    /** Valor cru de uma pref do perfil (String/Int/Long/Float/Boolean/Set). null = ausente. */
+    fun rawPref(key: String, profileId: String = _profileId.value): Any? =
+        prefs.all[scopedKey(key, profileId)]
+
+    /** Grava o valor cru de uma pref do perfil. Tipos aceitos: os do SharedPreferences. */
+    fun writeRawPref(key: String, value: Any?, profileId: String = _profileId.value) {
+        val k = scopedKey(key, profileId)
+        val ed = prefs.edit()
+        when (value) {
+            null -> ed.remove(k)
+            is String -> ed.putString(k, value)
+            is Int -> ed.putInt(k, value)
+            is Long -> ed.putLong(k, value)
+            is Float -> ed.putFloat(k, value)
+            is Boolean -> ed.putBoolean(k, value)
+            is Set<*> -> ed.putStringSet(k, value.filterIsInstance<String>().toSet())
+            else -> return
+        }
+        ed.apply()
+    }
+
+    /** Valor cru de uma pref do aparelho (não é por perfil). null = ausente. */
+    fun rawGlobalPref(key: String): Any? = prefs.all[key]
+
+    /** Grava o valor cru de uma pref do aparelho. */
+    fun writeRawGlobalPref(key: String, value: Any?) {
+        val ed = prefs.edit()
+        when (value) {
+            null -> ed.remove(key)
+            is String -> ed.putString(key, value)
+            is Int -> ed.putInt(key, value)
+            is Long -> ed.putLong(key, value)
+            is Float -> ed.putFloat(key, value)
+            is Boolean -> ed.putBoolean(key, value)
+            is Set<*> -> ed.putStringSet(key, value.filterIsInstance<String>().toSet())
+            else -> return
+        }
+        ed.apply()
+    }
 
     // ── Exibição da Início (por perfil, Fase B) ─────────────────────────────
     // Pôster pequeno por padrão (o Davi achou a Início grande demais). Um fluxo
@@ -1528,6 +1619,7 @@ class PlatformPrefs @Inject constructor(
             prefs.getString(sk("pref_player_audio_lang"), null)?.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
         _playerReuseLastSource.value = prefs.getBoolean(sk("pref_player_reuse_last_source"), true)
         _privateMode.value = prefs.getBoolean(sk("pref_private_mode"), false)
+        _hiddenContinue.value = readStringList("hidden_continue_v1").toSet()
         _randomIncludeContinue.value = prefs.getBoolean(sk("pref_random_include_continue"), true)
         _randomIncludeWatchlist.value = prefs.getBoolean(sk("pref_random_include_watchlist"), true)
         _randomUnwatchedOnly.value = prefs.getBoolean(sk("pref_random_unwatched_only"), false)

@@ -41,7 +41,8 @@ class SubtitleService @Inject constructor(
     private fun rank(lang: String) = com.aotv.app.data.local.SubLangs.rank(lang, prefs.subLang)
     private fun label(lang: String) = com.aotv.app.data.local.SubLangs.label(lang)
 
-    /** Texto do arquivo de legenda, ou null se não baixou. Trata GZIP e charsets legados. */
+    /** Texto do arquivo de legenda, ou null se não baixou. Trata GZIP, ZIP e
+     *  charsets legados (v1.13.0: ZIP + UTF-16/BOM, JOTV 1.0.19 §3.6). */
     suspend fun download(url: String): String? = withContext(Dispatchers.IO) {
         runCatching {
             val req = Request.Builder().url(url)
@@ -51,9 +52,29 @@ class SubtitleService @Inject constructor(
                 if (!resp.isSuccessful) return@use null
                 val bytes = resp.body?.bytes() ?: return@use null
                 // GZIP: magic bytes 1f 8b no início do corpo.
-                val rawBytes = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+                var rawBytes = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
                     java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(bytes)).use { it.readBytes() }
                 } else bytes
+                // ZIP: magic bytes PK\x03\x04 — extrai o primeiro .srt/.vtt/.ass
+                // de dentro (o .srt é o preferido). Sem entrada de legenda, null.
+                if (rawBytes.size >= 4 && rawBytes[0] == 0x50.toByte() && rawBytes[1] == 0x4B.toByte() &&
+                    rawBytes[2] == 0x03.toByte() && rawBytes[3] == 0x04.toByte()
+                ) {
+                    rawBytes = unzipFirstSubtitle(rawBytes) ?: return@use null
+                }
+                // BOM UTF-16 (FF FE = LE, FE FF = BE): decodifica direto com o
+                // charset certo — o UTF-8 estrito abaixo aceitaria os bytes NUL
+                // e devolveria lixo, então o BOM é testado ANTES do fallback.
+                if (rawBytes.size >= 2 && rawBytes[0] == 0xFF.toByte() && rawBytes[1] == 0xFE.toByte()) {
+                    return@use String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16LE)
+                }
+                if (rawBytes.size >= 2 && rawBytes[0] == 0xFE.toByte() && rawBytes[1] == 0xFF.toByte()) {
+                    return@use String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16BE)
+                }
+                // BOM UTF-8 (EF BB BF): tira e segue o fallback normal.
+                if (rawBytes.size >= 3 && rawBytes[0] == 0xEF.toByte() && rawBytes[1] == 0xBB.toByte() && rawBytes[2] == 0xBF.toByte()) {
+                    rawBytes = rawBytes.copyOfRange(3, rawBytes.size)
+                }
                 // UTF-8 estrito (falha em vez de trocar por �) e, se vier com replacement
                 // chars, cai para windows-1252 e depois ISO-8859-1 (nunca falha).
                 fun decodeStrict(data: ByteArray, charset: java.nio.charset.Charset): String? = runCatching {
@@ -65,6 +86,37 @@ class SubtitleService @Inject constructor(
             }
         }.getOrNull()
     }
+
+    /**
+     * Extrai o primeiro arquivo de legenda de dentro de um ZIP (.srt preferido,
+     * depois .vtt, depois .ass). Null quando o ZIP não tem nenhuma entrada de
+     * legenda. O corpo já está todo em memória (bytes do HTTP), então a leitura
+     * é limitada pelo tamanho do download.
+     */
+    private fun unzipFirstSubtitle(bytes: ByteArray): ByteArray? = runCatching {
+        java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zip ->
+            var best: ByteArray? = null
+            var bestRank = Int.MAX_VALUE
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory) {
+                    val rank = when {
+                        entry.name.lowercase().endsWith(".srt") -> 0
+                        entry.name.lowercase().endsWith(".vtt") -> 1
+                        entry.name.lowercase().endsWith(".ass") -> 2
+                        else -> -1
+                    }
+                    if (rank in 0 until bestRank) {
+                        best = zip.readBytes()
+                        bestRank = rank
+                        if (rank == 0) break // .srt é o preferido; achou, para
+                    }
+                }
+                entry = zip.nextEntry
+            }
+            best
+        }
+    }.getOrNull()
 
     /** OpenSubtitles mais as legendas dos addons instalados que têm o recurso subtitles. */
     suspend fun subtitles(imdb: String, type: String, season: Int, episode: Int): List<ExternalSub> =

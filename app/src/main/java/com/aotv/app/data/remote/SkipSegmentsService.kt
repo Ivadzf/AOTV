@@ -24,6 +24,18 @@ import javax.inject.Singleton
  * NUNCA embutir client ID no código: o ID de demonstração do JOTV não foi copiado.
  * Segmentos < 3s são descartados; cache em memória por imdb+temporada+episódio.
  * Falha de qualquer serviço retorna vazio e nunca quebra o player.
+ *
+ * v1.13.0 (refinamento, JOTV 1.0.19 §3.4): o merge passa a respeitar a duração
+ * do arquivo (proxy da versão do arquivo — cortes diferentes têm durações
+ * diferentes; segmento que começa depois do fim do arquivo é de outro corte e
+ * sai; fim além da duração é aparado) e dá prioridade à cena pós-créditos
+ * quando os intervalos se sobrepõem (o encerramento é aparado até o início
+ * dela, para nunca pular por cima de uma cena ainda não vista). Resumo,
+ * abertura e encerramento mantêm o comportamento da v1.8.1. Título, episódio
+ * e duração já chegavam aqui (título e episódio alimentam o Anime-Skip e a
+ * chave do cache; duração ia só na consulta ao SkipDB) — nenhum outro sinal
+ * de "versão do arquivo" chega ao serviço: o rótulo/addon da fonte não é
+ * passado ao get(), então a duração é o único discriminador de versão.
  */
 data class SkipSegment(val start: Long, val end: Long)
 
@@ -154,7 +166,10 @@ class SkipSegmentsService @Inject constructor() {
         return SkipSegments(recap, intro, outro, null)
     }
 
-    private fun merge(list: List<SkipSegments?>): SkipSegments {
+    // v1.13.0: merge respeitando a duração do arquivo e a prioridade da cena
+    // pós-créditos (ver o KDoc da classe). Sem duração conhecida (> 0), vale
+    // só o primeiro-não-nulo por tipo, como na v1.8.1.
+    private fun merge(list: List<SkipSegments?>, durationSec: Double = 0.0): SkipSegments {
         var recap: SkipSegment? = null
         var intro: SkipSegment? = null
         var outro: SkipSegment? = null
@@ -164,6 +179,27 @@ class SkipSegmentsService @Inject constructor() {
             if (intro == null && s.intro != null) intro = s.intro
             if (outro == null && s.outro != null) outro = s.outro
             if (postCredits == null && s.postCredits != null) postCredits = s.postCredits
+        }
+        // Duração do arquivo (quando conhecida): segmento que começa depois do
+        // fim é de outro corte/versão e sai; fim além da duração é aparado; o
+        // que sobrar com menos de 3s sai (mesmo corte do seg()).
+        val durMs = if (durationSec > 0) (durationSec * 1000.0).toLong() else 0L
+        fun within(s: SkipSegment?): SkipSegment? {
+            if (s == null || durMs <= 0) return s
+            if (s.start >= durMs) return null
+            val end = minOf(s.end, durMs)
+            return if (end - s.start < 3000) null else s.copy(end = end)
+        }
+        recap = within(recap)
+        intro = within(intro)
+        outro = within(outro)
+        postCredits = within(postCredits)
+        // Pós-créditos tem prioridade na sobreposição: o encerramento é
+        // aparado até o início da cena; se não sobrar 3s de encerramento, ele
+        // sai e só a cena fica (o botão vira "Ir para pós-créditos" no player).
+        if (outro != null && postCredits != null && outro.end > postCredits.start) {
+            outro = if (postCredits.start - outro.start < 3000) null
+            else outro.copy(end = postCredits.start)
         }
         return SkipSegments(recap, intro, outro, postCredits)
     }
@@ -182,7 +218,7 @@ class SkipSegmentsService @Inject constructor() {
         val a = async { fromIntroDb(imdb, isSeries, season, episode) }
         val b = async { fromSkipDb(imdb, isSeries, season, episode, durationSec) }
         val c = async { fromAnimeSkip(title, isSeries, episode, durationSec, animeSkipClientId) }
-        val res = merge(listOf(a.await(), b.await(), c.await()))
+        val res = merge(listOf(a.await(), b.await(), c.await()), durationSec)
         if (res.recap != null || res.intro != null || res.outro != null || res.postCredits != null) {
             cache[key] = res
         }

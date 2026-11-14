@@ -79,6 +79,7 @@ import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.AccentSoft
 import com.aotv.app.ui.theme.Background
 import com.aotv.app.ui.theme.BackgroundCard
+import com.aotv.app.ui.theme.DangerText
 import com.aotv.app.ui.theme.Surface2
 import com.aotv.app.ui.theme.TextPrimary
 import com.aotv.app.ui.theme.TextSecondary
@@ -114,6 +115,8 @@ fun PluginsScreen(
     var selectedRepo by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf("") }
     var choice by remember { mutableStateOf<String?>(null) }
+    // Confirmar antes de limpar (v1.13.0): cache/cookies apagados não voltam.
+    var confirmClear by remember { mutableStateOf<String?>(null) }
     var provider by remember { mutableStateOf<Pair<PluginRepo, InstalledPlugin>?>(null) }
     var sourceTest by remember { mutableStateOf<Pair<String, String>?>(null) }
     var repo by remember { mutableStateOf<PluginRepo?>(null) }
@@ -367,8 +370,8 @@ fun PluginsScreen(
                 PluginMenuItem(if (state.autoUpdate) "Desativar atualização automática" else "Ativar atualização automática", "Conferir a lista a cada 6 horas.") { viewModel.setAutoUpdate(!state.autoUpdate) },
                 PluginMenuItem("Tempo máximo por provedor", "${state.timeoutSec} segundos") { choice = "timeout" },
                 PluginMenuItem("Provedores simultâneos", state.concurrency.toString()) { choice = "concurrency" },
-                PluginMenuItem("Limpar cache dos provedores", "Cookies e sessões dos provedores serão apagados.") { viewModel.clearCache() },
-                PluginMenuItem("Limpar cookies dos plugins") { viewModel.clearCookies() },
+                PluginMenuItem("Limpar cache dos provedores", "Cookies e sessões dos provedores serão apagados.") { confirmClear = "cache" },
+                PluginMenuItem("Limpar cookies dos plugins") { confirmClear = "cookies" },
                 PluginMenuItem("Testar rede", "O fetch do motor busca o manifest do repositório.") { viewModel.testNetwork() },
                 PluginMenuItem("Exportar backup sem senhas") { createBackup.launch("AOTV-plugins.json") },
                 PluginMenuItem("Importar arquivo de backup") { importBackup.launch(arrayOf("application/json", "text/plain")) },
@@ -378,6 +381,24 @@ fun PluginsScreen(
         }
         val current = menu
         PluginMenu(when (menu) { "repos", "manage" -> "Repositórios"; "states" -> "Estado do provedor"; "types" -> "Tipo de conteúdo"; "timeout" -> "Tempo por provedor"; "concurrency" -> "Execução simultânea"; else -> "Preferências e backup" }, items.map { item -> item.copy(action = item.action?.let { action -> { if (choice == current) choice = null; action() } }) }) { choice = null }
+    }
+    confirmClear?.let { kind ->
+        AlertDialog(
+            onDismissRequest = { confirmClear = null },
+            title = { Text(if (kind == "cache") "Limpar cache dos provedores?" else "Limpar cookies dos plugins?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+            text = {
+                Text(
+                    if (kind == "cache") "Cookies e sessões dos provedores serão apagados."
+                    else "As sessões dos plugins serão apagadas. O próximo uso recria a sessão.",
+                    color = TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { if (kind == "cache") viewModel.clearCache() else viewModel.clearCookies(); confirmClear = null }) { Text("Limpar", color = DangerText) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = null }) { Text("Cancelar", color = TextSecondary) } },
+            containerColor = BackgroundCard, titleContentColor = TextPrimary, textContentColor = TextSecondary,
+        )
     }
 }
 

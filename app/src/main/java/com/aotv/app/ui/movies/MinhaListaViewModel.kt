@@ -32,8 +32,10 @@ import javax.inject.Inject
 class MinhaListaViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    private val simkl: com.aotv.app.data.remote.SimklService,
     private val continueArt: com.aotv.app.data.repository.ContinueArtworkRepository,
     private val seriesDetailCache: com.aotv.app.data.remote.SeriesDetailCache,
+    private val prefs: com.aotv.app.data.local.PlatformPrefs,
 ) : ViewModel() {
 
     val watchlist: StateFlow<List<WatchlistEntity>> =
@@ -43,8 +45,12 @@ class MinhaListaViewModel @Inject constructor(
             initialValue = emptyList(),
         )
 
+    // O oculto por perfil (v1.13.0) some da fileira: um backup antigo não traz o título de volta.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val recentlyPlayed: StateFlow<List<MovieHistoryEntity>> =
-        library.recentlyPlayed().stateIn(
+        kotlinx.coroutines.flow.combine(library.recentlyPlayed(), prefs.hiddenContinueFlow) { list, hidden ->
+            list.filterNot { prefs.continueKey(it.tmdbId, it.type) in hidden }
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
@@ -62,9 +68,12 @@ class MinhaListaViewModel @Inject constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** Remove um item de "Continuar assistindo". */
+    /** Remove um item de "Continuar assistindo" e guarda o oculto por perfil (v1.13.0). */
     fun removeFromContinue(tmdbId: Int, type: String) {
-        viewModelScope.launch { library.removePlayback(tmdbId, type) }
+        viewModelScope.launch {
+            prefs.hideContinue(tmdbId, type)
+            library.removePlayback(tmdbId, type)
+        }
     }
 
     // ── Calendário da Biblioteca (Lote 2, item 6) ───────────────────────────
@@ -119,5 +128,7 @@ class MinhaListaViewModel @Inject constructor(
     fun removeFromWatchlist(tmdbId: Int, type: String) {
         viewModelScope.launch { library.removeFromList(tmdbId, type) }
         trakt.watchlistChanged(tmdbId, type, added = false)
+        // Simkl: remoção é no-op de propósito (nunca apaga o histórico assistido).
+        simkl.watchlistChanged(tmdbId, type, added = false)
     }
 }

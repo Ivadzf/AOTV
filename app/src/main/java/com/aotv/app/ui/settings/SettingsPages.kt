@@ -140,9 +140,11 @@ object SettingsPageIds {
     const val Acompanhamento = "acompanhamento"
     const val Aparencia = "aparencia"
     const val Reproducao = "reproducao"
+    const val Backup = "backup"
+    const val Trackers = "trackers"
 
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -153,6 +155,8 @@ object SettingsPageIds {
         Acompanhamento -> "Acompanhamento"
         Aparencia -> "Aparência"
         Reproducao -> "Reprodução"
+        Backup -> "Backup e restauração"
+        Trackers -> "Trackers e Sincronização"
         else -> "Configurações"
     }
 }
@@ -193,6 +197,8 @@ fun SettingsPageScreen(
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel)
+        SettingsPageIds.Backup -> BackupScreen(onBack)
+        SettingsPageIds.Trackers -> TrackersScreen(onBack)
         else -> PlaceholderPage(
             title = "Configurações",
             sub = null,
@@ -881,6 +887,8 @@ private fun TraktSection(viewModel: SettingsViewModel) {
     val user by viewModel.traktUser.collectAsStateWithLifecycle()
     val busy by viewModel.traktBusy.collectAsStateWithLifecycle()
     val code by viewModel.traktCode.collectAsStateWithLifecycle()
+    // Confirmar antes de desconectar (v1.13.0).
+    var confirmLogout by remember { mutableStateOf(false) }
     Text(
         if (user == null) "Junta a Minha Lista, o ponto onde parou e os episódios vistos com o celular, a TV e o site."
         else "Conectado${if (user.isNullOrBlank()) "" else " como $user"}. Sincroniza ao abrir a Início.",
@@ -894,9 +902,19 @@ private fun TraktSection(viewModel: SettingsViewModel) {
             onClick = { if (user == null) viewModel.traktConnect() else viewModel.traktSync() },
         )
         if (user != null && busy == null) {
-            com.aotv.app.ui.common.AotvButton("Desconectar", viewModel::traktLogout, compact = true)
+            com.aotv.app.ui.common.AotvButton("Desconectar", { confirmLogout = true }, compact = true)
         }
     }
+    if (confirmLogout) AlertDialog(
+        onDismissRequest = { confirmLogout = false },
+        containerColor = BackgroundCard,
+        title = { Text("Desconectar do Trakt?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = { Text("A conta sai deste perfil. Minha Lista e o progresso ficam no aparelho.", color = TextSecondary) },
+        confirmButton = {
+            TextButton(onClick = { viewModel.traktLogout(); confirmLogout = false }) { Text("Desconectar", color = DangerText) }
+        },
+        dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancelar", color = TextSecondary) } },
+    )
     code?.let { c ->
         AlertDialog(
             onDismissRequest = viewModel::traktCancel,

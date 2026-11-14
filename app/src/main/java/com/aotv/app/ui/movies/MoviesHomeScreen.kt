@@ -438,6 +438,19 @@ private fun HomeSectionsTab(
     randomVm: RandomEpisodeViewModel,
 ) {
     val listState = rememberLazyListState()
+    // Remover do Continuar assistindo (segurar o card, v1.13.0): confirma antes.
+    var pendingRemove by remember { mutableStateOf<MovieItem?>(null) }
+    pendingRemove?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingRemove = null },
+            title = { Text("Remover de Continuar assistindo?") },
+            text = { Text(item.title) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.removeFromContinue(item.tmdbId, item.type.name); pendingRemove = null }) { Text("Remover") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRemove = null }) { Text("Cancelar") } },
+        )
+    }
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
     // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
     val panelBlurOn by hiltViewModel<DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
@@ -535,7 +548,7 @@ private fun HomeSectionsTab(
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
-                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn)
+                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onRemove = { pendingRemove = it })
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
@@ -723,6 +736,8 @@ private fun ContinueRow(
     display: HomeDisplayPrefs = HomeDisplayPrefs(),
     /** Vidro fosco nos cartões (Lote 4): toggle `pref_panel_blur`. */
     frosted: Boolean = false,
+    /** Segurar o card remove do Continuar (v1.13.0). null = sem remoção. */
+    onRemove: ((MovieItem) -> Unit)? = null,
 ) {
     Column {
         com.aotv.app.ui.common.SectionHeader(
@@ -735,7 +750,9 @@ private fun ContinueRow(
                 com.aotv.app.ui.common.ContinueCard(item, click,
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
-                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact, frosted = frosted)
+                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact, frosted = frosted,
+                    // Segurar remove do Continuar (v1.13.0); sem onRemove, o long-press não faz nada.
+                    onLongClick = onRemove?.let { remove -> { remove(item) } })
             }
         }
     }

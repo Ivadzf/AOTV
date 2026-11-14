@@ -42,6 +42,7 @@ class MovieDetailViewModel @Inject constructor(
     private val youtubeTrailer: com.aotv.app.data.remote.YoutubeTrailer,
     private val prober: com.aotv.app.data.remote.SourceProber,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    private val simkl: com.aotv.app.data.remote.SimklService,
     private val debrid: com.aotv.app.data.debrid.DebridService,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
     private val pluginService: com.aotv.app.data.plugins.PluginService,
@@ -642,6 +643,9 @@ class MovieDetailViewModel @Inject constructor(
             val adding = !_uiState.value.isSaved
             if (adding) library.saveToList(item) else library.removeFromList(item)
             trakt.watchlistChanged(item.tmdbId, item.type.name, adding)
+            // Simkl: adicionar sincroniza (plantowatch); remover é no-op de
+            // propósito dentro do serviço (nunca apaga o histórico assistido).
+            simkl.watchlistChanged(item.tmdbId, item.type.name, adding)
             // o estado isSaved é atualizado pelo coletor reativo de startLibraryObservers
         }
     }
