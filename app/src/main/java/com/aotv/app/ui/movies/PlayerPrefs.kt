@@ -230,4 +230,13 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Decoder de vídeo do perfil (Lote 4, v1.12.0): "hw" ou "hw_fallback". */
     val decoder: StateFlow<String> = prefs.playerDecoderFlow
     fun setDecoder(v: String) { prefs.playerDecoder = if (v == "hw_fallback") "hw_fallback" else "hw" }
+
+    /**
+     * Perfil de buffer do ExoPlayer (Lote 5 item 1, v1.14.0): "low", "normal"
+     * ou "high" (ver [BufferProfile] em PlayerEngine.kt). "normal" é o
+     * padrão do ExoPlayer. Vale a partir da próxima reprodução (o LoadControl
+     * entra na criação do player). Valor desconhecido volta p/ "normal".
+     */
+    val buffer: StateFlow<String> = prefs.playerBufferFlow
+    fun setBuffer(v: String) { prefs.playerBuffer = v }
 }

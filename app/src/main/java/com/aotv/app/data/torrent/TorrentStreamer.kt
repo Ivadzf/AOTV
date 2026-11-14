@@ -19,7 +19,24 @@ import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Motor de torrent (libtorrent) com servidor HTTP local que entrega o arquivo ao player enquanto baixa. */
+/** Motor de torrent (libtorrent) com servidor HTTP local que entrega o arquivo ao player enquanto baixa.
+ *
+ * Stats p/ o player (Lote 5 item 2, v1.14.0): [status] expõe seeds, peers
+ * e velocidade de download de verdade (do `TorrentStatus` do libtorrent),
+ * e o painel de infos técnicas do player mostra esses números + o buffer
+ * do ExoPlayer — nada inventado (ver TorrentStats em PlayerTechInfo.kt).
+ *
+ * Cache do torrent (Lote 5 item 3, v1.14.0): NÃO CONFIGURÁVEL — e não há
+ * pref fingindo que é. O libtorrent 2.x tirou o cache de disco (o I/O
+ * passou a ser por mmap) e o `SettingsPack` do libtorrent4j 2.1.0-39 não
+ * tem `cache_size`: conferido no jar, nenhum `cache_size` em
+ * `settings_pack$int_types` (só `max_queued_disk_bytes`, que é fila de
+ * escrita em disco, não cache — não virou pref p/ não enganar). O que o
+ * motor guarda em disco é o arquivo baixado em `cacheDir/torrents`,
+ * apagado ao sair do player ([stopAll]) e na limpeza de ociosos.
+ * FOLLOW-UP: reavaliar se o libtorrent4j voltar a expor tamanho de cache
+ * (ou se surgir outro motor com o ajuste); até lá, sem controle de cache.
+ */
 class TorrentStreamer(private val root: File) {
 
     data class Status(val peers: Int, val seeds: Int, val downloadBps: Int, val hasMetadata: Boolean)
@@ -54,6 +71,7 @@ class TorrentStreamer(private val root: File) {
         return "http://127.0.0.1:${ensureServer().listeningPort}/$token/${spec.infoHash}?m=" + URLEncoder.encode(magnet, "UTF-8")
     }
 
+    /** Stats reais do torrent p/ o painel do player (Lote 5 item 2): peers, seeds, velocidade e metadado. Null sem o torrent na sessão. */
     fun status(magnet: String?): Status? {
         val spec = TorrentMagnet.parse(magnet) ?: return null
         val a = active[spec.infoHash]?.takeIf { it.handle.isValid } ?: return null

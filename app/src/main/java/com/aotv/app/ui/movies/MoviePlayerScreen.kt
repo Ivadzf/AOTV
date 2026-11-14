@@ -259,6 +259,9 @@ fun MoviePlayerScreen(
     // e o player padrão decide o auto-abrir abaixo.
     val playerEngine by playerPrefsVm.engine.collectAsState()
     val playerDecoder by playerPrefsVm.decoder.collectAsState()
+    // Buffer do player (Lote 5 item 1, v1.14.0): lido ANTES do remember da
+    // sessão, como o decoder — o LoadControl entra no construtor do ExoPlayer.
+    val playerBuffer by playerPrefsVm.buffer.collectAsState()
     // Estado e regra do player moram na sessão. A função de tela ficou pequena e o Android volta
     // a compilar o código (antes passava do limite de instruções e rodava interpretado).
     val forceTv = television
@@ -271,6 +274,7 @@ fun MoviePlayerScreen(
             backdropUrl, season, episode, episodeTotal, sources,
             forceTv = forceTv, kodiDiag = kodiDiag,
             decoderMode = DecoderMode.fromId(playerDecoder),
+            bufferProfile = BufferProfile.fromId(playerBuffer),
         )
     }
     // A sessão voltou para a tela cheia: ela passa a ser da tela de novo e o
@@ -1443,10 +1447,17 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
         // O painel de INFOS TÉCNICAS tem composable próprio ([TechInfoPanel]),
         // como o de COR ([ColorFilterPanel]) — não cabe na lista de ações.
         if (sourcePanelOpen && !locked && panelKind == "info") {
+            // Stats do torrent ao vivo (Lote 5 item 2): enquanto o painel de
+            // infos está aberto, re-lê seeds/peers/velocidade/buffer a cada
+            // 2 s. Fora do painel não há polling — o status só existe p/ mostrar.
+            LaunchedEffect(streamUrl, playVia) {
+                while (true) { refreshTorrentStats(); delay(2_000) }
+            }
             TechInfoPanel(
                 info = techInfo,
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
+                torrent = torrentStats,
             )
         } else if (sourcePanelOpen && !locked && panelKind == "color") {
             ColorFilterPanel(
@@ -1512,6 +1523,9 @@ class PlayerSession(
     /** Decoder de vídeo (pref `pref_player_decoder`, Lote 4 — v1.12.0).
      *  Só vale na criação do player: a sessão cria o ExoPlayer 1x. */
     val decoderMode: DecoderMode = DecoderMode.HW,
+    /** Perfil de buffer do ExoPlayer (pref `pref_player_buffer`, Lote 5 item 1 — v1.14.0).
+     *  Como o decoder, só vale na criação do player: o LoadControl entra no Builder. */
+    val bufferProfile: BufferProfile = BufferProfile.NORMAL,
 ) {
     /** Volta para a tela anterior. Atualizado a cada composição. */
     var onBack: () -> Unit = {}
@@ -1704,6 +1718,24 @@ class PlayerSession(
     fun refreshTechInfo() {
         techInfo = runCatching { collectTechInfo(exoPlayer) }.getOrNull()
     }
+    // Stats do torrent P2P (Lote 5 item 2, v1.14.0): seeds, conexões,
+    // velocidade e buffer do ExoPlayer p/ a seção TORRENT do painel de
+    // infos técnicas. Re-lido a cada 2 s enquanto o painel está aberto
+    // (ver o LaunchedEffect junto do TechInfoPanel). Null = fonte atual
+    // não é P2P, P2P resolvido pelo debrid ou motor sem o torrent — aí a
+    // seção some do painel, sem inventar valor.
+    var torrentStats by run { mutableStateOf<TorrentStats?>(null) }
+    /** Re-lê os stats do torrent da fonte atual. Não trava o player. */
+    fun refreshTorrentStats() {
+        val u = streamUrl
+        torrentStats = if (u != null && TorrentMagnet.isMagnet(u) && playVia != "debrid") {
+            val st = runCatching { Torrents.ifStarted()?.status(u) }.getOrNull()
+            val buffered = (exoPlayer.bufferedPosition - exoPlayer.currentPosition).coerceAtLeast(0L)
+            st?.let { TorrentStats(seeds = it.seeds, peers = it.peers, downloadBps = it.downloadBps, bufferedMs = buffered) }
+        } else {
+            null
+        }
+    }
     // Legendas externas (OpenSubtitles e addons). Ligam sozinhas quando são a melhor no idioma.
     var externalSubs by run { mutableStateOf<List<com.aotv.app.data.remote.ExternalSub>>(emptyList()) }
     var selectedSubUrl by run { mutableStateOf<String?>(null) }
@@ -1840,6 +1872,7 @@ class PlayerSession(
         try {
             ExoPlayer.Builder(context)
                 .setRenderersFactory(decoderRenderersFactory(context, decoderMode))
+                .setLoadControl(bufferLoadControl(bufferProfile))
                 .setMediaSourceFactory(mediaSourceFactory(context))
                 .setAudioAttributes(audioAttrs, true)
                 .setHandleAudioBecomingNoisy(true)
@@ -1858,6 +1891,7 @@ class PlayerSession(
                 }
         } catch (_: Exception) {
             ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode))
+                .setLoadControl(bufferLoadControl(bufferProfile))
                 .setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
                 .build().apply { playWhenReady = true }
         }
@@ -2490,7 +2524,8 @@ class PlayerSession(
         if (kind == "sources") sourceLimit = 30
         if (kind == "color") colorFocusIdx = 0
         // Infos técnicas (Lote 4 item 4): lê os dados do stream na hora de abrir.
-        if (kind == "info") refreshTechInfo()
+        // Lote 5 item 2: junto, os stats do torrent (se a fonte for P2P).
+        if (kind == "info") { refreshTechInfo(); refreshTorrentStats() }
         if (kind == "episodes") selectPanelSeason(curSeason.coerceAtLeast(1))
     }
     // Chips do player (celular E TV: a mesma lista alimenta os dois — o toque

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.entity.DownloadEntity
 import com.aotv.app.ui.theme.*
 
@@ -39,6 +41,11 @@ fun DownloadsScreen(
 ) {
     val vm: DownloadsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
     val list by vm.downloads.collectAsStateWithLifecycle()
+    // "Só Wi-Fi" e fila (Lote 5, v1.14.0): downloads "queued" esperam o Wi-Fi.
+    val wifiOnly by vm.wifiOnly.collectAsStateWithLifecycle()
+    val queuedCount by vm.queuedCount.collectAsStateWithLifecycle()
+    val mobileLimitReached by vm.mobileLimitReached.collectAsStateWithLifecycle()
+    val mobileMonthBytes by vm.mobileMonthBytes.collectAsStateWithLifecycle()
 
     // Progresso (0..100) por id — atualizado em loop enquanto houver download em andamento.
     var progress by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
@@ -71,6 +78,47 @@ fun DownloadsScreen(
             "Downloads",
             sub = if (list.isEmpty()) "Para assistir sem internet" else "${list.size} no aparelho",
         )
+
+        // Aviso da fila "Só Wi-Fi" (Lote 5): downloads parados esperando o Wi-Fi.
+        if (queuedCount > 0) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = com.aotv.app.ui.common.pagePadding()).padding(top = 10.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(Icons.Default.WifiOff, null, tint = Accent, modifier = Modifier.size(22.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Aguardando Wi-Fi — $queuedCount na fila",
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary,
+                    )
+                    Text(
+                        if (wifiOnly) "Com \"Só Wi-Fi\" ligado, os downloads só começam em Wi-Fi. Desliga em Configurações → Downloads para baixar em dados móveis."
+                        else "O \"Só Wi-Fi\" está desligado: toque em \"Tentar agora\" para começar os downloads.",
+                        fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                TextButton(onClick = { vm.refresh() }) { Text("Tentar agora", color = Accent) }
+            }
+        }
+
+        // Aviso do limite de dados móveis (Lote 5): só aviso, nada é bloqueado.
+        if (mobileLimitReached) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = com.aotv.app.ui.common.pagePadding()).padding(top = 10.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Limite de dados móveis atingido (${MobileDataUsage.formatBytes(mobileMonthBytes)} este mês). É só um aviso: nada é bloqueado. Muda o limite em Configurações → Downloads.",
+                    fontSize = 13.sp, color = DangerText, lineHeight = 18.sp,
+                )
+            }
+        }
 
         if (list.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -143,11 +191,13 @@ private fun DownloadRow(
             val sub = when (d.status) {
                 "done"        -> if (d.lastEpisode.isNotBlank()) d.lastEpisode else "Pronto p/ assistir"
                 "downloading" -> if (percent > 0) "Baixando… $percent%" else "Baixando…"
+                "queued"      -> "Na fila — aguardando Wi-Fi"
                 else          -> "Falha no download"
             }
             val subColor = when (d.status) {
                 "done" -> Ok
                 "downloading" -> Accent
+                "queued" -> Accent
                 else -> DangerText
             }
             Text(

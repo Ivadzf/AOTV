@@ -12,6 +12,10 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = 'downloading'")
     suspend fun getDownloading(): List<DownloadEntity>
 
+    /** Na fila aguardando Wi-Fi ("Só Wi-Fi" ligado, Lote 5, v1.14.0). */
+    @Query("SELECT * FROM downloads WHERE status = 'queued' ORDER BY createdAt ASC")
+    suspend fun getQueued(): List<DownloadEntity>
+
     @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
     suspend fun get(id: String): DownloadEntity?
 
@@ -20,6 +24,10 @@ interface DownloadDao {
 
     @Query("UPDATE downloads SET status = :status, localUri = :localUri WHERE id = :id")
     suspend fun updateStatus(id: String, status: String, localUri: String)
+
+    /** Troca o id do DownloadManager e o status (tirar da fila "queued" p/ "downloading"). */
+    @Query("UPDATE downloads SET downloadId = :downloadId, status = :status WHERE id = :id")
+    suspend fun updateDownload(id: String, downloadId: Long, status: String)
 
     @Delete
     suspend fun delete(entity: DownloadEntity)

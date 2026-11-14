@@ -64,6 +64,13 @@ object AotvBackup {
         "plugin_timeout_sec", "plugin_concurrency", "plugin_auto_update", "plugin_global_enabled",
         "aotv_catalog_on", "platform_mode",
         "intro_marks_v1", "home_auto_on_v1", "nuvio_profile_links_v1",
+        // Lote 5 (v1.14.0): "Só Wi-Fi", pasta SAF e contadores/limite de dados
+        // móveis. A URI da pasta viaja como texto, mas a permissão persistida
+        // NÃO viaja no backup — depois de restaurar, a tela de Downloads pede
+        // p/ escolher a pasta de novo (ver DownloadsPage).
+        "downloads_wifi_only", "downloads_folder_uri", "downloads_folder_name",
+        "mobile_data_today_bytes", "mobile_data_month_bytes",
+        "mobile_data_day", "mobile_data_month", "mobile_data_limit_mb",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */

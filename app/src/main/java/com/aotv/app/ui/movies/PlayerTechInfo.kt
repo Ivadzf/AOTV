@@ -60,6 +60,32 @@ val TechInfo.isEmpty: Boolean
     get() = videoCodec == null && videoResolution == null && videoFps == null &&
         videoDecoder == null && videoBitrateKbps == null && audioCodec == null
 
+/**
+ * Stats do torrent durante a reprodução P2P (Lote 5 item 2, v1.14.0) —
+ * tudo lido de verdade, nada inventado:
+ * - [seeds]/[peers]: do status do libtorrent ([TorrentStreamer.Status]:
+ *   `numSeeds()`/`numPeers()` do handle). 0 é um valor real (ninguém
+ *   compartilhando / sem conexão ainda), não "sem dado".
+ * - [downloadBps]: taxa de download do payload, em bytes/s, do mesmo status.
+ * - [bufferedMs]: quanto do vídeo o ExoPlayer já tem guardado à frente
+ *   (`bufferedPosition - currentPosition`), em ms.
+ *
+ * A seção só aparece quando há status ([TechInfoPanel] com `torrent`
+ * não-nulo): fonte que não é P2P, P2P resolvido pelo debrid ou motor sem
+ * o torrent não mostram nada — o painel nunca mostra número chutado.
+ */
+data class TorrentStats(
+    val seeds: Int,
+    val peers: Int,
+    val downloadBps: Int,
+    val bufferedMs: Long,
+)
+
+/** "1,2 MB/s" ou "340 KB/s" — mesmo formato do overlay de carregamento P2P. */
+private fun torrentSpeedLabel(bps: Int): String =
+    if (bps >= 1_000_000) String.format(java.util.Locale("pt", "BR"), "%.1f MB/s", bps / 1_000_000.0)
+    else "${bps / 1_000} KB/s"
+
 /** Nome do decoder do [mime] no aparelho, ou null. [hardware] diz se ele é de hardware. */
 @OptIn(UnstableApi::class)
 private fun decoderFor(mime: String?): Pair<String, Boolean?>? {
@@ -132,9 +158,11 @@ internal fun TechInfoPanel(
     info: TechInfo?,
     onDismiss: () -> Unit,
     television: Boolean = false,
+    /** Stats do torrent P2P (null = fonte não é P2P; a seção some). */
+    torrent: TorrentStats? = null,
 ) {
-    if (television) TvScaled { TechInfoPanelBody(info, onDismiss, true) }
-    else TechInfoPanelBody(info, onDismiss, false)
+    if (television) TvScaled { TechInfoPanelBody(info, onDismiss, true, torrent) }
+    else TechInfoPanelBody(info, onDismiss, false, torrent)
 }
 
 @Composable
@@ -142,6 +170,7 @@ private fun TechInfoPanelBody(
     info: TechInfo?,
     onDismiss: () -> Unit,
     television: Boolean,
+    torrent: TorrentStats? = null,
 ) {
     SidePanel(
         title = "Informações de reprodução",
@@ -170,9 +199,19 @@ private fun TechInfoPanelBody(
                 info?.audioCodec?.let { "Codec" to it },
                 info?.audioDecoder?.let { "Decoder" to it },
             ).takeIf { it.isNotEmpty() }?.let { "AUDIO STREAM" to it },
+            // Torrent P2P (Lote 5 item 2): só quando há status real — os 4
+            // valores vêm do motor + ExoPlayer, sem nada inventado.
+            torrent?.let {
+                "TORRENT (P2P)" to listOf(
+                    "Seeds" to "${it.seeds}",
+                    "Conexões" to "${it.peers}",
+                    "Velocidade" to torrentSpeedLabel(it.downloadBps),
+                    "Buffer no player" to "${it.bufferedMs / 1_000} s",
+                )
+            },
         )
         LazyColumn(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (info == null || info.isEmpty) {
+            if ((info == null || info.isEmpty) && torrent == null) {
                 item {
                     Text(
                         "Ainda sem dados do stream — aparece quando o vídeo começar a tocar.",

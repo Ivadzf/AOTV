@@ -15,6 +15,6 @@ data class DownloadEntity(
     val localUri: String = "",          // file:// quando concluído
     val lastEpisode: String = "",       // "T1:E3" p/ série
     val downloadId: Long = 0,           // id do DownloadManager
-    val status: String = "downloading", // downloading | done | failed
+    val status: String = "downloading", // downloading | done | failed | queued ("queued" = na fila aguardando Wi-Fi, Lote 5)
     val createdAt: Long = 0,
 )

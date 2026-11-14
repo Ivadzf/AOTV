@@ -77,6 +77,9 @@ fun LivePlayerScreen(channelId: String, onBack: () -> Unit, viewModel: LivePlaye
 
     val activity = context as? android.app.Activity
     val player = remember {
+        // Buffer da pref `pref_player_buffer` NÃO vale aqui (Lote 5 item 1,
+        // v1.14.0): a TV ao vivo tem o próprio player, sem LoadControl
+        // configurado — o ajuste só vale p/ filmes e episódios.
         ExoPlayer.Builder(context).build().apply { playWhenReady = true }
     }
     // Ao entrar, trava em paisagem; ao sair, solta o player e volta a tela para o automático.

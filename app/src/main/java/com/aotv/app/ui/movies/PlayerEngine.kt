@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import com.google.android.gms.cast.CastMediaControlIntent
 
@@ -68,6 +69,60 @@ fun decoderRenderersFactory(context: Context, mode: DecoderMode): DefaultRendere
     DefaultRenderersFactory(context)
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
         .setEnableDecoderFallback(mode == DecoderMode.HW_FALLBACK)
+
+/**
+ * Tamanho do buffer do ExoPlayer (Lote 5 item 1, v1.14.0 — pref
+ * `pref_player_buffer`, por perfil). Os 4 números são os do
+ * [DefaultLoadControl.Builder.setBufferDurationsMs]: mínimo e máximo de
+ * mídia guardada, quanto precisa ter p/ começar a tocar e quanto precisa
+ * ter p/ retomar depois de travar.
+ *
+ * - [LOW]: 15 s / 30 s, começa com 1,5 s. Internet boa e aparelho com
+ *   pouca memória; começa rápido, mas trava mais fácil se a rede oscilar.
+ * - [NORMAL]: 50 s / 50 s, começa com 2,5 s, retoma com 5 s. É o PADRÃO
+ *   do ExoPlayer (os mesmos números que ele usa sem LoadControl) — quem
+ *   não mexer continua exatamente como antes.
+ * - [HIGH]: 120 s / 180 s, começa com 5 s, retoma com 10 s. Internet
+ *   instável: segura mais vídeo na frente, ao custo de mais memória e
+ *   de esperar mais no início.
+ *
+ * Vale SÓ na criação do player (a sessão cria o ExoPlayer 1x, como o
+ * decoder): mudar em Configurações vale a partir da próxima reprodução.
+ * Não vale p/ TV ao vivo (LivePlayerScreen usa o próprio ExoPlayer
+ * sem LoadControl), nem p/ player externo e Cast (não é o ExoPlayer do
+ * app que toca), nem p/ o player de som de outra fonte (só áudio, sem
+ * vídeo p/ guardar). Não há valor personalizado em ms: 3 presets cobrem
+ * os casos e o campo numérico não valia a tela a mais.
+ */
+enum class BufferProfile(
+    val id: String,
+    val label: String,
+    val minBufferMs: Int,
+    val maxBufferMs: Int,
+    val bufferForPlaybackMs: Int,
+    val bufferForPlaybackAfterRebufferMs: Int,
+) {
+    LOW("low", "Baixo", 15_000, 30_000, 1_500, 3_000),
+    NORMAL("normal", "Normal", 50_000, 50_000, 2_500, 5_000),
+    HIGH("high", "Alto", 120_000, 180_000, 5_000, 10_000);
+
+    companion object {
+        fun fromId(id: String): BufferProfile =
+            entries.firstOrNull { it.id == id } ?: NORMAL
+    }
+}
+
+/** LoadControl do ExoPlayer com o perfil de buffer escolhido. */
+@OptIn(UnstableApi::class)
+fun bufferLoadControl(profile: BufferProfile): DefaultLoadControl =
+    DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+            profile.minBufferMs,
+            profile.maxBufferMs,
+            profile.bufferForPlaybackMs,
+            profile.bufferForPlaybackAfterRebufferMs,
+        )
+        .build()
 
 /** Seletor de rota do Cast (Default Media Receiver), compartilhado pelo botão do player. */
 fun castRouteSelector(): androidx.mediarouter.media.MediaRouteSelector =

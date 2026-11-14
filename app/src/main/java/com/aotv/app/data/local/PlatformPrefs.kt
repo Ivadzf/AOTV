@@ -93,6 +93,8 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_color_hue", "pref_player_color_preset", "pref_player_color_daltonism",
     // Lote 4 — motor do player (v1.12.0): player padrão (interno/externo) e decoder.
     "pref_player_engine", "pref_player_decoder",
+    // Lote 5 — buffer do player (v1.14.0): perfil de buffer do ExoPlayer.
+    "pref_player_buffer",
     // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
     "pref_detail_original_title",
     // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
@@ -177,6 +179,38 @@ class PlatformPrefs @Inject constructor(
 
         /** Incluir chaves e sessões no backup (v1.13.0). Do aparelho. DESLIGADO por padrão. */
         private const val KEY_BACKUP_INCLUDE_SECRETS = "backup_include_secrets"
+
+        // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ─────
+        // Tudo global (NÃO vai p/ SCOPED_KEYS): a lista de downloads, a pasta
+        // e a rede são do aparelho, não do perfil — a fila é a mesma p/ todo
+        // mundo que usa o aparelho. O backup leva estas chaves (ver
+        // AotvBackup.GLOBAL_KEYS); a URI da pasta viaja como texto, mas a
+        // permissão persistida NÃO viaja no backup — depois de restaurar, a
+        // tela de Downloads pede p/ escolher a pasta de novo.
+
+        /** "Só Wi-Fi" nos downloads: ligado, download só roda em Wi-Fi. */
+        private const val KEY_DOWNLOADS_WIFI_ONLY = "downloads_wifi_only"
+
+        /** URI da pasta de download escolhida (SAF, ACTION_OPEN_DOCUMENT_TREE). "" = pasta do app. */
+        private const val KEY_DOWNLOADS_FOLDER_URI = "downloads_folder_uri"
+
+        /** Nome de exibição da pasta escolhida (só p/ mostrar na tela). */
+        private const val KEY_DOWNLOADS_FOLDER_NAME = "downloads_folder_name"
+
+        /** Bytes de dados móveis medidos hoje (ver MobileDataUsage). */
+        private const val KEY_MOBILE_DATA_TODAY = "mobile_data_today_bytes"
+
+        /** Bytes de dados móveis medidos no mês. */
+        private const val KEY_MOBILE_DATA_MONTH = "mobile_data_month_bytes"
+
+        /** Dia do contador de hoje ("yyyy-MM-dd"); mudou = zera o de hoje. */
+        private const val KEY_MOBILE_DATA_DAY = "mobile_data_day"
+
+        /** Mês do contador ("yyyy-MM"); mudou = zera o do mês. */
+        private const val KEY_MOBILE_DATA_MONTH_KEY = "mobile_data_month"
+
+        /** Limite mensal de dados móveis, em MB. 0 = sem limite (padrão). */
+        private const val KEY_MOBILE_DATA_LIMIT_MB = "mobile_data_limit_mb"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -496,6 +530,111 @@ class PlatformPrefs @Inject constructor(
     var backupIncludeSecrets: Boolean
         get() = prefs.getBoolean(KEY_BACKUP_INCLUDE_SECRETS, false)
         set(value) { prefs.edit().putBoolean(KEY_BACKUP_INCLUDE_SECRETS, value).apply() }
+
+    // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ──────────
+    // "Só Wi-Fi", pasta SAF e contadores de dados móveis. Tudo global: a fila
+    // de downloads e a rede são do aparelho, não do perfil (ver as chaves no
+    // companion). Os contadores só somam o que o app MEDIU de fato (downloads
+    // .mp4 via DownloadManager, enquanto a rede é móvel — ver MobileDataUsage);
+    // streaming do player, torrents e API/pôsteres NÃO entram na conta.
+
+    private val _downloadsWifiOnly = MutableStateFlow(prefs.getBoolean(KEY_DOWNLOADS_WIFI_ONLY, false))
+    /** "Só Wi-Fi" nos downloads ligado, que avisa quem observa. */
+    val downloadsWifiOnlyFlow: StateFlow<Boolean> = _downloadsWifiOnly.asStateFlow()
+    /** "Só Wi-Fi" nos downloads. Ligado, download novo em dados móveis entra na fila ("queued") em vez de baixar. Padrão DESLIGADO: tudo funciona como antes. */
+    var downloadsWifiOnly: Boolean
+        get() = _downloadsWifiOnly.value
+        set(value) { prefs.edit().putBoolean(KEY_DOWNLOADS_WIFI_ONLY, value).apply(); _downloadsWifiOnly.value = value }
+
+    private val _downloadFolderUri = MutableStateFlow(prefs.getString(KEY_DOWNLOADS_FOLDER_URI, "") ?: "")
+    /** URI SAF da pasta de download, que avisa quem observa. "" = pasta do app (padrão). */
+    val downloadFolderUriFlow: StateFlow<String> = _downloadFolderUri.asStateFlow()
+    /** URI SAF da pasta de download (ACTION_OPEN_DOCUMENT_TREE, permissão persistida). "" = pasta do app. */
+    var downloadFolderUri: String
+        get() = _downloadFolderUri.value
+        set(value) { prefs.edit().putString(KEY_DOWNLOADS_FOLDER_URI, value).apply(); _downloadFolderUri.value = value }
+
+    private val _downloadFolderName = MutableStateFlow(prefs.getString(KEY_DOWNLOADS_FOLDER_NAME, "") ?: "")
+    /** Nome de exibição da pasta de download, que avisa quem observa. */
+    val downloadFolderNameFlow: StateFlow<String> = _downloadFolderName.asStateFlow()
+    /** Nome de exibição da pasta de download (só p/ mostrar na tela). */
+    var downloadFolderName: String
+        get() = _downloadFolderName.value
+        set(value) { prefs.edit().putString(KEY_DOWNLOADS_FOLDER_NAME, value).apply(); _downloadFolderName.value = value }
+
+    /** Lê o contador de hoje já com a virada do dia (0 quando o dia guardado não é hoje). */
+    private fun readMobileToday(): Long =
+        if (prefs.getString(KEY_MOBILE_DATA_DAY, "") == MobileDataUsage.dayKey()) prefs.getLong(KEY_MOBILE_DATA_TODAY, 0L) else 0L
+
+    /** Lê o contador do mês já com a virada do mês (0 quando o mês guardado não é o atual). */
+    private fun readMobileMonth(): Long =
+        if (prefs.getString(KEY_MOBILE_DATA_MONTH_KEY, "") == MobileDataUsage.monthKey()) prefs.getLong(KEY_MOBILE_DATA_MONTH, 0L) else 0L
+
+    private val _mobileDataToday = MutableStateFlow(readMobileToday())
+    /** Bytes de dados móveis medidos hoje, que avisam quem observa. */
+    val mobileDataTodayFlow: StateFlow<Long> = _mobileDataToday.asStateFlow()
+
+    private val _mobileDataMonth = MutableStateFlow(readMobileMonth())
+    /** Bytes de dados móveis medidos no mês, que avisam quem observa. */
+    val mobileDataMonthFlow: StateFlow<Long> = _mobileDataMonth.asStateFlow()
+
+    private val _mobileDataLimitMb = MutableStateFlow(prefs.getLong(KEY_MOBILE_DATA_LIMIT_MB, 0L))
+    /** Limite mensal de dados móveis em MB, que avisa quem observa. 0 = sem limite. */
+    val mobileDataLimitMbFlow: StateFlow<Long> = _mobileDataLimitMb.asStateFlow()
+    /** Limite mensal de dados móveis, em MB. 0 = sem limite (só aviso, nunca bloqueia nada). */
+    var mobileDataLimitMb: Long
+        get() = _mobileDataLimitMb.value
+        set(value) {
+            val clean = value.coerceAtLeast(0L)
+            prefs.edit().putLong(KEY_MOBILE_DATA_LIMIT_MB, clean).apply()
+            _mobileDataLimitMb.value = clean
+            refreshMobileDataLimitReached()
+        }
+
+    private val _mobileDataLimitReached = MutableStateFlow(mobileDataLimitReached())
+    /** Limite mensal atingido (mês >= limite), que avisa quem observa. false sem limite. */
+    val mobileDataLimitReachedFlow: StateFlow<Boolean> = _mobileDataLimitReached.asStateFlow()
+
+    /** Limite mensal atingido? false sem limite configurado. */
+    fun mobileDataLimitReached(): Boolean {
+        val limit = prefs.getLong(KEY_MOBILE_DATA_LIMIT_MB, 0L)
+        return limit > 0 && readMobileMonth() >= limit * 1024L * 1024L
+    }
+
+    private fun refreshMobileDataLimitReached() {
+        _mobileDataLimitReached.value = mobileDataLimitReached()
+    }
+
+    /** Soma bytes MEDIDOS em dados móveis aos contadores (hoje + mês), com virada de dia/mês. Ignora <= 0. Quem chama já verificou que a rede é móvel (ver DownloadRepository). */
+    fun recordMobileBytes(bytes: Long) {
+        if (bytes <= 0L) return
+        val today = MobileDataUsage.dayKey()
+        val month = MobileDataUsage.monthKey()
+        val ed = prefs.edit()
+        var t = prefs.getLong(KEY_MOBILE_DATA_TODAY, 0L)
+        var m = prefs.getLong(KEY_MOBILE_DATA_MONTH, 0L)
+        if (prefs.getString(KEY_MOBILE_DATA_DAY, "") != today) {
+            t = 0L
+            ed.putString(KEY_MOBILE_DATA_DAY, today)
+        }
+        if (prefs.getString(KEY_MOBILE_DATA_MONTH_KEY, "") != month) {
+            m = 0L
+            ed.putString(KEY_MOBILE_DATA_MONTH_KEY, month)
+        }
+        t += bytes
+        m += bytes
+        ed.putLong(KEY_MOBILE_DATA_TODAY, t).putLong(KEY_MOBILE_DATA_MONTH, m).apply()
+        _mobileDataToday.value = t
+        _mobileDataMonth.value = m
+        refreshMobileDataLimitReached()
+    }
+
+    /** Recarrega os contadores com a virada de dia/mês (p/ a tela de Downloads abrir com o número certo). */
+    fun refreshMobileDataCounters() {
+        _mobileDataToday.value = readMobileToday()
+        _mobileDataMonth.value = readMobileMonth()
+        refreshMobileDataLimitReached()
+    }
 
     /** Substitui a lista de perfis pela do backup (o hash do PIN só vem com segredos). */
     fun restoreProfiles(list: List<Profile>) {
@@ -860,6 +999,23 @@ class PlatformPrefs @Inject constructor(
     var playerDecoder: String
         get() = _playerDecoder.value
         set(value) { prefs.edit().putString(sk("pref_player_decoder"), value).apply(); _playerDecoder.value = value }
+
+    // ── Buffer do player (Lote 5 item 1, v1.14.0) — por perfil ─────────────
+    // Perfil de buffer do ExoPlayer ("low", "normal" ou "high", ver
+    // [BufferProfile] em PlayerEngine.kt). "normal" é o padrão do ExoPlayer,
+    // então quem não mexer continua exatamente como antes. Só vale na
+    // criação do player: mudar em Configurações vale a partir da próxima
+    // reprodução. Valor desconhecido volta p/ "normal".
+
+    private val _playerBuffer = MutableStateFlow(prefs.getString(sk("pref_player_buffer"), "normal") ?: "normal")
+    /** Perfil de buffer do ExoPlayer do perfil ("low", "normal" ou "high"). */
+    val playerBufferFlow: StateFlow<String> = _playerBuffer.asStateFlow()
+    var playerBuffer: String
+        get() = _playerBuffer.value
+        set(value) {
+            val clean = if (value in listOf("low", "normal", "high")) value else "normal"
+            prefs.edit().putString(sk("pref_player_buffer"), clean).apply(); _playerBuffer.value = clean
+        }
 
     private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
     /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
@@ -1603,6 +1759,7 @@ class PlatformPrefs @Inject constructor(
         _playerColorDaltonism.value = prefs.getString(sk("pref_player_color_daltonism"), "off") ?: "off"
         _playerEngine.value = prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer"
         _playerDecoder.value = prefs.getString(sk("pref_player_decoder"), "hw") ?: "hw"
+        _playerBuffer.value = prefs.getString(sk("pref_player_buffer"), "normal") ?: "normal"
         _subColor.value = prefs.getInt(sk("sub_color"), -1)
         _subBgOpacity.value = prefs.getFloat(sk("sub_bg_opacity"), 0.78f)
         _subOutline.value = prefs.getBoolean(sk("sub_outline"), true)

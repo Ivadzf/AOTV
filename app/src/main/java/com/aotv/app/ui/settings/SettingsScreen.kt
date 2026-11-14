@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
@@ -250,6 +251,13 @@ private val hubEntries = listOf(
         sub = "Áudio, qualidade, trailer e legendas",
         icon = Icons.Default.ClosedCaption,
         keywords = listOf("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma"),
+    ),
+    HubEntry(
+        id = SettingsPageIds.Downloads,
+        title = "Downloads",
+        sub = "Só Wi-Fi, pasta e dados móveis",
+        icon = Icons.Default.Download,
+        keywords = listOf("Downloads", "Wi-Fi", "pasta", "dados móveis", "limite", "offline", "fila"),
     ),
     HubEntry(
         id = SettingsPageIds.Backup,

@@ -1,6 +1,11 @@
 package com.aotv.app.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +43,7 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -63,6 +69,7 @@ import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -100,6 +107,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
+import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.ui.movies.PlayerPrefsViewModel
@@ -140,6 +148,7 @@ object SettingsPageIds {
     const val Acompanhamento = "acompanhamento"
     const val Aparencia = "aparencia"
     const val Reproducao = "reproducao"
+    const val Downloads = "downloads"
     const val Backup = "backup"
     const val Trackers = "trackers"
 
@@ -155,6 +164,7 @@ object SettingsPageIds {
         Acompanhamento -> "Acompanhamento"
         Aparencia -> "Aparência"
         Reproducao -> "Reprodução"
+        Downloads -> "Downloads"
         Backup -> "Backup e restauração"
         Trackers -> "Trackers e Sincronização"
         else -> "Configurações"
@@ -197,6 +207,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel)
+        SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel)
         SettingsPageIds.Backup -> BackupScreen(onBack)
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
         else -> PlaceholderPage(
@@ -271,6 +282,135 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(16.dp),
         content = content,
     )
+}
+
+// ── Downloads (Lote 5, v1.14.0) ─────────────────────────────────────────────
+
+/** Nome da pasta SAF p/ mostrar (DISPLAY_NAME da árvore; fallback p/ o último segmento da URI). */
+private fun safFolderDisplayName(context: android.content.Context, treeUri: Uri): String {
+    val fromQuery = runCatching {
+        context.contentResolver.query(treeUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+    if (fromQuery != null) return fromQuery
+    return Uri.decode(treeUri.lastPathSegment?.substringAfterLast('/') ?: "").ifBlank { "Pasta escolhida" }
+}
+
+/**
+ * Página "Downloads": "Só Wi-Fi", pasta de download (SAF) e dados móveis.
+ * A pasta é do aparelho (não do perfil); os contadores mostram só o que o
+ * app mediu de fato (downloads .mp4 — ver MobileDataUsage). O limite é só
+ * um aviso na tela: nada é bloqueado nem pausado ao atingi-lo.
+ */
+@Composable
+private fun DownloadsPage(
+    onBack: () -> Unit,
+    viewModel: SettingsViewModel,
+) {
+    val context = LocalContext.current
+    val wifiOnly by viewModel.downloadsWifiOnly.collectAsStateWithLifecycle()
+    val folderUri by viewModel.downloadFolderUri.collectAsStateWithLifecycle()
+    val folderName by viewModel.downloadFolderName.collectAsStateWithLifecycle()
+    val today by viewModel.mobileDataToday.collectAsStateWithLifecycle()
+    val month by viewModel.mobileDataMonth.collectAsStateWithLifecycle()
+    val limitMb by viewModel.mobileDataLimitMb.collectAsStateWithLifecycle()
+    val limitReached by viewModel.mobileDataLimitReached.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.refreshMobileData() }
+
+    // A pasta escolhida ainda tem permissão persistida? O backup restaura a
+    // URI como texto, mas a permissão NÃO viaja — sem ela, pede p/ escolher de novo.
+    val folderHasAccess = remember(folderUri) {
+        folderUri.isBlank() || runCatching {
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri.toString() == folderUri && it.isReadPermission && it.isWritePermission
+            }
+        }.getOrDefault(false)
+    }
+
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.setDownloadFolder(uri.toString(), safFolderDisplayName(context, uri))
+        Toast.makeText(context, "Pasta de download alterada. Os próximos downloads concluídos vão para lá.", Toast.LENGTH_LONG).show()
+    }
+
+    SettingsPageScaffold("Downloads", "Só Wi-Fi, pasta e dados móveis", onBack) {
+        SettingsSection("Dados móveis")
+        SettingsCard {
+            Text("Hoje: ${MobileDataUsage.formatBytes(today)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text("Este mês: ${MobileDataUsage.formatBytes(month)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            Text(
+                "Conta só o que o app mediu: downloads .mp4 enquanto a rede é móvel. O streaming do player, torrents e pôsteres/APIs não entram na conta.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        if (limitReached) {
+            SettingsCard {
+                Text(
+                    "Limite mensal atingido (${MobileDataUsage.formatBytes(month)} este mês). É só um aviso: nada é bloqueado nem pausado.",
+                    fontSize = 14.sp, color = DangerText, lineHeight = 20.sp,
+                )
+            }
+        }
+        SettingsSection("Limite mensal")
+        SettingsCard {
+            PrefRow(
+                "Avisar quando chegar a",
+                listOf(0L to "Sem limite", 512L to "512 MB", 1024L to "1 GB", 2048L to "2 GB", 5120L to "5 GB", 10240L to "10 GB"),
+                limitMb, viewModel::setMobileDataLimitMb,
+            )
+            Text(
+                "É só um aviso na tela de Downloads: nada é bloqueado nem pausado ao atingir o limite.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        SettingsSection("Downloads")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.WifiOff,
+                title = "Só Wi-Fi",
+                sub = if (wifiOnly) "Ligado: em dados móveis os downloads ficam na fila aguardando o Wi-Fi"
+                    else "Desligado: downloads baixam em qualquer rede, como antes",
+                trailing = { Switch(checked = wifiOnly, onCheckedChange = { viewModel.setDownloadsWifiOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDownloadsWifiOnly(!wifiOnly) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Folder,
+                title = "Pasta de download",
+                sub = when {
+                    folderUri.isBlank() -> "Pasta do app (padrão). Toque para escolher outra pasta."
+                    !folderHasAccess -> "\"$folderName\" sem acesso — toque para escolher de novo."
+                    else -> "\"$folderName\". Os downloads concluídos vão para lá."
+                },
+                onClick = { pickFolder.launch(null) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        if (folderUri.isNotBlank()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { viewModel.clearDownloadFolder() }) {
+                    Text("Voltar para a pasta do app", color = Accent)
+                }
+            }
+        }
+        SettingsSection("O que entra na conta")
+        SettingsCard {
+            Text(
+                "Downloads .mp4: bytes medidos pelo DownloadManager enquanto a rede é móvel. " +
+                    "Streaming do player, torrents, pôsteres e chamadas de API não entram — medir o player exigiria mexer no motor do player e fica para o próximo lote. " +
+                    "Um download concluído com o app fechado entra na conta quando o app volta a observá-lo, com o total real, atribuído à rede daquele momento.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+        }
+    }
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -1084,6 +1224,8 @@ private fun ReproducaoPage(
     // Motor do player (Lote 4, v1.12.0): player padrão e decoder.
     val playerEngine by playerPrefs.engine.collectAsStateWithLifecycle()
     val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
+    // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
+    val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
@@ -1332,6 +1474,7 @@ private fun ReproducaoPage(
             }
         }
         // Motor do player (Lote 4, v1.12.0): player padrão e decoder de vídeo.
+        // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
         SettingsSection("Motor do player")
         SettingsCard {
             PrefRow(
@@ -1345,7 +1488,21 @@ private fun ReproducaoPage(
                 listOf("hw" to "Hardware (HW)", "hw_fallback" to "Hardware com fallback"),
                 playerDecoder, playerPrefs::setDecoder,
             )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Buffer do player",
+                listOf("low" to "Baixo", "normal" to "Normal", "high" to "Alto"),
+                playerBuffer, playerPrefs::setBuffer,
+            )
         }
+        Text(
+            "Buffer: Baixo guarda menos vídeo na frente (começa mais rápido, trava mais fácil se a internet oscilar), Normal é o padrão do ExoPlayer e Alto guarda até 3 minutos (aguenta internet instável, mas espera mais no início). Vale a partir da próxima reprodução. Não vale para TV ao vivo, player externo nem Cast.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Em fonte P2P, o painel \"Infos técnicas\" do player mostra seeds, conexões, velocidade de download e buffer no player, atualizados enquanto o painel está aberto.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
         Text(
             "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Sem Libmpv interno nesta versão.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,

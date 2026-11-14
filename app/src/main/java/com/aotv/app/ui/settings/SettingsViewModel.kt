@@ -78,6 +78,29 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ──────────
+    // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
+    val downloadsWifiOnly: StateFlow<Boolean> = platformPrefs.downloadsWifiOnlyFlow
+    fun setDownloadsWifiOnly(v: Boolean) { platformPrefs.downloadsWifiOnly = v }
+
+    val downloadFolderUri: StateFlow<String> = platformPrefs.downloadFolderUriFlow
+    val downloadFolderName: StateFlow<String> = platformPrefs.downloadFolderNameFlow
+    fun setDownloadFolder(uri: String, name: String) {
+        platformPrefs.downloadFolderUri = uri
+        platformPrefs.downloadFolderName = name
+    }
+    fun clearDownloadFolder() {
+        platformPrefs.downloadFolderUri = ""
+        platformPrefs.downloadFolderName = ""
+    }
+
+    val mobileDataToday: StateFlow<Long> = platformPrefs.mobileDataTodayFlow
+    val mobileDataMonth: StateFlow<Long> = platformPrefs.mobileDataMonthFlow
+    val mobileDataLimitMb: StateFlow<Long> = platformPrefs.mobileDataLimitMbFlow
+    val mobileDataLimitReached: StateFlow<Boolean> = platformPrefs.mobileDataLimitReachedFlow
+    fun setMobileDataLimitMb(v: Long) { platformPrefs.mobileDataLimitMb = v }
+    fun refreshMobileData() { platformPrefs.refreshMobileDataCounters() }
+
     // ── Perfil e reprodução (valem para o perfil ativo) ──
     val profiles = platformPrefs.profiles
     val profileId = platformPrefs.profileId

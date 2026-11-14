@@ -1,5 +1,6 @@
 package com.aotv.app.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
@@ -38,7 +40,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -245,6 +249,8 @@ private fun formatSimklDate(at: Long): String = runCatching {
  */
 @Composable
 private fun SimklPinDialog(pin: SimklService.DeviceCode, onCancel: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Conectar ao Simkl", color = TextPrimary) },
@@ -260,6 +266,15 @@ private fun SimklPinDialog(pin: SimklService.DeviceCode, onCancel: () -> Unit) {
                     textAlign = TextAlign.Center,
                 )
                 SimklQrCode(pin.pinUrl, Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(8.dp))
+                // Lote 5 (v1.14.0): copiar a URL completa com o código, sem digitar.
+                AotvButton(
+                    "Copiar link",
+                    {
+                        clipboard.setText(AnnotatedString(pin.pinUrl))
+                        Toast.makeText(context, "Link copiado", Toast.LENGTH_SHORT).show()
+                    },
+                    icon = Icons.Default.ContentCopy, tone = ButtonTone.SECONDARY, compact = true,
+                )
                 Text(
                     "Esperando você confirmar no celular",
                     color = TextSecondary, fontSize = 14.sp, textAlign = TextAlign.Center,
