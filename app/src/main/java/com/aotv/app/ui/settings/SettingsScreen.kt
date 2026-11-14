@@ -1,6 +1,8 @@
 package com.aotv.app.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.ClosedCaption
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,11 +53,14 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.PlatformMode
+import com.aotv.app.data.local.Profile
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.Background
+import com.aotv.app.ui.theme.BackgroundCard2
 import com.aotv.app.ui.theme.Border
 import com.aotv.app.ui.theme.DangerText
+import com.aotv.app.ui.theme.FocusRing
 import com.aotv.app.ui.theme.Ok
 import com.aotv.app.ui.theme.Surface2
 import com.aotv.app.ui.theme.TextPrimary
@@ -61,14 +68,21 @@ import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
 
 /**
- * Hub das Configurações (Fase A, Frente 2). Lista as 8 páginas no estilo da fork;
- * cada página é uma rota `movies_settings/{page}` (ver SettingsPages.kt).
- * A busca filtra as entradas por título, descrição e palavras-chave e abre a página.
+ * Hub das Configurações (redesign Lote 6, v1.15.0, formato Nuvio): busca no
+ * topo, cartão do perfil e as 11 páginas em 7 cartões por grupo — Conta,
+ * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações e
+ * Acompanhamento. Cada página é uma rota `movies_settings/{page}` (com
+ * `?anchor=` opcional p/ a busca profunda — ver SettingsPages.kt).
+ *
+ * A busca profunda casa também cada OPÇÃO dentro das páginas (ver
+ * SettingsSearchIndex.kt) e abre a página certa, rolando até a seção.
  */
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
     onOpenPage: (String) -> Unit = {},
+    onOpenProfiles: () -> Unit = {},
+    onOpenOption: (String, String?) -> Unit = { page, _ -> onOpenPage(page) },
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val currentMode by viewModel.platformMode.collectAsStateWithLifecycle()
@@ -84,14 +98,16 @@ fun SettingsScreen(
     // Verifica automaticamente ao abrir as Configurações (uma vez).
     LaunchedEffect(Unit) { if (sourceStatus.isEmpty()) viewModel.checkSourcesHealth() }
     val pad = com.aotv.app.ui.common.pagePadding()
-    // Busca das configurações (estilo Nuvio). Filtra as páginas por título, descrição e palavras-chave.
+    // Busca das configurações (estilo Nuvio). Filtra as páginas por título, descrição e palavras-chave,
+    // e as opções dentro delas pelo índice de SettingsSearchIndex.kt.
     var query by remember { mutableStateOf("") }
     val q = query.trim()
     fun match(vararg texts: String) = q.isEmpty() || texts.any { it.contains(q, ignoreCase = true) }
     // Páginas escondidas no perfil infantil — igual à tela única antiga, que escondia
     // Início, Addons, Contas/TMDB/TV ao vivo e Aparelho com o infantil ativo.
-    val entries = hubEntries.filter { !me.kids || !it.kidsHidden }
+    val pageResults = hubEntries.filter { !me.kids || !it.kidsHidden }
         .filter { match(it.title, it.sub, *it.keywords.toTypedArray()) }
+    val optionResults = remember(q, me.kids) { searchSettingOptions(q, me.kids) }
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -153,30 +169,105 @@ fun SettingsScreen(
                     .padding(horizontal = pad).padding(bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (entries.isEmpty()) {
-                    Text(
-                        "Nenhuma página bate com \"$q\".",
-                        fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                } else {
-                    com.aotv.app.ui.common.SettingsGroup {
-                        entries.forEachIndexed { i, entry ->
-                            com.aotv.app.ui.common.SettingsRow(
-                                icon = entry.icon,
-                                iconTint = Accent,
-                                title = entry.title,
-                                sub = entry.sub,
-                                onClick = { onOpenPage(entry.id) },
-                                grouped = true,
-                                divider = i > 0,
-                            )
+                if (q.isEmpty()) {
+                    // Cartão do perfil (estilo Nuvio): tocar abre "Quem está assistindo?".
+                    ProfileCard(me, onOpenProfiles)
+                    // Cartões por grupo, na ordem do Nuvio. Cartão vazio no perfil
+                    // infantil (só páginas travadas) some.
+                    hubCards.forEach { cardIds ->
+                        val rows = cardIds.mapNotNull { hubEntriesById[it] }
+                            .filter { !me.kids || !it.kidsHidden }
+                        if (rows.isNotEmpty()) {
+                            com.aotv.app.ui.common.SettingsGroup {
+                                rows.forEachIndexed { i, entry ->
+                                    com.aotv.app.ui.common.SettingsRow(
+                                        icon = entry.icon,
+                                        iconTint = Accent,
+                                        title = entry.title,
+                                        sub = entry.sub,
+                                        onClick = { onOpenPage(entry.id) },
+                                        grouped = true,
+                                        divider = i > 0,
+                                    )
+                                }
+                            }
                         }
+                    }
+                } else {
+                    if (optionResults.isNotEmpty()) {
+                        com.aotv.app.ui.common.Eyebrow("Opções", Modifier.padding(start = 4.dp, top = 8.dp))
+                        com.aotv.app.ui.common.SettingsGroup {
+                            optionResults.forEachIndexed { i, option ->
+                                com.aotv.app.ui.common.SettingsRow(
+                                    icon = hubEntriesById[option.pageId]?.icon ?: Icons.Default.Search,
+                                    iconTint = Accent,
+                                    title = option.title,
+                                    sub = option.sub + " · em " + SettingsPageIds.title(option.pageId),
+                                    onClick = { onOpenOption(option.pageId, option.anchor) },
+                                    grouped = true,
+                                    divider = i > 0,
+                                )
+                            }
+                        }
+                    }
+                    if (pageResults.isNotEmpty()) {
+                        com.aotv.app.ui.common.Eyebrow("Páginas", Modifier.padding(start = 4.dp, top = 8.dp))
+                        com.aotv.app.ui.common.SettingsGroup {
+                            pageResults.forEachIndexed { i, entry ->
+                                com.aotv.app.ui.common.SettingsRow(
+                                    icon = entry.icon,
+                                    iconTint = Accent,
+                                    title = entry.title,
+                                    sub = entry.sub,
+                                    onClick = { onOpenPage(entry.id) },
+                                    grouped = true,
+                                    divider = i > 0,
+                                )
+                            }
+                        }
+                    }
+                    if (optionResults.isEmpty() && pageResults.isEmpty()) {
+                        Text(
+                            "Nenhuma opção ou página bate com \"$q\".",
+                            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
                     }
                 }
                 below?.let { Spacer(Modifier.height(18.dp)); it() }
             }
         }
+    }
+}
+
+/** Cartão do perfil ativo no topo do hub (estilo Nuvio). Tocar troca ou edita perfis. */
+@Composable
+private fun ProfileCard(profile: Profile, onOpenProfiles: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(20.dp)
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(shape)
+            .background(BackgroundCard2)
+            .then(if (focused) Modifier.border(2.dp, FocusRing, shape) else Modifier)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(onClick = onOpenProfiles)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ProfileAvatar(profile, 56.dp)
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(
+                profile.name + if (profile.kids) " (infantil)" else "",
+                color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold,
+            )
+            Text(
+                "Trocar ou editar perfis",
+                color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = TextTertiary)
     }
 }
 
@@ -190,7 +281,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 8 páginas, na ordem da fork. Os ids são as rotas `movies_settings/{id}`. */
+/** As 11 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -225,17 +316,17 @@ private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Integracoes,
         title = "Integrações",
-        sub = "Contas, TMDB e TV ao vivo",
+        sub = "Contas e TV ao vivo",
         icon = Icons.Default.AccountCircle,
-        keywords = listOf("Contas", "Stremio", "Nuvio", "TMDB", "chave", "TV ao vivo", "Canais", "M3U", "Xtream", "guia"),
+        keywords = listOf("Contas", "Stremio", "Nuvio", "TV ao vivo", "Canais", "M3U", "Xtream", "guia"),
         kidsHidden = true,
     ),
     HubEntry(
         id = SettingsPageIds.Acompanhamento,
         title = "Acompanhamento",
-        sub = "Perfil, PIN dos pais e Trakt",
+        sub = "Perfil, PIN dos pais, TMDB e Trakt",
         icon = Icons.Default.Person,
-        keywords = listOf("Perfil", "trocar", "editar", "PIN", "pais", "Trakt", "sincronizar", "Minha Lista"),
+        keywords = listOf("Perfil", "trocar", "editar", "PIN", "pais", "TMDB", "chave", "Trakt", "sincronizar", "Minha Lista"),
     ),
     HubEntry(
         id = SettingsPageIds.Aparencia,
@@ -250,7 +341,7 @@ private val hubEntries = listOf(
         title = "Reprodução",
         sub = "Áudio, qualidade, trailer e legendas",
         icon = Icons.Default.ClosedCaption,
-        keywords = listOf("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma"),
+        keywords = listOf("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma", "buffer", "Buffer"),
     ),
     HubEntry(
         id = SettingsPageIds.Downloads,
@@ -275,6 +366,26 @@ private val hubEntries = listOf(
         keywords = listOf("Trackers", "Simkl", "sincronização", "scrobble", "PIN", "QR", "client ID"),
         kidsHidden = true,
     ),
+)
+
+private val hubEntriesById = hubEntries.associateBy { it.id }
+
+/**
+ * Os 7 cartões do hub, na ordem do Nuvio — cada cartão é um grupo de páginas:
+ * Conta (só o backup real — sem fingir sync), Aparência, Layout (Início,
+ * detalhes e streams, como o "Layout" do Nuvio), Conteúdo & Descoberta,
+ * Reprodução (com Downloads), Integrações e Acompanhamento (com Trackers).
+ * Sem "Sessão em grupo" (Lote 10), sem "Notificações" (não existe no AOTV)
+ * e sem "Avançadas" (sem conteúdo real) — grupos omitidos de propósito.
+ */
+private val hubCards: List<List<String>> = listOf(
+    listOf(SettingsPageIds.Backup),
+    listOf(SettingsPageIds.Aparencia),
+    listOf(SettingsPageIds.Layout, SettingsPageIds.Detalhe, SettingsPageIds.Streams),
+    listOf(SettingsPageIds.Conteudo),
+    listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),
+    listOf(SettingsPageIds.Integracoes),
+    listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
 )
 
 /** Resumo das configurações (.set-summary). Logo, versão e o estado do que importa. */

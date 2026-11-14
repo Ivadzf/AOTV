@@ -81,11 +81,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -96,6 +99,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -137,6 +142,7 @@ import com.aotv.app.ui.theme.TextTertiary
 // Se o arquivo ainda não existe, esta importação é o único ponto a integrar.
 import com.aotv.app.ui.theme.CustomThemeEditor
 import com.aotv.app.ui.theme.ThemeSelector
+import kotlin.math.roundToInt
 
 /** Ids das páginas — são os segmentos da rota `movies_settings/{page}`. */
 object SettingsPageIds {
@@ -178,6 +184,7 @@ object SettingsPageIds {
 @Composable
 fun SettingsPageScreen(
     pageId: String,
+    highlightAnchor: String? = null,
     onOpenAddons: () -> Unit = {},
     onOpenPlugins: () -> Unit = {},
     onOpenKodiAddons: () -> Unit = {},
@@ -199,15 +206,15 @@ fun SettingsPageScreen(
         return
     }
     when (pageId) {
-        SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel)
-        SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel)
-        SettingsPageIds.Streams -> StreamsPage(onBack)
-        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onBack, viewModel)
-        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel)
-        SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel)
-        SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel)
-        SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel)
-        SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel)
+        SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Streams -> StreamsPage(onBack, highlightAnchor = highlightAnchor)
+        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor)
+        SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
+        SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Backup -> BackupScreen(onBack)
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
         else -> PlaceholderPage(
@@ -219,15 +226,34 @@ fun SettingsPageScreen(
     }
 }
 
-/** Moldura comum das páginas: voltar + título + coluna rolável. */
+/** Posições (px dentro do conteúdo rolável) das seções com âncora da página aberta. */
+private val LocalSettingsAnchorPositions = staticCompositionLocalOf<MutableMap<String, Int>?> { null }
+
+/** Âncora pedida pela busca profunda (null = abertura normal, sem destaque). */
+private val LocalSettingsHighlightAnchor = staticCompositionLocalOf<String?> { null }
+
+/**
+ * Moldura comum das páginas: voltar + título + coluna rolável.
+ * Com [highlightAnchor], rola até a seção da âncora quando ela registra a
+ * posição e destaca o título da seção (busca profunda, Lote 6).
+ */
 @Composable
 private fun SettingsPageScaffold(
     title: String,
     sub: String?,
     onBack: () -> Unit,
+    highlightAnchor: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val pad = com.aotv.app.ui.common.pagePadding()
+    val scrollState = rememberScrollState()
+    val anchorPositions = remember { mutableStateMapOf<String, Int>() }
+    // A seção registra a posição ao compor; quando a âncora pedida aparece,
+    // rola até ela (uma vez por âncora — a posição não muda com a rolagem).
+    LaunchedEffect(highlightAnchor, highlightAnchor?.let { anchorPositions[it] }) {
+        val y = highlightAnchor?.let { anchorPositions[it] } ?: return@LaunchedEffect
+        scrollState.scrollTo(maxOf(0, y - 8))
+    }
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
             Modifier.fillMaxWidth().padding(start = 8.dp, end = pad, top = 10.dp),
@@ -240,12 +266,17 @@ private fun SettingsPageScaffold(
             }
             com.aotv.app.ui.common.PageHeader(title, Modifier.weight(1f), sub = sub)
         }
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(horizontal = pad).padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            content = content,
-        )
+        CompositionLocalProvider(
+            LocalSettingsAnchorPositions provides anchorPositions,
+            LocalSettingsHighlightAnchor provides highlightAnchor,
+        ) {
+            Column(
+                Modifier.fillMaxSize().verticalScroll(scrollState)
+                    .padding(horizontal = pad).padding(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                content = content,
+            )
+        }
     }
 }
 
@@ -272,8 +303,29 @@ private fun PlaceholderPage(title: String, sub: String?, note: String, onBack: (
     }
 }
 
+/**
+ * Rótulo de seção das páginas. Com [anchor], registra a posição no conteúdo
+ * rolável p/ a busca profunda rolar até aqui; quando é a âncora pedida, o
+ * título ganha fundo de destaque.
+ */
 @Composable
-private fun SettingsSection(text: String) = com.aotv.app.ui.common.SettingsSection(text)
+private fun SettingsSection(text: String, anchor: String? = null) {
+    val positions = LocalSettingsAnchorPositions.current
+    val highlighted = anchor != null && anchor == LocalSettingsHighlightAnchor.current
+    com.aotv.app.ui.common.SettingsSection(
+        text,
+        modifier = Modifier
+            .then(
+                if (anchor != null && positions != null) Modifier.onGloballyPositioned { coords ->
+                    positions[anchor] = coords.positionInParent().y.roundToInt()
+                } else Modifier
+            )
+            .then(
+                if (highlighted) Modifier.background(AccentSoft, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)
+                else Modifier
+            ),
+    )
+}
 
 /** Bloco com fundo de cartão para agrupar controles que não são uma linha só. */
 @Composable
@@ -307,6 +359,7 @@ private fun safFolderDisplayName(context: android.content.Context, treeUri: Uri)
 private fun DownloadsPage(
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
     val context = LocalContext.current
     val wifiOnly by viewModel.downloadsWifiOnly.collectAsStateWithLifecycle()
@@ -340,8 +393,8 @@ private fun DownloadsPage(
         Toast.makeText(context, "Pasta de download alterada. Os próximos downloads concluídos vão para lá.", Toast.LENGTH_LONG).show()
     }
 
-    SettingsPageScaffold("Downloads", "Só Wi-Fi, pasta e dados móveis", onBack) {
-        SettingsSection("Dados móveis")
+    SettingsPageScaffold("Downloads", "Só Wi-Fi, pasta e dados móveis", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Dados móveis", anchor = SettingsAnchors.DL_DATA)
         SettingsCard {
             Text("Hoje: ${MobileDataUsage.formatBytes(today)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Text("Este mês: ${MobileDataUsage.formatBytes(month)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
@@ -358,7 +411,7 @@ private fun DownloadsPage(
                 )
             }
         }
-        SettingsSection("Limite mensal")
+        SettingsSection("Limite mensal", anchor = SettingsAnchors.DL_LIMIT)
         SettingsCard {
             PrefRow(
                 "Avisar quando chegar a",
@@ -370,7 +423,7 @@ private fun DownloadsPage(
                 fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
         }
-        SettingsSection("Downloads")
+        SettingsSection("Downloads", anchor = SettingsAnchors.DL_MAIN)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.WifiOff,
@@ -401,7 +454,7 @@ private fun DownloadsPage(
                 }
             }
         }
-        SettingsSection("O que entra na conta")
+        SettingsSection("O que entra na conta", anchor = SettingsAnchors.DL_COUNTED)
         SettingsCard {
             Text(
                 "Downloads .mp4: bytes medidos pelo DownloadManager enquanto a rede é móvel. " +
@@ -421,10 +474,11 @@ private fun LayoutPage(
     onOpenCollections: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
+    highlightAnchor: String? = null,
 ) {
     val display by viewModel.homeDisplay.collectAsStateWithLifecycle()
-    SettingsPageScaffold("Layout", "Personalizar Início e Coleções", onBack) {
-        SettingsSection("Início")
+    SettingsPageScaffold("Layout", "Personalizar Início e Coleções", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Início", anchor = SettingsAnchors.LAYOUT_HOME)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Dashboard,
@@ -449,7 +503,7 @@ private fun LayoutPage(
         // Pôsteres e densidade (Fase B, frente compacta). O padrão é o compacto:
         // pôster pequeno, fileiras apertadas, sem selos nem etiqueta no pôster.
         // Muda na hora, sem reabrir o app. Vale para o perfil ativo.
-        SettingsSection("Pôsteres")
+        SettingsSection("Pôsteres", anchor = SettingsAnchors.LAYOUT_POSTERS)
         SettingsCard {
             PrefRow(
                 "Tamanho do pôster",
@@ -490,7 +544,7 @@ private fun LayoutPage(
         }
 
         // Destaque do topo.
-        SettingsSection("Destaque")
+        SettingsSection("Destaque", anchor = SettingsAnchors.LAYOUT_HERO)
         SettingsCard {
             PrefRow(
                 "Estilo do herói",
@@ -514,7 +568,7 @@ private fun LayoutPage(
         }
 
         // Títulos das seções.
-        SettingsSection("Títulos das seções")
+        SettingsSection("Títulos das seções", anchor = SettingsAnchors.LAYOUT_TITLES)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.CheckCircle,
@@ -530,7 +584,7 @@ private fun LayoutPage(
         // Continuar assistindo novo + Modo aleatório (Lote 2, v1.10.0). O que o
         // sorteio pode pegar: séries do Continuar assistindo e/ou da Minha Lista
         // do perfil ativo. Filmes nunca entram (só episódios de série).
-        SettingsSection("Continuar assistindo e Modo aleatório")
+        SettingsSection("Continuar assistindo e Modo aleatório", anchor = SettingsAnchors.LAYOUT_RANDOM)
         val randomContinue by viewModel.randomIncludeContinue.collectAsStateWithLifecycle()
         val randomWatchlist by viewModel.randomIncludeWatchlist.collectAsStateWithLifecycle()
         val randomUnwatched by viewModel.randomUnwatchedOnly.collectAsStateWithLifecycle()
@@ -574,6 +628,7 @@ private fun LayoutPage(
 private fun DetalhePage(
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
     val cinematic by viewModel.detailCinematic.collectAsStateWithLifecycle()
     val posterTransition by viewModel.detailPosterTransition.collectAsStateWithLifecycle()
@@ -582,8 +637,8 @@ private fun DetalhePage(
     val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
     val episodeRatings by viewModel.detailEpisodeRatings.collectAsStateWithLifecycle()
     val originalTitle by viewModel.detailOriginalTitle.collectAsStateWithLifecycle()
-    SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack) {
-        SettingsSection("Fundo e entrada")
+    SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Fundo e entrada", anchor = SettingsAnchors.DETAIL_BG)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Movie,
@@ -603,7 +658,7 @@ private fun DetalhePage(
                 divider = true,
             )
         }
-        SettingsSection("Ações e organização")
+        SettingsSection("Ações e organização", anchor = SettingsAnchors.DETAIL_ACTIONS)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Dashboard,
@@ -623,7 +678,7 @@ private fun DetalhePage(
                 divider = true,
             )
         }
-        SettingsSection("Título original")
+        SettingsSection("Título original", anchor = SettingsAnchors.DETAIL_ORIGINAL)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Translate,
@@ -635,7 +690,7 @@ private fun DetalhePage(
                 grouped = true,
             )
         }
-        SettingsSection("Episódios")
+        SettingsSection("Episódios", anchor = SettingsAnchors.DETAIL_EPISODES)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Star,
@@ -663,6 +718,7 @@ private fun DetalhePage(
 private fun StreamsPage(
     onBack: () -> Unit,
     viewModel: StreamPrefsViewModel = hiltViewModel(),
+    highlightAnchor: String? = null,
 ) {
     val search by viewModel.search.collectAsStateWithLifecycle()
     val badgesSize by viewModel.badgesSize.collectAsStateWithLifecycle()
@@ -671,8 +727,8 @@ private fun StreamsPage(
     val badgesPos by viewModel.badgesPos.collectAsStateWithLifecycle()
     val logo by viewModel.logo.collectAsStateWithLifecycle()
     val pinned by viewModel.pinned.collectAsStateWithLifecycle()
-    SettingsPageScaffold("Streams", "Pesquisa, emblemas, logo e fontes fixadas", onBack) {
-        SettingsSection("Folha de fontes")
+    SettingsPageScaffold("Streams", "Pesquisa, emblemas, logo e fontes fixadas", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Folha de fontes", anchor = SettingsAnchors.STREAMS_SHEET)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Search,
@@ -694,7 +750,7 @@ private fun StreamsPage(
                 divider = true,
             )
         }
-        SettingsSection("Emblemas")
+        SettingsSection("Emblemas", anchor = SettingsAnchors.STREAMS_BADGES)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Label,
@@ -730,7 +786,7 @@ private fun StreamsPage(
                 badgesPos, viewModel::setBadgesPos,
             )
         }
-        SettingsSection("Fontes fixadas")
+        SettingsSection("Fontes fixadas", anchor = SettingsAnchors.STREAMS_PINNED)
         Text(
             "Para fixar uma fonte, toque no pin ao lado do nome dela na folha de fontes. As fixadas aparecem primeiro.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
@@ -766,14 +822,15 @@ private fun ConteudoPage(
     onOpenDebrid: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
     val addons by viewModel.addons.collectAsStateWithLifecycle()
     val addonCount = addons.size
     val sourceStatus by viewModel.sourceStatus.collectAsStateWithLifecycle()
     val checkingHealth by viewModel.checkingHealth.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { if (sourceStatus.isEmpty()) viewModel.checkSourcesHealth() }
-    SettingsPageScaffold("Conteúdo & Descoberta", "Addons, plugins, fontes e Biblioteca", onBack) {
-        SettingsSection("Addons")
+    SettingsPageScaffold("Conteúdo & Descoberta", "Addons, plugins, fontes e Biblioteca", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Addons", anchor = SettingsAnchors.CONTENT_ADDONS)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Extension,
@@ -814,7 +871,7 @@ private fun ConteudoPage(
         }
 
         // Status das fontes. Chama a rede, então gira e trava enquanto verifica.
-        SettingsSection("Status das fontes")
+        SettingsSection("Status das fontes", anchor = SettingsAnchors.CONTENT_STATUS)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Refresh,
@@ -845,7 +902,7 @@ private fun ConteudoPage(
 
         // Biblioteca fica aqui dentro (decisão da Frente 2): o hub continua com as 8 páginas
         // da fork e a limpeza do Continuar assistindo mora junto do conteúdo.
-        SettingsSection("Biblioteca")
+        SettingsSection("Biblioteca", anchor = SettingsAnchors.CONTENT_LIBRARY)
         var confirmClear by remember { mutableStateOf(false) }
         val context = LocalContext.current
         com.aotv.app.ui.common.SettingsRow(
@@ -879,13 +936,12 @@ private fun IntegracoesPage(
     onOpenLive: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
-    val customTmdbKey by viewModel.customTmdbApiKey.collectAsStateWithLifecycle()
-    val hasTmdbKey by viewModel.hasTmdbKey.collectAsStateWithLifecycle()
-    var tmdbDraft by remember(customTmdbKey) { mutableStateOf(customTmdbKey) }
-    var tmdbVisible by remember(customTmdbKey) { mutableStateOf(false) }
-    SettingsPageScaffold("Integrações", "Contas, TMDB e TV ao vivo", onBack) {
-        SettingsSection("Contas")
+    // A chave TMDB saiu daqui (Lote 6, v1.15.0): agora mora em Acompanhamento,
+    // junto dos trackers. Esta página fica só com contas e TV ao vivo.
+    SettingsPageScaffold("Integrações", "Contas e TV ao vivo", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Contas", anchor = SettingsAnchors.INTEGR_ACCOUNTS)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.AccountCircle,
@@ -896,7 +952,7 @@ private fun IntegracoesPage(
                 grouped = true,
             )
         }
-        SettingsSection("TV ao vivo")
+        SettingsSection("TV ao vivo", anchor = SettingsAnchors.INTEGR_LIVE)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.LiveTv,
@@ -905,65 +961,6 @@ private fun IntegracoesPage(
                 sub = "Listas M3U e contas Xtream, com guia de programação.",
                 onClick = onOpenLive,
                 grouped = true,
-            )
-        }
-        SettingsSection("TMDB")
-        Text(
-            when {
-                customTmdbKey.isNotBlank() -> "Chave pessoal em uso. Você pode trocar a chave ou restaurar o padrão do app."
-                hasTmdbKey -> "Chave padrão do app em uso. Se preferir, informe sua própria chave abaixo."
-                else -> "Nenhuma chave configurada. Cole sua chave TMDB abaixo para liberar o catálogo, a busca e as fileiras."
-            },
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
-                OutlinedTextField(
-                    value = tmdbDraft,
-                    onValueChange = { tmdbDraft = it },
-                    label = { Text("Sua chave TMDB (opcional)") },
-                    placeholder = { Text("Cole sua chave aqui", color = TextTertiary) },
-                    visualTransformation = if (tmdbVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = gate,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Accent,
-                        unfocusedBorderColor = Border,
-                        focusedContainerColor = Surface2,
-                        unfocusedContainerColor = Surface2,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedLabelColor = Accent,
-                        unfocusedLabelColor = TextTertiary,
-                        cursorColor = Accent,
-                    ),
-                )
-            }
-            IconButton(
-                onClick = { tmdbVisible = !tmdbVisible }, enabled = tmdbDraft.isNotEmpty(),
-                modifier = Modifier.size(48.dp),
-            ) {
-                Icon(
-                    if (tmdbVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                    contentDescription = if (tmdbVisible) "Ocultar chave pessoal" else "Mostrar chave pessoal",
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            com.aotv.app.ui.common.AotvButton(
-                "Salvar chave", onClick = {
-                    viewModel.setTmdbApiKey(tmdbDraft)
-                    tmdbDraft = viewModel.customTmdbApiKey.value
-                    tmdbVisible = false
-                },
-                enabled = tmdbDraft.isNotBlank() && tmdbDraft.trim() != customTmdbKey,
-                compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
-            )
-            if (customTmdbKey.isNotBlank()) com.aotv.app.ui.common.AotvButton(
-                "Usar chave padrão", onClick = { viewModel.setTmdbApiKey(""); tmdbDraft = ""; tmdbVisible = false },
-                compact = true,
             )
         }
     }
@@ -978,14 +975,21 @@ private fun AcompanhamentoPage(
     onOpenProfiles: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
     var showSetPin by remember { mutableStateOf(false) }
     val hasPin = viewModel.hasParentalPin
-    SettingsPageScaffold("Acompanhamento", "Perfil, PIN dos pais e Trakt", onBack) {
+    // Chave TMDB (Lote 6, v1.15.0): saiu de Integrações p/ cá, junto dos
+    // trackers. Escondida no infantil — a chave continua atrás do PIN dos pais.
+    val customTmdbKey by viewModel.customTmdbApiKey.collectAsStateWithLifecycle()
+    val hasTmdbKey by viewModel.hasTmdbKey.collectAsStateWithLifecycle()
+    var tmdbDraft by remember(customTmdbKey) { mutableStateOf(customTmdbKey) }
+    var tmdbVisible by remember(customTmdbKey) { mutableStateOf(false) }
+    SettingsPageScaffold("Acompanhamento", "Perfil, PIN dos pais, TMDB e Trakt", onBack, highlightAnchor = highlightAnchor) {
         // Perfil ativo. Tocar abre o "Quem está assistindo?" para trocar ou editar.
         // PIN dos pais. Só mexe quem já está fora do infantil (sair do infantil já pede
         // o PIN quando existe um, então chegar aqui com infantil ativo não rola).
-        SettingsSection("Perfil")
+        SettingsSection("Perfil", anchor = SettingsAnchors.TRACK_PROFILE)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Person,
@@ -998,7 +1002,7 @@ private fun AcompanhamentoPage(
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.Lock,
                     title = if (hasPin) "Trocar PIN dos pais" else "Criar PIN dos pais",
-                    sub = "Trava sair do infantil e abrir Addons, TMDB e Aparelho com o infantil ativo",
+                    sub = "Trava sair do infantil e abrir Addons, a chave do TMDB e o Aparelho com o infantil ativo",
                     onClick = { showSetPin = true },
                     grouped = true,
                     divider = true,
@@ -1011,8 +1015,72 @@ private fun AcompanhamentoPage(
             onDismiss = { showSetPin = false },
         )
 
+        // TMDB (veio de Integrações). A chave é do perfil ativo e libera o
+        // catálogo, a busca e as fileiras; sem ela, vale a chave padrão do app.
+        if (!isKids) {
+            SettingsSection("TMDB", anchor = SettingsAnchors.TRACK_TMDB)
+            Text(
+                when {
+                    customTmdbKey.isNotBlank() -> "Chave pessoal em uso. Você pode trocar a chave ou restaurar o padrão do app."
+                    hasTmdbKey -> "Chave padrão do app em uso. Se preferir, informe sua própria chave abaixo."
+                    else -> "Nenhuma chave configurada. Cole sua chave TMDB abaixo para liberar o catálogo, a busca e as fileiras."
+                },
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                    OutlinedTextField(
+                        value = tmdbDraft,
+                        onValueChange = { tmdbDraft = it },
+                        label = { Text("Sua chave TMDB (opcional)") },
+                        placeholder = { Text("Cole sua chave aqui", color = TextTertiary) },
+                        visualTransformation = if (tmdbVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = gate,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent,
+                            unfocusedBorderColor = Border,
+                            focusedContainerColor = Surface2,
+                            unfocusedContainerColor = Surface2,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = Accent,
+                            unfocusedLabelColor = TextTertiary,
+                            cursorColor = Accent,
+                        ),
+                    )
+                }
+                IconButton(
+                    onClick = { tmdbVisible = !tmdbVisible }, enabled = tmdbDraft.isNotEmpty(),
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        if (tmdbVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (tmdbVisible) "Ocultar chave pessoal" else "Mostrar chave pessoal",
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                com.aotv.app.ui.common.AotvButton(
+                    "Salvar chave", onClick = {
+                        viewModel.setTmdbApiKey(tmdbDraft)
+                        tmdbDraft = viewModel.customTmdbApiKey.value
+                        tmdbVisible = false
+                    },
+                    enabled = tmdbDraft.isNotBlank() && tmdbDraft.trim() != customTmdbKey,
+                    compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+                )
+                if (customTmdbKey.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                    "Usar chave padrão", onClick = { viewModel.setTmdbApiKey(""); tmdbDraft = ""; tmdbVisible = false },
+                    compact = true,
+                )
+            }
+        }
+
         if (viewModel.traktConfigured) {
-            SettingsSection("Trakt")
+            SettingsSection("Trakt", anchor = SettingsAnchors.TRACK_TRAKT)
             SettingsCard { TraktSection(viewModel) }
         }
     }
@@ -1095,20 +1163,21 @@ private fun AparenciaPage(
     onBack: () -> Unit,
     onPlatformChanged: () -> Unit,
     viewModel: SettingsViewModel,
+    highlightAnchor: String? = null,
 ) {
     val currentMode by viewModel.platformMode.collectAsStateWithLifecycle()
     val deviceLayout = com.aotv.app.ui.common.currentDeviceLayout(currentMode)
     // Blur nos painéis (Lote 3 item 4, v1.11.0; padrão: ligado).
     val panelBlur by viewModel.panelBlur.collectAsStateWithLifecycle()
-    SettingsPageScaffold("Aparência", "Tema e aparelho", onBack) {
-        SettingsSection("Tema")
+    SettingsPageScaffold("Aparência", "Tema e aparelho", onBack, highlightAnchor = highlightAnchor) {
+        SettingsSection("Tema", anchor = SettingsAnchors.APPEAR_THEME)
         // Única setting nova da Fase A. O composable vem de ui/theme/ThemePicker.kt
         // (outra frente); sem ele, esta é a única importação a integrar.
         ThemeSelector()
         // Tema personalizado (Lote 3 item 3, v1.11.0): as 6 cores editáveis.
-        SettingsSection("Tema personalizado")
+        SettingsSection("Tema personalizado", anchor = SettingsAnchors.APPEAR_CUSTOM)
         CustomThemeEditor()
-        SettingsSection("Painéis")
+        SettingsSection("Painéis", anchor = SettingsAnchors.APPEAR_PANELS)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Image,
@@ -1119,7 +1188,7 @@ private fun AparenciaPage(
                 grouped = true,
             )
         }
-        SettingsSection("Aparelho")
+        SettingsSection("Aparelho", anchor = SettingsAnchors.APPEAR_DEVICE)
         Text(
             "Layout atual ${deviceLayout.label}. O modo automático reconhece TV e adapta celular e tablet ao espaço disponível.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
@@ -1186,6 +1255,7 @@ private fun ReproducaoPage(
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
     playerPrefs: PlayerPrefsViewModel = hiltViewModel(),
+    highlightAnchor: String? = null,
 ) {
     val audio by viewModel.audioPref.collectAsStateWithLifecycle()
     val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
@@ -1227,9 +1297,9 @@ private fun ReproducaoPage(
     // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
     val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
-    SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack) {
+    SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack, highlightAnchor = highlightAnchor) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
-        SettingsSection("Reprodução")
+        SettingsSection("Reprodução", anchor = SettingsAnchors.PLAY_MAIN)
         SettingsCard {
             PrefRow("Áudio preferido", listOf("any" to "Qualquer", "dub" to "Dublado", "leg" to "Legendado"), audio, viewModel::setAudio)
             Spacer(Modifier.height(14.dp))
@@ -1281,7 +1351,7 @@ private fun ReproducaoPage(
         // Personalização de legenda (v1.9.0): cor, fonte, opacidade do fundo e
         // contorno. Vale para a legenda embutida e para a externa, e também dá
         // para mudar no player, em Legendas. Tamanho e fundo continuam no player.
-        SettingsSection("Legendas")
+        SettingsSection("Legendas", anchor = SettingsAnchors.PLAY_SUBS)
         SettingsCard {
             PrefRow("Cor da legenda", SUB_COLORS, subColor, playerPrefs::setSubColor)
             Spacer(Modifier.height(14.dp))
@@ -1303,7 +1373,7 @@ private fun ReproducaoPage(
 
         // Botões do player (Fase C). Sobe e desce reordena, o switch tira da
         // barra. Desligado, o botão some do player mas continua aqui p/ religar.
-        SettingsSection("Botões do player")
+        SettingsSection("Botões do player", anchor = SettingsAnchors.PLAY_BUTTONS)
         SettingsCard {
             (effectiveButtons + disabledButtons).forEachIndexed { i, id ->
                 val enabled = id in effectiveButtons
@@ -1324,7 +1394,7 @@ private fun ReproducaoPage(
                 TextButton(onClick = { playerPrefs.resetButtons() }) { Text("Restaurar padrão", color = Accent) }
             }
         }
-        SettingsSection("Botões do topo")
+        SettingsSection("Botões do topo", anchor = SettingsAnchors.PLAY_TOP)
         Text(
             "O botão Voltar sempre aparece. Estes são os opcionais do topo do player.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
@@ -1351,7 +1421,7 @@ private fun ReproducaoPage(
                 )
             }
         }
-        SettingsSection("Reprodução no player")
+        SettingsSection("Reprodução no player", anchor = SettingsAnchors.PLAY_PLAYER)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.TouchApp,
@@ -1475,7 +1545,7 @@ private fun ReproducaoPage(
         }
         // Motor do player (Lote 4, v1.12.0): player padrão e decoder de vídeo.
         // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
-        SettingsSection("Motor do player")
+        SettingsSection("Motor do player", anchor = SettingsAnchors.PLAY_ENGINE)
         SettingsCard {
             PrefRow(
                 "Player padrão",
@@ -1511,7 +1581,7 @@ private fun ReproducaoPage(
             "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
-        SettingsSection("Pular trechos")
+        SettingsSection("Pular trechos", anchor = SettingsAnchors.PLAY_SKIP)
         Text(
             "O player busca os trechos (resumo, abertura, encerramento e pós-créditos) no IntroDB e no SkipDB, sem chave. O Anime-Skip (só séries) precisa de um client ID seu — vazio, ele fica desligado.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,

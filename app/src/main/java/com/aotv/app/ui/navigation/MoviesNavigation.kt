@@ -67,8 +67,12 @@ private sealed class MoviesRoute(val route: String) {
     object Search   : MoviesRoute("movies_search")
     object Settings : MoviesRoute("movies_settings")
     // Páginas das Configurações (Fase A, Frente 2) — o hub é movies_settings.
-    object SettingsPage : MoviesRoute("movies_settings/{page}") {
-        fun create(page: String) = "movies_settings/$page"
+    // O `?anchor=` (Lote 6, v1.15.0) é a seção da busca profunda: a página rola
+    // até ela e destaca o título. Sem âncora, abre no topo como antes.
+    object SettingsPage : MoviesRoute("movies_settings/{page}?anchor={anchor}") {
+        fun create(page: String, anchor: String? = null) =
+            if (anchor.isNullOrBlank()) "movies_settings/$page"
+            else "movies_settings/$page?anchor=${Uri.encode(anchor)}"
     }
     object Addons : MoviesRoute("movies_addons")
     object Plugins : MoviesRoute("movies_plugins")
@@ -424,6 +428,10 @@ fun MoviesNavigation(
                     SettingsScreen(
                         onBack = { navController.popBackStack() },
                         onOpenPage = { navController.navigate(MoviesRoute.SettingsPage.create(it)) },
+                        onOpenProfiles = { navController.navigate(MoviesRoute.Profiles.route) },
+                        onOpenOption = { page, anchor ->
+                            navController.navigate(MoviesRoute.SettingsPage.create(page, anchor))
+                        },
                     )
                 }
             }
@@ -431,11 +439,15 @@ fun MoviesNavigation(
             // Uma página das Configurações (Frente 2) — `page` é um dos ids de SettingsPageIds.
             composable(
                 MoviesRoute.SettingsPage.route,
-                arguments = listOf(navArgument("page") { type = NavType.StringType }),
+                arguments = listOf(
+                    navArgument("page") { type = NavType.StringType },
+                    navArgument("anchor") { type = NavType.StringType; nullable = true; defaultValue = null },
+                ),
             ) { backStackEntry ->
                 tvScale(isTV) {
                     SettingsPageScreen(
                         pageId = backStackEntry.arguments?.getString("page") ?: "",
+                        highlightAnchor = backStackEntry.arguments?.getString("anchor"),
                         onBack = { navController.popBackStack() },
                         onPlatformChanged = onRestartApp,
                         onOpenAddons = { navController.navigate(MoviesRoute.Addons.route) },
