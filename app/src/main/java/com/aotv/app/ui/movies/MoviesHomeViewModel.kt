@@ -856,7 +856,8 @@ class MoviesHomeViewModel @Inject constructor(
 
     fun load() {
         // Ranking de hoje para a etiqueta "#3 Hoje" dos pôsteres (vale também para fileira de addon).
-        posterInfo.loadRanks()        viewModelScope.launch {
+        posterInfo.loadRanks()
+        viewModelScope.launch {
             val apiKey = prefs.tmdbApiKey
             // Catálogo AOTV desligado. A Início fica com o progresso e as fileiras de addon.
             if (!prefs.catalogOn) {
