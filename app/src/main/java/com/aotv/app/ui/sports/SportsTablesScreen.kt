@@ -215,8 +215,8 @@ class SportsGameViewModel @Inject constructor(
     private val prefs: PlatformPrefs,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
-    val leagueId: String = savedStateHandle["league"].orEmpty()
-    val eventId: String = savedStateHandle["eventId"].orEmpty()
+    val leagueId: String = savedStateHandle.get<String>("league").orEmpty()
+    val eventId: String = savedStateHandle.get<String>("eventId").orEmpty()
     val league: SportsLeague? = SPORTS_LEAGUES.firstOrNull { it.id == leagueId }
 
     data class Ui(
@@ -374,18 +374,22 @@ fun SportsTablesScreen(
                     },
                 )
             }
+            // `ui` é propriedade delegada (by): smart cast não funciona nela —
+            // ler para vals locais antes da cadeia (build #248).
+            val tableError = ui.tableError
+            val table = ui.table
             if (ui.tableLoading) {
                 item(key = "table-loading") {
                     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.Center) {
                         CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
                     }
                 }
-            } else if (ui.tableError != null) {
+            } else if (tableError != null) {
                 item(key = "table-error") {
-                    Text(ui.tableError, color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 4.dp))
+                    Text(tableError, color = TextSecondary, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 4.dp))
                 }
-            } else if (ui.table != null) {
-                item(key = "table-body") { LeagueTableCard(ui.table) }
+            } else if (table != null) {
+                item(key = "table-body") { LeagueTableCard(table) }
             }
             // League Networks
             item(key = "networks-header") {
@@ -644,10 +648,12 @@ fun SportsGameScreen(
             }
             return@Column
         }
-        if (ui.error != null && ui.detail == null) {
+        // `ui` é propriedade delegada (by): smart cast não funciona nela (build #248).
+        val error = ui.error
+        if (error != null && ui.detail == null) {
             com.aotv.app.ui.common.AotvEmptyState(
                 Icons.Default.SportsSoccer, "Sem dados do jogo",
-                ui.error,
+                error,
                 action = { com.aotv.app.ui.common.AotvButton("Tentar de novo", { viewModel.refresh() }, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY) },
             )
             return@Column

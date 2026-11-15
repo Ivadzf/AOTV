@@ -230,7 +230,10 @@ fun DiagnosticsScreen(
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
         VpnPartySection("Último crash", anchor = SettingsAnchors.DIAG_CRASH)
-        if (state.lastCrash == null) {
+        // `state` é propriedade delegada (by): smart cast não funciona nela —
+        // ler para um val local antes do teste de null (build #248).
+        val lastCrash = state.lastCrash
+        if (lastCrash == null) {
             DiagCard {
                 Text(
                     "Nenhum crash registrado desde que este registro foi instalado. Se o app fechar sozinho, volte aqui: o registro aparece nesta seção.",
@@ -240,7 +243,7 @@ fun DiagnosticsScreen(
         } else {
             DiagCard {
                 Text(
-                    state.lastCrash.take(4000),
+                    lastCrash.take(4000),
                     fontSize = 13.sp, color = TextPrimary, lineHeight = 18.sp,
                 )
             }
