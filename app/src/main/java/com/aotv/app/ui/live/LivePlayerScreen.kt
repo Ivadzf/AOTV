@@ -39,10 +39,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -57,6 +60,9 @@ import kotlinx.coroutines.delay
 /**
  * Player de canal ao vivo. Toca HLS ou TS com os cabeçalhos que a lista pede, mostra o que está
  * passando e troca de canal pela lista lateral ou pelas setas.
+ *
+ * Lote 8 (v1.18.0): canal reserva (outro canal com o mesmo nome de outra fonte, 1 tentativa),
+ * erro real na tela, faixa de áudio lembrada por canal e registro no Continuar assistindo.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -74,6 +80,8 @@ fun LivePlayerScreen(
     val st by viewModel.state.collectAsStateWithLifecycle()
     var currentId by remember { mutableStateOf(channelId) }
     val channel = st.channels.firstOrNull { it.id == currentId }
+    // O listener do player é criado uma vez: lê o canal por aqui, sempre atual.
+    val latestChannelState = rememberUpdatedState(channel)
     // A lista lateral segue o mesmo grupo do canal aberto (favoritos entram juntos).
     val siblings = remember(st.channels, channel?.group) { st.channels.filter { it.group == channel?.group }.ifEmpty { st.channels } }
     var overlay by remember { mutableStateOf(true) }
@@ -81,6 +89,13 @@ fun LivePlayerScreen(
     var failed by remember { mutableStateOf(false) }
     var buffering by remember { mutableStateOf(true) }
     var retries by remember { mutableIntStateOf(0) }
+    // Lote 8 (v1.18.0): canal reserva em uso (1 tentativa), detalhe do erro
+    // real do player, seletor de faixa de áudio e a quem a faixa lembrada
+    // já foi aplicada nesta sessão.
+    var backupId by remember { mutableStateOf<String?>(null) }
+    var failDetail by remember { mutableStateOf<String?>(null) }
+    var showAudioPicker by remember { mutableStateOf(false) }
+    var audioAppliedFor by remember { mutableStateOf<String?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
     // Catch-up: programa passado vira uma sessão com início/fim; sem URL de catch-up,
@@ -116,13 +131,83 @@ fun LivePlayerScreen(
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER
         }
     }
+    /**
+     * Aplica a faixa de áudio lembrada deste canal (Lote 8, v1.18.0): procura,
+     * entre as faixas de áudio do stream, a que tem o idioma (ou rótulo)
+     * guardado e trava a seleção nela via trackSelectionParameters. Sem faixa
+     * igual, deixa o padrão do ExoPlayer. [tracks] vem do listener quando há;
+     * sem ele, lê do player.
+     */
+    fun applyAudioTrack(lang: String, tracks: Tracks? = null) {
+        val current = tracks ?: player.currentTracks
+        var foundGroup: Tracks.Group? = null
+        var foundTrack = -1
+        for (gi in 0 until current.groups.size) {
+            val g = current.groups[gi]
+            if (g.type != C.TRACK_TYPE_AUDIO) continue
+            for (ti in 0 until g.length) {
+                val f = g.getTrackFormat(ti)
+                val key = f.language?.takeIf { it.isNotBlank() } ?: f.label.orEmpty()
+                if (key.isNotBlank() && key.equals(lang, ignoreCase = true)) {
+                    foundGroup = g
+                    foundTrack = ti
+                    break
+                }
+            }
+            if (foundGroup != null) break
+        }
+        val group = foundGroup ?: return
+        if (foundTrack < 0) return
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setOverrideForType(TrackSelectionOverride(group.trackGroup, foundTrack))
+            .build()
+    }
+
+    /** Aplica a faixa lembrada do canal atual, uma vez por canal (ver [applyAudioTrack]). */
+    fun applySavedAudioIfNeeded(tracks: Tracks? = null) {
+        val c = latestChannelState.value ?: return
+        if (audioAppliedFor == c.id) return
+        val saved = viewModel.savedAudio(c.id)
+        if (saved == null) {
+            audioAppliedFor = c.id
+            return
+        }
+        val current = tracks ?: player.currentTracks
+        if (current.groups.isEmpty()) return
+        applyAudioTrack(saved, current)
+        audioAppliedFor = c.id
+    }
+
+    /** Faixas de áudio do stream atual, p/ o seletor (chave → rótulo). */
+    fun audioTrackKeys(): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        val current = player.currentTracks
+        for (gi in 0 until current.groups.size) {
+            val g = current.groups[gi]
+            if (g.type != C.TRACK_TYPE_AUDIO) continue
+            for (ti in 0 until g.length) {
+                val f = g.getTrackFormat(ti)
+                val key = f.language?.takeIf { it.isNotBlank() } ?: f.label.orEmpty()
+                val label = f.label?.takeIf { it.isNotBlank() }
+                    ?: f.language?.takeIf { it.isNotBlank() }
+                    ?: "Faixa ${out.size + 1}"
+                out += (key.ifBlank { label }) to label
+            }
+        }
+        return out
+    }
+
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY) { failed = false; retries = 0 }
+                if (state == Player.STATE_READY) { failed = false; retries = 0; applySavedAudioIfNeeded() }
             }
-            override fun onPlayerError(error: PlaybackException) { failed = true }
+            override fun onPlayerError(error: PlaybackException) {
+                failed = true
+                failDetail = error.message?.takeIf { it.isNotBlank() }
+            }
+            override fun onTracksChanged(tracks: Tracks) { applySavedAudioIfNeeded(tracks) }
         }
         player.addListener(l)
         onDispose { player.removeListener(l) }
@@ -130,7 +215,9 @@ fun LivePlayerScreen(
 
     fun play(c: LiveChannel) {
         failed = false
+        failDetail = null
         buffering = true
+        audioAppliedFor = null
         // Catch-up: resolve a URL da gravação; sem ela, toca o ao vivo e avisa.
         val targetUrl = if (inCatchup) {
             val resolved = viewModel.getCatchupUrl(c, catchupStart, catchupStop)
@@ -148,14 +235,29 @@ fun LivePlayerScreen(
         }.build()
         player.setMediaSource(DefaultMediaSourceFactory(http).createMediaSource(item))
         player.prepare()
+        // Lote 8 (v1.18.0): registra no Continuar assistindo (o mesmo
+        // histórico dos filmes e séries), com o programa atual — respeita a
+        // pref e o modo privado (nada é gravado no privado).
+        val (currentProgram, _) = viewModel.nowNext(c.id, System.currentTimeMillis())
+        viewModel.recordLiveContinue(c, currentProgram)
         viewModel.watched(c.id)
     }
 
     LaunchedEffect(channel?.id) { channel?.let { play(it) } }
-    // Canal caiu. Tenta de novo duas vezes antes de mostrar o aviso.
+    // Canal caiu. Tenta de novo duas vezes; depois, com o canal reserva
+    // ligado, tenta UMA vez outro canal com o mesmo nome de outra fonte
+    // (Lote 8, v1.18.0); se ele também falhar, mostra o erro real.
     LaunchedEffect(failed) {
-        if (failed && retries < 2 && channel != null) {
+        if (!failed || channel == null) return@LaunchedEffect
+        if (retries < 2) {
             delay(2_500); retries++; play(channel)
+        } else if (backupId == null && viewModel.backupEnabled) {
+            val backup = viewModel.backupChannel(channel)
+            if (backup != null) {
+                backupId = backup.id
+                retries = 0
+                currentId = backup.id
+            }
         }
     }
     LaunchedEffect(overlay, panel) { if (overlay && !panel) { delay(5_000); overlay = false } }
@@ -163,9 +265,16 @@ fun LivePlayerScreen(
     fun step(delta: Int) {
         if (siblings.isEmpty()) return
         val i = siblings.indexOfFirst { it.id == currentId }
+        backupId = null
         currentId = siblings[((if (i < 0) 0 else i) + delta + siblings.size) % siblings.size].id
         overlay = true
     }
+
+    // Erro real só quando não há mais o que tentar: com reserva disponível,
+    // a troca acontece sozinha e a tela não pisca o erro no meio.
+    val backupAvailable = channel != null && backupId == null && viewModel.backupEnabled &&
+        viewModel.backupChannel(channel) != null
+    val showError = failed && retries >= 2 && !backupAvailable
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
@@ -185,13 +294,17 @@ fun LivePlayerScreen(
 
         if (buffering && !failed) CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.align(Alignment.Center).size(44.dp))
 
-        if (failed && retries >= 2) Column(
+        if (showError) Column(
             Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xCC0B0F17)).padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("Canal fora do ar agora", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-            Text("A fonte não respondeu. Tente de novo ou mude de canal.", color = TextSecondary, fontSize = 14.sp)
+            Text(
+                failDetail ?: "Não foi possível tocar este canal. Tente de novo ou mude de canal.",
+                color = TextSecondary, fontSize = 14.sp,
+            )
+            if (backupId != null) Text("O canal reserva de outra fonte também não tocou.", color = TextSecondary, fontSize = 14.sp)
             com.aotv.app.ui.common.AotvButton("Tentar de novo", { retries = 0; channel?.let { play(it) } }, icon = Icons.Default.Refresh, compact = true)
         }
 
@@ -260,6 +373,11 @@ fun LivePlayerScreen(
                     }
                     IconButton(onClick = { step(-1) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowUp, "Canal anterior", tint = Color.White) }
                     IconButton(onClick = { step(1) }, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowDown, "Próximo canal", tint = Color.White) }
+                    // Lote 8 (v1.18.0): faixa de áudio — a escolha fica guardada
+                    // neste canal e volta sozinha na próxima vez.
+                    TextButton(onClick = { showAudioPicker = true }) {
+                        Text("Áudio", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -280,7 +398,7 @@ fun LivePlayerScreen(
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                             .background(if (active) AccentSoft else Color.White.copy(alpha = .05f))
-                            .clickable { currentId = c.id; panel = false }
+                            .clickable { backupId = null; currentId = c.id; panel = false }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -304,6 +422,49 @@ fun LivePlayerScreen(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 150.dp, start = 16.dp, end = 16.dp),
             action = { TextButton(onClick = { showCatchupUnavailable = false }) { Text("Ok", color = Color.White) } },
         ) { Text("Catch-up indisponível para este programa — tocando ao vivo") }
+
+        // Seletor de faixa de áudio (Lote 8, v1.18.0): a escolha fica guardada
+        // neste canal (ver LiveAudioPick) e volta sozinha na próxima vez.
+        if (showAudioPicker) {
+            val tracks = audioTrackKeys()
+            val saved = channel?.let { viewModel.savedAudio(it.id) }
+            AlertDialog(
+                onDismissRequest = { showAudioPicker = false },
+                containerColor = BackgroundCard,
+                title = { Text("Faixa de áudio", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (tracks.isEmpty()) {
+                            Text("Nenhuma faixa de áudio disponível neste canal.", color = TextSecondary, fontSize = 14.sp)
+                        } else {
+                            Text("A escolha fica guardada neste canal.", color = TextTertiary, fontSize = 13.sp)
+                            tracks.forEach { (key, label) ->
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            channel?.let { c ->
+                                                applyAudioTrack(key)
+                                                viewModel.saveAudio(c.id, key)
+                                            }
+                                            showAudioPicker = false
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        label, color = if (saved == key) Accent else TextPrimary,
+                                        fontSize = 15.sp, fontWeight = if (saved == key) FontWeight.Bold else FontWeight.Normal,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    if (saved == key) Text("Atual", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showAudioPicker = false }) { Text("Fechar", color = TextSecondary) } },
+            )
+        }
     }
 }
 

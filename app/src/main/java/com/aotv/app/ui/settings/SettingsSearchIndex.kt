@@ -29,6 +29,9 @@ object SettingsAnchors {
     const val DETAIL_ACTIONS = "detalhe-acoes"
     const val DETAIL_ORIGINAL = "detalhe-titulo-original"
     const val DETAIL_EPISODES = "detalhe-episodios"
+    const val DETAIL_RATINGS = "detalhe-notas"
+    const val DETAIL_REVIEWS = "detalhe-avaliacoes"
+    const val DETAIL_QUOTES = "detalhe-frases"
     // Streams
     const val STREAMS_SHEET = "streams-folha"
     const val STREAMS_BADGES = "streams-emblemas"
@@ -62,6 +65,10 @@ object SettingsAnchors {
     const val DL_LIMIT = "downloads-limite"
     const val DL_MAIN = "downloads-downloads"
     const val DL_COUNTED = "downloads-conta"
+    // Gravações (Lote 8)
+    const val DL_RECORD = "downloads-gravacoes"
+    // Esportes e Calendário (Lote 8)
+    const val LAYOUT_SPORTS = "layout-esportes"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -175,6 +182,55 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.LAYOUT_RANDOM,
         kidsHidden = true,
     ),
+    // ── Esportes e Calendário (Lote 8, v1.18.0) ──────────────────────────
+    SettingOptionEntry(
+        title = "Mostrar esportes",
+        sub = "Seção de esportes no Ao vivo e jogos na fileira \"Próximos\"",
+        keywords = listOf("esportes", "futebol", "ao vivo", "placar", "jogos"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Placares ao vivo",
+        sub = "O placar do EPG aparece no canal de esporte",
+        keywords = listOf("placar", "ao vivo", "resultado", "gol", "esporte"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Esconder placares",
+        sub = "Nenhum placar aparece (anti-spoiler)",
+        keywords = listOf("esconder placar", "spoiler", "resultado", "esporte"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Atraso do placar",
+        sub = "O placar só aparece esse tempo depois do início do jogo",
+        keywords = listOf("atraso", "placar", "spoiler", "segundos", "anti-spoiler"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Alertas de jogo",
+        sub = "Avisa quando um jogo começa (só com o app aberto)",
+        keywords = listOf("alerta", "jogo", "notificação", "esporte", "começando"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Esconder spoilers do calendário",
+        sub = "O episódio aparece sem T/E até ir ao ar",
+        keywords = listOf("spoiler", "calendário", "episódio", "sinopse", "próximos"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
     // ── Página de detalhes ───────────────────────────────────────────────
     SettingOptionEntry(
         title = "Fundo cinematográfico",
@@ -224,6 +280,27 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("card", "episódio", "estilo"),
         pageId = SettingsPageIds.Detalhe,
         anchor = SettingsAnchors.DETAIL_EPISODES,
+    ),
+    SettingOptionEntry(
+        title = "Nota agregada",
+        sub = "Nota de 0 a 100 com as notas por fonte (MDBList)",
+        keywords = listOf("nota agregada", "nota", "avaliação", "MDBList", "IMDb", "TMDB"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_RATINGS,
+    ),
+    SettingOptionEntry(
+        title = "O que estão dizendo",
+        sub = "Avaliações do Trakt na página de detalhes",
+        keywords = listOf("avaliações", "Trakt", "comentários", "opiniões"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_REVIEWS,
+    ),
+    SettingOptionEntry(
+        title = "Frases e ficha de produção",
+        sub = "Frases do Wikiquote e resumo da Wikipédia",
+        keywords = listOf("frases", "citações", "Wikiquote", "Wikipédia", "ficha"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_QUOTES,
     ),
     // ── Streams ──────────────────────────────────────────────────────────
     SettingOptionEntry(
@@ -405,6 +482,122 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Editar fonte",
         sub = "Alterar nome, endereço ou credenciais de uma fonte de canais",
         keywords = listOf("editar fonte", "edit source", "modificar", "atualizar m3u", "credenciais xtream", "editar lista"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    // ── Live TV (Lote 8, v1.18.0) ───────────────────────────────────────
+    // Guia configurável, atualização, exibição, formato Xtream, reserva,
+    // Continuar assistindo, faixa de áudio e catch-up HLS. Todas caem na
+    // seção "TV ao vivo" de Integrações.
+    SettingOptionEntry(
+        title = "Guia: dias à frente",
+        sub = "Até quantos dias o guia de programação alcança",
+        keywords = listOf("guia", "dias", "grade", "programação", "frente", "epg"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Guia: horas para trás",
+        sub = "Até quantas horas atrás o guia de programação volta",
+        keywords = listOf("guia", "horas", "atrás", "grade", "programação", "passado", "epg"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Atualização das listas",
+        sub = "De quanto em quanto tempo as listas atualizam sozinhas ao abrir o Ao vivo",
+        keywords = listOf("atualizar", "listas", "intervalo", "refresh", "automático"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Atualização do guia",
+        sub = "De quanto em quanto tempo o guia de programação atualiza sozinho",
+        keywords = listOf("atualizar", "guia", "epg", "intervalo", "refresh", "automático"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Atualizar agora",
+        sub = "Baixar de novo as listas e o guia na hora",
+        keywords = listOf("atualizar agora", "recarregar", "refresh", "forçar", "canais", "guia"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Logos dos canais",
+        sub = "Mostrar ou esconder a logo na fileira do canal",
+        keywords = listOf("logo", "canais", "exibição", "mostrar", "imagem"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Nomes dos canais",
+        sub = "Mostrar ou esconder o nome na fileira do canal",
+        keywords = listOf("nome", "canais", "exibição", "mostrar", "título"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Números dos canais",
+        sub = "Mostrar o número do canal antes do nome",
+        keywords = listOf("número", "canais", "exibição", "mostrar", "tvg-chno"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Limpar nomes de grupos",
+        sub = "Tirar prefixos tipo \"BR | \" dos nomes de grupos na exibição",
+        keywords = listOf("grupo", "limpar", "prefixo", "br", "exibição", "nome"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Formato do stream Xtream",
+        sub = "Automático, TS ou HLS para os canais das contas Xtream",
+        keywords = listOf("xtream", "formato", "ts", "hls", "m3u8", "stream"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Canal reserva",
+        sub = "Se o canal falhar, tenta outro com o mesmo nome de outra fonte",
+        keywords = listOf("reserva", "backup", "canal", "falha", "outra fonte"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Ao vivo no Continuar assistindo",
+        sub = "O canal assistido aparece no Continuar, com o programa atual",
+        keywords = listOf("continuar assistindo", "ao vivo", "histórico", "canal", "programa"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Lembrar faixa de áudio",
+        sub = "A faixa de áudio escolhida volta sozinha neste canal",
+        keywords = listOf("áudio", "faixa", "lembrar", "idioma", "dublado", "canal"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Catch-up em HLS",
+        sub = "A gravação do programa vem em .m3u8 em vez de .ts",
+        keywords = listOf("catch-up", "catchup", "hls", "m3u8", "gravação", "timeshift"),
         pageId = SettingsPageIds.Integracoes,
         anchor = SettingsAnchors.INTEGR_LIVE,
         kidsHidden = true,
@@ -707,6 +900,56 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("pasta", "download", "armazenamento", "SAF"),
         pageId = SettingsPageIds.Downloads,
         anchor = SettingsAnchors.DL_MAIN,
+    ),
+    // ── Gravações (Lote 8, v1.18.0) ─────────────────────────────────────
+    SettingOptionEntry(
+        title = "Gravações",
+        sub = "Gravar programas ao vivo e ver as gravações",
+        keywords = listOf("gravações", "gravar", "ao vivo", "programa", "record"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Pasta de gravações",
+        sub = "As gravações concluídas vão para lá",
+        keywords = listOf("pasta", "gravações", "armazenamento", "SAF"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Notificações de gravação",
+        sub = "Avisa início, fim e falha da gravação",
+        keywords = listOf("notificação", "gravação", "aviso", "início", "fim", "falha"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Começar a gravar antes",
+        sub = "A gravação começa antes do programa",
+        keywords = listOf("gravar", "antes", "antecedência", "minutos"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Continuar gravando depois",
+        sub = "A gravação continua depois do fim do programa",
+        keywords = listOf("gravar", "depois", "estender", "tolerância", "minutos"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Manter gravações",
+        sub = "Quantas gravações guardar antes de apagar a mais antiga",
+        keywords = listOf("manter", "apagar", "antigas", "limite", "retenção"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
+    ),
+    SettingOptionEntry(
+        title = "Espaço livre para gravar",
+        sub = "Avisa quando o espaço ficar abaixo do limite",
+        keywords = listOf("espaço", "armazenamento", "livre", "limite", "MB"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_RECORD,
     ),
     // ── Backup e restauração (sem âncora: abre a página no topo) ────────
     SettingOptionEntry(

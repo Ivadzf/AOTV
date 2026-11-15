@@ -23,7 +23,10 @@ import javax.inject.Inject
 data class LiveRow(val channel: LiveChannel, val now: LiveProgram?, val next: LiveProgram?, val favorite: Boolean)
 
 @HiltViewModel
-class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : ViewModel() {
+class LiveTvViewModel @Inject constructor(
+    private val repo: LiveTvRepository,
+    private val prefs: com.aotv.app.data.local.PlatformPrefs,
+) : ViewModel() {
 
     data class View(
         val hasSources: Boolean = false,
@@ -41,6 +44,13 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
         val now: Long = System.currentTimeMillis(),
         /** Guia completo por canal (a grade usa a lista inteira, não só agora/a seguir). */
         val epg: Map<String, List<LiveProgram>> = emptyMap(),
+        // Lote 8 (v1.18.0): guia configurável e exibição de canais (por perfil).
+        val guideDaysAhead: Int = 3,
+        val guideHoursBack: Int = 1,
+        val showLogos: Boolean = true,
+        val showNames: Boolean = true,
+        val showNumbers: Boolean = false,
+        val cleanGroupNames: Boolean = false,
     )
 
     private val filter = MutableStateFlow(ALL)
@@ -50,17 +60,18 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
     val view: StateFlow<View> = combine(repo.state, filter, query, clock) { st, f, q, now ->
         val favs = st.favorites
         val byId = st.channels.associateBy { it.id }
+        val clean = prefs.liveCleanGroupNames
         val base = when {
             f == FAV -> st.channels.filter { it.id in favs }
             f == RECENT -> st.recents.mapNotNull { byId[it] }
-            f.startsWith("g:") -> f.removePrefix("g:").let { g -> st.channels.filter { g in groupsOf(it) } }
+            f.startsWith("g:") -> f.removePrefix("g:").let { g -> st.channels.filter { g in groupNames(it, clean) } }
             else -> st.channels
         }
         val needle = q.trim().lowercase()
         val list = if (needle.isEmpty()) base else base.filter { it.name.lowercase().contains(needle) || it.group.lowercase().contains(needle) }
         // Grupos na ordem em que aparecem na lista, com a contagem (uma passada só).
         val counts = LinkedHashMap<String, Int>()
-        st.channels.forEach { c -> groupsOf(c).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
+        st.channels.forEach { c -> groupNames(c, clean).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
         val groups = counts.toList()
         View(
             hasSources = st.hasSources,
@@ -74,11 +85,17 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
             total = st.channels.size,
             filter = f, query = q, loading = st.loading, epgLoading = st.epgLoading, error = st.error, now = now,
             epg = st.epg,
+            guideDaysAhead = prefs.liveGuideDaysAhead,
+            guideHoursBack = prefs.liveGuideHoursBack,
+            showLogos = prefs.liveShowLogos,
+            showNames = prefs.liveShowNames,
+            showNumbers = prefs.liveShowNumbers,
+            cleanGroupNames = clean,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), View())
 
     init {
-        viewModelScope.launch { repo.refresh(false) }
+        viewModelScope.launch { repo.refreshIfStale() }
         // O "agora" do guia anda sozinho.
         viewModelScope.launch { while (true) { delay(30_000); clock.value = System.currentTimeMillis() } }
     }
@@ -101,6 +118,17 @@ class LiveTvViewModel @Inject constructor(private val repo: LiveTvRepository) : 
         /** Grupo para mostrar ("Filmes · Música"). */
         fun groupLabel(c: LiveChannel): String = c.group.split(';').map { it.trim() }.filter { it.isNotBlank() }.joinToString(" · ")
 
+        /** Tira prefixo de país tipo "BR | " do nome do grupo, SÓ p/ exibir (os dados não mudam). */
+        fun cleanGroupName(name: String): String {
+            val t = name.trim()
+            val m = Regex("^[A-Za-z]{2,3}\\s*[|:\\-]\\s*").find(t) ?: return t
+            return t.substring(m.value.length).trim().ifBlank { t }
+        }
+
+        /** Nomes de grupo p/ exibir (com a limpeza de prefixo quando ligada). */
+        fun groupNames(c: LiveChannel, clean: Boolean): List<String> =
+            groupsOf(c).map { if (clean) cleanGroupName(it) else it }
+
         fun nowNext(list: List<LiveProgram>?, now: Long): Pair<LiveProgram?, LiveProgram?> {
             if (list.isNullOrEmpty()) return null to null
             val i = list.indexOfFirst { it.isNow(now) }
@@ -119,7 +147,11 @@ class LiveBarViewModel @Inject constructor(repo: LiveTvRepository, prefs: com.ao
 }
 
 @HiltViewModel
-class LivePlayerViewModel @Inject constructor(private val repo: LiveTvRepository) : ViewModel() {
+class LivePlayerViewModel @Inject constructor(
+    private val repo: LiveTvRepository,
+    private val prefs: com.aotv.app.data.local.PlatformPrefs,
+    private val library: com.aotv.app.data.repository.LibraryRepository,
+) : ViewModel() {
     val state = repo.state
     fun channel(id: String) = repo.channel(id)
     fun watched(id: String) = repo.markWatched(id)
@@ -129,6 +161,80 @@ class LivePlayerViewModel @Inject constructor(private val repo: LiveTvRepository
     /** URL de catch-up de um programa ([startSec]/[stopSec] em epoch segundos, como na rota). */
     fun getCatchupUrl(channel: LiveChannel, startSec: Long, stopSec: Long): String? =
         repo.catchupUrl(channel, LiveProgram(startSec * 1000, stopSec * 1000, ""))
+
+    /** Canal reserva ligado neste perfil. */
+    val backupEnabled: Boolean get() = prefs.liveBackupChannel
+
+    /**
+     * Outro canal com o MESMO nome de outra fonte (Lote 8, v1.18.0). O player
+     * tenta este UMA vez quando o canal falha; se ele também falhar, mostra
+     * o erro real. Nunca entra em loop.
+     */
+    fun backupChannel(channel: LiveChannel): LiveChannel? =
+        state.value.channels.firstOrNull {
+            it.id != channel.id && it.sourceId != channel.sourceId &&
+                it.name.equals(channel.name, ignoreCase = true)
+        }
+
+    /**
+     * Ao vivo no Continuar assistindo (Lote 8, v1.18.0): grava no MESMO
+     * histórico dos filmes e séries (tipo "LIVE", tmdbId estável do canal),
+     * com o programa atual no selo e os horários no addon — o toque no card
+     * volta pelo embedId "live|<canal>|<inicioSec>:<fimSec>" (ver
+     * MoviesNavigation). Respeita a pref e o modo privado (no privado, nada
+     * é gravado).
+     */
+    fun recordLiveContinue(channel: LiveChannel, program: LiveProgram?) {
+        if (!prefs.liveInContinue || prefs.privateMode) return
+        viewModelScope.launch {
+            runCatching {
+                library.saveProgress(
+                    tmdbId = liveTmdbId(channel.id),
+                    type = LIVE_TYPE,
+                    title = channel.name,
+                    posterUrl = channel.logo,
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    lastEpisode = program?.title.orEmpty(),
+                    lastSourceUrl = channel.id,
+                    lastAddon = if (program == null) "" else "${program.start / 1000}:${program.stop / 1000}",
+                )
+            }
+        }
+    }
+
+    /** Última faixa de áudio lembrada deste canal (idioma ou rótulo), ou null. */
+    fun savedAudio(channelId: String): String? =
+        if (!prefs.liveRememberAudio) null else prefs.liveAudioPicks[channelId]?.lang
+
+    /** Guarda a faixa de áudio escolhida neste canal (só quando a pref está ligada). */
+    fun saveAudio(channelId: String, lang: String) {
+        if (!prefs.liveRememberAudio || lang.isBlank()) return
+        prefs.liveAudioPicks = prefs.liveAudioPicks +
+            (channelId to com.aotv.app.data.local.LiveAudioPick(lang, System.currentTimeMillis()))
+    }
+
+    companion object {
+        /** Tipo do histórico p/ canais ao vivo (não é MOVIE nem SERIES). */
+        const val LIVE_TYPE = "LIVE"
+
+        /** tmdbId estável (positivo) de um canal, p/ a chave do histórico. */
+        fun liveTmdbId(channelId: String): Int {
+            val h = ("live:" + channelId).hashCode()
+            return if (h == Int.MIN_VALUE) Int.MAX_VALUE else kotlin.math.abs(h)
+        }
+
+        /** "live|<canal>|<inicioSec>:<fimSec>" do card do Continuar, ou null. */
+        fun parseLiveEmbed(embedId: String): Triple<String, Long, Long>? {
+            val parts = embedId.split("|")
+            if (parts.size != 3 || parts[0] != "live") return null
+            val times = parts[2].split(":")
+            if (times.size != 2) return null
+            val start = times[0].toLongOrNull() ?: return null
+            val stop = times[1].toLongOrNull() ?: return null
+            return Triple(parts[1], start, stop)
+        }
+    }
 }
 
 @HiltViewModel

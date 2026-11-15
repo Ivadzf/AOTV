@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.aotv.app.data.live.LiveChannel
 import com.aotv.app.data.live.LiveProgram
+import com.aotv.app.ui.movies.RecordProgramDialog
 import com.aotv.app.ui.theme.*
 
 /**
@@ -53,10 +54,17 @@ fun LiveGuideScreen(
     onPlayCatchup: ((String) -> Unit)? = null,
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
-    // Janela: 1 h para trás, 3 h para a frente; ‹ › deslocam 1 h por vez.
+    // Lote 8 (v1.18.0): janela visível continua 4 h, mas os limites vêm das
+    // prefs — não rola para antes de (agora − horas atrás) nem para depois de
+    // (agora + dias à frente). windowStart = agora − 1 h + deslocamento, então
+    // o mínimo é −(horasAtrás − 1) e o máximo é 1 + diasÀFrente × 24.
+    // Sem EPG não há programação — nunca inventar (a grade mostra "Sem guia").
+    val minShift = -(v.guideHoursBack - 1)
+    val maxShift = 1 + v.guideDaysAhead * 24
     var shiftHours by remember { mutableIntStateOf(0) }
+    val shift = shiftHours.coerceIn(minShift, maxShift)
     val now = v.now
-    val windowStart = now - HOUR_MS + shiftHours * HOUR_MS
+    val windowStart = now - HOUR_MS + shift * HOUR_MS
     val windowEnd = windowStart + WINDOW_MS
     val totalWidth = HOUR_WIDTH_DP * WINDOW_HOURS
     // Um só ScrollState para o cabeçalho e todas as linhas: as colunas ficam alinhadas.
@@ -65,8 +73,10 @@ fun LiveGuideScreen(
     val hourPx = with(density) { HOUR_WIDTH_DP.toPx() }
     val nowXdp = ((now - windowStart).toFloat() / HOUR_MS * HOUR_WIDTH_DP.value).dp
     // Ao abrir (e a cada deslocamento), rola para o "agora" ficar visível.
-    LaunchedEffect(shiftHours) { scroll.scrollTo((((now - windowStart).toFloat() / HOUR_MS) * hourPx).toInt().coerceAtLeast(0)) }
+    LaunchedEffect(shift) { scroll.scrollTo((((now - windowStart).toFloat() / HOUR_MS) * hourPx).toInt().coerceAtLeast(0)) }
     var detail by remember { mutableStateOf<Pair<LiveChannel, LiveProgram>?>(null) }
+    // Lote 8 (v1.18.0): programa a gravar (diálogo da Frente 2).
+    var record by remember { mutableStateOf<Pair<LiveChannel, LiveProgram>?>(null) }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -74,9 +84,9 @@ fun LiveGuideScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            com.aotv.app.ui.common.FilterChipPill("‹ 1 h", false, { shiftHours = (shiftHours - 1).coerceAtLeast(-2) }, icon = Icons.Default.ChevronLeft)
-            com.aotv.app.ui.common.FilterChipPill("Agora", shiftHours == 0, { shiftHours = 0 })
-            com.aotv.app.ui.common.FilterChipPill("1 h ›", false, { shiftHours = (shiftHours + 1).coerceAtMost(12) }, icon = Icons.Default.ChevronRight)
+            com.aotv.app.ui.common.FilterChipPill("‹ 1 h", false, { shiftHours = (shiftHours - 1).coerceAtLeast(minShift) }, icon = Icons.Default.ChevronLeft)
+            com.aotv.app.ui.common.FilterChipPill("Agora", shift == 0, { shiftHours = 0.coerceIn(minShift, maxShift) })
+            com.aotv.app.ui.common.FilterChipPill("1 h ›", false, { shiftHours = (shiftHours + 1).coerceAtMost(maxShift) }, icon = Icons.Default.ChevronRight)
             Text(
                 "${hhmm(windowStart)} – ${hhmm(windowEnd)}", color = TextTertiary, fontSize = 13.sp,
                 modifier = Modifier.padding(start = 4.dp),
@@ -176,12 +186,29 @@ fun LiveGuideScreen(
                 }
             },
             confirmButton = {
-                if (isCurrent) TextButton(onClick = { onPlay(channel.id); detail = null }) { Text("Assistir ao vivo", color = Accent, fontWeight = FontWeight.ExtraBold) }
-                else TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
+                when {
+                    isCurrent -> TextButton(onClick = { onPlay(channel.id); detail = null }) { Text("Assistir ao vivo", color = Accent, fontWeight = FontWeight.ExtraBold) }
+                    // Lote 8 (v1.18.0): gravar programa futuro ou atual (passado não grava).
+                    program.stop > now -> TextButton(onClick = { record = channel to program; detail = null }) { Text("Gravar", color = Accent, fontWeight = FontWeight.ExtraBold) }
+                    else -> TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
+                }
             },
             dismissButton = {
-                if (isCurrent) TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
+                if (isCurrent || program.stop > now) TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
             },
+        )
+    }
+
+    // Lote 8 (v1.18.0): diálogo de agendar gravação (Frente 2).
+    record?.let { pair ->
+        val channel = pair.first
+        val program = pair.second
+        RecordProgramDialog(
+            channelId = channel.id, channelName = channel.name, channelUrl = channel.url,
+            channelHeaders = channel.headers, programTitle = program.title,
+            startMs = program.start, stopMs = program.stop,
+            onDismiss = { record = null },
+            onScheduled = { record = null },
         )
     }
 }

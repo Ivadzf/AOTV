@@ -214,8 +214,22 @@ fun MoviesNavigation(
             composable(MoviesRoute.Home.route) {
                 // Estável entre recomposições: lambda nova a cada vez recompunha a Início inteira.
                 val openDetail: (MovieItem) -> Unit = androidx.compose.runtime.remember(navController) { { item ->
-                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
-                    navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
+                    // Ao vivo no Continuar (Lote 8, v1.18.0): o card do canal
+                    // volta ao player, não ao detalhe — se o programa já
+                    // acabou, vai pelo catch-up (o player cai p/ o ao vivo
+                    // com aviso quando não há gravação).
+                    val live = com.aotv.app.ui.live.LivePlayerViewModel.parseLiveEmbed(item.embedId)
+                    if (live != null) {
+                        val (channelId, startSec, stopSec) = live
+                        if (stopSec > 0 && System.currentTimeMillis() / 1000 >= stopSec) {
+                            navController.navigate(MoviesRoute.LivePlayer.create(channelId, startSec, stopSec))
+                        } else {
+                            navController.navigate(MoviesRoute.LivePlayer.create(channelId))
+                        }
+                    } else {
+                        movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
+                        navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
+                    }
                 } }
                 // TV tem Início própria no desenho do webOS. Celular segue com a dele.
                 if (isTV) com.aotv.app.ui.tv.TvHomeScreen(
@@ -224,6 +238,7 @@ fun MoviesNavigation(
                 )
                 else MoviesHomeScreen(
                     onItemClick     = openDetail,
+                    onPlayLive      = { channelId -> navController.navigate(MoviesRoute.LivePlayer.create(channelId)) },
                     onSearchClick   = { navController.navigate(MoviesRoute.Search.route) },
                     onSettingsClick = { navController.navigate(MoviesRoute.Settings.route) },
                     onLibraryClick  = { navController.navigate(MoviesRoute.MinhaLista.route) },

@@ -32,6 +32,12 @@ class DetailPrefsViewModel @Inject constructor(
     val episodeRatings: StateFlow<Boolean> = prefs.detailEpisodeRatingsFlow
     /** Título em idioma original na página de detalhes (Lote 3 item 6; padrão: desligado). */
     val originalTitle: StateFlow<Boolean> = prefs.detailOriginalTitleFlow
+    /** Nota agregada (MDBList) na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */
+    val showAggregateRating: StateFlow<Boolean> = prefs.detailShowAggregateRatingFlow
+    /** Avaliações do Trakt na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */
+    val showTraktReviews: StateFlow<Boolean> = prefs.detailShowTraktReviewsFlow
+    /** Frases e ficha (Wikiquote/Wikipédia) na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */
+    val showQuotes: StateFlow<Boolean> = prefs.detailShowQuotesFlow
     /** Blur real atrás das folhas do detalhe (Lote 3 item 4; padrão: ligado). */
     val panelBlur: StateFlow<Boolean> = prefs.panelBlurFlow
 }

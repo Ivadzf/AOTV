@@ -62,6 +62,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalContext
+import com.aotv.app.data.sports.SportsGame
+import kotlinx.coroutines.delay
 import com.aotv.app.ui.theme.*
 import com.aotv.app.data.local.SystemRow
 
@@ -76,6 +80,8 @@ fun MoviesHomeScreen(
     onFolderClick: (collectionId: String, folderId: String) -> Unit = { _, _ -> },
     /** Modo aleatório (Lote 2): episódio sorteado abre DIRETO no player. */
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    /** Ao vivo (Lote 8): jogo da fileira "Próximos" abre o player do canal. Sem ele, o jogo só grava. */
+    onPlayLive: (String) -> Unit = {},
     viewModel: MoviesHomeViewModel = hiltViewModel(),
     randomVm: RandomEpisodeViewModel = hiltViewModel(),
 ) {
@@ -131,6 +137,7 @@ fun MoviesHomeScreen(
                 onCustomize = onCustomize,
                 onFolderClick = onFolderClick,
                 onPlayEpisode = onPlayEpisode,
+                onPlayLive = onPlayLive,
                 randomVm = randomVm,
             )
         }
@@ -435,6 +442,8 @@ private fun HomeSectionsTab(
     onCustomize: () -> Unit,
     onFolderClick: (String, String) -> Unit,
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    /** Ao vivo (Lote 8): jogo da fileira "Próximos" abre o player do canal. */
+    onPlayLive: (String) -> Unit = {},
     randomVm: RandomEpisodeViewModel,
 ) {
     val listState = rememberLazyListState()
@@ -461,6 +470,39 @@ private fun HomeSectionsTab(
         val ready = randomState as? RandomEpisodeViewModel.RandomState.Ready ?: return@LaunchedEffect
         onPlayEpisode(ready.item, ready.season, ready.episode, ready.episodeTotal)
         randomVm.consume()
+    }
+    // Gravação de jogo (Lote 8): o botão "Gravar" do card abre o diálogo.
+    var recordGame by remember { mutableStateOf<SportsGame?>(null) }
+    recordGame?.let { game ->
+        RecordProgramDialog(
+            channelId = game.channelId, channelName = game.channelName, channelUrl = game.channelUrl,
+            channelHeaders = game.channelHeaders, programTitle = game.title,
+            startMs = game.startMs, stopMs = game.stopMs,
+            onDismiss = { recordGame = null },
+            onScheduled = { recordGame = null },
+        )
+    }
+    // Gravações e lembretes (Lote 8): dispara o que venceu e avisa o que
+    // começa em 1 minuto — SÓ com o app aberto (sem WorkManager no gradle,
+    // ver RecordingReminders): com o app fechado, nada dispara nem avisa.
+    val context = LocalContext.current
+    val currentState by rememberUpdatedState(state)
+    LaunchedEffect(state.upcomingEpisodes, state.upcomingGames) {
+        com.aotv.app.data.recordings.RecordingService.checkDue(context)
+        com.aotv.app.data.recordings.RecordingReminders.checkDue(
+            context, state.upcomingEpisodes, state.upcomingGames,
+            state.calendarHideSpoilers, state.sportsGameAlerts,
+        )
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            com.aotv.app.data.recordings.RecordingService.checkDue(context)
+            com.aotv.app.data.recordings.RecordingReminders.checkDue(
+                context, currentState.upcomingEpisodes, currentState.upcomingGames,
+                currentState.calendarHideSpoilers, currentState.sportsGameAlerts,
+            )
+        }
     }
     // Listas derivadas estáveis: map/associate novos a cada composição tornavam
     // a fileira não-pulável (o LazyColumn recompunha a fileira inteira a cada
@@ -609,6 +651,28 @@ private fun HomeSectionsTab(
                     }
                 }
             }
+        }
+        // Fileira "Próximos" (Lote 8, v1.18.0): depois das fileiras
+        // existentes. Episódios abrem o detalhe da série; jogos abrem o ao
+        // vivo (quando a navegação ligar o onPlayLive) ou agendam a gravação.
+        if (state.upcomingEpisodes.isNotEmpty() || state.upcomingGames.isNotEmpty()) item(key = "upcoming") {
+            UpcomingRow(
+                episodes = state.upcomingEpisodes, games = state.upcomingGames,
+                now = System.currentTimeMillis(), hideSpoilers = state.calendarHideSpoilers,
+                hideScores = state.sportsHideScores, scoreDelaySec = state.sportsScoreDelaySec,
+                sportsShow = state.sportsShow, display = display,
+                onEpisodeClick = { entry ->
+                    onItemClick(
+                        MovieItem(
+                            tmdbId = entry.tmdbId, embedId = entry.tmdbId.toString(), title = entry.title,
+                            overview = "", posterUrl = entry.posterUrl, backdropUrl = "",
+                            year = "", rating = 0.0, type = MediaType.SERIES,
+                        ),
+                    )
+                },
+                onPlayGame = { game -> onPlayLive(game.channelId) },
+                onRecordGame = { game -> recordGame = game },
+            )
         }
         // ── Fim da Início (Lote 4, Correção B) ──────────────────────────────
         // Descobrir e Surpreenda-me estavam acima do herói e incomodavam:

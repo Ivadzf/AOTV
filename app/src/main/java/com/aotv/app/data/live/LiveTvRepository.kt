@@ -26,11 +26,13 @@ import javax.inject.Singleton
 
 /**
  * TV ao vivo. Guarda as fontes (listas M3U e contas Xtream), baixa os canais e o guia e lembra
- * favoritos e recentes. Canais e guia ficam em arquivo por 12 h, a tela abre sem esperar a rede.
+ * favoritos e recentes. Canais e guia ficam em arquivo e a tela abre sem esperar a rede; a
+ * atualização automática segue os intervalos das prefs (Lote 8: listas 24 h, guia 12 h).
  */
 @Singleton
 class LiveTvRepository @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val platformPrefs: com.aotv.app.data.local.PlatformPrefs,
 ) {
     data class State(
         val sources: List<LiveSource> = emptyList(),
@@ -53,6 +55,25 @@ class LiveTvRepository @Inject constructor(
     private val client = com.aotv.app.data.remote.AppDns.mediaClient.newBuilder()
         .callTimeout(90, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
     private val lock = Mutex()
+
+    // Lote 8 (v1.18.0): avisos de formato Xtream da última atualização (fonte
+    // que não libera o formato escolhido) e a hora da última atualização de
+    // listas e de guia — o refresh automático compara com os intervalos das
+    // prefs. Sem WorkManager no app (ver build.gradle.kts): não há agendamento
+    // em 2º plano; a checagem acontece ao abrir a aba Ao vivo + no manual.
+    private val formatWarnings = mutableListOf<String>()
+    private var lastListsAt: Long
+        get() = prefs.getLong("live_last_lists_at", 0L)
+        set(value) { prefs.edit().putLong("live_last_lists_at", value).apply() }
+    private var lastEpgAt: Long
+        get() = prefs.getLong("live_last_epg_at", 0L)
+        set(value) { prefs.edit().putLong("live_last_epg_at", value).apply() }
+
+    /** Intervalo da atualização das listas, em ms (pref por perfil, padrão 24 h). */
+    fun listsIntervalMs(): Long = platformPrefs.liveRefreshListsHours.coerceIn(1, 168) * 3_600_000L
+
+    /** Intervalo da atualização do guia, em ms (pref por perfil, padrão 12 h). */
+    fun epgIntervalMs(): Long = platformPrefs.liveRefreshEpgHours.coerceIn(1, 168) * 3_600_000L
 
     private val _state = MutableStateFlow(
         State(
@@ -228,7 +249,10 @@ class LiveTvRepository @Inject constructor(
                         val user = rest[0]
                         val pass = rest[1]
                         val streamId = rest[2].split(".")[0]
-                        "$serverPart/timeshift/$user/$pass/${(stop - start) / 60}/$start/$streamId.ts"
+                        // Lote 8 (v1.18.0): com catch-up em HLS, a gravação vem em
+                        // .m3u8 em vez de .ts. Só vale p/ o timeshift Xtream.
+                        val ext = if (platformPrefs.liveCatchupHls) "m3u8" else "ts"
+                        "$serverPart/timeshift/$user/$pass/${(stop - start) / 60}/$start/$streamId.$ext"
                     } else null
                 } else null
             }
@@ -345,18 +369,19 @@ class LiveTvRepository @Inject constructor(
 
     // ── Canais e guia ───────────────────────────────────────────────────────────
 
-    /** Atualiza canais (e depois o guia). [force] ignora o arquivo de 12 h. */
+    /** Atualiza canais (e depois o guia). [force] ignora o arquivo e baixa tudo de novo. */
     suspend fun refresh(force: Boolean = false) = lock.withLock {
         withContext(Dispatchers.IO) {
             val sources = _state.value.sources.filter { it.enabled }
             if (sources.isEmpty()) { _state.update { it.copy(channels = emptyList(), error = null) }; return@withContext }
             _state.update { it.copy(loading = true, error = null) }
+            formatWarnings.clear()
             val errors = mutableListOf<String>()
             val epgUrls = LinkedHashSet<String>()
             val all = ArrayList<LiveChannel>()
             for (s in sources) {
                 val cached = readChannels(s.id)
-                val fresh = cached != null && System.currentTimeMillis() - cached.third < TTL
+                val fresh = cached != null && System.currentTimeMillis() - cached.third < listsIntervalMs()
                 val (chans, urls) = if (!force && fresh) cached!!.first to cached.second
                 else runCatching { fetch(s) }.getOrNull()?.also { (c, u) -> writeChannels(s.id, c, u) } ?: run {
                     errors += s.name
@@ -366,13 +391,56 @@ class LiveTvRepository @Inject constructor(
                 epgUrls += urls
                 if (s.epgUrl.startsWith("http", true)) epgUrls += s.epgUrl
             }
+            lastListsAt = System.currentTimeMillis()
+            val errorParts = mutableListOf<String>()
+            if (errors.isNotEmpty()) errorParts += "Não deu para atualizar ${errors.joinToString(", ")}. Mostrando o que estava salvo."
+            if (formatWarnings.isNotEmpty()) {
+                val label = if (platformPrefs.liveXtreamFormat == "hls") "HLS" else "TS"
+                errorParts += "Formato $label indisponível em ${formatWarnings.joinToString(", ")} — usando o formato da conta."
+            }
             _state.update {
                 it.copy(
                     channels = all, loading = false,
-                    error = if (errors.isEmpty()) null else "Não deu para atualizar ${errors.joinToString(", ")}. Mostrando o que estava salvo.",
+                    error = errorParts.joinToString(" ").takeIf { it.isNotBlank() },
                 )
             }
             refreshEpg(all, epgUrls.toList(), force)
+        }
+    }
+
+    /**
+     * Atualiza sozinho ao abrir a aba Ao vivo (Lote 8, v1.18.0): se passou o
+     * intervalo das listas, baixa tudo; senão, só o guia se passou o dele.
+     * Não há agendamento em 2º plano (sem WorkManager no app) — a checagem
+     * é na abertura + no botão "Atualizar agora".
+     */
+    suspend fun refreshIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - lastListsAt >= listsIntervalMs()) refresh(true) else refresh(false)
+    }
+
+    /**
+     * Extensão do stream Xtream (Lote 8, v1.18.0). "auto" usa o da conta
+     * (m3u8 quando a conta deixa, senão ts); "ts"/"hls" forçam o formato.
+     * Se a conta não libera o formato escolhido, volta ao da conta e anota
+     * o aviso, que o [refresh] mostra como erro real na tela.
+     */
+    private fun xtreamExt(acc: XtreamAccount?, sourceName: String): String {
+        val auto = if (acc == null || acc.formats.isEmpty() || "m3u8" in acc.formats) "m3u8" else "ts"
+        return when (platformPrefs.liveXtreamFormat) {
+            "ts" -> {
+                if (acc != null && acc.formats.isNotEmpty() && "ts" !in acc.formats) {
+                    formatWarnings += sourceName
+                    auto
+                } else "ts"
+            }
+            "hls" -> {
+                if (acc != null && acc.formats.isNotEmpty() && "m3u8" !in acc.formats) {
+                    formatWarnings += sourceName
+                    auto
+                } else "m3u8"
+            }
+            else -> auto
         }
     }
 
@@ -391,7 +459,7 @@ class LiveTvRepository @Inject constructor(
             val base = "${s.server}/player_api.php?username=${enc(s.user)}&password=${enc(s.pass)}"
             val acc = getText(base)?.let(XtreamParser::account)
             if (acc != null) _state.update { it.copy(accounts = it.accounts + (s.id to acc)) }
-            val ext = if (acc == null || acc.formats.isEmpty() || "m3u8" in acc.formats) "m3u8" else "ts"
+            val ext = xtreamExt(acc, s.name)
             val groups = getText("$base&action=get_live_categories")?.let(XtreamParser::categories).orEmpty()
             getText("$base&action=get_live_streams")?.let { XtreamParser.live(it, s, groups, ext) }?.takeIf { it.isNotEmpty() }
                 ?.let { it to listOf("${s.server}/xmltv.php?username=${enc(s.user)}&password=${enc(s.pass)}") }
@@ -400,10 +468,15 @@ class LiveTvRepository @Inject constructor(
 
     private fun refreshEpg(channels: List<LiveChannel>, urls: List<String>, force: Boolean) {
         if (urls.isEmpty() || channels.isEmpty()) return
-        val sig = (urls.sorted().joinToString("|") + channels.size).hashCode().toString()
+        // Lote 8 (v1.18.0): a janela do guia vem das prefs (dias à frente e
+        // horas para trás); mudar a janela invalida o cache guardado.
+        val daysAhead = platformPrefs.liveGuideDaysAhead.coerceIn(1, 7)
+        val hoursBack = platformPrefs.liveGuideHoursBack.coerceIn(0, 24)
+        val sig = (urls.sorted().joinToString("|") + channels.size + "|$daysAhead|$hoursBack").hashCode().toString()
         val cached = readEpg()
-        if (!force && cached != null && cached.second == sig && System.currentTimeMillis() - cached.third < TTL) {
+        if (!force && cached != null && cached.second == sig && System.currentTimeMillis() - cached.third < epgIntervalMs()) {
             _state.update { it.copy(epg = cached.first) }
+            lastEpgAt = System.currentTimeMillis()
             return
         }
         _state.update { it.copy(epgLoading = true) }
@@ -423,11 +496,14 @@ class LiveTvRepository @Inject constructor(
                     val gz = raw.read() == 0x1f && raw.read() == 0x8b
                     raw.reset()
                     val input = if (gz || u.substringBefore('?').endsWith(".gz", true)) GZIPInputStream(raw) else raw
-                    XmltvParser.parse(input, wanted, names).forEach { (k, v) -> if ((merged[k]?.size ?: 0) < v.size) merged[k] = v }
+                    XmltvParser.parse(input, wanted, names, hoursBack = hoursBack, daysAhead = daysAhead).forEach { (k, v) -> if ((merged[k]?.size ?: 0) < v.size) merged[k] = v }
                 }
             }
         }
-        if (merged.isNotEmpty()) writeEpg(merged, sig)
+        if (merged.isNotEmpty()) {
+            writeEpg(merged, sig)
+            lastEpgAt = System.currentTimeMillis()
+        }
         _state.update { it.copy(epg = if (merged.isNotEmpty()) merged else cached?.first ?: it.epg, epgLoading = false) }
     }
 
@@ -555,8 +631,6 @@ class LiveTvRepository @Inject constructor(
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
 
     companion object {
-        private const val TTL = 12 * 3_600_000L
-
         /** "servidor.com:8080" ou "http://servidor.com:8080/player_api.php" viram a base. */
         fun normalizeServer(input: String): String? {
             val raw = input.trim().ifBlank { return null }

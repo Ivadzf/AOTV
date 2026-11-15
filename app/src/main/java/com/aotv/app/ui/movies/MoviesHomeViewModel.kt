@@ -12,6 +12,8 @@ import com.aotv.app.data.remote.dto.trailerKeys
 import com.aotv.app.data.remote.dto.TmdbNextEpisodeDto
 import com.aotv.app.data.remote.dto.toMovieItem
 import com.aotv.app.data.remote.dto.toSeriesItem
+import com.aotv.app.data.sports.SportsGame
+import com.aotv.app.data.sports.upcomingSportsGames
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,6 +23,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -41,6 +44,8 @@ class MoviesHomeViewModel @Inject constructor(
     collections: com.aotv.app.data.collections.CollectionsRepository,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
     private val continueArt: com.aotv.app.data.repository.ContinueArtworkRepository,
+    /** Guia ao vivo (Lote 8, v1.18.0): os jogos da fileira "Próximos" vêm do EPG. */
+    private val liveTv: com.aotv.app.data.live.LiveTvRepository,
 ) : ViewModel() {
     /** Coleções do perfil, para as fileiras de pastas da Início. */
     val collectionsFlow: StateFlow<List<com.aotv.app.data.collections.MediaCollection>> = collections.flow
@@ -142,6 +147,15 @@ class MoviesHomeViewModel @Inject constructor(
         val addonRows: List<AddonRow> = emptyList(),
         // ── Novos episódios das séries do histórico e da Minha Lista ──
         val newEpisodes: List<NewEpisode> = emptyList(),
+        // ── Fileira "Próximos" (Lote 8, v1.18.0): episódios + jogos de esporte ──
+        val upcomingEpisodes: List<CalendarEntry> = emptyList(),
+        val upcomingGames: List<SportsGame> = emptyList(),
+        val sportsShow: Boolean = true,
+        val calendarHideSpoilers: Boolean = false,
+        val sportsHideScores: Boolean = false,
+        val sportsScoreDelaySec: Int = 30,
+        val sportsLiveScores: Boolean = true,
+        val sportsGameAlerts: Boolean = false,
         /** Trailer mudo no destaque, conforme a preferência do perfil. */
         val heroTrailer: Boolean = true,
         /** Exibição da Início (Fase B, frente compacta): tamanho do pôster, densidade, selos, herói, fundo e sublinhado. */
@@ -254,6 +268,35 @@ class MoviesHomeViewModel @Inject constructor(
             _uiState.update { it.copy(newEpisodes = sortNewEpisodes(out)) }
         }
     }
+    // ── Fileira "Próximos" (Lote 8, v1.18.0) ─────────────────────────────
+    // Próximos episódios: o MESMO conjunto e o MESMO cache da fileira
+    // "Novos episódios" (calendarEntriesOf: sem air_date, sem linha) e do
+    // Calendário da Biblioteca. Só entram os que ainda vão ao ar (hoje em
+    // diante) — o último episódio já exibido fica só na Biblioteca.
+    private var lastUpcomingKey = ""
+
+    /** Monta os próximos episódios da fileira "Próximos". */
+    private fun buildUpcomingEpisodes(series: List<Triple<Int, String, String>>) {
+        val key = series.joinToString(",") { it.first.toString() }
+        if (key == lastUpcomingKey) return
+        lastUpcomingKey = key
+        if (series.isEmpty()) { _uiState.update { it.copy(upcomingEpisodes = emptyList()) }; return }
+        viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val today = todayMs()
+            val out = series.map { (id, title, poster) ->
+                async {
+                    val d = seriesDetailCache.get(id) ?: return@async emptyList<CalendarEntry>()
+                    val last = d.lastEpisodeToAir
+                    val seen = last != null && library.isEpisodeWatched(id, last.season, last.episode)
+                    calendarEntriesOf(id, title.ifBlank { d.name }, poster, d, seen, now)
+                }
+            }.awaitAll().flatten()
+                .filter { !it.isLastAired && it.atMs >= today }
+            _uiState.update { it.copy(upcomingEpisodes = sortCalendarEntries(out).take(10)) }
+        }
+    }
+
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     /** Assinatura do histórico já processado — evita refazer a busca a cada tick do Flow. */
@@ -268,6 +311,9 @@ class MoviesHomeViewModel @Inject constructor(
      */
     private fun buildRecommendations(history: List<com.aotv.app.data.local.entity.MovieHistoryEntity>) {
         lastHistory = history
+        // Ao vivo (Lote 8, v1.18.0): canais no histórico (tipo "LIVE") não
+        // são títulos do TMDB — não viram semente de recomendação.
+        val history = history.filter { it.type != com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE }
         // Recomendação é do catálogo AOTV (TMDB). Desligado, nem chama a rede.
         if (!prefs.catalogOn) return
         // Fileira desligada não busca na rede (ao religar, o applyLayout repõe).
@@ -539,7 +585,35 @@ class MoviesHomeViewModel @Inject constructor(
                 (h.filter { it.type == MediaType.SERIES.name }.map { Triple(it.tmdbId, it.title, it.posterUrl) } +
                     w.filter { it.type == MediaType.SERIES.name }.map { Triple(it.tmdbId, it.title, it.posterUrl) })
                     .distinctBy { it.first }.take(15)
-            }.collect { buildNewEpisodes(it) }
+            }.collect { buildNewEpisodes(it); buildUpcomingEpisodes(it) }
+        }
+        // Esportes e calendário (Lote 8, v1.18.0): as prefs do perfil no
+        // UiState (a fileira "Próximos" e os lembretes leem daqui) e os jogos
+        // do EPG. Os jogos só mudam quando o guia recarrega (abrir o Ao vivo
+        // ou o "Atualizar canais") — a Início não tem relógio próprio p/ o EPG.
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                prefs.sportsShowFlow, prefs.calendarHideSpoilersFlow, prefs.sportsHideScoresFlow,
+                prefs.sportsScoreDelaySecFlow, prefs.sportsLiveScoresFlow, prefs.sportsGameAlertsFlow,
+            ) { show, hideSpoilers, hideScores, delaySec, liveScores, alerts ->
+                _uiState.update {
+                    it.copy(
+                        sportsShow = show, calendarHideSpoilers = hideSpoilers,
+                        sportsHideScores = hideScores, sportsScoreDelaySec = delaySec,
+                        sportsLiveScores = liveScores, sportsGameAlerts = alerts,
+                    )
+                }
+            }.collect()
+        }
+        viewModelScope.launch {
+            liveTv.state.collect { st ->
+                val games = if (prefs.sportsShow) {
+                    upcomingSportsGames(st.channels, st.epg, System.currentTimeMillis())
+                } else {
+                    emptyList()
+                }
+                _uiState.update { it.copy(upcomingGames = games) }
+            }
         }
         // Continuar assistindo: observa o histórico (reproduções recentes) e mapeia p/ MovieItem.
         viewModelScope.launch {
@@ -555,7 +629,12 @@ class MoviesHomeViewModel @Inject constructor(
                 val items = continueList.map { h ->
                     MovieItem(
                         tmdbId = h.tmdbId,
-                        embedId = h.tmdbId.toString(),
+                        // Ao vivo (Lote 8, v1.18.0): o toque no card volta ao
+                        // player pelo embedId "live|<canal>|<inicio>:<fim>"
+                        // (ver MoviesNavigation) — não é um título do TMDB.
+                        embedId = if (h.type == com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE) {
+                            "live|" + h.lastSourceUrl + "|" + h.lastAddon
+                        } else h.tmdbId.toString(),
                         title = h.title,
                         overview = "",
                         posterUrl = h.posterUrl,
@@ -585,6 +664,9 @@ class MoviesHomeViewModel @Inject constructor(
                 buildRecommendations(list)
                 coroutineScope {
                     continueList.take(20).map { h -> async {
+                        // Ao vivo (Lote 8, v1.18.0): o tmdbId do canal é
+                        // sintético — sem busca de arte no TMDB p/ ele.
+                        if (h.type == com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE) return@async
                         val item = items.firstOrNull { it.tmdbId == h.tmdbId && it.type.name == h.type } ?: return@async
                         val art = continueArt.resolve(item, h.lastEpisode)
                         _uiState.update { current -> current.copy(

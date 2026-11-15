@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +33,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
+/**
+ * Nota de uma fonte na nota agregada (Lote 8, v1.18.0): [score100] já
+ * normalizado para a escala 0–100 (IMDb/TMDB/Trakt 0–10 ×10, Letterboxd
+ * 0–5 ×20, RT/Metacritic já 0–100, RogerEbert 0–4 ×25).
+ */
+data class DetailSourceRating(val source: String, val score100: Int)
+
 @HiltViewModel
 class MovieDetailViewModel @Inject constructor(
     private val tmdb: TmdbApiService,
@@ -42,6 +50,8 @@ class MovieDetailViewModel @Inject constructor(
     private val youtubeTrailer: com.aotv.app.data.remote.YoutubeTrailer,
     private val prober: com.aotv.app.data.remote.SourceProber,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    private val mdbList: com.aotv.app.data.remote.MDBListService,
+    private val wiki: com.aotv.app.data.remote.WikiService,
     private val simkl: com.aotv.app.data.remote.SimklService,
     private val debrid: com.aotv.app.data.debrid.DebridService,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
@@ -251,6 +261,25 @@ class MovieDetailViewModel @Inject constructor(
         val budget: Long = 0,
         /** Receita do filme em dólares (TMDB). 0 = sem dado; séries sempre 0. */
         val revenue: Long = 0,
+        // ── Lote 8 — Tela de detalhe (v1.18.0) ──────────────────────────
+        // Nota agregada: null = sem fonte com nota (a seção SOME, nunca
+        // inventa nota). aggregateError = erro real da busca (MDBList).
+        val aggregateScore: Int? = null,
+        val aggregateSources: List<DetailSourceRating> = emptyList(),
+        val aggregateError: String? = null,
+        // Avaliações do Trakt: série e episódio SEPARADOS — a aba de
+        // episódio nunca mostra os comentários da série. Erro real em
+        // traktReviewsError; sem Trakt configurado as listas ficam vazias.
+        val traktShowReviews: List<com.aotv.app.data.remote.TraktComment> = emptyList(),
+        val traktEpisodeReviews: List<com.aotv.app.data.remote.TraktComment> = emptyList(),
+        val traktReviewsError: String? = null,
+        val traktReviewsLoading: Boolean = false,
+        // Frases e ficha (Wikiquote/Wikipédia): null/vazio = sem dado real
+        // (a seção SOME). wikiError = erro real da chamada.
+        val wikiSummary: String? = null,
+        val wikiSummaryTitle: String? = null,
+        val wikiQuotes: List<String> = emptyList(),
+        val wikiError: String? = null,
         /** Teste das fontes por URL (filme e episódio). */
         val probes: Map<String, com.aotv.app.data.remote.ProbeResult> = emptyMap(),
         /** Magnet → o debrid tem pronto (true) ou não tem (false). Ausente = não se sabe. */
@@ -510,6 +539,8 @@ class MovieDetailViewModel @Inject constructor(
                 val trailers = detailDto?.videos.trailerKeys()
                 _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
+                loadDetailExtras(tmdbId, detail?.title.orEmpty(), detail?.year?.toIntOrNull(), true, detailDto?.originalTitle.orEmpty())
+
                 // Franquia (Harry Potter, Velozes…): carrega em paralelo e ordena por data de
                 // lançamento, que é a ordem cronológica que o usuário espera assistir.
                 detailDto?.collection?.takeIf { it.id > 0 }?.let { ref ->
@@ -599,6 +630,7 @@ class MovieDetailViewModel @Inject constructor(
                         },
                     )
                 }
+                loadDetailExtras(tmdbId, seriesDetail?.title.orEmpty(), seriesDetail?.firstAirYear?.toIntOrNull(), false, detailDto?.originalName.orEmpty())
                 // Logo do título: TMDB (PT-BR) principal, metahub fallback.
                 launch {
                     val tmdbLogo = if (apiKey.isNotBlank() && tmdbId > 0)
@@ -618,6 +650,88 @@ class MovieDetailViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isLoading = false, sourcesLoading = false, stremioLoading = false, error = LOAD_ERROR_MSG)
                 }
+            }
+        }
+    }
+
+    // ── Lote 8 — Tela de detalhe (v1.18.0): seções novas ─────────────────
+    // Só LEITURA: nenhuma destas chamadas grava nada (modo privado não
+    // precisa bloquear — não há scrobble nem registro aqui). Cada seção
+    // some quando não há dado real; erro real vai p/ o campo de erro da
+    // seção, nunca "não respondeu" genérico.
+
+    /** Normaliza a nota de uma fonte do MDBList para 0–100 (ver DetailSourceRating). */
+    fun normalizeSourceScore(source: String, value: Double): Int {
+        val scaled = when (source) {
+            "RT", "Metacritic" -> value
+            "Letterboxd" -> value * 20.0
+            "RogerEbert" -> value * 25.0
+            else -> value * 10.0
+        }
+        return scaled.roundToInt().coerceIn(0, 100)
+    }
+
+    private fun loadDetailExtras(tmdbId: Int, title: String, year: Int?, isMovie: Boolean, originalTitle: String) {
+        if (title.isBlank()) return
+        // Nota agregada (MDBList): só quando a pref está ligada e o serviço
+        // está habilitado (chave configurada). Sem fonte com nota, fica null.
+        if (prefs.detailShowAggregateRating && mdbList.isEnabled) {
+            viewModelScope.launch {
+                mdbList.getRatings(title, year, isMovie).onSuccess { ratings ->
+                    val sources = ratings.mapNotNull { (source, value) ->
+                        if (value == null) null else DetailSourceRating(source, normalizeSourceScore(source, value))
+                    }
+                    val score = if (sources.isEmpty()) null else sources.sumOf { it.score100 } / sources.size
+                    _uiState.update { it.copy(aggregateScore = score, aggregateSources = sources, aggregateError = null) }
+                }.onFailure { e ->
+                    _uiState.update { it.copy(aggregateError = e.message ?: e.javaClass.simpleName) }
+                }
+            }
+        }
+        // Avaliações do Trakt (série/filme): só com client ID configurado.
+        if (prefs.detailShowTraktReviews && trakt.configured) {
+            viewModelScope.launch {
+                _uiState.update { it.copy(traktReviewsLoading = true) }
+                val result = if (isMovie) trakt.getMovieComments(tmdbId) else trakt.getShowComments(tmdbId)
+                result.onSuccess { comments ->
+                    _uiState.update { it.copy(traktShowReviews = comments, traktReviewsError = null, traktReviewsLoading = false) }
+                }.onFailure { e ->
+                    _uiState.update { it.copy(traktReviewsError = e.message ?: e.javaClass.simpleName, traktReviewsLoading = false) }
+                }
+            }
+            if (!isMovie) {
+                val ep = _uiState.value.selectedEpisode
+                if (ep != null) loadEpisodeReviews(tmdbId, ep.first, ep.second)
+            }
+        }
+        // Frases e ficha (Wikiquote/Wikipédia): sem credencial, sem dado = some.
+        if (prefs.detailShowQuotes) {
+            viewModelScope.launch {
+                val summary = runCatching { wiki.getSummary(title, originalTitle) }
+                val quotes = runCatching { wiki.getQuotes(title, originalTitle) }
+                val summaryValue = summary.getOrNull()
+                val error = summary.exceptionOrNull() ?: quotes.exceptionOrNull()
+                _uiState.update {
+                    it.copy(
+                        wikiSummary = summaryValue?.extract,
+                        wikiSummaryTitle = summaryValue?.title,
+                        wikiQuotes = quotes.getOrDefault(emptyList()),
+                        wikiError = error?.message ?: error?.javaClass?.simpleName,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Avaliações do Trakt do episódio selecionado (só séries). */
+    fun loadEpisodeReviews(tmdbId: Int, season: Int, episode: Int) {
+        if (!prefs.detailShowTraktReviews || !trakt.configured) return
+        if (season <= 0 || episode <= 0 || tmdbId <= 0) return
+        viewModelScope.launch {
+            trakt.getEpisodeComments(tmdbId, season, episode).onSuccess { comments ->
+                _uiState.update { it.copy(traktEpisodeReviews = comments) }
+            }.onFailure { e ->
+                _uiState.update { it.copy(traktReviewsError = e.message ?: e.javaClass.simpleName) }
             }
         }
     }
@@ -724,6 +838,8 @@ class MovieDetailViewModel @Inject constructor(
         val imdb = _uiState.value.seriesImdbId.orEmpty()
         // Série não preenche state.item, então o tmdbId vem do stub que abriu a tela.
         val seriesTmdb = stubItem?.tmdbId ?: 0
+        // Avaliações do episódio selecionado (Lote 8): nunca reuse as da série.
+        loadEpisodeReviews(seriesTmdb, season, episode)
         val addons = prefs.stremioAddonList()
         // Plugins do Nuvio (JS) precisam do id do TMDB (não usam IMDb).
         val plugins = if (seriesTmdb > 0) pluginService.enabledPlugins("tv") else emptyList()

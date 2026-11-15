@@ -97,6 +97,20 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
             )
         }
 
+        // Lote 8 (v1.18.0): banner de progresso visível durante a atualização
+        // (o botão "Atualizar agora" força listas + guia) — nunca toast genérico.
+        if (st.loading || ui.busy == "refresh") {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(BackgroundCard2).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                Text("Atualizando canais e guia…", color = TextSecondary, fontSize = 13.sp)
+            }
+        }
+
         val summary: @Composable () -> Unit = {
             com.aotv.app.ui.common.SummaryCard {
                 Text("Canais", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
@@ -107,7 +121,7 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                 com.aotv.app.ui.common.SummaryRow("Favoritos", "${st.favorites.size}")
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Canais e guia ficam salvos por 12 horas. A tela abre na hora e atualiza sozinha depois.",
+                    "Canais e guia ficam salvos no aparelho. A tela abre na hora e atualiza sozinha quando passa o intervalo configurado (listas e guia têm intervalos próprios em Configurações → TV ao vivo).",
                     color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
                 )
             }

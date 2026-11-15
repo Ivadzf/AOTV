@@ -24,6 +24,9 @@ data class ExtAudioPick(val sig: String, val delaySec: Double, val at: Long)
  */
 data class LastSourcePick(val addon: String, val qualityRank: Int, val at: Long)
 
+/** Última faixa de áudio escolhida num canal ao vivo (Lote 8, v1.18.0). [lang] é o idioma da faixa (ex. "por") ou, sem idioma, o rótulo dela. [at] é p/ cortar os canais mais velhos. */
+data class LiveAudioPick(val lang: String, val at: Long)
+
 /**
  * Um addon Stremio instalado. A ordem da lista é a prioridade (o 1º é tentado primeiro).
  * [id] é o id do manifest, serve para reconhecer o mesmo addon com URL configurada diferente.
@@ -99,10 +102,18 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_buffer",
     // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
     "pref_detail_original_title",
+    // Lote 8 — Tela de detalhe (v1.18.0): toggles das seções novas.
+    "pref_detail_show_aggregate_rating", "pref_detail_show_trakt_reviews", "pref_detail_show_quotes",
     // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
     "pref_private_mode",
     // Lote 2 — Biblioteca e Descoberta: Continuar assistindo novo + Modo aleatório.
     "pref_random_include_continue", "pref_random_include_watchlist", "pref_random_unwatched_only",
+    // Lote 8 — Esportes, Gravações e Calendário (v1.18.0).
+    "sports_show", "sports_hide_scores", "sports_score_delay_sec",
+    "sports_live_scores", "sports_game_alerts",
+    "record_start_early_min", "record_run_late_min", "record_keep_episodes",
+    "record_low_space_mb", "record_notifications",
+    "calendar_hide_spoilers",
     // v1.13.0 — Backup: títulos removidos do Continuar assistindo (por perfil).
     "hidden_continue_v1",
     // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
@@ -116,6 +127,16 @@ internal val SCOPED_KEYS = listOf(
     "anilist_access_token", "anilist_enabled",
     "tvdb_episode_ordering", "tvdb_ordering_enabled",
     "post_play_rating_enabled",
+    // Lote 8 — Live TV (v1.18.0): guia, atualização, exibição de canais,
+    // canal reserva, Continuar assistindo, faixa de áudio e catch-up HLS
+    // (tudo por perfil). O formato do stream Xtream é GLOBAL ("live_xtream_format")
+    // e NÃO entra aqui. A última faixa de áudio por canal ("live_audio_v1")
+    // segue o mapa JSON de "last_source_v1".
+    "live_guide_days_ahead", "live_guide_hours_back",
+    "live_refresh_lists_hours", "live_refresh_epg_hours",
+    "live_show_logos", "live_show_names", "live_show_numbers", "live_clean_group_names",
+    "live_backup_channel", "live_in_continue", "live_remember_audio", "live_catchup_hls",
+    "live_audio_v1",
 )
 
 /**
@@ -220,6 +241,12 @@ class PlatformPrefs @Inject constructor(
 
         /** Limite mensal de dados móveis, em MB. 0 = sem limite (padrão). */
         private const val KEY_MOBILE_DATA_LIMIT_MB = "mobile_data_limit_mb"
+
+        /** URI da pasta de gravações escolhida (SAF, ACTION_OPEN_DOCUMENT_TREE). "" = pasta do app. */
+        private const val KEY_RECORDINGS_FOLDER_URI = "recordings_folder_uri"
+
+        /** Nome de exibição da pasta de gravações (só p/ mostrar na tela). */
+        private const val KEY_RECORDINGS_FOLDER_NAME = "recordings_folder_name"
     }
 
     private val prefs = context.getSharedPreferences("aotv_prefs", Context.MODE_PRIVATE)
@@ -417,6 +444,127 @@ class PlatformPrefs @Inject constructor(
     var traktUser: String
         get() = prefs.getString(sk("trakt_user_v1"), "") ?: ""
         set(value) { prefs.edit().putString(sk("trakt_user_v1"), value).apply() }
+
+    // ── Lote 8 — Live TV (v1.18.0) ──────────────────────────────────────────
+    // Guia configurável, atualização, exibição de canais, canal reserva,
+    // Continuar assistindo, faixa de áudio e catch-up HLS. Tudo por perfil
+    // (sk), exceto o formato do stream Xtream, que é GLOBAL (vale p/ todas
+    // as contas do aparelho) e por isso NÃO usa sk() nem entra em SCOPED_KEYS.
+    // Os fluxos são recarregados na troca de perfil em refreshLayout().
+
+    private val _liveGuideDaysAhead = MutableStateFlow(prefs.getInt(sk("live_guide_days_ahead"), 3))
+    /** Dias à frente que o guia permite alcançar (1–7, padrão 3). */
+    val liveGuideDaysAheadFlow: StateFlow<Int> = _liveGuideDaysAhead.asStateFlow()
+    var liveGuideDaysAhead: Int
+        get() = _liveGuideDaysAhead.value
+        set(value) { val v = value.coerceIn(1, 7); prefs.edit().putInt(sk("live_guide_days_ahead"), v).apply(); _liveGuideDaysAhead.value = v }
+
+    private val _liveGuideHoursBack = MutableStateFlow(prefs.getInt(sk("live_guide_hours_back"), 1))
+    /** Horas para trás que o guia permite alcançar (0–24, padrão 1). */
+    val liveGuideHoursBackFlow: StateFlow<Int> = _liveGuideHoursBack.asStateFlow()
+    var liveGuideHoursBack: Int
+        get() = _liveGuideHoursBack.value
+        set(value) { val v = value.coerceIn(0, 24); prefs.edit().putInt(sk("live_guide_hours_back"), v).apply(); _liveGuideHoursBack.value = v }
+
+    private val _liveRefreshListsHours = MutableStateFlow(prefs.getInt(sk("live_refresh_lists_hours"), 24))
+    /** Intervalo da atualização automática das listas, em horas (1–168, padrão 24). */
+    val liveRefreshListsHoursFlow: StateFlow<Int> = _liveRefreshListsHours.asStateFlow()
+    var liveRefreshListsHours: Int
+        get() = _liveRefreshListsHours.value
+        set(value) { val v = value.coerceIn(1, 168); prefs.edit().putInt(sk("live_refresh_lists_hours"), v).apply(); _liveRefreshListsHours.value = v }
+
+    private val _liveRefreshEpgHours = MutableStateFlow(prefs.getInt(sk("live_refresh_epg_hours"), 12))
+    /** Intervalo da atualização automática do guia, em horas (1–168, padrão 12). */
+    val liveRefreshEpgHoursFlow: StateFlow<Int> = _liveRefreshEpgHours.asStateFlow()
+    var liveRefreshEpgHours: Int
+        get() = _liveRefreshEpgHours.value
+        set(value) { val v = value.coerceIn(1, 168); prefs.edit().putInt(sk("live_refresh_epg_hours"), v).apply(); _liveRefreshEpgHours.value = v }
+
+    private val _liveShowLogos = MutableStateFlow(prefs.getBoolean(sk("live_show_logos"), true))
+    /** Logo do canal visível nas fileiras da aba Ao vivo. */
+    val liveShowLogosFlow: StateFlow<Boolean> = _liveShowLogos.asStateFlow()
+    var liveShowLogos: Boolean
+        get() = _liveShowLogos.value
+        set(value) { prefs.edit().putBoolean(sk("live_show_logos"), value).apply(); _liveShowLogos.value = value }
+
+    private val _liveShowNames = MutableStateFlow(prefs.getBoolean(sk("live_show_names"), true))
+    /** Nome do canal visível nas fileiras da aba Ao vivo. */
+    val liveShowNamesFlow: StateFlow<Boolean> = _liveShowNames.asStateFlow()
+    var liveShowNames: Boolean
+        get() = _liveShowNames.value
+        set(value) { prefs.edit().putBoolean(sk("live_show_names"), value).apply(); _liveShowNames.value = value }
+
+    private val _liveShowNumbers = MutableStateFlow(prefs.getBoolean(sk("live_show_numbers"), false))
+    /** Número do canal (tvg-chno) visível nas fileiras da aba Ao vivo. */
+    val liveShowNumbersFlow: StateFlow<Boolean> = _liveShowNumbers.asStateFlow()
+    var liveShowNumbers: Boolean
+        get() = _liveShowNumbers.value
+        set(value) { prefs.edit().putBoolean(sk("live_show_numbers"), value).apply(); _liveShowNumbers.value = value }
+
+    private val _liveCleanGroupNames = MutableStateFlow(prefs.getBoolean(sk("live_clean_group_names"), false))
+    /** Limpa prefixos tipo "BR | " dos nomes de grupos SÓ na exibição (os dados não mudam). */
+    val liveCleanGroupNamesFlow: StateFlow<Boolean> = _liveCleanGroupNames.asStateFlow()
+    var liveCleanGroupNames: Boolean
+        get() = _liveCleanGroupNames.value
+        set(value) { prefs.edit().putBoolean(sk("live_clean_group_names"), value).apply(); _liveCleanGroupNames.value = value }
+
+    private val _liveBackupChannel = MutableStateFlow(prefs.getBoolean(sk("live_backup_channel"), true))
+    /** Canal reserva ligado: se o canal falhar, tenta outro com o mesmo nome de outra fonte (1 vez). */
+    val liveBackupChannelFlow: StateFlow<Boolean> = _liveBackupChannel.asStateFlow()
+    var liveBackupChannel: Boolean
+        get() = _liveBackupChannel.value
+        set(value) { prefs.edit().putBoolean(sk("live_backup_channel"), value).apply(); _liveBackupChannel.value = value }
+
+    private val _liveInContinue = MutableStateFlow(prefs.getBoolean(sk("live_in_continue"), true))
+    /** O que é assistido ao vivo entra no Continuar assistindo. */
+    val liveInContinueFlow: StateFlow<Boolean> = _liveInContinue.asStateFlow()
+    var liveInContinue: Boolean
+        get() = _liveInContinue.value
+        set(value) { prefs.edit().putBoolean(sk("live_in_continue"), value).apply(); _liveInContinue.value = value }
+
+    private val _liveRememberAudio = MutableStateFlow(prefs.getBoolean(sk("live_remember_audio"), true))
+    /** Lembra a última faixa de áudio escolhida em cada canal ao vivo. */
+    val liveRememberAudioFlow: StateFlow<Boolean> = _liveRememberAudio.asStateFlow()
+    var liveRememberAudio: Boolean
+        get() = _liveRememberAudio.value
+        set(value) { prefs.edit().putBoolean(sk("live_remember_audio"), value).apply(); _liveRememberAudio.value = value }
+
+    private val _liveCatchupHls = MutableStateFlow(prefs.getBoolean(sk("live_catchup_hls"), false))
+    /** Catch-up prefere a variante HLS (.m3u8) do timeshift Xtream em vez de .ts. */
+    val liveCatchupHlsFlow: StateFlow<Boolean> = _liveCatchupHls.asStateFlow()
+    var liveCatchupHls: Boolean
+        get() = _liveCatchupHls.value
+        set(value) { prefs.edit().putBoolean(sk("live_catchup_hls"), value).apply(); _liveCatchupHls.value = value }
+
+    private val _liveXtreamFormat = MutableStateFlow(prefs.getString("live_xtream_format", "auto") ?: "auto")
+    /** Formato do stream Xtream: "auto" (o da conta), "ts" ou "hls". GLOBAL, do aparelho. */
+    val liveXtreamFormatFlow: StateFlow<String> = _liveXtreamFormat.asStateFlow()
+    var liveXtreamFormat: String
+        get() = _liveXtreamFormat.value
+        set(value) { val v = if (value == "ts" || value == "hls") value else "auto"; prefs.edit().putString("live_xtream_format", v).apply(); _liveXtreamFormat.value = v }
+
+    /**
+     * Última faixa de áudio escolhida por canal ao vivo (Lote 8, v1.18.0):
+     * id do canal → idioma da faixa (ex. "por") ou, sem idioma, o rótulo
+     * ("Português"). No máximo 60 canais (os mais recentes); o resto cai no
+     * cortar por [at]. Por perfil (SCOPED_KEYS "live_audio_v1"). Sem fluxo:
+     * só o player lê e grava, como "last_source_v1".
+     */
+    var liveAudioPicks: Map<String, LiveAudioPick>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(sk("live_audio_v1"), null) ?: "{}")
+            o.keys().asSequence().associateWith { k ->
+                val v = o.getJSONObject(k)
+                LiveAudioPick(v.optString("l"), v.optLong("t", 0L))
+            }.filterValues { it.lang.isNotBlank() }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val o = org.json.JSONObject()
+            value.entries.sortedByDescending { it.value.at }.take(60).forEach { (k, p) ->
+                o.put(k, org.json.JSONObject().put("l", p.lang).put("t", p.at))
+            }
+            prefs.edit().putString(sk("live_audio_v1"), o.toString()).apply()
+        }
 
     // ── MDBList / AniList / TheTVDB (v1.17.0) ───────────────────────────────
     // Mesmo padrão do Trakt: chave de conta é DO APARELHO (a chave de API
@@ -680,6 +828,105 @@ class PlatformPrefs @Inject constructor(
         get() = _downloadFolderName.value
         set(value) { prefs.edit().putString(KEY_DOWNLOADS_FOLDER_NAME, value).apply(); _downloadFolderName.value = value }
 
+    // ── Lote 8 — Esportes, Gravações e Calendário (v1.18.0) ───────────────
+    // Tudo por perfil (SCOPED_KEYS), menos a pasta de gravações, que é do
+    // aparelho como a de downloads. NENHUMA destas prefs inventa dado: sem
+    // EPG não há jogo, sem placar no texto do EPG não há placar na tela
+    // (ver SportsScores), sem air_date não há episódio no calendário.
+
+    private val _sportsShow = MutableStateFlow(prefs.getBoolean(sk("sports_show"), true))
+    /** Mostrar a seção de esportes no Ao vivo e os jogos na fileira "Próximos". */
+    val sportsShowFlow: StateFlow<Boolean> = _sportsShow.asStateFlow()
+    var sportsShow: Boolean
+        get() = _sportsShow.value
+        set(value) { prefs.edit().putBoolean(sk("sports_show"), value).apply(); _sportsShow.value = value }
+
+    private val _sportsHideScores = MutableStateFlow(prefs.getBoolean(sk("sports_hide_scores"), false))
+    /** Esconder os placares extraídos do EPG (anti-spoiler). */
+    val sportsHideScoresFlow: StateFlow<Boolean> = _sportsHideScores.asStateFlow()
+    var sportsHideScores: Boolean
+        get() = _sportsHideScores.value
+        set(value) { prefs.edit().putBoolean(sk("sports_hide_scores"), value).apply(); _sportsHideScores.value = value }
+
+    private val _sportsScoreDelaySec = MutableStateFlow(prefs.getInt(sk("sports_score_delay_sec"), 30))
+    /** Atraso p/ mostrar o placar extraído, em segundos (anti-spoiler). */
+    val sportsScoreDelaySecFlow: StateFlow<Int> = _sportsScoreDelaySec.asStateFlow()
+    var sportsScoreDelaySec: Int
+        get() = _sportsScoreDelaySec.value
+        set(value) { prefs.edit().putInt(sk("sports_score_delay_sec"), value.coerceIn(0, 600)).apply(); _sportsScoreDelaySec.value = value.coerceIn(0, 600) }
+
+    private val _sportsLiveScores = MutableStateFlow(prefs.getBoolean(sk("sports_live_scores"), true))
+    /** Placares ao vivo nos canais de esporte (só o que o EPG traz no texto). */
+    val sportsLiveScoresFlow: StateFlow<Boolean> = _sportsLiveScores.asStateFlow()
+    var sportsLiveScores: Boolean
+        get() = _sportsLiveScores.value
+        set(value) { prefs.edit().putBoolean(sk("sports_live_scores"), value).apply(); _sportsLiveScores.value = value }
+
+    private val _sportsGameAlerts = MutableStateFlow(prefs.getBoolean(sk("sports_game_alerts"), false))
+    /** Alertar quando um jogo de esporte começa (notificação local, só com o app aberto — ver RecordingReminders). */
+    val sportsGameAlertsFlow: StateFlow<Boolean> = _sportsGameAlerts.asStateFlow()
+    var sportsGameAlerts: Boolean
+        get() = _sportsGameAlerts.value
+        set(value) { prefs.edit().putBoolean(sk("sports_game_alerts"), value).apply(); _sportsGameAlerts.value = value }
+
+    private val _recordStartEarlyMin = MutableStateFlow(prefs.getInt(sk("record_start_early_min"), 2))
+    /** Começar a gravação este tanto de minutos ANTES do programa. */
+    val recordStartEarlyMinFlow: StateFlow<Int> = _recordStartEarlyMin.asStateFlow()
+    var recordStartEarlyMin: Int
+        get() = _recordStartEarlyMin.value
+        set(value) { prefs.edit().putInt(sk("record_start_early_min"), value.coerceIn(0, 30)).apply(); _recordStartEarlyMin.value = value.coerceIn(0, 30) }
+
+    private val _recordRunLateMin = MutableStateFlow(prefs.getInt(sk("record_run_late_min"), 5))
+    /** Continuar gravando este tanto de minutos DEPOIS do fim do programa. */
+    val recordRunLateMinFlow: StateFlow<Int> = _recordRunLateMin.asStateFlow()
+    var recordRunLateMin: Int
+        get() = _recordRunLateMin.value
+        set(value) { prefs.edit().putInt(sk("record_run_late_min"), value.coerceIn(0, 60)).apply(); _recordRunLateMin.value = value.coerceIn(0, 60) }
+
+    private val _recordKeepEpisodes = MutableStateFlow(prefs.getInt(sk("record_keep_episodes"), 5))
+    /** Nº de gravações a manter; acima disso apaga a mais antiga. */
+    val recordKeepEpisodesFlow: StateFlow<Int> = _recordKeepEpisodes.asStateFlow()
+    var recordKeepEpisodes: Int
+        get() = _recordKeepEpisodes.value
+        set(value) { prefs.edit().putInt(sk("record_keep_episodes"), value.coerceIn(1, 50)).apply(); _recordKeepEpisodes.value = value.coerceIn(1, 50) }
+
+    private val _recordLowSpaceMb = MutableStateFlow(prefs.getInt(sk("record_low_space_mb"), 1024))
+    /** Avisar (e parar a gravação) quando o espaço livre ficar abaixo disto, em MB. */
+    val recordLowSpaceMbFlow: StateFlow<Int> = _recordLowSpaceMb.asStateFlow()
+    var recordLowSpaceMb: Int
+        get() = _recordLowSpaceMb.value
+        set(value) { prefs.edit().putInt(sk("record_low_space_mb"), value.coerceIn(0, 10240)).apply(); _recordLowSpaceMb.value = value.coerceIn(0, 10240) }
+
+    private val _recordNotifications = MutableStateFlow(prefs.getBoolean(sk("record_notifications"), true))
+    /** Notificar início, fim e falha da gravação (precisa da permissão de notificação). */
+    val recordNotificationsFlow: StateFlow<Boolean> = _recordNotifications.asStateFlow()
+    var recordNotifications: Boolean
+        get() = _recordNotifications.value
+        set(value) { prefs.edit().putBoolean(sk("record_notifications"), value).apply(); _recordNotifications.value = value }
+
+    private val _calendarHideSpoilers = MutableStateFlow(prefs.getBoolean(sk("calendar_hide_spoilers"), false))
+    /** Esconder título/sinopse do episódio até ele ir ao ar (fileira "Próximos" e lembretes). */
+    val calendarHideSpoilersFlow: StateFlow<Boolean> = _calendarHideSpoilers.asStateFlow()
+    var calendarHideSpoilers: Boolean
+        get() = _calendarHideSpoilers.value
+        set(value) { prefs.edit().putBoolean(sk("calendar_hide_spoilers"), value).apply(); _calendarHideSpoilers.value = value }
+
+    private val _recordingsFolderUri = MutableStateFlow(prefs.getString(KEY_RECORDINGS_FOLDER_URI, "") ?: "")
+    /** URI SAF da pasta de gravações, que avisa quem observa. "" = pasta do app (padrão). Do aparelho, como a de downloads. */
+    val recordingsFolderUriFlow: StateFlow<String> = _recordingsFolderUri.asStateFlow()
+    /** URI SAF da pasta de gravações (ACTION_OPEN_DOCUMENT_TREE, permissão persistida). "" = pasta do app. */
+    var recordingsFolderUri: String
+        get() = _recordingsFolderUri.value
+        set(value) { prefs.edit().putString(KEY_RECORDINGS_FOLDER_URI, value).apply(); _recordingsFolderUri.value = value }
+
+    private val _recordingsFolderName = MutableStateFlow(prefs.getString(KEY_RECORDINGS_FOLDER_NAME, "") ?: "")
+    /** Nome de exibição da pasta de gravações, que avisa quem observa. */
+    val recordingsFolderNameFlow: StateFlow<String> = _recordingsFolderName.asStateFlow()
+    /** Nome de exibição da pasta de gravações (só p/ mostrar na tela). */
+    var recordingsFolderName: String
+        get() = _recordingsFolderName.value
+        set(value) { prefs.edit().putString(KEY_RECORDINGS_FOLDER_NAME, value).apply(); _recordingsFolderName.value = value }
+
     /** Lê o contador de hoje já com a virada do dia (0 quando o dia guardado não é hoje). */
     private fun readMobileToday(): Long =
         if (prefs.getString(KEY_MOBILE_DATA_DAY, "") == MobileDataUsage.dayKey()) prefs.getLong(KEY_MOBILE_DATA_TODAY, 0L) else 0L
@@ -918,6 +1165,30 @@ class PlatformPrefs @Inject constructor(
     var detailOriginalTitle: Boolean
         get() = _detailOriginalTitle.value
         set(value) { prefs.edit().putBoolean(sk("pref_detail_original_title"), value).apply(); _detailOriginalTitle.value = value }
+
+    // Lote 8 — Tela de detalhe (v1.18.0): nota agregada, avaliações do Trakt
+    // e frases/ficha (Wikiquote/Wikipédia). Padrão true: quem não mexer
+    // continua vendo as seções quando houver dado real para mostrar.
+    private val _detailShowAggregateRating = MutableStateFlow(prefs.getBoolean(sk("pref_detail_show_aggregate_rating"), true))
+    /** Nota agregada (MDBList) visível na página de detalhes. */
+    val detailShowAggregateRatingFlow: StateFlow<Boolean> = _detailShowAggregateRating.asStateFlow()
+    var detailShowAggregateRating: Boolean
+        get() = _detailShowAggregateRating.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_show_aggregate_rating"), value).apply(); _detailShowAggregateRating.value = value }
+
+    private val _detailShowTraktReviews = MutableStateFlow(prefs.getBoolean(sk("pref_detail_show_trakt_reviews"), true))
+    /** Avaliações do Trakt ("O que estão dizendo") visíveis na página de detalhes. */
+    val detailShowTraktReviewsFlow: StateFlow<Boolean> = _detailShowTraktReviews.asStateFlow()
+    var detailShowTraktReviews: Boolean
+        get() = _detailShowTraktReviews.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_show_trakt_reviews"), value).apply(); _detailShowTraktReviews.value = value }
+
+    private val _detailShowQuotes = MutableStateFlow(prefs.getBoolean(sk("pref_detail_show_quotes"), true))
+    /** Frases e ficha de produção (Wikiquote/Wikipédia) visíveis na página de detalhes. */
+    val detailShowQuotesFlow: StateFlow<Boolean> = _detailShowQuotes.asStateFlow()
+    var detailShowQuotes: Boolean
+        get() = _detailShowQuotes.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_show_quotes"), value).apply(); _detailShowQuotes.value = value }
 
     // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
     // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
@@ -1857,6 +2128,9 @@ class PlatformPrefs @Inject constructor(
         _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
         _detailEpisodeRatings.value = prefs.getBoolean(sk("pref_detail_episode_ratings"), true)
         _detailOriginalTitle.value = prefs.getBoolean(sk("pref_detail_original_title"), false)
+        _detailShowAggregateRating.value = prefs.getBoolean(sk("pref_detail_show_aggregate_rating"), true)
+        _detailShowTraktReviews.value = prefs.getBoolean(sk("pref_detail_show_trakt_reviews"), true)
+        _detailShowQuotes.value = prefs.getBoolean(sk("pref_detail_show_quotes"), true)
         _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
         _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
         _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)
@@ -1898,6 +2172,20 @@ class PlatformPrefs @Inject constructor(
         _randomIncludeContinue.value = prefs.getBoolean(sk("pref_random_include_continue"), true)
         _randomIncludeWatchlist.value = prefs.getBoolean(sk("pref_random_include_watchlist"), true)
         _randomUnwatchedOnly.value = prefs.getBoolean(sk("pref_random_unwatched_only"), false)
+        // Lote 8 — Live TV (v1.18.0): o formato Xtream é GLOBAL e não precisa
+        // recarregar aqui; o resto é por perfil.
+        _liveGuideDaysAhead.value = prefs.getInt(sk("live_guide_days_ahead"), 3).coerceIn(1, 7)
+        _liveGuideHoursBack.value = prefs.getInt(sk("live_guide_hours_back"), 1).coerceIn(0, 24)
+        _liveRefreshListsHours.value = prefs.getInt(sk("live_refresh_lists_hours"), 24).coerceIn(1, 168)
+        _liveRefreshEpgHours.value = prefs.getInt(sk("live_refresh_epg_hours"), 12).coerceIn(1, 168)
+        _liveShowLogos.value = prefs.getBoolean(sk("live_show_logos"), true)
+        _liveShowNames.value = prefs.getBoolean(sk("live_show_names"), true)
+        _liveShowNumbers.value = prefs.getBoolean(sk("live_show_numbers"), false)
+        _liveCleanGroupNames.value = prefs.getBoolean(sk("live_clean_group_names"), false)
+        _liveBackupChannel.value = prefs.getBoolean(sk("live_backup_channel"), true)
+        _liveInContinue.value = prefs.getBoolean(sk("live_in_continue"), true)
+        _liveRememberAudio.value = prefs.getBoolean(sk("live_remember_audio"), true)
+        _liveCatchupHls.value = prefs.getBoolean(sk("live_catchup_hls"), false)
     }
 
     private fun computeLayout(): List<HomeRowPref> {

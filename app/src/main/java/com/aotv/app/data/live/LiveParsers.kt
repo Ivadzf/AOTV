@@ -8,7 +8,9 @@ import java.io.InputStream
 
 /** Lista M3U (a de IPTV). Lê grupo, logo, id do guia, número e os cabeçalhos que o canal pede. */
 object M3uParser {
-    private val ATTR = Regex("""([A-Za-z0-9_-]+)="([^"]*)"""")
+    // String escapada (não crua """..."""): o ktbalance não lida com a
+    // regex crua aqui e acusa chaves/parênteses não fechados.
+    private val ATTR = Regex("([A-Za-z0-9_-]+)=\"([^\"]*)\"")
 
     fun parse(text: String, sourceId: String): M3uResult {
         val epg = mutableListOf<String>()
@@ -152,7 +154,8 @@ object XtreamParser {
 
 /**
  * Guia XMLTV. Lê em fluxo (o arquivo pode ter dezenas de MB) e guarda só os programas dos
- * canais pedidos, entre 3 h atrás e 24 h à frente.
+ * canais pedidos, entre [hoursBack] horas atrás e [daysAhead] dias à frente (Lote 8, v1.18.0:
+ * antes era fixo 3 h atrás e 24 h à frente). Sem guia, não há programação — nunca inventar.
  */
 object XmltvParser {
     private val FORMATS = listOf("yyyyMMddHHmmss Z", "yyyyMMddHHmmss", "yyyyMMddHHmm Z", "yyyyMMddHHmm")
@@ -166,9 +169,11 @@ object XmltvParser {
         wanted: Map<String, List<String>>,
         names: Map<String, List<String>>,
         now: Long = System.currentTimeMillis(),
+        hoursBack: Int = 3,
+        daysAhead: Int = 1,
     ): Map<String, List<LiveProgram>> {
-        val from = now - 3 * 3_600_000L
-        val to = now + 24 * 3_600_000L
+        val from = now - hoursBack.coerceIn(0, 24) * 3_600_000L
+        val to = now + daysAhead.coerceIn(1, 7) * 24 * 3_600_000L
         val p = XmlPullParserFactory.newInstance().newPullParser()
         p.setInput(input, null)
         val idToChannels = HashMap<String, List<String>>()

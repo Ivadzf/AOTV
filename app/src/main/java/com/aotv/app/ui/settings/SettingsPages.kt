@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Comment
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Code
@@ -43,7 +45,11 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -113,6 +119,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.MobileDataUsage
+import com.aotv.app.data.recordings.ScheduledRecording
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.ui.movies.PlayerPrefsViewModel
@@ -349,6 +356,13 @@ private fun safFolderDisplayName(context: android.content.Context, treeUri: Uri)
     return Uri.decode(treeUri.lastPathSegment?.substringAfterLast('/') ?: "").ifBlank { "Pasta escolhida" }
 }
 
+/** Linha da gravação: canal, horário e status (Lote 8). */
+private fun recordingSub(rec: ScheduledRecording): String {
+    val day = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(rec.startMs))
+    val until = java.text.SimpleDateFormat("HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(rec.stopMs))
+    return "${rec.channelName} · $day até $until · ${rec.statusLabel()}"
+}
+
 /**
  * Página "Downloads": "Só Wi-Fi", pasta de download (SAF) e dados móveis.
  * A pasta é do aparelho (não do perfil); os contadores mostram só o que o
@@ -369,7 +383,17 @@ private fun DownloadsPage(
     val month by viewModel.mobileDataMonth.collectAsStateWithLifecycle()
     val limitMb by viewModel.mobileDataLimitMb.collectAsStateWithLifecycle()
     val limitReached by viewModel.mobileDataLimitReached.collectAsStateWithLifecycle()
-    LaunchedEffect(Unit) { viewModel.refreshMobileData() }
+    // Gravações (Lote 8): pasta, janelas, retenção, espaço e a lista.
+    val recFolderUri by viewModel.recordingsFolderUri.collectAsStateWithLifecycle()
+    val recFolderName by viewModel.recordingsFolderName.collectAsStateWithLifecycle()
+    val recStartEarly by viewModel.recordStartEarlyMin.collectAsStateWithLifecycle()
+    val recRunLate by viewModel.recordRunLateMin.collectAsStateWithLifecycle()
+    val recKeep by viewModel.recordKeepEpisodes.collectAsStateWithLifecycle()
+    val recLowSpace by viewModel.recordLowSpaceMb.collectAsStateWithLifecycle()
+    val recNotifications by viewModel.recordNotifications.collectAsStateWithLifecycle()
+    val recordings by viewModel.recordingsList.collectAsStateWithLifecycle()
+    var recFreeMb by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) { viewModel.refreshMobileData(); viewModel.refreshRecordings(); recFreeMb = viewModel.recordingsFreeMb() }
 
     // A pasta escolhida ainda tem permissão persistida? O backup restaura a
     // URI como texto, mas a permissão NÃO viaja — sem ela, pede p/ escolher de novo.
@@ -391,6 +415,28 @@ private fun DownloadsPage(
         }
         viewModel.setDownloadFolder(uri.toString(), safFolderDisplayName(context, uri))
         Toast.makeText(context, "Pasta de download alterada. Os próximos downloads concluídos vão para lá.", Toast.LENGTH_LONG).show()
+    }
+
+    // A pasta de gravações ainda tem permissão persistida? Mesmo caso da de
+    // downloads: o backup restaura a URI como texto, mas a permissão NÃO viaja.
+    val recFolderHasAccess = remember(recFolderUri) {
+        recFolderUri.isBlank() || runCatching {
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri.toString() == recFolderUri && it.isReadPermission && it.isWritePermission
+            }
+        }.getOrDefault(false)
+    }
+
+    val pickRecordingsFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.setRecordingsFolder(uri.toString(), safFolderDisplayName(context, uri))
+        Toast.makeText(context, "Pasta de gravações alterada. As próximas gravações vão para lá.", Toast.LENGTH_LONG).show()
     }
 
     SettingsPageScaffold("Downloads", "Só Wi-Fi, pasta e dados móveis", onBack, highlightAnchor = highlightAnchor) {
@@ -451,6 +497,100 @@ private fun DownloadsPage(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = { viewModel.clearDownloadFolder() }) {
                     Text("Voltar para a pasta do app", color = Accent)
+                }
+            }
+        }
+        // Gravações (Lote 8, v1.18.0): pasta SAF, janelas, retenção, espaço e a lista.
+        SettingsSection("Gravações", anchor = SettingsAnchors.DL_RECORD)
+        SettingsCard {
+            Text("Espaço livre no aparelho: ${MobileDataUsage.formatBytes(recFreeMb * 1024L * 1024L)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "A gravação pára e avisa quando o espaço livre ficar abaixo de $recLowSpace MB. O espaço é do armazenamento interno (StatFs); com pasta externa, a gravação vai para lá, mas o limite olha o aparelho.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Folder,
+                title = "Pasta de gravações",
+                sub = when {
+                    recFolderUri.isBlank() -> "Pasta do app (padrão). Toque para escolher outra pasta."
+                    !recFolderHasAccess -> "\"$recFolderName\" sem acesso — toque para escolher de novo."
+                    else -> "\"$recFolderName\". As gravações vão para lá."
+                },
+                onClick = { pickRecordingsFolder.launch(null) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Notifications,
+                title = "Notificações de gravação",
+                sub = if (recNotifications) "Avisa início, fim e falha (com o erro real)"
+                    else "Sem aviso: a gravação acontece, mas não avisa",
+                trailing = { Switch(checked = recNotifications, onCheckedChange = { viewModel.setRecordNotifications(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setRecordNotifications(!recNotifications) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        if (recFolderUri.isNotBlank()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { viewModel.clearRecordingsFolder() }) {
+                    Text("Voltar para a pasta do app", color = Accent)
+                }
+            }
+        }
+        SettingsCard {
+            PrefRow(
+                "Começar a gravar antes",
+                listOf(0 to "Na hora", 2 to "2 min", 5 to "5 min", 10 to "10 min"),
+                recStartEarly, viewModel::setRecordStartEarlyMin,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Continuar gravando depois",
+                listOf(0 to "Na hora", 5 to "5 min", 10 to "10 min", 15 to "15 min", 30 to "30 min"),
+                recRunLate, viewModel::setRecordRunLateMin,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Manter gravações",
+                listOf(1 to "1", 3 to "3", 5 to "5", 10 to "10", 20 to "20"),
+                recKeep, viewModel::setRecordKeepEpisodes,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Avisar quando o espaço ficar abaixo de",
+                listOf(256 to "256 MB", 512 to "512 MB", 1024 to "1 GB", 2048 to "2 GB"),
+                recLowSpace, viewModel::setRecordLowSpaceMb,
+            )
+            Text(
+                "Acima do nº a manter, a gravação mais antiga é apagada. Com o app fechado, a gravação só começa quando o app abre — não há agendador em segundo plano.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        if (recordings.isEmpty()) {
+            SettingsCard {
+                Text(
+                    "Nenhuma gravação agendada. Agende a partir de um jogo na fileira \"Próximos\" ou de um programa no guia.",
+                    fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+                )
+            }
+        } else {
+            SettingsCard {
+                recordings.forEachIndexed { index, rec ->
+                    if (index > 0) Spacer(Modifier.height(12.dp))
+                    Text(rec.programTitle, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(recordingSub(rec), color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+                    if (rec.status == ScheduledRecording.STATUS_FAILED && rec.error.isNotBlank()) {
+                        Text("Erro: ${rec.error}", color = DangerText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        when (rec.status) {
+                            ScheduledRecording.STATUS_SCHEDULED -> TextButton(onClick = { viewModel.cancelRecording(rec.id) }) { Text("Cancelar", color = Accent) }
+                            ScheduledRecording.STATUS_DONE, ScheduledRecording.STATUS_FAILED, ScheduledRecording.STATUS_CANCELLED ->
+                                TextButton(onClick = { viewModel.removeRecording(rec.id) }) { Text("Apagar", color = Accent) }
+                        }
+                    }
                 }
             }
         }
@@ -619,6 +759,78 @@ private fun LayoutPage(
                 divider = true,
             )
         }
+
+        // Esportes e Calendário (Lote 8, v1.18.0). Os placares vêm SÓ do texto
+        // do EPG — sem placar no texto, sem placar na tela.
+        SettingsSection("Esportes e Calendário", anchor = SettingsAnchors.LAYOUT_SPORTS)
+        val sportsShow by viewModel.sportsShow.collectAsStateWithLifecycle()
+        val sportsLiveScores by viewModel.sportsLiveScores.collectAsStateWithLifecycle()
+        val sportsHideScores by viewModel.sportsHideScores.collectAsStateWithLifecycle()
+        val sportsScoreDelay by viewModel.sportsScoreDelaySec.collectAsStateWithLifecycle()
+        val sportsAlerts by viewModel.sportsGameAlerts.collectAsStateWithLifecycle()
+        val hideSpoilers by viewModel.calendarHideSpoilers.collectAsStateWithLifecycle()
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.SportsSoccer,
+                title = "Mostrar esportes",
+                sub = if (sportsShow) "Seção de esportes no Ao vivo e jogos na fileira \"Próximos\""
+                    else "Sem seção de esportes nem jogos na Início",
+                trailing = { Switch(checked = sportsShow, onCheckedChange = { viewModel.setSportsShow(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSportsShow(!sportsShow) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.LiveTv,
+                title = "Placares ao vivo nos canais",
+                sub = if (sportsLiveScores) "O placar do EPG aparece no canal de esporte"
+                    else "Canais de esporte sem placar",
+                trailing = { Switch(checked = sportsLiveScores, onCheckedChange = { viewModel.setSportsLiveScores(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSportsLiveScores(!sportsLiveScores) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VisibilityOff,
+                title = "Esconder placares",
+                sub = if (sportsHideScores) "Nenhum placar aparece (anti-spoiler)"
+                    else "O placar aparece quando o guia traz no texto",
+                trailing = { Switch(checked = sportsHideScores, onCheckedChange = { viewModel.setSportsHideScores(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSportsHideScores(!sportsHideScores) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Notifications,
+                title = "Alertas de jogo",
+                sub = if (sportsAlerts) "Avisa quando um jogo começa (só com o app aberto)"
+                    else "Sem aviso quando o jogo começa",
+                trailing = { Switch(checked = sportsAlerts, onCheckedChange = { viewModel.setSportsGameAlerts(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSportsGameAlerts(!sportsAlerts) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.CalendarMonth,
+                title = "Esconder spoilers do calendário",
+                sub = if (hideSpoilers) "O episódio aparece sem T/E até ir ao ar"
+                    else "T/E do episódio visível na fileira \"Próximos\"",
+                trailing = { Switch(checked = hideSpoilers, onCheckedChange = { viewModel.setCalendarHideSpoilers(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setCalendarHideSpoilers(!hideSpoilers) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsCard {
+            PrefRow(
+                "Atraso do placar (anti-spoiler)",
+                listOf(0 to "Na hora", 15 to "15 s", 30 to "30 s", 60 to "1 min", 120 to "2 min"),
+                sportsScoreDelay, viewModel::setSportsScoreDelaySec,
+            )
+            Text(
+                "O placar só aparece esse tempo depois do início do jogo — e só quando o guia traz o placar no texto. Sem placar no texto, o jogo aparece sem resultado.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
     }
 }
 
@@ -637,6 +849,9 @@ private fun DetalhePage(
     val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
     val episodeRatings by viewModel.detailEpisodeRatings.collectAsStateWithLifecycle()
     val originalTitle by viewModel.detailOriginalTitle.collectAsStateWithLifecycle()
+    val showAggregateRating by viewModel.detailShowAggregateRating.collectAsStateWithLifecycle()
+    val showTraktReviews by viewModel.detailShowTraktReviews.collectAsStateWithLifecycle()
+    val showQuotes by viewModel.detailShowQuotes.collectAsStateWithLifecycle()
     SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Fundo e entrada", anchor = SettingsAnchors.DETAIL_BG)
         com.aotv.app.ui.common.SettingsGroup {
@@ -707,6 +922,42 @@ private fun DetalhePage(
                 "Estilo do card de episódio",
                 listOf("horizontal" to "Horizontal com arte", "stacked" to "Empilhado com texto"),
                 episodeStyle, viewModel::setDetailEpisodeStyle,
+            )
+        }
+        SettingsSection("Nota agregada", anchor = SettingsAnchors.DETAIL_RATINGS)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Star,
+                title = "Mostrar nota agregada",
+                sub = if (showAggregateRating) "Nota de 0 a 100 com as notas por fonte (MDBList). Sem fonte com nota, a seção não aparece"
+                    else "Sem nota agregada na página de detalhes",
+                trailing = { Switch(checked = showAggregateRating, onCheckedChange = { viewModel.setDetailShowAggregateRating(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailShowAggregateRating(!showAggregateRating) },
+                grouped = true,
+            )
+        }
+        SettingsSection("O que estão dizendo", anchor = SettingsAnchors.DETAIL_REVIEWS)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Comment,
+                title = "Mostrar avaliações do Trakt",
+                sub = if (showTraktReviews) "Avaliações do Trakt na página de detalhes, com abas Série e Episódio"
+                    else "Sem avaliações do Trakt na página de detalhes",
+                trailing = { Switch(checked = showTraktReviews, onCheckedChange = { viewModel.setDetailShowTraktReviews(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailShowTraktReviews(!showTraktReviews) },
+                grouped = true,
+            )
+        }
+        SettingsSection("Frases e ficha de produção", anchor = SettingsAnchors.DETAIL_QUOTES)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.FormatQuote,
+                title = "Mostrar frases e ficha",
+                sub = if (showQuotes) "Frases do Wikiquote e resumo da Wikipédia. Sem frase ou página, a seção não aparece"
+                    else "Sem frases nem ficha na página de detalhes",
+                trailing = { Switch(checked = showQuotes, onCheckedChange = { viewModel.setDetailShowQuotes(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailShowQuotes(!showQuotes) },
+                grouped = true,
             )
         }
     }
@@ -940,6 +1191,20 @@ private fun IntegracoesPage(
 ) {
     // A chave TMDB saiu daqui (Lote 6, v1.15.0): agora mora em Acompanhamento,
     // junto dos trackers. Esta página fica só com contas e TV ao vivo.
+    // Lote 8 (v1.18.0): opções da TV ao vivo, por perfil (o formato Xtream é global).
+    val liveGuideDaysAhead by viewModel.liveGuideDaysAhead.collectAsStateWithLifecycle()
+    val liveGuideHoursBack by viewModel.liveGuideHoursBack.collectAsStateWithLifecycle()
+    val liveRefreshListsHours by viewModel.liveRefreshListsHours.collectAsStateWithLifecycle()
+    val liveRefreshEpgHours by viewModel.liveRefreshEpgHours.collectAsStateWithLifecycle()
+    val liveShowLogos by viewModel.liveShowLogos.collectAsStateWithLifecycle()
+    val liveShowNames by viewModel.liveShowNames.collectAsStateWithLifecycle()
+    val liveShowNumbers by viewModel.liveShowNumbers.collectAsStateWithLifecycle()
+    val liveCleanGroupNames by viewModel.liveCleanGroupNames.collectAsStateWithLifecycle()
+    val liveXtreamFormat by viewModel.liveXtreamFormat.collectAsStateWithLifecycle()
+    val liveBackupChannel by viewModel.liveBackupChannel.collectAsStateWithLifecycle()
+    val liveInContinue by viewModel.liveInContinue.collectAsStateWithLifecycle()
+    val liveRememberAudio by viewModel.liveRememberAudio.collectAsStateWithLifecycle()
+    val liveCatchupHls by viewModel.liveCatchupHls.collectAsStateWithLifecycle()
     SettingsPageScaffold("Integrações", "Contas e TV ao vivo", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Contas", anchor = SettingsAnchors.INTEGR_ACCOUNTS)
         com.aotv.app.ui.common.SettingsGroup {
@@ -961,6 +1226,133 @@ private fun IntegracoesPage(
                 sub = "Listas M3U e contas Xtream, com guia de programação.",
                 onClick = onOpenLive,
                 grouped = true,
+            )
+        }
+        // Lote 8 (v1.18.0): guia, atualização, exibição, stream e reprodução —
+        // tudo sob a mesma seção "TV ao vivo" (anchor INTEGR_LIVE), logo após
+        // a entrada das fontes. O botão "Atualizar agora" fica nas telas Ao vivo
+        // e Fontes (força listas + guia na hora, com banner de progresso).
+        SettingsSection("Guia de programação")
+        SettingsCard {
+            PrefRow(
+                "Dias à frente",
+                listOf(1 to "1 dia", 2 to "2 dias", 3 to "3 dias", 5 to "5 dias", 7 to "7 dias"),
+                liveGuideDaysAhead, viewModel::setLiveGuideDaysAhead,
+            )
+            PrefRow(
+                "Horas para trás",
+                listOf(0 to "Só agora", 1 to "1 h", 3 to "3 h", 6 to "6 h", 12 to "12 h", 24 to "24 h"),
+                liveGuideHoursBack, viewModel::setLiveGuideHoursBack,
+            )
+            Text(
+                "A grade continua mostrando 4 horas por vez; os botões ‹ 1 h / Agora / 1 h › respeitam estes limites. Sem guia, não há programação.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        SettingsSection("Atualização")
+        SettingsCard {
+            PrefRow(
+                "Listas: atualizar a cada",
+                listOf(6 to "6 h", 12 to "12 h", 24 to "24 h", 48 to "48 h", 168 to "7 dias"),
+                liveRefreshListsHours, viewModel::setLiveRefreshListsHours,
+            )
+            PrefRow(
+                "Guia: atualizar a cada",
+                listOf(1 to "1 h", 6 to "6 h", 12 to "12 h", 24 to "24 h"),
+                liveRefreshEpgHours, viewModel::setLiveRefreshEpgHours,
+            )
+            Text(
+                "A atualização automática acontece ao abrir a aba Ao vivo. O botão de atualizar nas telas Ao vivo e Fontes força na hora.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        SettingsSection("Exibição dos canais")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Logos dos canais",
+                sub = if (liveShowLogos) "Ligado: a logo aparece na fileira" else "Desligado: só o nome",
+                trailing = { Switch(checked = liveShowLogos, onCheckedChange = { viewModel.setLiveShowLogos(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveShowLogos(!liveShowLogos) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Nomes dos canais",
+                sub = if (liveShowNames) "Ligado: o nome aparece na fileira" else "Desligado: só o programa",
+                trailing = { Switch(checked = liveShowNames, onCheckedChange = { viewModel.setLiveShowNames(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveShowNames(!liveShowNames) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Números dos canais",
+                sub = if (liveShowNumbers) "Ligado: o número aparece antes do nome" else "Desligado: sem número",
+                trailing = { Switch(checked = liveShowNumbers, onCheckedChange = { viewModel.setLiveShowNumbers(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveShowNumbers(!liveShowNumbers) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Visibility,
+                title = "Limpar nomes de grupos",
+                sub = if (liveCleanGroupNames) "Ligado: prefixos tipo \"BR | \" somem da exibição" else "Desligado: os nomes aparecem como vêm na lista",
+                trailing = { Switch(checked = liveCleanGroupNames, onCheckedChange = { viewModel.setLiveCleanGroupNames(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveCleanGroupNames(!liveCleanGroupNames) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsSection("Stream e catch-up")
+        SettingsCard {
+            PrefRow(
+                "Formato do stream Xtream",
+                listOf("auto" to "Automático", "ts" to "TS (.ts)", "hls" to "HLS (.m3u8)"),
+                liveXtreamFormat, viewModel::setLiveXtreamFormat,
+            )
+            Text(
+                "Automático usa o formato que a conta libera. Se a conta não liberar o formato escolhido, volta ao automático e avisa na tela.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Catch-up em HLS",
+                sub = if (liveCatchupHls) "Ligado: a gravação vem em .m3u8 em vez de .ts" else "Desligado: a gravação vem em .ts",
+                trailing = { Switch(checked = liveCatchupHls, onCheckedChange = { viewModel.setLiveCatchupHls(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveCatchupHls(!liveCatchupHls) },
+                grouped = true,
+            )
+        }
+        SettingsSection("Reprodução ao vivo")
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Refresh,
+                title = "Canal reserva",
+                sub = if (liveBackupChannel) "Ligado: se o canal falhar, tenta outro com o mesmo nome de outra fonte" else "Desligado: sem tentativa de reserva",
+                trailing = { Switch(checked = liveBackupChannel, onCheckedChange = { viewModel.setLiveBackupChannel(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveBackupChannel(!liveBackupChannel) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Ao vivo no Continuar assistindo",
+                sub = if (liveInContinue) "Ligado: o canal aparece no Continuar, com o programa atual" else "Desligado: nada ao vivo entra no Continuar",
+                trailing = { Switch(checked = liveInContinue, onCheckedChange = { viewModel.setLiveInContinue(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveInContinue(!liveInContinue) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Lembrar faixa de áudio",
+                sub = if (liveRememberAudio) "Ligado: a faixa escolhida volta sozinha neste canal" else "Desligado: sempre a faixa padrão",
+                trailing = { Switch(checked = liveRememberAudio, onCheckedChange = { viewModel.setLiveRememberAudio(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setLiveRememberAudio(!liveRememberAudio) },
+                grouped = true,
+                divider = true,
             )
         }
     }

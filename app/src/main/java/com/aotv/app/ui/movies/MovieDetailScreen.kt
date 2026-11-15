@@ -197,6 +197,12 @@ fun MovieDetailScreen(
     // Título em idioma original (Lote 3 item 6, por perfil; padrão: desligado).
     val showOriginalTitle by detailPrefs.originalTitle.collectAsStateWithLifecycle()
 
+    // Lote 8 — Tela de detalhe (v1.18.0): nota agregada, avaliações do Trakt,
+    // frases e ficha. Padrão: mostrar (cada seção some sem dado real).
+    val showAggregateRating by detailPrefs.showAggregateRating.collectAsStateWithLifecycle()
+    val showTraktReviews by detailPrefs.showTraktReviews.collectAsStateWithLifecycle()
+    val showQuotes by detailPrefs.showQuotes.collectAsStateWithLifecycle()
+
     // Navegador de episódios (Lote 2 item 3): busca + ordenação da TEMPORADA
     // selecionada, em memória (sem recarregar a série). O estado vive aqui,
     // na tela — não é pref: trocar de série recomeça a busca do zero.
@@ -225,6 +231,11 @@ fun MovieDetailScreen(
         }
         if (state.cast.isNotEmpty()) add("elenco" to "Elenco")
         if (state.collectionItems.size > 1 || state.related.isNotEmpty()) add("mais" to "Mais como isto")
+        if (showAggregateRating && (state.aggregateScore != null || state.aggregateError != null) ||
+            showTraktReviews && (state.traktShowReviews.isNotEmpty() || state.traktEpisodeReviews.isNotEmpty() || state.traktReviewsError != null) ||
+            showQuotes && (state.wikiSummary != null || state.wikiQuotes.isNotEmpty() || state.wikiError != null)) {
+            add("detalhe-extra" to "Notas e frases")
+        }
     }
     var detailTab by rememberSaveable { mutableStateOf("") }
     val activeDetailTab = detailTabList.firstOrNull { it.first == detailTab }?.first
@@ -988,6 +999,45 @@ fun MovieDetailScreen(
                 }
 
                 item { Spacer(Modifier.height(28.dp)) }
+            }
+
+            // ── Lote 8 — Nota agregada, avaliações e frases ───────────────────
+            // Cada seção some sem dado real. Com abas, ficam na aba "Notas e frases".
+            if (!detailTabsOn || activeDetailTab == "detalhe-extra") {
+                if (showAggregateRating && (state.aggregateScore != null || state.aggregateError != null)) {
+                    item {
+                        AggregateRatingSection(
+                            score = state.aggregateScore,
+                            sources = state.aggregateSources,
+                            error = state.aggregateError,
+                            modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (showTraktReviews && (state.traktReviewsLoading || state.traktShowReviews.isNotEmpty() || state.traktEpisodeReviews.isNotEmpty() || state.traktReviewsError != null)) {
+                    item {
+                        TraktReviewsSection(
+                            showReviews = state.traktShowReviews,
+                            episodeReviews = state.traktEpisodeReviews,
+                            isSeries = isSeries,
+                            selectedEpisode = state.selectedEpisode,
+                            error = state.traktReviewsError,
+                            loading = state.traktReviewsLoading,
+                            modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
+                        )
+                    }
+                }
+                if (showQuotes && (state.wikiSummary != null || state.wikiQuotes.isNotEmpty() || state.wikiError != null)) {
+                    item {
+                        WikiQuotesSection(
+                            summaryTitle = state.wikiSummaryTitle,
+                            summary = state.wikiSummary,
+                            quotes = state.wikiQuotes,
+                            error = state.wikiError,
+                            modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
+                        )
+                    }
+                }
             }
 
             // ── Elenco (TMDB credits) ──────────────────────────────────────────
@@ -2441,6 +2491,169 @@ private fun ErrorRetryCard(message: String, onRetry: () -> Unit, modifier: Modif
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
         ) {
             Text("Tentar novamente", fontWeight = FontWeight.Bold, fontSize = 14.sp, fontFamily = ManropeFontFamily)
+        }
+    }
+}
+
+// ─── Lote 8 — Tela de detalhe (v1.18.0) ──────────────────────────────────────
+// Nota agregada, avaliações do Trakt e frases/ficha. Regra comum: sem dado
+// real a seção NÃO é chamada (o chamador só monta quando há score/erro/
+// comentários/resumo/frases); erro real aparece como texto, nunca genérico.
+
+/** Nota agregada 0–100 com uma barra por fonte (MDBList). */
+@Composable
+private fun AggregateRatingSection(
+    score: Int?,
+    sources: List<DetailSourceRating>,
+    error: String?,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth().padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        com.aotv.app.ui.common.Eyebrow("Nota agregada", Modifier.padding(bottom = 3.dp))
+        if (score != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "$score",
+                    color = TextPrimary,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = SoraFontFamily,
+                )
+                Text("de 100", color = TextTertiary, fontSize = 14.sp, fontFamily = ManropeFontFamily)
+            }
+            sources.forEach { src ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(src.source, color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = ManropeFontFamily)
+                        Text("${src.score100}", color = TextSecondary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
+                    }
+                    Box(
+                        Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(999.dp)).background(Surface2),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth(src.score100 / 100f).height(6.dp)
+                                .clip(RoundedCornerShape(999.dp)).background(Accent),
+                        )
+                    }
+                }
+            }
+            Text(
+                "Média das fontes com nota (MDBList).",
+                color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily,
+            )
+        }
+        if (error != null) {
+            Text("Não foi possível carregar as notas: $error", color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
+        }
+    }
+}
+
+/** "O que estão dizendo": comentários do Trakt, abas Série / Episódio. */
+@Composable
+private fun TraktReviewsSection(
+    showReviews: List<com.aotv.app.data.remote.TraktComment>,
+    episodeReviews: List<com.aotv.app.data.remote.TraktComment>,
+    isSeries: Boolean,
+    selectedEpisode: Pair<Int, Int>?,
+    error: String?,
+    loading: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var tab by rememberSaveable { mutableStateOf("serie") }
+    val episodeTab = isSeries
+    val shown = if (tab == "episodio" && episodeTab) episodeReviews else showReviews
+    Column(modifier.fillMaxWidth().padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        com.aotv.app.ui.common.Eyebrow("O que estão dizendo", Modifier.padding(bottom = 3.dp))
+        Text("Avaliações do Trakt", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
+        if (episodeTab) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.aotv.app.ui.common.FilterChipPill("Série", tab == "serie", onClick = { tab = "serie" })
+                com.aotv.app.ui.common.FilterChipPill("Episódio", tab == "episodio", onClick = { tab = "episodio" })
+            }
+        }
+        if (loading && shown.isEmpty()) {
+            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+        }
+        if (error != null) {
+            Text("Não foi possível carregar as avaliações: $error", color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
+        }
+        if (!loading && error == null && shown.isEmpty()) {
+            val emptyText = if (tab == "episodio" && episodeTab) {
+                if (selectedEpisode == null) "Selecione um episódio para ver as avaliações dele."
+                else "Sem avaliações para este episódio."
+            } else "Sem avaliações no Trakt para este título."
+            Text(emptyText, color = TextTertiary, fontSize = 14.sp, fontFamily = ManropeFontFamily)
+        }
+        shown.forEach { comment ->
+            TraktCommentCard(comment = comment)
+        }
+    }
+}
+
+/** Um comentário do Trakt; spoiler fica escondido atrás de um toque. */
+@Composable
+private fun TraktCommentCard(comment: com.aotv.app.data.remote.TraktComment) {
+    var revealed by rememberSaveable(comment.id) { mutableStateOf(false) }
+    val body = comment.comment.orEmpty()
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(comment.author, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily)
+            if (comment.likes > 0) {
+                Text("${comment.likes} curtidas", color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily)
+            }
+        }
+        if (body.isNotBlank()) {
+            if (comment.spoiler && !revealed) {
+                Text(
+                    "Contém spoiler — toque para revelar",
+                    color = Accent, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = ManropeFontFamily,
+                    modifier = Modifier.clickable { revealed = true },
+                )
+            } else {
+                Text(body, color = TextSecondary, fontSize = 14.sp, lineHeight = 21.sp, fontFamily = ManropeFontFamily)
+            }
+        }
+    }
+}
+
+/** Frases do Wikiquote + resumo da Wikipédia (ficha de produção). */
+@Composable
+private fun WikiQuotesSection(
+    summaryTitle: String?,
+    summary: String?,
+    quotes: List<String>,
+    error: String?,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth().padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        com.aotv.app.ui.common.Eyebrow("Frases e ficha de produção", Modifier.padding(bottom = 3.dp))
+        Text("Frases e ficha", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
+        if (summary != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (!summaryTitle.isNullOrBlank()) {
+                    Text(summaryTitle, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily)
+                }
+                Text(summary, color = TextSecondary, fontSize = 14.sp, lineHeight = 21.sp, fontFamily = ManropeFontFamily)
+                Text("Fonte: Wikipédia", color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily)
+            }
+        }
+        quotes.forEach { quote ->
+            Text(
+                "“$quote”",
+                color = TextSecondary, fontSize = 15.sp, lineHeight = 23.sp, fontFamily = ManropeFontFamily,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+            )
+        }
+        if (quotes.isNotEmpty()) {
+            Text("Fonte: Wikiquote", color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily)
+        }
+        if (error != null) {
+            Text("Não foi possível carregar frases e ficha: $error", color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
         }
     }
 }

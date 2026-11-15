@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,7 +33,10 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.sports.liveSportsNow
 import com.aotv.app.ui.common.topInsetsPadding
+import com.aotv.app.ui.movies.SportsSection
 import com.aotv.app.ui.theme.*
 
 /** Aba "Ao vivo". Canais das listas e contas, com o que está passando agora e a seguir. */
@@ -49,6 +53,12 @@ fun LiveTvScreen(
     var searching by remember { mutableStateOf(false) }
     // Lote 7: lista de canais ou grade do guia (mesma ViewModel, mesmos filtros).
     var guide by remember { mutableStateOf(false) }
+    // Lote 8 (v1.18.0): prefs de esportes (Frente 2) p/ a seção ao vivo.
+    val prefs = remember { PlatformPrefs(LocalContext.current) }
+    val sportsShow by prefs.sportsShowFlow.collectAsStateWithLifecycle()
+    val sportsHideScores by prefs.sportsHideScoresFlow.collectAsStateWithLifecycle()
+    val sportsScoreDelaySec by prefs.sportsScoreDelaySecFlow.collectAsStateWithLifecycle()
+    val sportsLiveScores by prefs.sportsLiveScoresFlow.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -118,6 +128,33 @@ fun LiveTvScreen(
             }
         }
 
+        // Lote 8 (v1.18.0): seção de esportes ao vivo (Frente 2) — depois das
+        // pílulas de filtro, só na vista de canais. Sem linhas, não desenha nada.
+        if (!guide && sportsShow) {
+            SportsSection(
+                rows = liveSportsNow(v.rows.map { it.channel }, v.epg, v.now),
+                now = v.now,
+                hideScores = sportsHideScores,
+                scoreDelaySec = sportsScoreDelaySec,
+                liveScores = sportsLiveScores,
+                onPlay = onPlay,
+            )
+        }
+
+        // Lote 8 (v1.18.0): banner de progresso visível durante a atualização
+        // (manual ou automática ao abrir) — nunca toast genérico.
+        if (v.loading) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(BackgroundCard2).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                Text("Atualizando canais e guia…", color = TextSecondary, fontSize = 13.sp)
+            }
+        }
+
         v.error?.let {
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }
@@ -142,14 +179,21 @@ fun LiveTvScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(v.rows, key = { it.channel.id }) { row ->
-                ChannelRow(row, v.now, onClick = { onPlay(row.channel.id) }, onFavorite = { viewModel.toggleFavorite(row.channel.id) })
+                ChannelRow(
+                    row, v.now, onClick = { onPlay(row.channel.id) }, onFavorite = { viewModel.toggleFavorite(row.channel.id) },
+                    showLogos = v.showLogos, showNames = v.showNames, showNumbers = v.showNumbers, cleanGroups = v.cleanGroupNames,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ChannelRow(row: LiveRow, now: Long, onClick: () -> Unit, onFavorite: () -> Unit) {
+private fun ChannelRow(
+    row: LiveRow, now: Long, onClick: () -> Unit, onFavorite: () -> Unit,
+    // Lote 8 (v1.18.0): exibição de canais, por perfil (ver LiveTvViewModel.View).
+    showLogos: Boolean = true, showNames: Boolean = true, showNumbers: Boolean = false, cleanGroups: Boolean = false,
+) {
     val c = row.channel
     Row(
         Modifier
@@ -162,18 +206,25 @@ private fun ChannelRow(row: LiveRow, now: Long, onClick: () -> Unit, onFavorite:
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(Modifier.size(width = 64.dp, height = 44.dp).clip(RoundedCornerShape(10.dp)).background(Surface2), contentAlignment = Alignment.Center) {
-            if (c.logo.isNotBlank()) AsyncImage(c.logo, c.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
-            else Text(c.name.take(2).uppercase(), color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+        if (showLogos) {
+            Box(Modifier.size(width = 64.dp, height = 44.dp).clip(RoundedCornerShape(10.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+                if (c.logo.isNotBlank()) AsyncImage(c.logo, c.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
+                else Text(c.name.take(2).uppercase(), color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+            }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(c.name, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (showNames) {
+                val displayName = if (showNumbers && c.number > 0) "${c.number} · ${c.name}" else c.name
+                Text(displayName, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             val n = row.now
             if (n != null) {
                 Text(n.title, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 com.aotv.app.ui.common.ProgressBar(n.progress(now), Modifier.fillMaxWidth(0.9f), height = 3.dp)
             } else if (c.group.isNotBlank()) {
-                Text(LiveTvViewModel.groupLabel(c), color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Limpeza de prefixo ("BR | ") só na exibição, quando ligada.
+                val groupText = if (cleanGroups) LiveTvViewModel.groupNames(c, true).joinToString(" · ") else LiveTvViewModel.groupLabel(c)
+                Text(groupText, color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             row.next?.let { nx ->
                 Text("A seguir ${hhmm(nx.start)} ${nx.title}", color = TextTertiary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

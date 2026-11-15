@@ -199,6 +199,41 @@ data class TraktSettingsUser(
     @SerializedName("name") val name: String? = null,
 )
 
+// ─── Comentários / avaliações (Lote 8, v1.18.0 — "O que estão dizendo") ─────
+// Só LEITURA, endpoint público do Trakt (só o client_id no header, sem
+// login): comentários de filme, de série e de episódio. O [spoiler] vem do
+// servidor e a tela esconde o texto atrás de um toque para revelar.
+
+data class TraktCommentUser(
+    @SerializedName("username") val username: String? = null,
+    @SerializedName("name") val name: String? = null,
+)
+
+data class TraktComment(
+    @SerializedName("id") val id: Long = 0L,
+    @SerializedName("comment") val comment: String? = null,
+    @SerializedName("spoiler") val spoiler: Boolean = false,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("likes") val likes: Int = 0,
+    @SerializedName("user") val user: TraktCommentUser? = null,
+) {
+    /** Nome de exibição: nome, senão username, senão "Usuário do Trakt". */
+    val author: String get() = user?.name?.ifBlank { user?.username }.orEmpty().ifBlank { "Usuário do Trakt" }
+}
+
+/** Resultado da busca por TMDB id: o filme ou a série, com os ids do Trakt. */
+data class TraktSearchResult(
+    @SerializedName("type") val type: String? = null,
+    @SerializedName("movie") val movie: TraktHistoryMovie? = null,
+    @SerializedName("show") val show: TraktHistoryShow? = null,
+) {
+    /** Id do Trakt do título, seja filme ou série (interface TraktMediaRef). */
+    val traktId: Int? get() {
+        val m: TraktMediaRef? = movie ?: show
+        return m?.ids?.trakt
+    }
+}
+
 // ─── Interface Retrofit ───────────────────────────────────────────────────────
 
 private interface TraktApi {
@@ -322,6 +357,40 @@ private interface TraktApi {
         @Header("Authorization") auth: String,
         @Header("trakt-api-key") key: String,
     ): List<TraktWatchedShow>
+
+    // ── Comentários (públicos: só client_id, sem login) ──────────────────
+    @GET("search/tmdb/{id}")
+    suspend fun searchByTmdb(
+        @Header("trakt-api-key") key: String,
+        @Path("id") tmdbId: Int,
+        @Query("type") type: String,
+    ): List<TraktSearchResult>
+
+    @GET("movies/{id}/comments")
+    suspend fun getMovieComments(
+        @Header("trakt-api-key") key: String,
+        @Path("id") traktId: Int,
+        @Query("sort") sort: String = "newest",
+        @Query("limit") limit: Int = 10,
+    ): List<TraktComment>
+
+    @GET("shows/{id}/comments")
+    suspend fun getShowComments(
+        @Header("trakt-api-key") key: String,
+        @Path("id") traktId: Int,
+        @Query("sort") sort: String = "newest",
+        @Query("limit") limit: Int = 10,
+    ): List<TraktComment>
+
+    @GET("shows/{id}/seasons/{season}/episodes/{episode}/comments")
+    suspend fun getEpisodeComments(
+        @Header("trakt-api-key") key: String,
+        @Path("id") traktId: Int,
+        @Path("season") season: Int,
+        @Path("episode") episode: Int,
+        @Query("sort") sort: String = "newest",
+        @Query("limit") limit: Int = 10,
+    ): List<TraktComment>
 }
 
 /**
@@ -772,6 +841,46 @@ class TraktService @Inject constructor(
     suspend fun clearPlayback(id: Long): Result<Unit> = runCatching {
         require(isConnected) { "Trakt não conectado" }
         withAuth { auth, key -> api.deletePlayback(auth, key, id).checkOk() }
+    }
+
+    // ── Comentários / avaliações (Lote 8, v1.18.0) ─────────────────────────
+    // Só LEITURA (nunca grava nada): a tela de detalhe mostra os
+    // comentários do Trakt do título. Sem client ID configurado, falha com
+    // mensagem real (a tela esconde a seção). Título sem id no Trakt =
+    // lista vazia (não é erro). Erro de rede/HTTP propaga como Result
+    // failure com a mensagem real — nunca "não respondeu" genérico.
+
+    /** Id do Trakt de um título a partir do id do TMDB. null = sem par no Trakt. */
+    suspend fun resolveTraktId(tmdbId: Int, isMovie: Boolean): Int? {
+        if (!configured || tmdbId <= 0) return null
+        val type = if (isMovie) "movie" else "show"
+        return api.searchByTmdb(clientId, tmdbId, type).firstOrNull()?.traktId
+    }
+
+    /** Comentários do filme (os mais recentes, até 10). */
+    suspend fun getMovieComments(tmdbId: Int): Result<List<TraktComment>> = runCatching {
+        require(configured) { "Trakt não configurado" }
+        val id = resolveTraktId(tmdbId, true) ?: return@runCatching emptyList()
+        api.getMovieComments(clientId, id)
+    }
+
+    /** Comentários da série (os mais recentes, até 10). */
+    suspend fun getShowComments(tmdbId: Int): Result<List<TraktComment>> = runCatching {
+        require(configured) { "Trakt não configurado" }
+        val id = resolveTraktId(tmdbId, false) ?: return@runCatching emptyList()
+        api.getShowComments(clientId, id)
+    }
+
+    /**
+     * Comentários do episódio (temporada/episódio). NUNCA devolve os da
+     * série: sem episódio selecionado ou sem comentários, a lista é vazia
+     * e a aba mostra "Sem avaliações para este episódio".
+     */
+    suspend fun getEpisodeComments(tmdbId: Int, season: Int, episode: Int): Result<List<TraktComment>> = runCatching {
+        require(configured) { "Trakt não configurado" }
+        if (season <= 0 || episode <= 0) return@runCatching emptyList()
+        val id = resolveTraktId(tmdbId, false) ?: return@runCatching emptyList()
+        api.getEpisodeComments(clientId, id, season, episode)
     }
 
     // ── Avisos do player e da Minha Lista ─────────────────────────────────────

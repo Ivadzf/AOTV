@@ -1,10 +1,15 @@
 package com.aotv.app.ui.settings
 
+import android.content.Context
+import android.os.StatFs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.recordings.RecordingStore
+import com.aotv.app.data.recordings.ScheduledRecording
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +22,8 @@ class SettingsViewModel @Inject constructor(
     private val healthChecker: com.aotv.app.data.remote.SourceHealthChecker,
     private val trakt: com.aotv.app.data.remote.TraktService,
     private val history: com.aotv.app.data.local.dao.MovieHistoryDao,
+    private val recordings: RecordingStore,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     // ── Trakt (v1.17.0: Client ID/Secret do usuário, por perfil, na tela de Trackers) ──
@@ -115,6 +122,63 @@ class SettingsViewModel @Inject constructor(
     fun setMobileDataLimitMb(v: Long) { platformPrefs.mobileDataLimitMb = v }
     fun refreshMobileData() { platformPrefs.refreshMobileDataCounters() }
 
+    // ── Esportes, Gravações e Calendário (Lote 8, v1.18.0) ───────────────
+    // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
+    val sportsShow: StateFlow<Boolean> = platformPrefs.sportsShowFlow
+    fun setSportsShow(v: Boolean) { platformPrefs.sportsShow = v }
+
+    val sportsHideScores: StateFlow<Boolean> = platformPrefs.sportsHideScoresFlow
+    fun setSportsHideScores(v: Boolean) { platformPrefs.sportsHideScores = v }
+
+    val sportsScoreDelaySec: StateFlow<Int> = platformPrefs.sportsScoreDelaySecFlow
+    fun setSportsScoreDelaySec(v: Int) { platformPrefs.sportsScoreDelaySec = v }
+
+    val sportsLiveScores: StateFlow<Boolean> = platformPrefs.sportsLiveScoresFlow
+    fun setSportsLiveScores(v: Boolean) { platformPrefs.sportsLiveScores = v }
+
+    val sportsGameAlerts: StateFlow<Boolean> = platformPrefs.sportsGameAlertsFlow
+    fun setSportsGameAlerts(v: Boolean) { platformPrefs.sportsGameAlerts = v }
+
+    val calendarHideSpoilers: StateFlow<Boolean> = platformPrefs.calendarHideSpoilersFlow
+    fun setCalendarHideSpoilers(v: Boolean) { platformPrefs.calendarHideSpoilers = v }
+
+    val recordStartEarlyMin: StateFlow<Int> = platformPrefs.recordStartEarlyMinFlow
+    fun setRecordStartEarlyMin(v: Int) { platformPrefs.recordStartEarlyMin = v }
+
+    val recordRunLateMin: StateFlow<Int> = platformPrefs.recordRunLateMinFlow
+    fun setRecordRunLateMin(v: Int) { platformPrefs.recordRunLateMin = v }
+
+    val recordKeepEpisodes: StateFlow<Int> = platformPrefs.recordKeepEpisodesFlow
+    fun setRecordKeepEpisodes(v: Int) { platformPrefs.recordKeepEpisodes = v }
+
+    val recordLowSpaceMb: StateFlow<Int> = platformPrefs.recordLowSpaceMbFlow
+    fun setRecordLowSpaceMb(v: Int) { platformPrefs.recordLowSpaceMb = v }
+
+    val recordNotifications: StateFlow<Boolean> = platformPrefs.recordNotificationsFlow
+    fun setRecordNotifications(v: Boolean) { platformPrefs.recordNotifications = v }
+
+    val recordingsFolderUri: StateFlow<String> = platformPrefs.recordingsFolderUriFlow
+    val recordingsFolderName: StateFlow<String> = platformPrefs.recordingsFolderNameFlow
+    fun setRecordingsFolder(uri: String, name: String) {
+        platformPrefs.recordingsFolderUri = uri
+        platformPrefs.recordingsFolderName = name
+    }
+    fun clearRecordingsFolder() {
+        platformPrefs.recordingsFolderUri = ""
+        platformPrefs.recordingsFolderName = ""
+    }
+
+    /** Gravações agendadas do aparelho (o serviço atualiza enquanto a tela está aberta). */
+    val recordingsList: StateFlow<List<ScheduledRecording>> = recordings.recordingsFlow
+    fun refreshRecordings() { recordings.refresh() }
+    fun cancelRecording(id: String) { recordings.cancel(id) }
+    fun removeRecording(id: String) { recordings.remove(id) }
+
+    /** Espaço livre no aparelho em MB (StatFs do armazenamento interno). */
+    fun recordingsFreeMb(): Long = runCatching {
+        StatFs(appContext.filesDir.path).availableBytes / (1024L * 1024L)
+    }.getOrDefault(0L)
+
     // ── Perfil e reprodução (valem para o perfil ativo) ──
     val profiles = platformPrefs.profiles
     val profileId = platformPrefs.profileId
@@ -162,6 +226,56 @@ class SettingsViewModel @Inject constructor(
     // Lote 3 item 6 (v1.11.0): título em idioma original na página de detalhes.
     val detailOriginalTitle: StateFlow<Boolean> = platformPrefs.detailOriginalTitleFlow
     fun setDetailOriginalTitle(v: Boolean) { platformPrefs.detailOriginalTitle = v }
+
+    // Lote 8 — Tela de detalhe (v1.18.0): nota agregada, avaliações do Trakt, frases/ficha.
+    val detailShowAggregateRating: StateFlow<Boolean> = platformPrefs.detailShowAggregateRatingFlow
+    fun setDetailShowAggregateRating(v: Boolean) { platformPrefs.detailShowAggregateRating = v }
+
+    val detailShowTraktReviews: StateFlow<Boolean> = platformPrefs.detailShowTraktReviewsFlow
+    fun setDetailShowTraktReviews(v: Boolean) { platformPrefs.detailShowTraktReviews = v }
+
+    val detailShowQuotes: StateFlow<Boolean> = platformPrefs.detailShowQuotesFlow
+    fun setDetailShowQuotes(v: Boolean) { platformPrefs.detailShowQuotes = v }
+
+    // ── Lote 8 — Live TV (v1.18.0, por perfil; o formato Xtream é global) ──
+    val liveGuideDaysAhead: StateFlow<Int> = platformPrefs.liveGuideDaysAheadFlow
+    fun setLiveGuideDaysAhead(v: Int) { platformPrefs.liveGuideDaysAhead = v }
+
+    val liveGuideHoursBack: StateFlow<Int> = platformPrefs.liveGuideHoursBackFlow
+    fun setLiveGuideHoursBack(v: Int) { platformPrefs.liveGuideHoursBack = v }
+
+    val liveRefreshListsHours: StateFlow<Int> = platformPrefs.liveRefreshListsHoursFlow
+    fun setLiveRefreshListsHours(v: Int) { platformPrefs.liveRefreshListsHours = v }
+
+    val liveRefreshEpgHours: StateFlow<Int> = platformPrefs.liveRefreshEpgHoursFlow
+    fun setLiveRefreshEpgHours(v: Int) { platformPrefs.liveRefreshEpgHours = v }
+
+    val liveShowLogos: StateFlow<Boolean> = platformPrefs.liveShowLogosFlow
+    fun setLiveShowLogos(v: Boolean) { platformPrefs.liveShowLogos = v }
+
+    val liveShowNames: StateFlow<Boolean> = platformPrefs.liveShowNamesFlow
+    fun setLiveShowNames(v: Boolean) { platformPrefs.liveShowNames = v }
+
+    val liveShowNumbers: StateFlow<Boolean> = platformPrefs.liveShowNumbersFlow
+    fun setLiveShowNumbers(v: Boolean) { platformPrefs.liveShowNumbers = v }
+
+    val liveCleanGroupNames: StateFlow<Boolean> = platformPrefs.liveCleanGroupNamesFlow
+    fun setLiveCleanGroupNames(v: Boolean) { platformPrefs.liveCleanGroupNames = v }
+
+    val liveXtreamFormat: StateFlow<String> = platformPrefs.liveXtreamFormatFlow
+    fun setLiveXtreamFormat(v: String) { platformPrefs.liveXtreamFormat = v }
+
+    val liveBackupChannel: StateFlow<Boolean> = platformPrefs.liveBackupChannelFlow
+    fun setLiveBackupChannel(v: Boolean) { platformPrefs.liveBackupChannel = v }
+
+    val liveInContinue: StateFlow<Boolean> = platformPrefs.liveInContinueFlow
+    fun setLiveInContinue(v: Boolean) { platformPrefs.liveInContinue = v }
+
+    val liveRememberAudio: StateFlow<Boolean> = platformPrefs.liveRememberAudioFlow
+    fun setLiveRememberAudio(v: Boolean) { platformPrefs.liveRememberAudio = v }
+
+    val liveCatchupHls: StateFlow<Boolean> = platformPrefs.liveCatchupHlsFlow
+    fun setLiveCatchupHls(v: Boolean) { platformPrefs.liveCatchupHls = v }
 
     // ── Modo aleatório (Lote 2, v1.10.0) ───────────────────────────────────
     val randomIncludeContinue: StateFlow<Boolean> = platformPrefs.randomIncludeContinueFlow

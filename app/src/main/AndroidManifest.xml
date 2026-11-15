@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Busca por voz (Lote 3, item 1): pedida em runtime só quando o microfone é tocado. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Gravações (Lote 8): aviso de início/fim/falha (Android 13+, pedido em runtime ao agendar) e serviço em 2º plano. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Microfone opcional: aparelho sem ele instala normal e a busca por voz some. -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -51,5 +55,11 @@
                 <data android:scheme="aotv" android:host="anilist" android:path="/callback" />
             </intent-filter>
         </activity>
+
+        <!-- Gravação de stream ao vivo (Lote 8): baixa HLS/TS em 2º plano com notificação persistente. -->
+        <service
+            android:name=".data.recordings.RecordingService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
 </manifest>
