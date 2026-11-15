@@ -74,6 +74,18 @@ jobs:
             -o app/src/main/jniLibs/arm64-v8a/libkodi.so \
             app/src/main/cpp/libkodi-stub.c -L/tmp/chaquopy-stub -lpython3
           readelf -d app/src/main/jniLibs/arm64-v8a/libkodi.so
+                    "$CLANG" -shared -Wl,--no-as-needed \
+            -o app/src/main/jniLibs/arm64-v8a/libkodi.so \
+            app/src/main/cpp/libkodi-stub.c -L/tmp/chaquopy-stub -lpython3
+          readelf -d app/src/main/jniLibs/arm64-v8a/libkodi.so
+          CLANG32="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
+          mkdir -p /tmp/chaquopy-stub32 app/src/main/jniLibs/armeabi-v7a
+          printf 'void aotv_python3_stub(void) {}\n' > /tmp/chaquopy-stub32/python3-stub.c
+          "$CLANG32" -shared -Wl,-soname,libpython3.so \
+            -o /tmp/chaquopy-stub32/libpython3.so /tmp/chaquopy-stub32/python3-stub.c
+          "$CLANG32" -shared -Wl,--no-as-needed \
+            -o app/src/main/jniLibs/armeabi-v7a/libkodi.so \
+            app/src/main/cpp/libkodi-stub.c -L/tmp/chaquopy-stub32 -lpython3
 
       - name: Compilar debug
         run: gradle assembleDebug --stacktrace
