@@ -10,7 +10,9 @@ enum class DebridProvider(
 ) {
     REAL_DEBRID("realdebrid", "Real-Debrid", "RD", "https://real-debrid.com/apitoken", true),
     TORBOX("torbox", "TorBox", "TB", "https://torbox.app/settings", true),
-    PREMIUMIZE("premiumize", "Premiumize", "PM", "https://www.premiumize.me/account", false);
+    PREMIUMIZE("premiumize", "Premiumize", "PM", "https://www.premiumize.me/account", false),
+    /** Lote 10 (v1.20.0): só chave da API, sem login por código. */
+    ALL_DEBRID("alldebrid", "AllDebrid", "AD", "https://alldebrid.com/apikeys", false);
 
     companion object {
         fun of(id: String?): DebridProvider? = entries.firstOrNull { it.id == id }
@@ -60,6 +62,17 @@ sealed interface DebridResolve {
     data object NotCached : DebridResolve
     data object NoAccount : DebridResolve
     data class Failed(val message: String) : DebridResolve
+}
+
+/**
+ * Resultado de mandar um torrent NÃO-cacheado para baixar no serviço (Lote 10,
+ * v1.20.0). O download fica na conta da pessoa, no site do serviço — o app só
+ * avisa que entrou na fila; não há progresso aqui.
+ */
+sealed interface DebridSend {
+    /** Entrou na fila do serviço. [label] é o nome que o serviço deu ao torrent. */
+    data class Queued(val label: String) : DebridSend
+    data class Failed(val message: String) : DebridSend
 }
 
 /** Ajustes do debrid (do aparelho, valem para todos os perfis). */

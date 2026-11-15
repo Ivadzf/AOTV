@@ -54,6 +54,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="anilist" android:path="/callback" />
             </intent-filter>
+            <!-- Watch Party (Lote 10, v1.20.0): convite por deep link (aotv://party/?code=XXXXXX). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="aotv" android:host="party" />
+            </intent-filter>
         </activity>
 
         <!-- Gravação de stream ao vivo (Lote 8): baixa HLS/TS em 2º plano com notificação persistente. -->

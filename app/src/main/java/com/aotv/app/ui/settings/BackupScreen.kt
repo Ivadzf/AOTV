@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
@@ -39,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,22 +71,32 @@ import com.aotv.app.ui.common.SettingsSection
 import com.aotv.app.ui.common.pagePadding
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.Accent
+import com.aotv.app.ui.theme.AccentSoft
 import com.aotv.app.ui.theme.Background
 import com.aotv.app.ui.theme.BackgroundCard
 import com.aotv.app.ui.theme.Surface2
 import com.aotv.app.ui.theme.TextPrimary
 import com.aotv.app.ui.theme.TextSecondary
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * Tela "Backup e restauração" (v1.13.0), no layout da foto do JOTV 1.0.19:
- * CONTEÚDO INCLUÍDO / WI-FI DIRETO (SEM SERVIDOR) / ARQUIVO LOCAL (.JSON).
+ * CONTEÚDO INCLUÍDO / GOOGLE DRIVE (Lote 10, v1.20.0) / WI-FI DIRETO (SEM
+ * SERVIDOR) / ARQUIVO LOCAL (.JSON).
  *
  * Sem servidor externo: o backup sai em .json (Downloads), em texto colado ou
  * pelo servidor Wi-Fi temporário desta tela. O servidor vive SÓ enquanto a
  * tela está aberta — sair daqui desliga ele (DisposableEffect + onCleared).
+ *
+ * O sync do Drive usa o MESMO JSON do backup local (respeita o toggle
+ * "Incluir chaves e sessões") e precisa do Client ID OAuth do projeto do
+ * usuário no Google Cloud + da conta Google conectada; sem client ID a
+ * função fica desligada e a tela explica o que falta.
  *
  * Ponto de entrada p/ a navegação: `BackupScreen(onBack)`. A rota e a entrada
  * no hub de Configurações são do coordenador.
@@ -91,6 +104,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun BackupScreen(
     onBack: () -> Unit,
+    highlightAnchor: String? = null,
     viewModel: BackupViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -99,9 +113,40 @@ fun BackupScreen(
     var pasteOpen by remember { mutableStateOf(false) }
     var wifiFetchOpen by remember { mutableStateOf(false) }
     var wifiSendOpen by remember { mutableStateOf(false) }
+    var driveClientIdOpen by remember { mutableStateOf(false) }
 
     // O servidor desliga ao sair da tela (o ViewModel também para no onCleared).
     DisposableEffect(Unit) { onDispose { viewModel.stopServer() } }
+    // Confere a sessão Google ao abrir (o e-mail guardado pode estar velho).
+    LaunchedEffect(Unit) { viewModel.refreshDriveSession(context) }
+
+    // Login Google p/ o Drive (o erro real vem do Google Sign-In).
+    val driveSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        runCatching { GoogleSignIn.getSignedInAccountFromIntent(result.data) }
+            .onSuccess { task ->
+                task.addOnSuccessListener { account -> viewModel.onDriveSignIn(account) }
+                task.addOnFailureListener { e -> viewModel.onDriveSignInError(e.message ?: "Não foi possível conectar a conta Google.") }
+            }
+            .onFailure { viewModel.onDriveSignIn(null) }
+    }
+
+    // Posição da seção do Drive p/ a busca profunda rolar até aqui: os itens
+    // antes dela são os condicionais (ocupado/mensagem/servidor) + a seção
+    // "Conteúdo incluído" + a linha do toggle de segredos.
+    val listState = rememberLazyListState()
+    val driveSectionIndex = (if (state.busy != null) 1 else 0) +
+        (if (state.message != null) 1 else 0) +
+        (if (state.serverRunning) 1 else 0) + 2
+    LaunchedEffect(highlightAnchor) {
+        if (highlightAnchor == SettingsAnchors.BACKUP_DRIVE) listState.scrollToItem(driveSectionIndex)
+    }
+    val driveHighlighted = highlightAnchor == SettingsAnchors.BACKUP_DRIVE
+    val driveStatus = when {
+        state.driveClientId.isBlank() -> "Desligado: falta o Client ID do Google"
+        !state.driveConnected -> "Conta não conectada"
+        state.driveLastSyncAt > 0L -> "Último sync: ${formatSyncDate(state.driveLastSyncAt)}"
+        else -> "Conectado: nunca sincronizado"
+    }
 
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
@@ -149,7 +194,7 @@ fun BackupScreen(
             if (!LocalIsTv.current) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar", tint = TextPrimary) }
             PageHeader("Backup e restauração", Modifier.weight(1f), sub = "Sem servidor externo. Tudo fica entre os seus aparelhos.")
         }
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = pagePadding()), contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = pagePadding()), contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (state.busy != null) item {
                 Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     CircularProgressIndicator(Modifier.size(24.dp), color = Accent)
@@ -179,6 +224,71 @@ fun BackupScreen(
                     },
                     onClick = { viewModel.setIncludeSecrets(!state.includeSecrets) },
                 )
+            }
+
+            item { SettingsSection("Google Drive", modifier = driveSectionModifier(driveHighlighted)) }
+            item {
+                SettingsRow(
+                    icon = Icons.Default.Cloud,
+                    title = "Sincronizar com o Google Drive",
+                    sub = driveStatus,
+                    trailing = null,
+                )
+            }
+            if (state.driveClientId.isBlank()) {
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Edit,
+                        title = "Configurar Client ID do Google",
+                        sub = "Crie o projeto no Google Cloud e cole o Client ID aqui",
+                        onClick = { driveClientIdOpen = true },
+                    )
+                }
+            } else if (!state.driveConnected) {
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Cloud,
+                        title = "Conectar conta Google",
+                        sub = "Login com a conta que vai guardar o backup",
+                        onClick = {
+                            val intent = viewModel.driveSignInIntent(context)
+                            if (intent != null) driveSignInLauncher.launch(intent)
+                        },
+                    )
+                }
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Edit,
+                        title = "Alterar Client ID do Google",
+                        sub = "Trocar o projeto do Google Cloud",
+                        onClick = { driveClientIdOpen = true },
+                    )
+                }
+            } else {
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.CloudUpload,
+                        title = "Subir agora",
+                        sub = "Envia o backup atual p/ o Google Drive",
+                        onClick = { viewModel.uploadToDrive() },
+                    )
+                }
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Download,
+                        title = "Baixar agora",
+                        sub = "Baixa o backup do Drive e mostra o resumo p/ restaurar",
+                        onClick = { viewModel.downloadFromDrive() },
+                    )
+                }
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Close,
+                        title = "Desconectar conta",
+                        sub = state.driveAccountEmail.ifBlank { "Sair da conta Google" },
+                        onClick = { viewModel.driveSignOut() },
+                    )
+                }
             }
 
             item { SettingsSection("Wi-Fi direto (sem servidor)") }
@@ -251,6 +361,89 @@ fun BackupScreen(
     state.pendingRestore?.let { pending ->
         RestoreSummaryDialog(pending, onClose = viewModel::dismissRestore, onConfirm = viewModel::confirmRestore)
     }
+    if (driveClientIdOpen) DriveClientIdDialog(
+        current = state.driveClientId,
+        onClose = { driveClientIdOpen = false },
+        onSave = { id ->
+            driveClientIdOpen = false
+            viewModel.setDriveClientId(id)
+        },
+    )
+    state.driveConflict?.let { conflict ->
+        DriveConflictDialog(
+            conflict = conflict,
+            onClose = viewModel::dismissDriveConflict,
+            onOverwrite = viewModel::confirmDriveOverwrite,
+            onDownload = {
+                viewModel.dismissDriveConflict()
+                viewModel.downloadFromDrive()
+            },
+        )
+    }
+}
+
+/** Data/hora do último sync (dd/MM/yyyy HH:mm, no idioma do aparelho). */
+private fun formatSyncDate(epochMs: Long): String =
+    SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(java.util.Date(epochMs))
+
+/** Destaque da seção do Drive quando a busca profunda pediu a âncora dela. */
+private fun driveSectionModifier(highlighted: Boolean): Modifier =
+    if (highlighted) Modifier.background(AccentSoft, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)
+    else Modifier
+
+/** Client ID OAuth do Google Drive (projeto do usuário no Google Cloud). */
+@Composable
+private fun DriveClientIdDialog(current: String, onClose: () -> Unit, onSave: (String) -> Unit) {
+    var value by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Client ID do Google Drive", color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value, { value = it.trim().take(200) },
+                    label = { Text("Client ID OAuth") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "No Google Cloud, crie um projeto, ative a API do Google Drive e crie uma credencial OAuth do tipo \"Aplicativo da Web\". Cole o Client ID aqui. Sem ele, o sync fica desligado e o backup local/Wi-Fi continua funcionando. O upload usa o mesmo backup (respeita \"Incluir chaves e sessões\").",
+                    color = TextSecondary, fontSize = 13.sp,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(value.trim()) }) { Text("Salvar") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancelar") } },
+        containerColor = BackgroundCard, titleContentColor = TextPrimary, textContentColor = TextSecondary,
+    )
+}
+
+/** O Drive tem um backup mais novo que o último sync: perguntar antes de subir por cima. */
+@Composable
+private fun DriveConflictDialog(
+    conflict: BackupViewModel.DriveConflict,
+    onClose: () -> Unit,
+    onOverwrite: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    val whenText = if (conflict.remoteModifiedMs > 0L) " (em ${formatSyncDate(conflict.remoteModifiedMs)})" else ""
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("O Drive tem um backup mais novo", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("O arquivo ${conflict.remoteName} no Drive mudou desde o último sync$whenText.", color = TextSecondary)
+                Text("Subir por cima apaga a versão do Drive. Baixar traz a versão do Drive p/ cá.", color = TextSecondary)
+            }
+        },
+        confirmButton = { TextButton(onClick = onOverwrite) { Text("Subir por cima") } },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onDownload) { Text("Baixar do Drive") }
+                TextButton(onClick = onClose) { Text("Cancelar") }
+            }
+        },
+        containerColor = BackgroundCard, titleContentColor = TextPrimary, textContentColor = TextSecondary,
+    )
 }
 
 /** Painel do servidor Wi-Fi aberto: QR da página inicial + IP/porta + PIN. */

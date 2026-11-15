@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -94,6 +95,8 @@ private sealed class MoviesRoute(val route: String) {
     object Profiles : MoviesRoute("movies_profiles")
     object HomeCustomize : MoviesRoute("movies_home_customize")
     object Debrid : MoviesRoute("movies_debrid")
+    // Servidores de mídia (Lote 10, v1.20.0) — Jellyfin, Emby e Plex do usuário.
+    object MediaServers : MoviesRoute("movies_media_servers")
     object Accounts : MoviesRoute("movies_accounts")
     object Live : MoviesRoute("movies_live")
     object LiveSources : MoviesRoute("movies_live_sources")
@@ -157,6 +160,19 @@ fun MoviesNavigation(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
+    // Deep link da Watch Party (Lote 10, v1.20.0): a MainActivity oferece o
+    // código (onCreate/onNewIntent) e aqui a navegação pousa na página da
+    // festa — a tela lê o código do intent e pré-preenche a entrada.
+    val partyCode by com.aotv.app.data.party.PartyDeepLink.code.collectAsStateWithLifecycle()
+    LaunchedEffect(partyCode) {
+        if (partyCode != null) {
+            navController.navigate(
+                MoviesRoute.SettingsPage.create(com.aotv.app.ui.settings.SettingsPageIds.WatchParty)
+            ) { launchSingleTop = true }
+            com.aotv.app.data.party.PartyDeepLink.consume()
+        }
+    }
+
     // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
     // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
     // Configurações cobre o hub e as páginas (movies_settings/*).
@@ -166,6 +182,7 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.AddonStore.route ||
         currentRoute == MoviesRoute.HomeCustomize.route ||
         currentRoute == MoviesRoute.Debrid.route ||
+        currentRoute == MoviesRoute.MediaServers.route ||
         currentRoute == MoviesRoute.Accounts.route ||
         currentRoute == MoviesRoute.LiveSources.route ||
         currentRoute == MoviesRoute.LiveOnDemand.route ||
@@ -431,6 +448,7 @@ fun MoviesNavigation(
                 else MinhaListaScreen(
                     onItemClick = onListItem,
                     onDownloadsClick = { navController.navigate(MoviesRoute.Downloads.route) },
+                    onMediaServersClick = { navController.navigate(MoviesRoute.MediaServers.route) },
                     // Modo aleatório (Lote 2): mesmo caminho direto ao player da Início.
                     onPlayEpisode = { item, season, episode, epTotal ->
                         navigateToPlayer(
@@ -477,6 +495,7 @@ fun MoviesNavigation(
                         onOpenProfiles = { navController.navigate(MoviesRoute.Profiles.route) },
                         onOpenHomeCustomize = { navController.navigate(MoviesRoute.HomeCustomize.route) },
                         onOpenDebrid = { navController.navigate(MoviesRoute.Debrid.route) },
+                        onOpenMediaServers = { navController.navigate(MoviesRoute.MediaServers.route) },
                         onOpenAccounts = { navController.navigate(MoviesRoute.Accounts.route) },
                         onOpenLive = { navController.navigate(MoviesRoute.LiveSources.route) },
                         onOpenCollections = { navController.navigate(MoviesRoute.Collections.route) },
@@ -626,9 +645,25 @@ fun MoviesNavigation(
                 tvScale(isTV) { com.aotv.app.ui.settings.AccountsScreen(onBack = { navController.popBackStack() }) }
             }
 
-            // Debrid (Real-Debrid, TorBox e Premiumize). Torrent vira link direto.
+            // Debrid (Real-Debrid, TorBox, Premiumize e AllDebrid). Torrent vira link direto.
             composable(MoviesRoute.Debrid.route) {
                 tvScale(isTV) { com.aotv.app.ui.settings.DebridScreen(onBack = { navController.popBackStack() }) }
+            }
+
+            // Servidores de mídia (Lote 10, v1.20.0) — Jellyfin, Emby e Plex do
+            // usuário. Toca pelo player existente (mesmo caminho do detalhe).
+            composable(MoviesRoute.MediaServers.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.settings.MediaServersScreen(
+                        onBack = { navController.popBackStack() },
+                        onPlay = { url, title, type, posterUrl, season, episode ->
+                            navigateToPlayer(
+                                url, title, type = type, posterUrl = posterUrl,
+                                season = season, episode = episode,
+                            )
+                        },
+                    )
+                }
             }
 
             // Personalizar Início (fileiras, ordem, nomes, destaque e catálogo AOTV).
@@ -1038,6 +1073,8 @@ private fun MoviesBottomBarItem(
 private fun MinhaListaScreen(
     onItemClick: (MovieItem) -> Unit,
     onDownloadsClick: () -> Unit = {},
+    /** Servidores de mídia (Lote 10): abre a tela de Jellyfin/Emby/Plex. */
+    onMediaServersClick: () -> Unit = {},
     /** Modo aleatório (Lote 2): episódio sorteado abre DIRETO no player. */
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
 ) {
@@ -1157,6 +1194,32 @@ private fun MinhaListaScreen(
             rolling = randomState is com.aotv.app.ui.movies.RandomEpisodeViewModel.RandomState.Rolling,
             onRoll = { randomVm.roll() },
         )
+        // Servidores de mídia (Lote 10, v1.20.0): terceira entrada, na
+        // Biblioteca. Só aparece com servidor conectado e o atalho ligado
+        // (pref por perfil `media_servers_show_v1`).
+        val mediaServersVm: com.aotv.app.ui.settings.MediaServersViewModel =
+            androidx.hilt.navigation.compose.hiltViewModel()
+        val showMediaServers by mediaServersVm.hasServers.collectAsStateWithLifecycle()
+        if (showMediaServers) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                    .background(com.aotv.app.ui.theme.BackgroundCard)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onMediaServersClick)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Icon(Icons.Default.Dns, null, tint = com.aotv.app.ui.theme.TextPrimary, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Servidores de mídia", color = com.aotv.app.ui.theme.TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Text("Jellyfin, Emby e Plex — sua coleção", color = com.aotv.app.ui.theme.TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                Icon(Icons.Default.ChevronRight, "Abrir servidores de mídia", tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(22.dp))
+            }
+        }
         val pad = com.aotv.app.ui.common.pagePadding()
         val config = androidx.compose.ui.platform.LocalConfiguration.current
         val availableWidth = config.screenWidthDp - if (config.screenWidthDp >= 600 && config.screenHeightDp >= 480) tabletRailWidth().value.toInt() else 0

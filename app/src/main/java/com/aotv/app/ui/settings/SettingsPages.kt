@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -165,9 +166,11 @@ object SettingsPageIds {
     const val Downloads = "downloads"
     const val Backup = "backup"
     const val Trackers = "trackers"
+    const val Vpn = "vpn"
+    const val WatchParty = "watchparty"
 
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -181,6 +184,8 @@ object SettingsPageIds {
         Downloads -> "Downloads"
         Backup -> "Backup e restauração"
         Trackers -> "Trackers e Sincronização"
+        Vpn -> "VPN"
+        WatchParty -> "Watch Party"
         else -> "Configurações"
     }
 }
@@ -199,6 +204,7 @@ fun SettingsPageScreen(
     onOpenProfiles: () -> Unit = {},
     onOpenHomeCustomize: () -> Unit = {},
     onOpenDebrid: () -> Unit = {},
+    onOpenMediaServers: () -> Unit = {},
     onOpenAccounts: () -> Unit = {},
     onOpenLive: () -> Unit = {},
     onOpenCollections: () -> Unit = {},
@@ -217,14 +223,16 @@ fun SettingsPageScreen(
         SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Streams -> StreamsPage(onBack, highlightAnchor = highlightAnchor)
-        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onOpenMediaServers, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
         SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel, highlightAnchor)
-        SettingsPageIds.Backup -> BackupScreen(onBack)
+        SettingsPageIds.Backup -> BackupScreen(onBack, highlightAnchor = highlightAnchor)
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
+        SettingsPageIds.Vpn -> VpnScreen(onBack, highlightAnchor)
+        SettingsPageIds.WatchParty -> WatchPartyScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
             sub = null,
@@ -1072,6 +1080,7 @@ private fun ConteudoPage(
     onOpenPlugins: () -> Unit,
     onOpenKodiAddons: () -> Unit,
     onOpenDebrid: () -> Unit,
+    onOpenMediaServers: () -> Unit,
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
     highlightAnchor: String? = null,
@@ -1115,8 +1124,17 @@ private fun ConteudoPage(
                 icon = Icons.Default.Bolt,
                 iconTint = Accent,
                 title = "Debrid",
-                sub = "Real-Debrid, TorBox ou Premiumize. Torrent toca na hora por link direto.",
+                sub = "Real-Debrid, TorBox, Premiumize ou AllDebrid. Torrent toca na hora por link direto.",
                 onClick = onOpenDebrid,
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Dns,
+                iconTint = Accent,
+                title = "Servidores de mídia",
+                sub = "Jellyfin, Emby e Plex. Sua coleção no app, com a sua conta.",
+                onClick = onOpenMediaServers,
                 grouped = true,
                 divider = true,
             )

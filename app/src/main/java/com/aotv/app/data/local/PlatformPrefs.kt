@@ -143,6 +143,22 @@ internal val SCOPED_KEYS = listOf(
     "live_show_logos", "live_show_names", "live_show_numbers", "live_clean_group_names",
     "live_backup_channel", "live_in_continue", "live_remember_audio", "live_catchup_hls",
     "live_audio_v1", "live_group_favorites_v1",
+    // Lote 10 — VPN (v1.20.0): perfis trazidos pelo usuário. A Frente 3 (VPN)
+    // é dona de quem ESCREVE estas chaves; o backup/sync só as CARREGA no
+    // payload (o mesmo JSON do backup local). `vpn_profiles_v1` é JSON com os
+    // perfis (inclui a chave privada do WireGuard/OpenVPN) e por isso é
+    // segredo: só viaja com o toggle "Incluir chaves e sessões" (ver
+    // AotvBackup.SECRET_SCOPED_KEYS). As outras duas não são segredo: só o
+    // perfil ativo (id/nome) e o ligar automático.
+    "vpn_profiles_v1", "vpn_active_profile_v1", "vpn_auto_connect_v1",
+    // Lote 10 — Servidores de mídia (v1.20.0, Frente 1): mostrar o atalho dos
+    // servidores (Jellyfin/Emby/Plex) na Biblioteca. As contas em si são do
+    // aparelho (SharedPreferences própria, fora do backup) e NÃO entram aqui.
+    "media_servers_show_v1",
+    // Lote 10 — Watch Party (v1.20.0, Frente 3): sessão local e efêmera
+    // (código + papel). Sem servidor, sem segredo: o código expira ao sair
+    // da sessão.
+    "party_session_v1",
 )
 
 /**
@@ -215,6 +231,29 @@ class PlatformPrefs @Inject constructor(
 
         /** Incluir chaves e sessões no backup (v1.13.0). Do aparelho. DESLIGADO por padrão. */
         private const val KEY_BACKUP_INCLUDE_SECRETS = "backup_include_secrets"
+
+        // ── Sync via Google Drive (Lote 10, v1.20.0) — do aparelho ─────
+        // Client ID OAuth configurável, vazio por padrão (ver DriveSyncService):
+        // sem ele a função fica desligada. A conta, o id do arquivo e as
+        // datas do último sync viajam no backup (ver AotvBackup.GLOBAL_KEYS);
+        // o client ID é segredo (ver AotvBackup.SECRET_GLOBAL_KEYS) e só
+        // viaja com o toggle "Incluir chaves e sessões" — mesmo precedente
+        // do client ID do Trakt.
+
+        /** Client ID OAuth do Google Drive (tipo "Aplicativo da Web", do projeto do usuário no Google Cloud). "" = sync desligado. */
+        private const val KEY_DRIVE_CLIENT_ID = "drive_client_id"
+
+        /** E-mail da conta Google conectada ao Drive (só p/ mostrar na tela). */
+        private const val KEY_DRIVE_ACCOUNT_EMAIL = "drive_account_email"
+
+        /** Id do arquivo `aotv-backup.json` no Drive (p/ atualizar o mesmo arquivo). */
+        private const val KEY_DRIVE_FILE_ID = "drive_file_id"
+
+        /** Quando foi o último sync com o Drive (epoch ms). 0 = nunca. */
+        private const val KEY_DRIVE_LAST_SYNC_AT = "drive_last_sync_at"
+
+        /** `modifiedTime` do arquivo remoto no último sync (epoch ms): base do conflito. 0 = nunca. */
+        private const val KEY_DRIVE_LAST_REMOTE_MODIFIED = "drive_last_remote_modified_ms"
 
         // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ─────
         // Tudo global (NÃO vai p/ SCOPED_KEYS): a lista de downloads, a pasta
@@ -669,6 +708,33 @@ class PlatformPrefs @Inject constructor(
         get() = prefs.getBoolean(sk("post_play_rating_enabled"), false)
         set(value) { prefs.edit().putBoolean(sk("post_play_rating_enabled"), value).apply() }
 
+    // ── Lote 10 — VPN e Watch Party (v1.20.0, Frente 3) ──────────────────
+    // Perfis de VPN importados pelo usuário (ver VpnProfileStore): o JSON
+    // de `vpn_profiles_v1` guarda metadados + segredos e é chave SECRETA
+    // (só viaja no backup/sync com o toggle de segredos). O escopo vive
+    // DENTRO de cada perfil ("app" = só o AOTV, "device" = todo o aparelho).
+    // A sessão da Watch Party (`party_session_v1`) é local e efêmera.
+
+    /** Perfis de VPN (JSON array de VpnProfile, com segredos embutidos). "[]" = nenhum perfil. */
+    var vpnProfilesJson: String
+        get() = prefs.getString(sk("vpn_profiles_v1"), "[]") ?: "[]"
+        set(value) { prefs.edit().putString(sk("vpn_profiles_v1"), value).apply() }
+
+    /** Id do perfil de VPN ativo. "" = nenhum. */
+    var vpnActiveProfileId: String
+        get() = prefs.getString(sk("vpn_active_profile_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("vpn_active_profile_v1"), value).apply() }
+
+    /** Ligar o perfil de VPN ativo ao abrir o app. Só vale quando a conexão existir (sem motor, sem efeito). */
+    var vpnAutoConnect: Boolean
+        get() = prefs.getBoolean(sk("vpn_auto_connect_v1"), false)
+        set(value) { prefs.edit().putBoolean(sk("vpn_auto_connect_v1"), value).apply() }
+
+    /** Sessão atual da Watch Party (JSON {"code","role","createdAt"}). "" = sem sessão. */
+    var partySessionJson: String
+        get() = prefs.getString(sk("party_session_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("party_session_v1"), value).apply() }
+
     // ── Fase D — trackers, Discord e servidores de mídia (por perfil) ─────────
     // Sessões em JSON cru, como o Trakt. IDs/chaves são configuráveis pelo usuário
     // em Configurações e NUNCA vão para o código (regra dura do projeto): vazio =
@@ -829,6 +895,39 @@ class PlatformPrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_BACKUP_INCLUDE_SECRETS, false)
         set(value) { prefs.edit().putBoolean(KEY_BACKUP_INCLUDE_SECRETS, value).apply() }
 
+    // ── Sync via Google Drive (Lote 10, v1.20.0) — do aparelho ──────────
+    // Client ID configurável, vazio por padrão (ver DriveSyncService): sem
+    // ele a função fica desligada e o backup local/Wi-Fi continua. A conta,
+    // o id do arquivo e as datas do último sync são do aparelho (não do
+    // perfil) e viajam no backup (ver AotvBackup.GLOBAL_KEYS); o client ID
+    // é segredo (ver AotvBackup.SECRET_GLOBAL_KEYS) e só viaja com o toggle
+    // "Incluir chaves e sessões" — mesmo precedente do client ID do Trakt.
+
+    /** Client ID OAuth do Google Drive ("" = sync desligado). */
+    var driveClientId: String
+        get() = prefs.getString(KEY_DRIVE_CLIENT_ID, "") ?: ""
+        set(value) { prefs.edit().putString(KEY_DRIVE_CLIENT_ID, value.trim()).apply() }
+
+    /** E-mail da conta Google conectada ("" = desconectado). */
+    var driveAccountEmail: String
+        get() = prefs.getString(KEY_DRIVE_ACCOUNT_EMAIL, "") ?: ""
+        set(value) { prefs.edit().putString(KEY_DRIVE_ACCOUNT_EMAIL, value).apply() }
+
+    /** Id do arquivo de backup no Drive ("" = ainda não subiu nada). */
+    var driveFileId: String
+        get() = prefs.getString(KEY_DRIVE_FILE_ID, "") ?: ""
+        set(value) { prefs.edit().putString(KEY_DRIVE_FILE_ID, value).apply() }
+
+    /** Último sync com o Drive, em epoch ms (0 = nunca). */
+    var driveLastSyncAt: Long
+        get() = prefs.getLong(KEY_DRIVE_LAST_SYNC_AT, 0L)
+        set(value) { prefs.edit().putLong(KEY_DRIVE_LAST_SYNC_AT, value).apply() }
+
+    /** `modifiedTime` do arquivo remoto no último sync, em epoch ms (0 = nunca). */
+    var driveLastRemoteModifiedMs: Long
+        get() = prefs.getLong(KEY_DRIVE_LAST_REMOTE_MODIFIED, 0L)
+        set(value) { prefs.edit().putLong(KEY_DRIVE_LAST_REMOTE_MODIFIED, value).apply() }
+
     // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ──────────
     // "Só Wi-Fi", pasta SAF e contadores de dados móveis. Tudo global: a fila
     // de downloads e a rede são do aparelho, não do perfil (ver as chaves no
@@ -872,6 +971,14 @@ class PlatformPrefs @Inject constructor(
     var sportsShow: Boolean
         get() = _sportsShow.value
         set(value) { prefs.edit().putBoolean(sk("sports_show"), value).apply(); _sportsShow.value = value }
+
+    // ── Lote 10 — Servidores de mídia (v1.20.0) ─────────────────────────────
+    private val _mediaServersShow = MutableStateFlow(prefs.getBoolean(sk("media_servers_show_v1"), true))
+    /** Mostrar o atalho dos servidores de mídia (Jellyfin/Emby/Plex) na Biblioteca. */
+    val mediaServersShowFlow: StateFlow<Boolean> = _mediaServersShow.asStateFlow()
+    var mediaServersShow: Boolean
+        get() = _mediaServersShow.value
+        set(value) { prefs.edit().putBoolean(sk("media_servers_show_v1"), value).apply(); _mediaServersShow.value = value }
 
     private val _sportsHideScores = MutableStateFlow(prefs.getBoolean(sk("sports_hide_scores"), false))
     /** Esconder os placares extraídos do EPG (anti-spoiler). */

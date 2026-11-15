@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 55
-        versionName    = "1.19.0"
+        versionCode    = 56
+        versionName    = "1.20.0"
         // v1.1: só arm64-v8a (o celular do Davi é arm64; o APK fica ~20 MB menor).
         ndk { abiFilters += listOf("arm64-v8a") }
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
@@ -178,6 +178,18 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     implementation("androidx.documentfile:documentfile:1.0.1") // M3U por arquivo (SAF) — v1.17.0
+
+    // Sync via Google Drive (Lote 10, v1.20.0): Google Sign-In (OAuth com
+    // client ID configurável, vazio por padrão — ver DriveSyncService) + API
+    // REST do Drive. Coordenadas conferidas no Maven Central em 2026-11-15:
+    // play-services-auth 21.3.0, google-api-client-android 2.9.2 e
+    // google-api-services-drive v3-rev20261106-2.9.2 (par 2.9.2, mesma linha).
+    // GsonFactory/AndroidHttp vêm transitivamente do google-api-client
+    // (google-http-client-gson / google-http-client-android). NADA de
+    // WorkManager aqui (isso é do Lote 13).
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
+    implementation("com.google.api-client:google-api-client-android:2.9.2")
+    implementation("com.google.apis:google-api-services-drive:v3-rev20261106-2.9.2")
 
     // Google Fonts (downloadable fonts via GMS)
     implementation("androidx.compose.ui:ui-text-google-fonts")

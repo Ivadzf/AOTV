@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.debrid.DebridAccount
 import com.aotv.app.data.debrid.DebridProvider
+import com.aotv.app.data.debrid.DebridSend
 import com.aotv.app.data.debrid.DebridService
 import com.aotv.app.data.debrid.DebridSettings
 import com.aotv.app.data.debrid.DeviceCode
@@ -99,5 +100,23 @@ class DebridViewModel @Inject constructor(
     fun setEnabled(on: Boolean) = debrid.setEnabled(on)
     fun setPreferred(p: DebridProvider) = debrid.setPreferred(p)
     fun setHideUncached(on: Boolean) = debrid.setHideUncached(on)
+
+    /** Manda um magnet que o serviço não tem pronto para baixar na conta. */
+    fun sendMagnet(magnet: String) {
+        if (magnet.isBlank()) {
+            local.update { it.copy(error = "Cole um magnet primeiro") }
+            return
+        }
+        viewModelScope.launch {
+            local.update { it.copy(error = null, message = null) }
+            when (val r = debrid.sendUncached(magnet.trim())) {
+                is DebridSend.Queued -> local.update {
+                    it.copy(message = "Na fila do ${debrid.active()?.provider?.label ?: "debrid"}: ${r.label}")
+                }
+                is DebridSend.Failed -> local.update { it.copy(error = r.message) }
+            }
+        }
+    }
+
     fun clearMessage() = local.update { it.copy(error = null, message = null) }
 }

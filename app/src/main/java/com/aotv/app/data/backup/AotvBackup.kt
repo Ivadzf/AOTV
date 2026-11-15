@@ -37,7 +37,8 @@ import org.json.JSONObject
  *
  * Sessões de Debrid, Nuvio e Stremio NUNCA entram no backup: vivem em
  * SharedPreferences próprias, sem caminho de exportação/importação nesses
- * serviços. Restaurar exige reconectar essas três contas.
+ * serviços. O mesmo vale para os servidores de mídia (Jellyfin/Emby/Plex,
+ * `aotv_mediaservers`). Restaurar exige reconectar essas contas.
  */
 object AotvBackup {
     /** Formato do arquivo. Mudar aqui = formato novo (o restore recusa o antigo). */
@@ -53,6 +54,10 @@ object AotvBackup {
         "emby_v1", "pref_player_animeskip_client_id",
         // v1.17.0 — token do AniList (por perfil): segredo, como os tokens do Trakt.
         "anilist_access_token",
+        // Lote 10 (v1.20.0) — perfis de VPN (JSON com a chave privada do
+        // WireGuard/OpenVPN): segredo, como os tokens. A Frente 3 (VPN) é
+        // dona de quem escreve a chave; o backup/sync só a carrega.
+        "vpn_profiles_v1",
     )
 
     /** Chaves do aparelho que são segredo: só entram com o toggle ligado. */
@@ -64,6 +69,9 @@ object AotvBackup {
         // de propósito: GLOBAL_KEYS entra no backup SEMPRE, e chave de API
         // nunca viaja sem o toggle de segredos (mesma regra do Trakt).
         "mdblist_api_key", "anilist_client_id", "tvdb_api_key", "tvdb_auth_token",
+        // Lote 10 (v1.20.0) — Client ID OAuth do Google Drive (configurável,
+        // vazio por padrão): mesmo precedente do client ID do Trakt.
+        "drive_client_id",
     )
 
     /** Globais que o backup leva (fora os segredos): tema, blur e o resto do aparelho. */
@@ -82,6 +90,12 @@ object AotvBackup {
         // v1.17.0 — expiração do token do TheTVDB: só um timestamp, não é
         // segredo (o token em si está em SECRET_GLOBAL_KEYS).
         "tvdb_token_expiry",
+        // Lote 10 (v1.20.0) — sync do Google Drive: conta, id do arquivo e
+        // datas do último sync (nada disso é segredo; o client ID está em
+        // SECRET_GLOBAL_KEYS). Viajar no backup faz o outro aparelho achar
+        // o mesmo arquivo no Drive sem procurar de novo.
+        "drive_account_email", "drive_file_id", "drive_last_sync_at",
+        "drive_last_remote_modified_ms",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */

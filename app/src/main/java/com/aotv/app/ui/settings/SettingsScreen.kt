@@ -25,12 +25,14 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -69,9 +71,9 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Hub das Configurações (redesign Lote 6, v1.15.0, formato Nuvio): busca no
- * topo, cartão do perfil e as 11 páginas em 7 cartões por grupo — Conta,
- * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações e
- * Acompanhamento. Cada página é uma rota `movies_settings/{page}` (com
+ * topo, cartão do perfil e as 13 páginas em 8 cartões por grupo — Conta,
+ * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações,
+ * Acompanhamento e Conexão (VPN + Watch Party, Lote 10). Cada página é uma
  * `?anchor=` opcional p/ a busca profunda — ver SettingsPages.kt).
  *
  * A busca profunda casa também cada OPÇÃO dentro das páginas (ver
@@ -282,7 +284,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 11 páginas. Os ids são as rotas `movies_settings/{id}`. */
+/** As 13 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -367,17 +369,34 @@ private val hubEntries = listOf(
         keywords = listOf("Trackers", "Simkl", "Trakt", "sincronização", "scrobble", "PIN", "QR", "client ID"),
         kidsHidden = true,
     ),
+    HubEntry(
+        id = SettingsPageIds.Vpn,
+        title = "VPN",
+        sub = "Perfis WireGuard e OpenVPN do seu provedor",
+        icon = Icons.Default.VpnKey,
+        keywords = listOf("VPN", "WireGuard", "OpenVPN", "perfil", "conf", "ovpn", "túnel", "privacidade"),
+        kidsHidden = true,
+    ),
+    HubEntry(
+        id = SettingsPageIds.WatchParty,
+        title = "Watch Party",
+        sub = "Assista junto com um código",
+        icon = Icons.Default.Group,
+        keywords = listOf("Watch Party", "assistir junto", "código", "convite", "sessão", "grupo", "sincronizar"),
+        kidsHidden = true,
+    ),
 )
 
 private val hubEntriesById = hubEntries.associateBy { it.id }
 
 /**
- * Os 7 cartões do hub, na ordem do Nuvio — cada cartão é um grupo de páginas:
+ * Os 8 cartões do hub, na ordem do Nuvio — cada cartão é um grupo de páginas:
  * Conta (só o backup real — sem fingir sync), Aparência, Layout (Início,
  * detalhes e streams, como o "Layout" do Nuvio), Conteúdo & Descoberta,
- * Reprodução (com Downloads), Integrações e Acompanhamento (com Trackers).
- * Sem "Sessão em grupo" (Lote 10), sem "Notificações" (não existe no AOTV)
- * e sem "Avançadas" (sem conteúdo real) — grupos omitidos de propósito.
+ * Reprodução (com Downloads), Integrações, Acompanhamento (com Trackers) e
+ * Conexão (VPN + Watch Party, Lote 10).
+ * Sem "Notificações" (não existe no AOTV) e sem "Avançadas" (sem conteúdo
+ * real) — grupos omitidos de propósito.
  */
 private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Backup),
@@ -387,6 +406,7 @@ private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),
     listOf(SettingsPageIds.Integracoes),
     listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
+    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty),
 )
 
 /** Resumo das configurações (.set-summary). Logo, versão e o estado do que importa. */

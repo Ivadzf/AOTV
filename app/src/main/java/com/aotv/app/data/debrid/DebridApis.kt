@@ -169,6 +169,23 @@ internal class RealDebridApi(private val http: DebridHttp) {
         }
     }
 
+    /**
+     * Manda o torrent para baixar na conta (quando não está no cache). O
+     * download fica no site do serviço; o app só confirma que entrou na fila.
+     */
+    fun queue(token: String, magnet: String): DebridSend {
+        val add = http.form("$BASE/torrents/addMagnet", listOf("magnet" to magnet), token)
+        if (add.code == 401) return DebridSend.Failed("Token do Real-Debrid venceu. Conecte de novo.")
+        if (add.code == 403) return DebridSend.Failed("Conta do Real-Debrid sem premium")
+        val id = add.json()?.optString("id").orEmpty()
+        if (!add.ok || id.isBlank()) return DebridSend.Failed("Real-Debrid não aceitou o torrent (${add.code})")
+        val info = waitInfo(token, id)
+        if (info != null && info.optString("status") == "waiting_files_selection") {
+            http.form("$BASE/torrents/selectFiles/$id", listOf("files" to "all"), token)
+        }
+        return DebridSend.Queued(info?.optString("filename").orEmpty().ifBlank { "torrent" })
+    }
+
     private fun waitInfo(token: String, id: String): JSONObject? {
         repeat(14) { i ->
             val o = http.get("$BASE/torrents/info/$id", token).json()
@@ -269,6 +286,18 @@ internal class TorBoxApi(private val http: DebridHttp) {
         return out
     }
 
+    /**
+     * Manda o torrent para baixar na conta (quando não está no cache). Sem
+     * `add_only_if_cached`, o TorBox baixa de verdade e avisa quando ficar pronto.
+     */
+    fun queue(token: String, magnet: String): DebridSend {
+        val c = http.multipart("$BASE/torrents/createtorrent", listOf("magnet" to magnet, "add_only_if_cached" to "false", "allow_zip" to "false"), token)
+        if (c.code == 401 || c.code == 403) return DebridSend.Failed("Chave do TorBox não vale mais. Conecte de novo.")
+        val name = c.json()?.optJSONObject("data")?.optString("name").orEmpty()
+        return if (c.ok) DebridSend.Queued(name.ifBlank { "torrent" })
+        else DebridSend.Failed("TorBox não aceitou o torrent (${c.code})")
+    }
+
     fun resolve(token: String, magnet: String, spec: TorrentSpec, season: Int, episode: Int): DebridResolve {
         val c = http.multipart("$BASE/torrents/createtorrent", listOf("magnet" to magnet, "add_only_if_cached" to "true", "allow_zip" to "false"), token)
         if (c.code == 401 || c.code == 403) return DebridResolve.Failed("Chave do TorBox não vale mais. Conecte de novo.")
@@ -316,6 +345,15 @@ internal class PremiumizeApi(private val http: DebridHttp) {
         return out
     }
 
+    /** Manda o torrent para baixar na conta (quando não está no cache). */
+    fun queue(key: String, magnet: String): DebridSend {
+        val r = http.form("$BASE/transfer/create", listOf("apikey" to key, "src" to magnet))
+        if (r.code == 401 || r.code == 403) return DebridSend.Failed("Chave do Premiumize não vale mais. Conecte de novo.")
+        val o = r.json() ?: return DebridSend.Failed("Premiumize não respondeu (${r.code})")
+        return if (o.optString("status") == "success") DebridSend.Queued(o.optString("name").ifBlank { "torrent" })
+        else DebridSend.Failed(o.optString("message").ifBlank { "Premiumize recusou o torrent" })
+    }
+
     fun resolve(key: String, magnet: String, spec: TorrentSpec, season: Int, episode: Int): DebridResolve {
         val r = http.form("$BASE/transfer/directdl", listOf("apikey" to key, "src" to magnet))
         if (r.code == 401 || r.code == 403) return DebridResolve.Failed("Chave do Premiumize não vale mais. Conecte de novo.")
@@ -336,4 +374,128 @@ internal class PremiumizeApi(private val http: DebridHttp) {
     }
 
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+}
+
+// ── AllDebrid (Lote 10, v1.20.0) ─────────────────────────────────────────────
+
+/**
+ * AllDebrid, API v4 (status na v4.1). A chave vai na query (`apikey=`); o
+ * parâmetro `agent` não é mais exigido desde 2025-01-15.
+ *
+ * Sem consulta de cache que não mexa na conta: o `/magnet/instant` saiu do
+ * ar, então a "consulta" é o próprio upload — o campo `ready` da resposta
+ * diz na hora se o serviço já tem o torrent. Por isso [cached] devolve
+ * vazio e o [DebridService.check] resolve os primeiros magnets como faz
+ * com o Real-Debrid. Torrent que não fica pronto sai da conta (delete no
+ * `finally` do resolve, igual ao Real-Debrid).
+ */
+internal class AllDebridApi(private val http: DebridHttp) {
+    companion object {
+        const val BASE = "https://api.alldebrid.com/v4"
+        const val BASE41 = "https://api.alldebrid.com/v4.1"
+        /** statusCode do /magnet/status v4.1: 0 fila, 1 baixando, 2 comprimindo, 3 enviando, 4 pronto, 5–15 erro. */
+        const val STATUS_READY = 4
+    }
+
+    private fun auth(key: String) = "apikey=" + java.net.URLEncoder.encode(key, "UTF-8")
+    private fun ok(o: JSONObject?) = o?.optString("status") == "success"
+
+    /** Nome e fim do premium. null quando a chave não vale. */
+    fun user(key: String): Pair<String, Long>? {
+        val o = http.get("$BASE/user?${auth(key)}").json() ?: return null
+        if (!ok(o)) return null
+        val u = o.optJSONObject("data")?.optJSONObject("user") ?: return null
+        val raw = u.optLong("premiumUntil", 0L)
+        val until = when {
+            raw <= 0 -> 0L
+            raw > 1_000_000_000_000L -> raw
+            else -> raw * 1000
+        }
+        return u.optString("username") to until
+    }
+
+    /** Sem probe sem efeito: o /magnet/instant não existe mais. Ver o comentário da classe. */
+    fun cached(key: String, hashes: List<String>): Set<String> = emptySet()
+
+    fun resolve(key: String, magnet: String, spec: TorrentSpec, season: Int, episode: Int): DebridResolve {
+        val up = http.form("$BASE/magnet/upload?${auth(key)}", listOf("magnets[]" to magnet))
+        if (up.code == 401 || up.code == 403) return DebridResolve.Failed("Chave do AllDebrid não vale mais. Conecte de novo.")
+        val upObj = up.json()
+        val first = upObj?.optJSONObject("data")?.optJSONArray("magnets")?.optJSONObject(0)
+        val id = first?.optInt("id", -1) ?: -1
+        if (!ok(upObj) || id <= 0) {
+            val msg = first?.optJSONObject("error")?.optString("message").orEmpty()
+            return DebridResolve.Failed(msg.ifBlank { "AllDebrid não aceitou o torrent (${up.code})" })
+        }
+        var keep = false
+        try {
+            var ready = first.optBoolean("ready", false)
+            var tries = 0
+            while (!ready && tries < 12) {
+                Thread.sleep(if (tries == 0) 800L else 2500L)
+                tries++
+                val st = status(key, id) ?: return DebridResolve.NotCached
+                val code = st.optInt("statusCode", -1)
+                if (code == STATUS_READY) ready = true
+                else if (code >= 5) return DebridResolve.NotCached
+            }
+            if (!ready) return DebridResolve.NotCached
+            val files = filesOf(key, id)
+            val chosen = pickRemote(files, spec, indexReliable = true, season, episode)
+                ?: return DebridResolve.Failed("Arquivo de vídeo não encontrado no torrent")
+            val un = http.form("$BASE/link/unlock?${auth(key)}", listOf("link" to chosen.link))
+            val unObj = un.json()
+            val url = unObj?.optJSONObject("data")?.optString("link").orEmpty()
+            if (!ok(unObj) || url.isBlank()) return DebridResolve.Failed("AllDebrid não liberou o link (${un.code})")
+            keep = true
+            return DebridResolve.Ok(url, DebridProvider.ALL_DEBRID)
+        } finally {
+            // Torrent que não serviu sai da conta da pessoa.
+            if (!keep) http.get("$BASE/magnet/delete?${auth(key)}&id=$id")
+        }
+    }
+
+    /** Manda o torrent para baixar na conta (quando não está no cache). */
+    fun queue(key: String, magnet: String): DebridSend {
+        val o = http.form("$BASE/magnet/upload?${auth(key)}", listOf("magnets[]" to magnet)).json()
+        val first = o?.optJSONObject("data")?.optJSONArray("magnets")?.optJSONObject(0)
+        if (!ok(o) || first == null) {
+            val msg = first?.optJSONObject("error")?.optString("message").orEmpty()
+            return DebridSend.Failed(msg.ifBlank { "AllDebrid não aceitou o torrent" })
+        }
+        return DebridSend.Queued(first.optString("filename").ifBlank { "torrent" })
+    }
+
+    /** Um magnet do /magnet/status v4.1 (o array `magnets[0]`; objeto como fallback). */
+    private fun status(key: String, id: Int): JSONObject? {
+        val o = http.get("$BASE41/magnet/status?${auth(key)}&id=$id").json() ?: return null
+        if (!ok(o)) return null
+        val d = o.optJSONObject("data") ?: return null
+        return d.optJSONArray("magnets")?.optJSONObject(0) ?: d.optJSONObject("magnets")
+    }
+
+    /** Arquivos do magnet, achatando a árvore (`n` nome, `s` tamanho, `l` link, `e` filhos). */
+    private fun filesOf(key: String, id: Int): List<RemoteFile> {
+        val o = http.form("$BASE/magnet/files?${auth(key)}", listOf("id[]" to id.toString())).json()
+        val data = o?.optJSONArray("data") ?: return emptyList()
+        val out = ArrayList<RemoteFile>()
+        for (i in 0 until data.length()) {
+            val tree = data.optJSONObject(i)?.optJSONArray("files") ?: continue
+            for (j in 0 until tree.length()) flatten(tree.optJSONObject(j) ?: continue, "", out)
+        }
+        return out
+    }
+
+    private fun flatten(node: JSONObject, prefix: String, out: MutableList<RemoteFile>) {
+        val children = node.optJSONArray("e")
+        if (children != null) {
+            val next = prefix + node.optString("n") + "/"
+            for (i in 0 until children.length()) flatten(children.optJSONObject(i) ?: continue, next, out)
+            return
+        }
+        val link = node.optString("l")
+        if (link.isBlank()) return
+        val idx = out.size
+        out += RemoteFile(idx.toString(), TorrentFile(idx, prefix + node.optString("n"), node.optLong("s")), link)
+    }
 }

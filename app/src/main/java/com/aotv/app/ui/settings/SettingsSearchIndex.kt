@@ -8,8 +8,10 @@ package com.aotv.app.ui.settings
  * busca achar a opção e abrir a página certa — com rolagem e destaque até a
  * seção quando a página suporta âncora ([SettingOptionEntry.anchor]).
  *
- * Páginas sem âncora (Backup e Trackers, que têm scaffold próprio):
- * o resultado abre a página no topo; a opção continua listada.
+ * Páginas sem âncora (Trackers, que tem scaffold próprio, e o Backup fora
+ * da seção do Drive): o resultado abre a página no topo; a opção continua
+ * listada. A seção do Google Drive (Lote 10, v1.20.0) TEM âncora
+ * ([SettingsAnchors.BACKUP_DRIVE]).
  *
  * NENHUMA chave de pref é renomeada aqui — o índice só descreve texto.
  * [kidsHidden] espelha a trava de rota: a opção some da busca no perfil
@@ -68,8 +70,21 @@ object SettingsAnchors {
     const val DL_COUNTED = "downloads-conta"
     // Gravações (Lote 8)
     const val DL_RECORD = "downloads-gravacoes"
+    // Backup — Google Drive (Lote 10, v1.20.0). As outras opções do Backup
+    // seguem sem âncora (a página tem scaffold próprio e só esta seção
+    // ganhou rolagem + destaque).
+    const val BACKUP_DRIVE = "backup-drive"
     // Esportes e Calendário (Lote 8)
     const val LAYOUT_SPORTS = "layout-esportes"
+    // VPN e Watch Party (Lote 10)
+    const val VPN_IMPORT = "vpn-importar"
+    const val VPN_PROFILES = "vpn-perfis"
+    const val VPN_SCOPE = "vpn-escopo"
+    const val VPN_STATUS = "vpn-status"
+    const val PARTY_CREATE = "party-criar"
+    const val PARTY_JOIN = "party-entrar"
+    const val PARTY_MEMBERS = "party-participantes"
+    const val PARTY_SYNC = "party-sincronizacao"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -380,8 +395,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Debrid",
-        sub = "Real-Debrid, TorBox ou Premiumize",
-        keywords = listOf("debrid", "real-debrid", "torbox", "premiumize", "torrent"),
+        sub = "Real-Debrid, TorBox, Premiumize ou AllDebrid",
+        keywords = listOf("debrid", "real-debrid", "torbox", "premiumize", "alldebrid", "torrent"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_ADDONS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Servidores de mídia",
+        sub = "Jellyfin, Emby e Plex — sua coleção no app",
+        keywords = listOf("servidor", "servidores", "jellyfin", "emby", "plex", "coleção", "mídia", "biblioteca"),
         pageId = SettingsPageIds.Conteudo,
         anchor = SettingsAnchors.CONTENT_ADDONS,
         kidsHidden = true,
@@ -1018,7 +1041,47 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Downloads,
         anchor = SettingsAnchors.DL_RECORD,
     ),
-    // ── Backup e restauração (sem âncora: abre a página no topo) ────────
+    // ── Backup e restauração (sem âncora, exceto o Google Drive) ──────
+    SettingOptionEntry(
+        title = "Sincronizar com o Google Drive",
+        sub = "Subir e baixar o backup na sua conta Google",
+        keywords = listOf("drive", "google", "sincronizar", "nuvem", "backup", "sync"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Subir backup para o Drive",
+        sub = "Envia o backup atual p/ o Google Drive",
+        keywords = listOf("drive", "google", "subir", "enviar", "upload", "nuvem"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Baixar backup do Drive",
+        sub = "Baixa o backup do Drive e mostra o resumo p/ restaurar",
+        keywords = listOf("drive", "google", "baixar", "download", "restaurar", "nuvem"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Client ID do Google Drive",
+        sub = "Client ID OAuth do seu projeto no Google Cloud",
+        keywords = listOf("drive", "google", "client id", "oauth", "configurar", "cloud"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Conectar conta Google",
+        sub = "Login com a conta que vai guardar o backup",
+        keywords = listOf("drive", "google", "conectar", "conta", "login"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
     SettingOptionEntry(
         title = "Incluir chaves e sessões",
         sub = "O backup inclui senhas e sessões",
@@ -1088,6 +1151,72 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         sub = "Apaga só a sessão deste perfil",
         keywords = listOf("simkl", "desconectar", "sair", "logout"),
         pageId = SettingsPageIds.Trackers,
+        kidsHidden = true,
+    ),
+    // ── VPN (Lote 10, v1.20.0) ────────────────────────────────────────────
+    SettingOptionEntry(
+        title = "Importar perfil VPN",
+        sub = "Arquivo .conf (WireGuard) ou .ovpn (OpenVPN) do seu provedor",
+        keywords = listOf("vpn", "wireguard", "openvpn", "conf", "ovpn", "importar", "perfil", "túnel"),
+        pageId = SettingsPageIds.Vpn,
+        anchor = SettingsAnchors.VPN_IMPORT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Perfis de VPN",
+        sub = "Renomear, trocar o escopo e remover",
+        keywords = listOf("vpn", "perfis", "renomear", "remover", "wireguard", "openvpn"),
+        pageId = SettingsPageIds.Vpn,
+        anchor = SettingsAnchors.VPN_PROFILES,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Escopo da VPN",
+        sub = "Só o AOTV ou todo o aparelho",
+        keywords = listOf("vpn", "escopo", "aparelho", "só o app", "todo o aparelho"),
+        pageId = SettingsPageIds.Vpn,
+        anchor = SettingsAnchors.VPN_SCOPE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Status da VPN",
+        sub = "Desconectado — a conexão depende do motor nativo",
+        keywords = listOf("vpn", "status", "conectar", "desconectar", "desconectado"),
+        pageId = SettingsPageIds.Vpn,
+        anchor = SettingsAnchors.VPN_STATUS,
+        kidsHidden = true,
+    ),
+    // ── Watch Party (Lote 10, v1.20.0) ────────────────────────────────────
+    SettingOptionEntry(
+        title = "Criar Watch Party",
+        sub = "Gera um código para assistir junto",
+        keywords = listOf("watch party", "criar", "código", "sessão", "assistir junto", "grupo"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_CREATE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Entrar numa Watch Party",
+        sub = "Entre com o código do convite",
+        keywords = listOf("watch party", "entrar", "código", "convite", "sessão", "participar"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_JOIN,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Participantes da Watch Party",
+        sub = "Quem está na sessão",
+        keywords = listOf("watch party", "participantes", "quem está", "sessão", "grupo"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_MEMBERS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Sincronização da Watch Party",
+        sub = "Play, pause e seek sincronizados — indisponível sem relay",
+        keywords = listOf("watch party", "sincronização", "sincronizar", "play", "pause", "seek"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_SYNC,
         kidsHidden = true,
     ),
 )

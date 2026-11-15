@@ -36,7 +36,7 @@ import com.aotv.app.data.debrid.DebridProvider
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
 
-/** Debrid. Conecta Real-Debrid, TorBox ou Premiumize para os torrents tocarem por link direto. */
+/** Debrid. Conecta Real-Debrid, TorBox, Premiumize ou AllDebrid para os torrents tocarem por link direto. */
 @Composable
 fun DebridScreen(onBack: () -> Unit, viewModel: DebridViewModel = hiltViewModel()) {
     val st by viewModel.ui.collectAsStateWithLifecycle()
@@ -129,8 +129,39 @@ fun DebridScreen(onBack: () -> Unit, viewModel: DebridViewModel = hiltViewModel(
                                 com.aotv.app.ui.common.FilterChipPill("Esconder", st.settings.hideUncached, { viewModel.setHideUncached(true) })
                             }
                             Text(
-                                "O Real-Debrid não informa o cache antes. Ele confere as melhores fontes de cada título e o resto toca por P2P.",
+                                "O Real-Debrid e o AllDebrid não informam o cache antes. Eles conferem as melhores fontes de cada título e o resto toca por P2P.",
                                 color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                        }
+                    }
+                    // Enviar torrent para baixar (Lote 10, v1.20.0): quando o serviço
+                    // não tem o arquivo pronto, o magnet vai para a fila de download
+                    // da conta — depois ele toca por link direto.
+                    item {
+                        var sendMagnet by remember { mutableStateOf("") }
+                        Column(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BackgroundCard2).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text("Enviar torrent para baixar", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                "O serviço não tem o arquivo pronto? Cole o magnet aqui: ele baixa na sua conta (${st.active?.provider?.label ?: "debrid em uso"}) e depois toca por link direto.",
+                                color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                            OutlinedTextField(
+                                value = sendMagnet, onValueChange = { sendMagnet = it }, singleLine = true,
+                                label = { Text("Magnet do torrent") },
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                                    focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+                                ),
+                            )
+                            com.aotv.app.ui.common.AotvButton(
+                                "Enviar para download", { viewModel.sendMagnet(sendMagnet) },
+                                tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+                                enabled = sendMagnet.isNotBlank(), compact = true,
                             )
                         }
                     }

@@ -30,6 +30,7 @@ class DebridService @Inject constructor(
     private val rd = RealDebridApi(http)
     private val tb = TorBoxApi(http)
     private val pm = PremiumizeApi(http)
+    private val ad = AllDebridApi(http)
 
     private val _accounts = MutableStateFlow(readAccounts())
     val accounts: StateFlow<List<DebridAccount>> = _accounts.asStateFlow()
@@ -55,6 +56,7 @@ class DebridService @Inject constructor(
             DebridProvider.REAL_DEBRID -> rd.user(k)
             DebridProvider.TORBOX -> tb.user(k)
             DebridProvider.PREMIUMIZE -> pm.user(k)
+            DebridProvider.ALL_DEBRID -> ad.user(k)
         } ?: return@withContext Result.failure(IllegalStateException("${provider.label} não aceitou essa chave"))
         val acc = DebridAccount(provider, k, info.first, info.second)
         save(acc)
@@ -66,6 +68,7 @@ class DebridService @Inject constructor(
             DebridProvider.REAL_DEBRID -> rd.deviceStart()
             DebridProvider.TORBOX -> tb.deviceStart()
             DebridProvider.PREMIUMIZE -> null
+            DebridProvider.ALL_DEBRID -> null
         }
         if (d == null) Result.failure(IllegalStateException("${provider.label} não deu o código agora. Tente de novo ou use a chave."))
         else Result.success(d)
@@ -77,6 +80,7 @@ class DebridService @Inject constructor(
             DebridProvider.REAL_DEBRID -> rd.devicePoll(d)
             DebridProvider.TORBOX -> tb.devicePoll(d)
             DebridProvider.PREMIUMIZE -> DevicePoll.Failed("Premiumize só entra com a chave")
+            DebridProvider.ALL_DEBRID -> DevicePoll.Failed("AllDebrid só entra com a chave")
         }
         if (r is DevicePoll.Done) save(r.account)
         r
@@ -111,8 +115,8 @@ class DebridService @Inject constructor(
 
     /**
      * Consulta de uma vez os torrents da lista. TorBox e Premiumize respondem em lote. O
-     * Real-Debrid não tem consulta, então ele confere só os [rdTop] primeiros tentando resolver
-     * (o que já deixa o link pronto para tocar na hora).
+     * Real-Debrid e o AllDebrid não têm consulta sem efeito, então eles conferem só os
+     * [rdTop] primeiros tentando resolver (o que já deixa o link pronto para tocar na hora).
      */
     suspend fun check(magnets: List<String>, season: Int = 0, episode: Int = 0, rdTop: Int = 3): Map<String, Boolean> = withContext(Dispatchers.IO) {
         val a = active() ?: return@withContext emptyMap()
@@ -123,7 +127,7 @@ class DebridService @Inject constructor(
                 val ok = if (a.provider == DebridProvider.TORBOX) tb.cached(a.token, todo) else pm.cached(a.token, todo)
                 todo.forEach { cache["${a.provider.id}:$it"] = it in ok }
             }
-            DebridProvider.REAL_DEBRID -> magnets.filter { m -> hashOf(m) in todo }.take(rdTop).forEach { resolve(it, season, episode) }
+            DebridProvider.REAL_DEBRID, DebridProvider.ALL_DEBRID -> magnets.filter { m -> hashOf(m) in todo }.take(rdTop).forEach { resolve(it, season, episode) }
         }
         hashes.mapNotNull { h -> cache["${a.provider.id}:$h"]?.let { h to it } }.toMap()
     }
@@ -163,6 +167,7 @@ class DebridService @Inject constructor(
                         DebridProvider.REAL_DEBRID -> rd.resolve(a.token, clean, spec, season, episode)
                         DebridProvider.TORBOX -> tb.resolve(a.token, clean, spec, season, episode)
                         DebridProvider.PREMIUMIZE -> pm.resolve(a.token, clean, spec, season, episode)
+                        DebridProvider.ALL_DEBRID -> ad.resolve(a.token, clean, spec, season, episode)
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -181,6 +186,25 @@ class DebridService @Inject constructor(
             inFlight.remove(key, mine)
             mine.complete(result)
         }
+    }
+
+    /**
+     * Manda um torrent que o serviço NÃO tem pronto para baixar na conta (Lote 10,
+     * v1.20.0). O download fica no site do serviço — o app só confirma que entrou
+     * na fila. Sem conta ativa, [DebridSend.Failed].
+     */
+    suspend fun sendUncached(magnet: String): DebridSend = withContext(Dispatchers.IO) {
+        val a = active() ?: return@withContext DebridSend.Failed("Nenhuma conta de debrid conectada")
+        val spec = TorrentMagnet.parse(magnet) ?: return@withContext DebridSend.Failed("Magnet inválido")
+        val clean = TorrentMagnet.forEngine(spec) + (spec.fileName?.let { "&dn=" + java.net.URLEncoder.encode(it, "UTF-8") } ?: "")
+        runCatching {
+            when (a.provider) {
+                DebridProvider.REAL_DEBRID -> rd.queue(a.token, clean)
+                DebridProvider.TORBOX -> tb.queue(a.token, clean)
+                DebridProvider.PREMIUMIZE -> pm.queue(a.token, clean)
+                DebridProvider.ALL_DEBRID -> ad.queue(a.token, clean)
+            }
+        }.getOrElse { DebridSend.Failed(it.message ?: "Falha no ${a.provider.label}") }
     }
 
     private fun keyOf(a: DebridAccount, magnet: String, season: Int, episode: Int): String? {

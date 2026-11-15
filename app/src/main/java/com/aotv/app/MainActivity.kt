@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        offerPartyDeepLink(intent)
         enableEdgeToEdge()
         hideSystemBars()
 
@@ -95,6 +96,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Deep link da Watch Party (Lote 10, v1.20.0): app já aberto quando o
+    // convite chega — atualiza o intent e oferece o código de novo.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        offerPartyDeepLink(intent)
+    }
+
+    // Extrai o código de `aotv://party/?code=XXXXXX` e oferece p/ navegação
+    // (MoviesNavigation consome). Sem código válido, não faz nada.
+    private fun offerPartyDeepLink(intent: Intent?) {
+        val code = com.aotv.app.data.party.WatchParty.parseDeepLink(intent?.data) ?: return
+        com.aotv.app.data.party.PartyDeepLink.offer(code)
     }
 
     // Coleta ranks/quality isolada: cada emissão só recompõe este wrapper.
