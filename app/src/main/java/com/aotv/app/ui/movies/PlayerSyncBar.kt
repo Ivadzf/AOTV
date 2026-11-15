@@ -37,6 +37,8 @@ internal fun SyncBar(
     onZero: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** true = ajusta o áudio próprio (só atrasa, 0 a +10 s); false = som de outra fonte (atrasa e adianta). */
+    ownAudio: Boolean = false,
 ) {
     BoxWithConstraints(
         modifier.fillMaxWidth().padding(12.dp)
@@ -72,7 +74,8 @@ internal fun SyncBar(
                 SyncAction("Fechar", Modifier.weight(1f), onClose)
             }
             Text(
-                "Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido.",
+                if (ownAudio) "Só atrasa o som (0 a +10 s). Para adiantar o som, use o som de outra fonte. Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido."
+                else "Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido.",
                 color = TextSecondary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         }

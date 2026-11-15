@@ -15,6 +15,9 @@ enum class PlatformMode { AUTO, TV, PHONE }
 /** Fonte que dá o som de um título ([sig] reconhece a fonte, o link muda) e o atraso em segundos. */
 data class ExtAudioPick(val sig: String, val delaySec: Double, val at: Long)
 
+/** Atraso do áudio próprio de um título (Lote 14 item 3, v1.24.0), em segundos. Chave "TIPO:tmdbId". */
+data class OwnAudioDelay(val delaySec: Double, val at: Long)
+
 /**
  * Última fonte ESCOLHIDA À MÃO num título (Lote 4 item 6, v1.12.0).
  * Identidade estável = addon + qualidade (ver [pickPreferredSource] no player:
@@ -73,7 +76,7 @@ fun scopedKey(key: String, profileId: String): String =
 
 /** Preferências que são de cada perfil. O resto (addons, modo, chave TMDB, aberturas) é do aparelho. */
 internal val SCOPED_KEYS = listOf(
-    "recent_searches", "ext_audio_v1", "home_catalogs_v1", "sub_size", "sub_bg",
+    "recent_searches", "ext_audio_v1", "own_audio_delay_v1", "home_catalogs_v1", "sub_size", "sub_bg",
     "sub_color", "sub_bg_opacity", "sub_outline", "sub_font",
     "pref_audio", "pref_max_quality", "pref_hero_trailer",
     "trakt_access_token_v1", "trakt_refresh_token_v1", "trakt_expires_at_v1",
@@ -192,6 +195,9 @@ internal val SCOPED_KEYS = listOf(
     // (código + papel). Sem servidor, sem segredo: o código expira ao sair
     // da sessão.
     "party_session_v1",
+    // Lote 14 (v1.24.0) — Descobrir com catálogos dos addons: o catálogo escolhido
+    // ("addonId|type|id", vazio = TMDB). Só a escolha, sem credencial.
+    "pref_discover_catalog_v1",
 )
 
 /**
@@ -2280,6 +2286,28 @@ class PlatformPrefs @Inject constructor(
         }
 
     /**
+     * Atraso do áudio próprio por título (Lote 14 item 3, v1.24.0), chave
+     * "TIPO:tmdbId". Só guarda atraso != 0 (0 = sincronia original, não
+     * precisa de registro) e no máximo 60 títulos, os mais recentes.
+     * Por perfil (SCOPED_KEYS "own_audio_delay_v1"). Quem grava é o
+     * PlayerProgressViewModel, no mesmo padrão do som de outra fonte.
+     */
+    var ownAudioDelays: Map<String, OwnAudioDelay>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(sk("own_audio_delay_v1"), null) ?: "{}")
+            o.keys().asSequence().associateWith { k ->
+                val v = o.getJSONObject(k)
+                OwnAudioDelay(v.optDouble("d", 0.0), v.optLong("t", 0L))
+            }.filterValues { it.delaySec != 0.0 }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val kept = value.entries.sortedByDescending { it.value.at }.take(60)
+            val o = org.json.JSONObject()
+            kept.forEach { (k, p) -> o.put(k, org.json.JSONObject().put("d", p.delaySec).put("t", p.at)) }
+            prefs.edit().putString(sk("own_audio_delay_v1"), o.toString()).apply()
+        }
+
+    /**
      * Última fonte escolhida À MÃO por título (Lote 4 item 6, v1.12.0), chave
      * "TIPO:tmdbId". Guarda SÓ addon + qualidade — nunca a URL (token/assinatura).
      * No máximo 60 títulos (os mais recentes); o resto cai no cortar por [LastSourcePick.at].
@@ -2601,6 +2629,14 @@ class PlatformPrefs @Inject constructor(
     var catalogOn: Boolean
         get() = _catalogOn.value
         set(value) { prefs.edit().putBoolean("aotv_catalog_on", value).apply(); _catalogOn.value = value }
+
+    /**
+     * Catálogo escolhido no Descobrir (Lote 14, v1.24.0): "addonId|type|id", vazio = TMDB.
+     * Por perfil, para o catálogo sobreviver ao fechar o app e à troca Filmes/Séries.
+     */
+    var discoverCatalog: String
+        get() = prefs.getString(sk("pref_discover_catalog_v1"), "").orEmpty()
+        set(value) { prefs.edit().putString(sk("pref_discover_catalog_v1"), value).apply() }
 
     // ── Manifests guardados (nome e catálogos de cada addon, para a Início abrir sem rede) ──
     private val _addonMeta = MutableStateFlow(HomeLayout.decodeAddons(prefs.getString("addon_meta_v1", null)))

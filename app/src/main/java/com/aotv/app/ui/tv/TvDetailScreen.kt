@@ -101,6 +101,8 @@ private fun TvDetailScreenBody(
     val primary = rememberDetailPrimary(detailItem, state, viewModel, onPlayEpisode, onPlayDirect)
     val isSeries = item.type == MediaType.SERIES
     val scope = rememberCoroutineScope()
+    // Painel de opções do episódio (Lote 14, v1.24.0): segurar OK no episódio.
+    var episodeOptions by remember { mutableStateOf<com.aotv.app.domain.model.EpisodeItem?>(null) }
     val list = rememberLazyListState()
 
     // O catálogo às vezes traz o texto que o detalhe em português não tem, então vale o primeiro preenchido.
@@ -244,7 +246,8 @@ private fun TvDetailScreenBody(
                     }
 
                     if (isSeries) item(key = "eps") {
-                        TvEpisodes(state, detailItem, onPlayEpisode, onPlayDirect, viewModel::selectEpisode)
+                        TvEpisodes(state, detailItem, onPlayEpisode, onPlayDirect, viewModel::selectEpisode,
+                            onEpisodeOptions = { episodeOptions = it })
                     } else item(key = "sources") {
                         Column(Modifier.fillMaxWidth()) {
                             Row(
@@ -318,7 +321,22 @@ private fun TvDetailScreenBody(
             }
         }
 
-        // Fontes do episódio no painel lateral (segurar OK no episódio).
+        // Painel de opções do episódio (Lote 14, v1.24.0): "Ver fontes" abre o
+        // painel de fontes do episódio (o mesmo que segurar OK fazia antes).
+        episodeOptions?.let { ep ->
+            TvEpisodeOptionsPanel(
+                episodeLabel = "T${ep.seasonNumber} E${ep.episodeNumber} · ${ep.name.ifBlank { "Episódio ${ep.episodeNumber}" }}",
+                watched = "${ep.seasonNumber}:${ep.episodeNumber}" in state.watchedEpisodes,
+                hasPrevious = ep.episodeNumber > 1,
+                onDismiss = { episodeOptions = null },
+                onToggleWatched = { viewModel.toggleEpisodeWatched(ep.seasonNumber, ep.episodeNumber) },
+                onMarkPrevious = { viewModel.markPreviousEpisodesWatched(ep.seasonNumber, ep.episodeNumber) },
+                onMarkSeason = { viewModel.markSeasonWatched(ep.seasonNumber) },
+                onViewSources = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+            )
+        }
+
+        // Fontes do episódio no painel lateral ("Ver fontes" no painel de opções).
         state.selectedEpisode?.let { (season, episode) ->
             val ep = state.seasons[season]?.firstOrNull { it.episodeNumber == episode }
             TvSourcePanel(
@@ -378,6 +396,8 @@ private fun TvEpisodes(
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
     onSelect: (Int, Int) -> Unit,
+    /** Segurar OK no episódio abre o painel de opções (Lote 14, v1.24.0). */
+    onEpisodeOptions: (com.aotv.app.domain.model.EpisodeItem) -> Unit = {},
 ) {
     val season = state.selectedSeason
     val eps = state.seasons[season]
@@ -416,12 +436,14 @@ private fun TvEpisodes(
                                 listOf(MoviePlayerSource("Fonte salva", state.resumeSourceUrl)), ep.seasonNumber, ep.episodeNumber, total)
                         } else onPlayEpisode(item.tmdbId, ep.seasonNumber, ep.episodeNumber, total)
                     },
-                    onLongClick = { onSelect(ep.seasonNumber, ep.episodeNumber) },
+                    // Segurar OK abre o painel de opções (Lote 14, v1.24.0);
+                    // o "Ver fontes" dele abre o painel de fontes (onSelect).
+                    onLongClick = { onEpisodeOptions(ep) },
                 )
             }
         }
         Text(
-            "OK assiste  ·  Segure OK para escolher a fonte", color = TextTertiary, fontSize = 0.95.rs,
+            "OK assiste  ·  Segure OK para opções", color = TextTertiary, fontSize = 0.95.rs,
             modifier = Modifier.padding(horizontal = tvPad).offset(y = (-0.4).r),
         )
     }

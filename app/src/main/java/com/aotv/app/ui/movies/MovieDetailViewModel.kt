@@ -872,6 +872,61 @@ class MovieDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Painel de opções do episódio (Lote 14, v1.24.0): marca/desmarca UM
+     * episódio. Desmarcar só tira de vistos — não apaga o progresso do
+     * player nem tira a série do Continuar (o que foi assistido continua
+     * assistido; só a marca some).
+     */
+    fun toggleEpisodeWatched(season: Int, episode: Int) {
+        if (prefs.privateMode) return
+        val item = stubItem ?: return
+        val key = epKey(season, episode)
+        if (_uiState.value.watchedEpisodes.contains(key)) {
+            viewModelScope.launch { library.unmarkEpisodeWatched(item.tmdbId, season, episode) }
+        } else {
+            markEpisodeWatched(season, episode)
+        }
+    }
+
+    /** Números dos episódios da temporada que o catálogo local conhece. */
+    private fun seasonEpisodeNumbers(season: Int): List<Int> =
+        _uiState.value.seasons[season]?.map { it.episodeNumber }.orEmpty()
+
+    /**
+     * Painel de opções do episódio (Lote 14, v1.24.0): marca todos os
+     * episódios ANTERIORES ao [episode] na mesma temporada — só os que
+     * existem no catálogo local ([seasonEpisodeNumbers]). O Continuar
+     * continua apontando p/ o episódio do painel (o próximo a ver).
+     */
+    fun markPreviousEpisodesWatched(season: Int, episode: Int) {
+        if (prefs.privateMode) return
+        val item = stubItem ?: return
+        val previous = seasonEpisodeNumbers(season).filter { it in 1 until episode }
+        if (previous.isEmpty()) return
+        viewModelScope.launch {
+            library.markEpisodesWatched(item.tmdbId, season, previous)
+            library.recordPlayback(item, lastEpisode = "T$season:E$episode")
+        }
+    }
+
+    /**
+     * Painel de opções do episódio (Lote 14, v1.24.0): marca TODA a
+     * temporada como assistida — só os episódios que existem no catálogo
+     * local. O Continuar aponta p/ o último episódio da temporada.
+     */
+    fun markSeasonWatched(season: Int) {
+        if (prefs.privateMode) return
+        val item = stubItem ?: return
+        val all = seasonEpisodeNumbers(season)
+        if (all.isEmpty()) return
+        val last = all.max()
+        viewModelScope.launch {
+            library.markEpisodesWatched(item.tmdbId, season, all)
+            library.recordPlayback(item, lastEpisode = "T$season:E$last")
+        }
+    }
+
     // ───────────────────────── (A) FONTES DO EPISÓDIO SELECIONADO ─────────────────────────
 
     /** Busca nos addons as fontes do episódio selecionado, para o painel de fontes. */

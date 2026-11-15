@@ -462,6 +462,21 @@ private fun HomeSectionsTab(
             dismissButton = { TextButton(onClick = { pendingRemove = null }) { Text("Cancelar") } },
         )
     }
+    // Painel de opções do título (Lote 14, v1.24.0): segurar o card do
+    // Continuar abre Ir para detalhes / Marcar como assistido / Remover.
+    // O "Remover" do painel cai na confirmação acima; "Marcar" some com
+    // canal ao vivo (embedId "live|...") — ao vivo não tem assistido.
+    var pendingOptions by remember { mutableStateOf<MovieItem?>(null) }
+    pendingOptions?.let { item ->
+        TitleOptionsDialog(
+            item = item,
+            showMarkWatched = !item.embedId.startsWith("live|"),
+            onDismiss = { pendingOptions = null },
+            onGoToDetails = { onItemClick(item) },
+            onMarkWatched = { viewModel.markContinueWatched(item) },
+            onRemove = { pendingRemove = item },
+        )
+    }
     // "Não hoje" (Lote 13, v1.23.0): segurar o card de episódio novo dispensa
     // o episódio até amanhã (mesmo padrão do remover acima).
     var pendingNotToday by remember { mutableStateOf<MovieItem?>(null) }
@@ -622,7 +637,7 @@ private fun HomeSectionsTab(
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
-                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onRemove = { pendingRemove = it })
+                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onOptions = { pendingOptions = it })
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
@@ -834,8 +849,8 @@ private fun ContinueRow(
     display: HomeDisplayPrefs = HomeDisplayPrefs(),
     /** Vidro fosco nos cartões (Lote 4): toggle `pref_panel_blur`. */
     frosted: Boolean = false,
-    /** Segurar o card remove do Continuar (v1.13.0). null = sem remoção. */
-    onRemove: ((MovieItem) -> Unit)? = null,
+    /** Segurar o card abre o painel de opções do título (Lote 14, v1.24.0). null = sem painel. */
+    onOptions: ((MovieItem) -> Unit)? = null,
 ) {
     Column {
         com.aotv.app.ui.common.SectionHeader(
@@ -849,8 +864,8 @@ private fun ContinueRow(
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
                     episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact, frosted = frosted,
-                    // Segurar remove do Continuar (v1.13.0); sem onRemove, o long-press não faz nada.
-                    onLongClick = onRemove?.let { remove -> { remove(item) } })
+                    // Segurar abre o painel de opções (Lote 14, v1.24.0); sem onOptions, o long-press não faz nada.
+                    onLongClick = onOptions?.let { options -> { options(item) } })
             }
         }
     }

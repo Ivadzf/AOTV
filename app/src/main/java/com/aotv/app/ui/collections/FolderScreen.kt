@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -31,6 +32,11 @@ import coil.compose.AsyncImage
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
+import com.aotv.app.ui.tv.TV_GRID_COLUMNS
+import com.aotv.app.ui.tv.TvPoster
+import com.aotv.app.ui.tv.TvScrollArea
+import com.aotv.app.ui.tv.r
+import com.aotv.app.ui.tv.tvPad
 
 @Composable
 fun FolderScreen(
@@ -80,6 +86,9 @@ private fun FolderHeader(st: FolderViewModel.UiState, onBack: () -> Unit) {
 @Composable
 private fun TabbedContent(st: FolderViewModel.UiState, vm: FolderViewModel, onItemClick: (MovieItem) -> Unit) {
     val pad = com.aotv.app.ui.common.pagePadding()
+    // Lote 14 item 5 (v1.24.0): na TV a pasta usa o pôster grande (TvPoster, w500)
+    // em 8 colunas, igual ao Descobrir e à Início; no celular nada muda.
+    val isTv = com.aotv.app.ui.common.LocalIsTv.current
     val tab = st.tabs.getOrNull(st.selected) ?: return
     if (st.tabs.size > 1) {
         LazyRow(
@@ -109,18 +118,27 @@ private fun TabbedContent(st: FolderViewModel.UiState, vm: FolderViewModel, onIt
             tab.error ?: "Nada aqui por enquanto.", color = TextSecondary, fontSize = 15.sp, lineHeight = 21.sp,
             modifier = Modifier.padding(horizontal = pad, vertical = 24.dp),
         )
-        else -> LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 112.dp),
-            state = grid,
-            contentPadding = PaddingValues(start = pad, end = pad, top = 8.dp, bottom = 32.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            items(tab.items, key = { "${it.type}:${it.tmdbId}" }) { item -> PosterItem(item, onItemClick) }
-            if (tab.loadingMore) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp)) }
+        else -> {
+            val gridContent: @Composable () -> Unit = {
+                LazyVerticalGrid(
+                    columns = if (isTv) GridCells.Fixed(TV_GRID_COLUMNS) else GridCells.Adaptive(minSize = 112.dp),
+                    state = grid,
+                    contentPadding = PaddingValues(start = if (isTv) tvPad else pad, end = if (isTv) tvPad else pad, top = 8.dp, bottom = 32.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (isTv) 1.r else 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (isTv) 1.5.r else 16.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(tab.items, key = { "${it.type}:${it.tmdbId}" }) { item ->
+                        if (isTv) TvPoster(item, { onItemClick(item) }, width = Dp.Unspecified)
+                        else PosterItem(item, onItemClick)
+                    }
+                    if (tab.loadingMore) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(28.dp)) }
+                    }
+                }
             }
+            // Na TV a rolagem segue o foco como no Descobrir; no celular nada muda.
+            if (isTv) TvScrollArea(1.r) { gridContent() } else gridContent()
         }
     }
 }
@@ -128,6 +146,9 @@ private fun TabbedContent(st: FolderViewModel.UiState, vm: FolderViewModel, onIt
 @Composable
 private fun RowsContent(st: FolderViewModel.UiState, vm: FolderViewModel, onItemClick: (MovieItem) -> Unit) {
     val pad = com.aotv.app.ui.common.pagePadding()
+    // Lote 14 item 5 (v1.24.0): na TV as fileiras usam o pôster grande
+    // (TvPoster, w500, 12.5r como as fileiras da Início); no celular nada muda.
+    val isTv = com.aotv.app.ui.common.LocalIsTv.current
     LazyColumn(contentPadding = PaddingValues(bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(st.tabs.filter { !it.isAll }, key = { it.key }) { tab ->
             Column {
@@ -142,8 +163,11 @@ private fun RowsContent(st: FolderViewModel.UiState, vm: FolderViewModel, onItem
                         val row = rememberLazyListState()
                         val nearEnd by remember { derivedStateOf { (row.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= row.layoutInfo.totalItemsCount - 4 } }
                         LaunchedEffect(nearEnd, tab.items.size) { if (nearEnd) vm.loadMore(tab.key) }
-                        LazyRow(state = row, contentPadding = PaddingValues(horizontal = pad), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            items(tab.items, key = { "${it.type}:${it.tmdbId}" }) { item -> PosterItem(item, onItemClick, Modifier.width(128.dp)) }
+                        LazyRow(state = row, contentPadding = PaddingValues(horizontal = if (isTv) tvPad else pad), horizontalArrangement = Arrangement.spacedBy(if (isTv) 1.25.r else 14.dp)) {
+                            items(tab.items, key = { "${it.type}:${it.tmdbId}" }) { item ->
+                                if (isTv) TvPoster(item, { onItemClick(item) })
+                                else PosterItem(item, onItemClick, Modifier.width(128.dp))
+                            }
                         }
                     }
                 }

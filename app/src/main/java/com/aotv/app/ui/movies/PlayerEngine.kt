@@ -3,10 +3,15 @@ package com.aotv.app.ui.movies
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.google.android.gms.cast.CastMediaControlIntent
+import java.nio.ByteBuffer
 
 /**
  * Motor do player — Lote 4 (v1.12.0), itens 1–3: player externo, Cast e decoder.
@@ -63,12 +68,195 @@ enum class DecoderMode(val id: String, val label: String) {
  * A pref só vale na CRIAÇÃO do player (a sessão cria o ExoPlayer 1x);
  * trocar de fonte/episódio reusa o mesmo player e não recria nada.
  * Mudar a pref em Configurações vale a partir da próxima reprodução.
+ *
+ * Com [delayProcessor] (Lote 14 item 3, v1.24.0), a fábrica vira uma
+ * subclasse que sobrescreve [DefaultRenderersFactory.buildAudioSink]
+ * p/ plugar o processador de atraso no [DefaultAudioSink] — a 1.6.0 NÃO
+ * tem `setAudioProcessors` na fábrica nem `setAudioSink` no
+ * `ExoPlayer.Builder` (conferido no AAR: só o `DefaultAudioSink.Builder`
+ * aceita processadores). O `buildAudioSink` padrão da 1.6.0 só monta o
+ * sink com float/playback-params, então a sobrescrita preserva tudo.
  */
 @OptIn(UnstableApi::class)
-fun decoderRenderersFactory(context: Context, mode: DecoderMode): DefaultRenderersFactory =
-    DefaultRenderersFactory(context)
+fun decoderRenderersFactory(context: Context, mode: DecoderMode, delayProcessor: AudioDelayProcessor? = null): DefaultRenderersFactory {
+    val base: DefaultRenderersFactory =
+        if (delayProcessor != null) DelayAudioRenderersFactory(context, delayProcessor)
+        else DefaultRenderersFactory(context)
+    return base
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
         .setEnableDecoderFallback(mode == DecoderMode.HW_FALLBACK)
+}
+
+/** Fábrica que pluga o [AudioDelayProcessor] no sink de áudio (Lote 14 item 3). */
+@OptIn(UnstableApi::class)
+private class DelayAudioRenderersFactory(
+    context: Context,
+    private val delayProcessor: AudioDelayProcessor,
+) : DefaultRenderersFactory(context) {
+    @OptIn(UnstableApi::class)
+    override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
+        DefaultAudioSink.Builder(context)
+            .setAudioProcessors(arrayOf(delayProcessor))
+            .setEnableFloatOutput(enableFloatOutput)
+            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .build()
+}
+
+/** Teto do atraso do áudio próprio: 10 s (um passo grosso do JOTV a partir do zero). */
+const val OWN_AUDIO_DELAY_MAX_SEC = 10.0
+private const val OWN_AUDIO_DELAY_MAX_MS = 10_000L
+
+/**
+ * Atraso do áudio próprio (Lote 14 item 3, v1.24.0) — um [AudioProcessor]
+ * que segura o PCM e o solta [delayMs] depois, então o som sai atrasado
+ * em relação à imagem. O Media3 1.6.0 NÃO tem API pública de atraso de
+ * áudio (`Player` não tem `setAudioDelay`; `PlaybackParameters` só
+ * controla velocidade/pitch) — este processador é a implementação, não
+ * uma chamada a uma API que não existe.
+ *
+ * Limite honesto: só o atraso POSITIVO (som depois da imagem) é
+ * possível por buffer. Atraso NEGATIVO (adiantar o som) exigiria atrasar
+ * o VÍDEO, p/ o que não há API — por isso o atraso nunca passa de 0 p/
+ * baixo e a ajuda da UI diz isso ("só atrasa o som; para adiantar, use
+ * o som de outra fonte"). O som de outra fonte (ExtAudioSync) continua
+ * existindo p/ quem precisa adiantar.
+ *
+ * Detalhe de Media3 que decide o desenho: o `AudioProcessingPipeline`
+ * congela a lista de processadores ativos no `configure()` (e no
+ * `flush()`), a partir de `isActive()` — um processador inativo no
+ * `configure()` fica FORA da lista até a próxima troca de formato ou
+ * busca, e mudar o atraso depois não faria nada. Por isso [isActive]
+ * é true sempre que o formato é PCM conhecido, mesmo com atraso 0:
+ * com 0 o processador só passa o som direto (sem latência extra além
+ * da cópia), e o atraso passa a valer na hora quando [setDelayMs] muda.
+ * [delayMs] NÃO é zerado no [reset] (troca de faixa): o atraso é do
+ * título e vale p/ a sessão inteira; só o buffer é limpo no [flush]
+ * (busca) e no fim do stream o que ficou guardado é solto ([queueEndOfStream]).
+ *
+ * Pior caso de memória: 10 s de PCM 48 kHz 5.1 16 bits ≈ 5,7 MB
+ * transitórios no heap; o caso comum (estéreo) é ~1,9 MB.
+ */
+@OptIn(UnstableApi::class)
+class AudioDelayProcessor : AudioProcessor {
+    /** Atraso atual em ms (0 = passa direto). Pode mudar durante a reprodução. */
+    @Volatile
+    var delayMs: Long = 0L
+        private set
+
+    private var inputFormat = AudioProcessor.AudioFormat.NOT_SET
+    private var delayBytes = 0
+    private val chunks = ArrayDeque<ByteArray>()
+    private var headOffset = 0
+    private var bufferedBytes = 0
+    private var outputBuffer: ByteBuffer = AudioProcessor.EMPTY_BUFFER
+    private var inputEnded = false
+
+    /** Novo atraso (0 a 10 s). Vale na hora; diminuir solta o som guardado de uma vez. */
+    fun setDelayMs(ms: Long) {
+        delayMs = ms.coerceIn(0L, OWN_AUDIO_DELAY_MAX_MS)
+        updateDelayBytes()
+    }
+
+    private fun bytesPerSample(encoding: Int): Int = when (encoding) {
+        C.ENCODING_PCM_8BIT -> 1
+        C.ENCODING_PCM_16BIT, C.ENCODING_PCM_16BIT_BIG_ENDIAN -> 2
+        C.ENCODING_PCM_24BIT, C.ENCODING_PCM_24BIT_BIG_ENDIAN -> 3
+        C.ENCODING_PCM_32BIT, C.ENCODING_PCM_32BIT_BIG_ENDIAN, C.ENCODING_PCM_FLOAT -> 4
+        else -> 0
+    }
+
+    private fun updateDelayBytes() {
+        val f = inputFormat
+        delayBytes = if (f == AudioProcessor.AudioFormat.NOT_SET || f.sampleRate <= 0 || f.bytesPerFrame <= 0) 0
+        else ((delayMs * f.sampleRate.toLong() * f.bytesPerFrame / 1000) / f.bytesPerFrame * f.bytesPerFrame).toInt()
+    }
+
+    override fun configure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
+        inputFormat = inputAudioFormat
+        updateDelayBytes()
+        return inputAudioFormat
+    }
+
+    /**
+     * True com formato PCM conhecido, mesmo com atraso 0 — ver o motivo no
+     * doc da classe (a lista de ativos congela no `configure()`). Com
+     * formato desconhecido/não-PCM, false: o pipeline pula o processador
+     * e o som passa intacto, sem quebrar a reprodução.
+     */
+    override fun isActive(): Boolean {
+        val f = inputFormat
+        return f != AudioProcessor.AudioFormat.NOT_SET && f.sampleRate > 0 &&
+            f.channelCount > 0 && bytesPerSample(f.encoding) > 0
+    }
+
+    override fun queueInput(input: ByteBuffer) {
+        val n = input.remaining()
+        if (n > 0) {
+            val bytes = ByteArray(n)
+            input.get(bytes)
+            chunks.addLast(bytes)
+            bufferedBytes += n
+        }
+        drain()
+    }
+
+    /** Solta o que passou do atraso guardado (com atraso 0, solta tudo na hora). */
+    private fun drain() {
+        val emit = (bufferedBytes - delayBytes).coerceAtLeast(0)
+        if (emit == 0) return
+        outputBuffer = takeBytes(emit)
+    }
+
+    private fun takeBytes(n: Int): ByteBuffer {
+        val out = ByteBuffer.allocate(n)
+        var left = n
+        while (left > 0) {
+            val first = chunks.first()
+            val avail = first.size - headOffset
+            val take = minOf(avail, left)
+            out.put(first, headOffset, take)
+            headOffset += take
+            left -= take
+            bufferedBytes -= take
+            if (headOffset == first.size) {
+                chunks.removeFirst()
+                headOffset = 0
+            }
+        }
+        out.flip()
+        return out
+    }
+
+    override fun getOutput(): ByteBuffer {
+        val out = outputBuffer
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
+        return out
+    }
+
+    override fun queueEndOfStream() {
+        inputEnded = true
+        if (bufferedBytes > 0) outputBuffer = takeBytes(bufferedBytes)
+    }
+
+    override fun isEnded(): Boolean =
+        inputEnded && bufferedBytes == 0 && outputBuffer === AudioProcessor.EMPTY_BUFFER
+
+    override fun flush() {
+        chunks.clear()
+        headOffset = 0
+        bufferedBytes = 0
+        outputBuffer = AudioProcessor.EMPTY_BUFFER
+        inputEnded = false
+    }
+
+    override fun reset() {
+        flush()
+        inputFormat = AudioProcessor.AudioFormat.NOT_SET
+        delayBytes = 0
+    }
+
+    override fun getDurationAfterProcessorApplied(durationUs: Long): Long = durationUs + delayMs * 1000
+}
 
 /**
  * Tamanho do buffer do ExoPlayer (Lote 5 item 1, v1.14.0 — pref

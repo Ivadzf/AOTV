@@ -21,6 +21,36 @@ data class AddonCatalogOption(
     val genreRequired: Boolean = false,
 )
 
+/**
+ * Um filtro que o catálogo de um addon declara no manifest (`extra`).
+ * [isRequired] = o catálogo só responde com esse filtro preenchido; sem "Todos".
+ * [options] é cortado em [AddonLinks.MAX_FILTER_OPTIONS] (até 1.000 opções por filtro).
+ */
+data class AddonCatalogExtra(
+    val name: String,
+    val isRequired: Boolean,
+    val options: List<String> = emptyList(),
+)
+
+/**
+ * Catálogo de addon usável no Descobrir, com os filtros que ele declara.
+ * [base] é a base do addon (sem /manifest.json), para pedir as páginas do catálogo.
+ */
+data class AddonDiscoverCatalog(
+    val addonId: String,
+    val addonName: String,
+    val type: String,
+    val id: String,
+    val name: String,
+    val extras: List<AddonCatalogExtra> = emptyList(),
+    val base: String = "",
+) {
+    /** Chave estável p/ guardar a escolha do usuário ("addonId|type|id"). */
+    val key: String get() = "$addonId|$type|$id"
+    /** Rótulo no seletor: "Nome do addon — Nome do catálogo". */
+    val label: String get() = "$addonName — $name"
+}
+
 /** Campo do formulário de configuração que o manifest declara em `config`. */
 data class AddonConfigField(
     val key: String,
@@ -54,6 +84,9 @@ data class CommunityAddon(
  * Espelha as funções do webOS em webos/src/js/sources.js.
  */
 object AddonLinks {
+
+    /** Até 1.000 opções por filtro de catálogo de addon (Descobrir). */
+    const val MAX_FILTER_OPTIONS = 1000
 
     private val gson = GsonBuilder().disableHtmlEscaping().create()
 
@@ -163,6 +196,43 @@ object AddonLinks {
             val genres = extras.firstOrNull { it.str("name") == "genre" }?.arr("options")
                 ?.mapNotNull { o -> o.takeIf { it.isJsonPrimitive }?.asString?.takeIf { s -> s.isNotBlank() } }.orEmpty()
             AddonCatalogOption(addonId, addonName, type, id, c.str("name").ifBlank { id }, genres, "genre" in required)
+        }
+    }
+
+    /**
+     * Catálogos de filme e série usáveis no Descobrir, com TODOS os filtros que o manifest
+     * declara (`extra`: gênero, ano, idioma, país, nota, ordem…). Diferente de [homeCatalogs],
+     * aceita catálogo com filtro obrigatório — o Descobrir abre esse filtro na 1ª opção, sem
+     * "Todos". Extras de busca (`search`) e de paginação (`skip`) não são filtros e ficam de
+     * fora. Até [MAX_FILTER_OPTIONS] opções por filtro.
+     */
+    fun discoverCatalogs(manifest: JsonObject): List<AddonDiscoverCatalog> {
+        val addonId = manifest.str("id")
+        if (addonId.isBlank()) return emptyList()
+        val addonName = manifest.str("name").ifBlank { addonId }
+        val arr = manifest.arr("catalogs") ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val c = el.obj() ?: return@mapNotNull null
+            val type = c.str("type")
+            val id = c.str("id")
+            if (id.isBlank() || (type != "movie" && type != "series")) return@mapNotNull null
+            val extras = c.arr("extra")?.mapNotNull { it.obj() }.orEmpty()
+            val requiredNames = extras.filter { e ->
+                e.get("isRequired")?.let { it.isJsonPrimitive && it.asBoolean } == true
+            }.map { it.str("name") } +
+                c.arr("extraRequired")?.mapNotNull { e -> e.takeIf { it.isJsonPrimitive }?.asString }.orEmpty()
+            val parsed = extras.mapNotNull { e ->
+                val name = e.str("name")
+                if (name.isBlank() || name == "search" || name == "skip") return@mapNotNull null
+                val options = e.arr("options")
+                    ?.mapNotNull { o -> o.takeIf { it.isJsonPrimitive }?.asString?.takeIf { s -> s.isNotBlank() } }
+                    .orEmpty().take(MAX_FILTER_OPTIONS)
+                AddonCatalogExtra(name, name in requiredNames, options)
+            }
+            // Filtro obrigatório sem nenhuma opção declarada não dá para preencher: o
+            // catálogo não serve pro Descobrir (nunca responderia).
+            if (parsed.any { it.isRequired && it.options.isEmpty() }) return@mapNotNull null
+            AddonDiscoverCatalog(addonId, addonName, type, id, c.str("name").ifBlank { id }, parsed)
         }
     }
 

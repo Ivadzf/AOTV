@@ -979,6 +979,18 @@ class MoviesHomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * "Marcar como assistido" no painel de opções do título (Lote 14,
+     * v1.24.0): filme completa o progresso e some do Continuar; série
+     * marca o episódio em andamento e avança p/ o próximo (ver
+     * [LibraryRepository.markContinueWatched]). Modo privado não marca
+     * nada, igual ao [MovieDetailViewModel.markEpisodeWatched].
+     */
+    fun markContinueWatched(item: com.aotv.app.domain.model.MovieItem) {
+        if (prefs.privateMode) return
+        viewModelScope.launch { library.markContinueWatched(item.tmdbId) }
+    }
+
     fun load() {
         // Ranking de hoje para a etiqueta "#3 Hoje" dos pôsteres (vale também para fileira de addon).
         posterInfo.loadRanks()

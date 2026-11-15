@@ -50,6 +50,10 @@ private fun TvMyListScreenBody(
     val artwork by vm.recentArtwork.collectAsStateWithLifecycle()
     var filter by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<Triple<String, String, () -> Unit>?>(null) }
+    // Painel de opções do título (Lote 14, v1.24.0): segurar OK no card do
+    // Continuar abre Ir para detalhes / Marcar como assistido / Remover.
+    // Guarda o tipo ARMAZENADO junto (o remover e o "ao vivo" dependem dele).
+    var titleOptions by remember { mutableStateOf<Pair<MovieItem, String>?>(null) }
     val gs = rememberLazyGridState()
 
     fun type(raw: String) = runCatching { MediaType.valueOf(raw) }.getOrDefault(MediaType.MOVIE)
@@ -63,6 +67,19 @@ private fun TvMyListScreenBody(
             confirmButton = { TvButton("Remover", { ok(); confirm = null }, primary = true) },
             dismissButton = { TvButton("Cancelar", { confirm = null }) },
             containerColor = BackgroundCard,
+        )
+    }
+
+    // Painel de opções do título (Lote 14, v1.24.0): o "Remover" cai na
+    // confirmação acima com o tipo armazenado; "Marcar" some p/ ao vivo.
+    titleOptions?.let { (item, storedType) ->
+        TvTitleOptionsPanel(
+            item = item,
+            showMarkWatched = storedType != "LIVE",
+            onDismiss = { titleOptions = null },
+            onGoToDetails = { onItemClick(item) },
+            onMarkWatched = { vm.markContinueWatched(item) },
+            onRemove = { confirm = Triple("Remover de Continuar assistindo?", item.title) { vm.removeFromContinue(item.tmdbId, storedType) } },
         )
     }
 
@@ -111,7 +128,9 @@ private fun TvMyListScreenBody(
                                 progress = if (h.durationMs > 0) h.positionMs.toFloat() / h.durationMs else null,
                                 remaining = if (h.durationMs > h.positionMs) ((h.durationMs - h.positionMs) / 60_000L).toInt() else null,
                                 episode = ep,
-                                onLongClick = { confirm = Triple("Remover de Continuar assistindo?", h.title) { vm.removeFromContinue(h.tmdbId, h.type) } },
+                                // Segurar OK abre o painel de opções (Lote 14, v1.24.0);
+                                // o "Remover" dele confirma antes (ver titleOptions acima).
+                                onLongClick = { titleOptions = stub(h.tmdbId, h.type, h.title, h.posterUrl, "") to h.type },
                             )
                         }
                     }

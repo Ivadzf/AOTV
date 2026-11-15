@@ -344,13 +344,20 @@ class StremioAddonService @Inject constructor(
      * Uma página de um catálogo do addon. Lê {base}/catalog/{type}/{id}[/genre=G&skip=N].json.
      * Devolve null quando o addon não respondeu.
      */
-    suspend fun catalogMetas(base: String, type: String, id: String, skip: Int, genre: String? = null): List<AddonMeta>? = withContext(Dispatchers.IO) {
-        val extras = listOfNotNull(
-            genre?.takeIf { it.isNotBlank() }?.let { "genre=" + AddonLinks.encodeURIComponent(it) },
-            if (skip > 0) "skip=$skip" else null,
-        )
+    suspend fun catalogMetas(base: String, type: String, id: String, skip: Int, genre: String? = null): List<AddonMeta>? =
+        catalogMetasWithExtras(base, type, id, skip, genre?.takeIf { it.isNotBlank() }?.let { mapOf("genre" to it) }.orEmpty())
+
+    /**
+     * Uma página de um catálogo do addon com os filtros que ele declara
+     * ({base}/catalog/{type}/{id}[/filtro=valor&...&skip=N].json). [extras] já vem sem os
+     * filtros vazios ("Todos"). Devolve null quando o addon não respondeu.
+     */
+    suspend fun catalogMetasWithExtras(base: String, type: String, id: String, skip: Int, extras: Map<String, String>): List<AddonMeta>? = withContext(Dispatchers.IO) {
+        val parts = extras.entries.filter { it.value.isNotBlank() }
+            .map { (k, v) -> "$k=" + AddonLinks.encodeURIComponent(v) } +
+            (if (skip > 0) listOf("skip=$skip") else emptyList())
         val path = "${AddonLinks.baseOf(base)}/catalog/$type/${AddonLinks.encodeURIComponent(id)}" +
-            (if (extras.isEmpty()) "" else "/" + extras.joinToString("&")) + ".json"
+            (if (parts.isEmpty()) "" else "/" + parts.joinToString("&")) + ".json"
         val body = runCatching {
             client.newCall(Request.Builder().url(encodePath(path)).build()).execute()
                 .use { if (it.isSuccessful) it.body?.string() else null }
@@ -381,6 +388,23 @@ class StremioAddonService @Inject constructor(
             client.newCall(Request.Builder().url(url).build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
         }.getOrNull() ?: return@withContext emptyList()
         runCatching { AddonLinks.collectionCatalogs(com.google.gson.JsonParser.parseString(body).asJsonObject) }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Catálogos do addon usáveis no Descobrir, com os filtros que o manifest declara.
+     * Addon sem catálogo de filme/série (ou que não responde) simplesmente não aparece
+     * no seletor. [base] de cada catálogo já vem preenchida.
+     */
+    suspend fun discoverCatalogs(manifestUrl: String): List<AddonDiscoverCatalog> = withContext(Dispatchers.IO) {
+        val url = normalizeManifestUrl(manifestUrl)
+        if (url.isBlank()) return@withContext emptyList()
+        val body = runCatching {
+            client.newCall(Request.Builder().url(url).build()).execute().use { if (it.isSuccessful) it.body?.string() else null }
+        }.getOrNull() ?: return@withContext emptyList()
+        runCatching {
+            AddonLinks.discoverCatalogs(com.google.gson.JsonParser.parseString(body).asJsonObject)
+                .map { it.copy(base = AddonLinks.baseOf(url)) }
+        }.getOrDefault(emptyList())
     }
 
     private companion object {

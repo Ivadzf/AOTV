@@ -9,6 +9,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -142,6 +143,9 @@ fun MovieDetailScreen(
     // Folha Sobre o título (Lote 11, v1.21.0) e guarda de duração.
     var aboutOpen by remember { mutableStateOf(false) }
     var guardPending by remember { mutableStateOf<GuardPending?>(null) }
+    // Painel de opções do episódio (Lote 14, v1.24.0): segurar o card abre
+    // marcar/desmarcar, anteriores, temporada e ver fontes.
+    var episodeOptions by remember { mutableStateOf<com.aotv.app.domain.model.EpisodeItem?>(null) }
     val detailScope = rememberCoroutineScope()
     // Foco inicial (TV): botão Assistir/Continuar já vem selecionado no D-pad.
     val primaryFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -1073,6 +1077,8 @@ fun MovieDetailScreen(
                         },
                         // (A) tocar o card abre o painel de fontes/servidores do episódio
                         onSelect = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+                        // (Lote 14, v1.24.0) segurar o card abre o painel de opções do episódio.
+                        onLongClick = { episodeOptions = ep },
                     )
                 }
 
@@ -1284,6 +1290,22 @@ fun MovieDetailScreen(
                     viewModel.clearSelectedEpisode()
                     onOpenKodiAddon(addonId, title)
                 },
+            )
+        }
+
+        // ── Painel de opções do episódio (Lote 14, v1.24.0) ───────────────────
+        // "Ver fontes" abre a mesma folha que tocar o card; as marcações usam
+        // só os episódios do catálogo local da temporada selecionada.
+        episodeOptions?.let { ep ->
+            EpisodeOptionsDialog(
+                episodeLabel = "T${ep.seasonNumber} E${ep.episodeNumber} · ${ep.name.ifBlank { "Episódio ${ep.episodeNumber}" }}",
+                watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
+                hasPrevious = ep.episodeNumber > 1,
+                onDismiss = { episodeOptions = null },
+                onToggleWatched = { viewModel.toggleEpisodeWatched(ep.seasonNumber, ep.episodeNumber) },
+                onMarkPrevious = { viewModel.markPreviousEpisodesWatched(ep.seasonNumber, ep.episodeNumber) },
+                onMarkSeason = { viewModel.markSeasonWatched(ep.seasonNumber) },
+                onViewSources = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
             )
         }
 
@@ -2354,6 +2376,8 @@ private fun EpisodeRowCard(
     modifier: Modifier = Modifier,
     onPlay: () -> Unit,
     onSelect: () -> Unit,
+    // (Lote 14, v1.24.0) segurar o card abre o painel de opções do episódio.
+    onLongClick: (() -> Unit)? = null,
 ) {
     val rowSrc = remember { MutableInteractionSource() }
     val config = androidx.compose.ui.platform.LocalConfiguration.current
@@ -2401,7 +2425,7 @@ private fun EpisodeRowCard(
                 .background(BackgroundCard)
                 .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
                 // (A) tocar o card abre o painel de fontes/servidores do episódio
-                .clickable(interactionSource = rowSrc, indication = androidx.compose.foundation.LocalIndication.current, onClick = onSelect)
+                .combinedClickable(interactionSource = rowSrc, indication = androidx.compose.foundation.LocalIndication.current, onClick = onSelect, onLongClick = onLongClick)
                 .padding(12.dp)
                 .alpha(cardAlpha),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -2492,7 +2516,7 @@ private fun EpisodeRowCard(
             .background(BackgroundCard)
             .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
             // (A) tocar o card abre o painel de fontes/servidores do episódio
-            .clickable(interactionSource = rowSrc, indication = androidx.compose.foundation.LocalIndication.current, onClick = onSelect)
+            .combinedClickable(interactionSource = rowSrc, indication = androidx.compose.foundation.LocalIndication.current, onClick = onSelect, onLongClick = onLongClick)
             .padding(10.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),

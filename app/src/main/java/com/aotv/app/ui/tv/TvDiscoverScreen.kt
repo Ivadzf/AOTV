@@ -39,7 +39,7 @@ import com.aotv.app.ui.theme.*
 import java.util.Calendar
 
 private enum class DiscoverFilter(val title: String) {
-    KIND("Conteúdo"), SORT("Ordenar por"), GENRES("Gêneros"),
+    KIND("Conteúdo"), CATALOG("Catálogo"), SORT("Ordenar por"), GENRES("Gêneros"),
     YEAR("Ano"), CERT("Classificação"), RATING("Nota mínima"),
 }
 
@@ -54,8 +54,12 @@ fun TvDiscoverScreen(
     var picker by rememberSaveable { mutableStateOf<DiscoverFilter?>(null) }
     var restoreFocus by remember { mutableStateOf<DiscoverFilter?>(null) }
     var pendingField by remember { mutableStateOf<DiscoverFilter?>(null) }
+    // Filtro de catálogo de addon aberto no momento (nome do extra), null = nenhum.
+    var extraPicker by rememberSaveable { mutableStateOf<String?>(null) }
+    var restoreExtra by remember { mutableStateOf<String?>(null) }
     var clearing by remember { mutableStateOf(false) }
     val requesters = remember { DiscoverFilter.entries.associateWith { FocusRequester() } }
+    val extraRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val grid = rememberLazyGridState()
     val movie = state.kind == DiscoverViewModel.Kind.MOVIE
     val year = remember { Calendar.getInstance().get(Calendar.YEAR) }
@@ -87,6 +91,14 @@ fun TvDiscoverScreen(
             restoreFocus = null
         }
     }
+    LaunchedEffect(restoreExtra, extraPicker) {
+        val target = restoreExtra
+        if (target != null && extraPicker == null) {
+            withFrameNanos { }
+            runCatching { extraRequesters[target]?.requestFocus() }
+            restoreExtra = null
+        }
+    }
 
     TvText {
         Column(Modifier.fillMaxSize().background(Background)) {
@@ -100,20 +112,34 @@ fun TvDiscoverScreen(
                         fontSize = 2.8.rs, lineHeight = 3.2.rs, letterSpacing = (-0.08).rs)
                 }
                 Text(
-                    if (state.loading) "Atualizando…" else "%,d títulos".format(state.totalResults).replace(',', '.'),
+                    if (state.loading) "Atualizando…" else if (state.totalResults > 0) "%,d títulos".format(state.totalResults).replace(',', '.') else state.catalogLabel,
                     color = TextSecondary, fontSize = 1.rs, modifier = Modifier.padding(end = 1.4.r),
                 )
                 TvButton(if (clearing && state.loading) "Atualizando…" else "Limpar filtros",
                     { clearing = true; pendingField = null; viewModel.clearFilters() }, icon = Icons.Default.Refresh,
                     enabled = state.activeFilterCount > 0 && !state.loading, busy = clearing && state.loading)
             }
+            // Catálogo de addon: os filtros do TMDB somem e entram os que o addon declara
+            // (linha abaixo). O seletor de catálogo só existe com catálogo disponível.
+            val fields = buildList {
+                add(DiscoverFilter.KIND)
+                if (state.catalogs.isNotEmpty() && !state.isKidsProfile) add(DiscoverFilter.CATALOG)
+                if (state.selectedCatalog == null) {
+                    add(DiscoverFilter.SORT)
+                    add(DiscoverFilter.GENRES)
+                    add(DiscoverFilter.YEAR)
+                    add(DiscoverFilter.CERT)
+                    add(DiscoverFilter.RATING)
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = tvPad),
                 horizontalArrangement = Arrangement.spacedBy(0.8.r),
             ) {
-                DiscoverFilter.entries.forEach { field ->
+                fields.forEach { field ->
                     val value = when (field) {
                         DiscoverFilter.KIND -> if (movie) "Filmes" else "Séries"
+                        DiscoverFilter.CATALOG -> state.catalogLabel
                         DiscoverFilter.SORT -> sorts.firstOrNull { it.id == state.sort }?.label ?: "Populares"
                         DiscoverFilter.GENRES -> genreValue
                         DiscoverFilter.YEAR -> state.year?.toString() ?: "Todos"
@@ -122,6 +148,7 @@ fun TvDiscoverScreen(
                     }
                     val selected = when (field) {
                         DiscoverFilter.KIND -> !movie
+                        DiscoverFilter.CATALOG -> state.selectedCatalog != null
                         DiscoverFilter.SORT -> state.sort != DiscoverViewModel.SORT_POPULAR
                         DiscoverFilter.GENRES -> state.selectedGenres.isNotEmpty()
                         DiscoverFilter.YEAR -> state.year != null
@@ -132,13 +159,41 @@ fun TvDiscoverScreen(
                         field.title, value, selected,
                         busy = state.loading && pendingField == field,
                         enabled = (field != DiscoverFilter.CERT || movie) && (field != DiscoverFilter.GENRES || state.genres.isNotEmpty()),
-                        modifier = Modifier.weight(if (field == DiscoverFilter.SORT || field == DiscoverFilter.GENRES) 1.2f else 1f)
+                        modifier = Modifier.weight(if (field == DiscoverFilter.SORT || field == DiscoverFilter.GENRES || field == DiscoverFilter.CATALOG) 1.2f else 1f)
                             .focusRequester(requesters.getValue(field)),
                         onClick = { picker = field },
                     )
                 }
             }
-            val active = genres + listOfNotNull(
+            // Filtros do catálogo de addon (Lote 14): um seletor por extra declarado.
+            // Obrigatório não tem "Todos"; opcional tem.
+            if (state.selectedCatalog != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = tvPad).padding(top = 0.8.r),
+                    horizontalArrangement = Arrangement.spacedBy(0.8.r),
+                ) {
+                    state.addonExtras.forEach { extra ->
+                        val current = state.selectedExtras[extra.name].orEmpty()
+                        val shown = current.ifBlank { if (extra.isRequired) extra.options.firstOrNull().orEmpty() else "Todos" }
+                        val isDefault = extra.isRequired && current == extra.options.firstOrNull() ||
+                            !extra.isRequired && current.isBlank()
+                        FilterSelector(
+                            extra.name, shown, !isDefault,
+                            busy = false, enabled = extra.options.isNotEmpty(),
+                            modifier = Modifier.weight(1f)
+                                .focusRequester(extraRequesters.getOrPut(extra.name) { FocusRequester() }),
+                            onClick = { extraPicker = extra.name },
+                        )
+                    }
+                }
+            }
+            val active = if (state.selectedCatalog != null) {
+                // Só o que mudou do padrão (obrigatório na 1ª opção não conta, como no contador).
+                state.selectedExtras.filter { (name, value) ->
+                    val extra = state.addonExtras.firstOrNull { it.name == name }
+                    extra != null && (!extra.isRequired || value != extra.options.firstOrNull())
+                }.values.toList()
+            } else genres + listOfNotNull(
                 state.year?.toString(), state.cert.takeIf { it.isNotBlank() }?.let { if (it == "L") "Livre" else "$it anos" },
                 state.minRating?.let { "Nota ${it.toInt()} ou mais" },
             )
@@ -151,6 +206,27 @@ fun TvDiscoverScreen(
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading -> TvSpinner("Atualizando catálogo", Modifier.align(Alignment.Center))
+                    state.connectionError -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(3.5.r))
+                        Text("Catálogo vazio", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
+                            fontSize = 1.7.rs, modifier = Modifier.padding(top = 1.r))
+                        Text("Confira a conexão ou escolha outro catálogo", color = TextSecondary, fontSize = 1.1.rs,
+                            modifier = Modifier.padding(top = 0.5.r))
+                    }
+                    state.emptyCatalog -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(3.5.r))
+                        Text("Catálogo vazio", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
+                            fontSize = 1.7.rs, modifier = Modifier.padding(top = 1.r))
+                        Text("Esse catálogo não trouxe títulos com o filtro escolhido. Tente outro filtro ou outro catálogo.", color = TextSecondary, fontSize = 1.1.rs,
+                            modifier = Modifier.padding(top = 0.5.r))
+                    }
+                    state.noTmdbMatch -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(3.5.r))
+                        Text("Sem par no TMDB", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
+                            fontSize = 1.7.rs, modifier = Modifier.padding(top = 1.r))
+                        Text("Os títulos desse catálogo não existem no TMDB, o que é comum em catálogo de anime", color = TextSecondary, fontSize = 1.1.rs,
+                            modifier = Modifier.padding(top = 0.5.r))
+                    }
                     state.items.isEmpty() -> Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(3.5.r))
                         Text("Nada com esses filtros", color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
@@ -176,6 +252,8 @@ fun TvDiscoverScreen(
         picker?.let { field ->
             val options = when (field) {
                 DiscoverFilter.KIND -> listOf(FilterChoice("movie", "Filmes"), FilterChoice("series", "Séries"))
+                DiscoverFilter.CATALOG -> listOf(FilterChoice("", "TMDB · Filtros avançados")) +
+                    state.catalogs.map { FilterChoice(it.key, it.label) }
                 DiscoverFilter.SORT -> sorts
                 DiscoverFilter.GENRES -> state.genres.map { FilterChoice(it.id.toString(), it.name) }
                 DiscoverFilter.YEAR -> listOf(FilterChoice("", "Todos os anos")) + (year downTo 1990).map { FilterChoice(it.toString(), it.toString()) }
@@ -184,6 +262,7 @@ fun TvDiscoverScreen(
             }
             val selected = when (field) {
                 DiscoverFilter.KIND -> setOf(if (movie) "movie" else "series")
+                DiscoverFilter.CATALOG -> setOf(state.selectedCatalog?.key.orEmpty())
                 DiscoverFilter.SORT -> setOf(state.sort)
                 DiscoverFilter.GENRES -> state.selectedGenres.map { it.toString() }.toSet()
                 DiscoverFilter.YEAR -> setOf(state.year?.toString().orEmpty())
@@ -191,13 +270,16 @@ fun TvDiscoverScreen(
                 DiscoverFilter.RATING -> setOf(state.minRating?.toInt()?.toString().orEmpty())
             }
             fun close() { picker = null; restoreFocus = field }
-            FilterPicker(field, options, selected, onDismiss = ::close) { values ->
+            FilterPicker(field.title, options, selected, multi = field == DiscoverFilter.GENRES,
+                columns = if (field == DiscoverFilter.GENRES) 3 else if (field == DiscoverFilter.YEAR) 4 else 2,
+                onDismiss = ::close) { values ->
                 if (values == selected) { close(); return@FilterPicker }
                 pendingField = field
                 clearing = false
                 val value = values.firstOrNull().orEmpty()
                 when (field) {
                     DiscoverFilter.KIND -> viewModel.setKind(if (value == "movie") DiscoverViewModel.Kind.MOVIE else DiscoverViewModel.Kind.SERIES)
+                    DiscoverFilter.CATALOG -> viewModel.selectCatalog(state.catalogs.firstOrNull { it.key == value })
                     DiscoverFilter.SORT -> viewModel.setSort(value)
                     DiscoverFilter.GENRES -> viewModel.setGenres(values.mapNotNull { it.toIntOrNull() }.toSet())
                     DiscoverFilter.YEAR -> if (value.toIntOrNull() != state.year) viewModel.setYear(value.toIntOrNull())
@@ -205,6 +287,22 @@ fun TvDiscoverScreen(
                     DiscoverFilter.RATING -> if (value.toFloatOrNull() != state.minRating) viewModel.setMinRating(value.toFloatOrNull())
                 }
                 close()
+            }
+        }
+        // Picker de um filtro do catálogo de addon (obrigatório sem "Todos").
+        extraPicker?.let { name ->
+            val extra = state.addonExtras.firstOrNull { it.name == name }
+            if (extra != null) {
+                val current = state.selectedExtras[name].orEmpty()
+                val options = (if (extra.isRequired) emptyList() else listOf(FilterChoice("", "Todos"))) +
+                    extra.options.map { FilterChoice(it, it) }
+                val selected = setOf(current)
+                fun close() { extraPicker = null; restoreExtra = name }
+                FilterPicker(name, options, selected, multi = false, columns = 2, onDismiss = ::close) { values ->
+                    val value = values.firstOrNull().orEmpty()
+                    if (value != current) viewModel.setExtra(name, value)
+                    close()
+                }
             }
         }
     }
@@ -240,23 +338,22 @@ private fun FilterSelector(
 
 @Composable
 private fun FilterPicker(
-    field: DiscoverFilter, options: List<FilterChoice>, selected: Set<String>,
+    title: String, options: List<FilterChoice>, selected: Set<String>,
+    multi: Boolean, columns: Int,
     onDismiss: () -> Unit, onConfirm: (Set<String>) -> Unit,
 ) {
-    val multi = field == DiscoverFilter.GENRES
-    var draft by remember(field) { mutableStateOf(selected) }
-    val columns = if (multi) 3 else if (field == DiscoverFilter.YEAR) 4 else 2
+    var draft by remember(title) { mutableStateOf(selected) }
     val firstIndex = options.indexOfFirst { it.id in selected }.coerceAtLeast(0)
     val grid = rememberLazyGridState(initialFirstVisibleItemIndex = (firstIndex / columns) * columns)
     val first = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        LaunchedEffect(field, options.size) { withFrameNanos { }; runCatching { first.requestFocus() } }
+        LaunchedEffect(title, options.size) { withFrameNanos { }; runCatching { first.requestFocus() } }
         Column(
             Modifier.width(62.r).heightIn(max = 39.r).clip(RoundedCornerShape(1.r))
                 .background(BackgroundElevated).border(0.06.r, Border, RoundedCornerShape(1.r)).padding(1.8.r),
         ) {
             TvEyebrow(if (multi) "Selecione os gêneros que você gosta" else "Refine sua busca")
-            Text(field.title, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
+            Text(title, color = TextPrimary, fontFamily = DisplayFont, fontWeight = FontWeight.Bold,
                 fontSize = 2.rs, modifier = Modifier.padding(bottom = 1.2.r))
             TvScrollArea(0.5.r) {
                 LazyVerticalGrid(

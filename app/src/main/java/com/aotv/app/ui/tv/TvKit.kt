@@ -82,6 +82,14 @@ fun remDp(): Float = LocalConfiguration.current.let { tvRem(it.screenWidthDp, it
  * fileira de 1.65rs vai de 13.2 sp para 16.5 sp. */
 const val TV_REM_SCALE = 1.25f
 
+/**
+ * Nº de pôsteres por linha nas grades da TV (Lote 14 item 5, v1.24.0):
+ * Descobrir, Início e pastas das Coleções usam 8 — o pôster grande da TV
+ * (12.5r, w500 via [tvPosterUrl]) não cabe em 10 por linha. Ponto único:
+ * o celular não usa isto (a grade dele continua adaptativa, w342).
+ */
+const val TV_GRID_COLUMNS = 8
+
 internal fun tvRem(widthDp: Int, heightDp: Int): Float =
     (minOf(widthDp / 120f, heightDp / 67.5f) * TV_REM_SCALE).coerceAtLeast(1.25f)
 

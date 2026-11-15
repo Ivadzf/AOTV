@@ -153,6 +153,17 @@ class PlayerProgressViewModel @Inject constructor(
     /** Som de outra fonte salvo para o título, ou null. */
     fun extAudio(key: String): com.aotv.app.data.local.ExtAudioPick? = prefs.extAudioPicks[key]
 
+    /** Atraso do áudio próprio salvo para o título, ou null. */
+    fun ownAudioDelay(key: String): com.aotv.app.data.local.OwnAudioDelay? = prefs.ownAudioDelays[key]
+
+    /** Grava (ou apaga, com 0.0) o atraso do áudio próprio do título. Guarda no máximo 60 títulos. */
+    fun saveOwnAudioDelay(key: String, delaySec: Double) {
+        val all = prefs.ownAudioDelays.toMutableMap()
+        if (delaySec == 0.0) all.remove(key)
+        else all[key] = com.aotv.app.data.local.OwnAudioDelay(delaySec, System.currentTimeMillis())
+        prefs.ownAudioDelays = all
+    }
+
     /** Grava (ou apaga, com [sig] null) a escolha de som do título. Guarda no máximo 60 títulos. */
     fun saveExtAudio(key: String, sig: String?, delaySec: Double) {
         val all = prefs.extAudioPicks.toMutableMap()

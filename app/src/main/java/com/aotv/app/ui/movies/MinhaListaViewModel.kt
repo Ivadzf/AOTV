@@ -80,6 +80,17 @@ class MinhaListaViewModel @Inject constructor(
         }
     }
 
+    /**
+     * "Marcar como assistido" no painel de opções do título (Lote 14,
+     * v1.24.0 — TV e Minha Lista): mesma regra do
+     * [MoviesHomeViewModel.markContinueWatched] (ver
+     * [LibraryRepository.markContinueWatched]). Modo privado não marca nada.
+     */
+    fun markContinueWatched(item: com.aotv.app.domain.model.MovieItem) {
+        if (prefs.privateMode) return
+        viewModelScope.launch { library.markContinueWatched(item.tmdbId) }
+    }
+
     // ── Ainda não assistidos (Lote 11, v1.21.0) ───────────────────────────
     // Títulos da Minha Lista que o perfil ainda NÃO assistiu: sem entrada no
     // histórico de reproduções E, p/ séries, sem nenhum episódio marcado

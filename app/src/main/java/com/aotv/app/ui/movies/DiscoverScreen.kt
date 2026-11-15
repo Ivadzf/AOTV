@@ -12,12 +12,16 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.LocalMovies
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -60,6 +64,7 @@ fun DiscoverScreen(
     val gridState = rememberLazyGridState()
     // Filtros começam abertos. Depois de escolher, o usuário fecha e sobra tela pro resultado.
     var filtersOpen by rememberSaveable { mutableStateOf(true) }
+    var catalogPicker by rememberSaveable { mutableStateOf(false) }
 
     // Scroll infinito: pede a próxima página quando falta pouco pro fim.
     val nearEnd by remember {
@@ -84,6 +89,22 @@ fun DiscoverScreen(
             onBack = onBack,
         )
 
+        // Seletor de catálogo (Lote 14): só aparece quando há catálogo de addon disponível.
+        // Sem addon ligado (ou perfil infantil), nem existe — o Descobrir fica só no TMDB.
+        if (state.catalogs.isNotEmpty() && !state.isKidsProfile) {
+            CatalogBar(
+                label = state.catalogLabel,
+                onPick = { catalogPicker = true },
+            )
+        }
+        if (catalogPicker) {
+            CatalogPickerDialog(
+                state = state,
+                onPick = { viewModel.selectCatalog(it); catalogPicker = false },
+                onDismiss = { catalogPicker = false },
+            )
+        }
+
         LazyVerticalGrid(
             // Celular em pé 3 colunas, tela larga cabe mais (pôster de 112dp ou mais).
             columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidth()),
@@ -103,6 +124,30 @@ fun DiscoverScreen(
                     Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Accent, strokeWidth = 3.dp)
                     }
+                }
+
+                state.connectionError -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    AotvEmptyState(
+                        icon = Icons.Outlined.LocalMovies,
+                        title = "Catálogo vazio",
+                        message = "Confira a conexão ou escolha outro catálogo",
+                    )
+                }
+
+                state.emptyCatalog -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    AotvEmptyState(
+                        icon = Icons.Outlined.LocalMovies,
+                        title = "Catálogo vazio",
+                        message = "Esse catálogo não trouxe títulos com o filtro escolhido. Tente outro filtro ou outro catálogo.",
+                    )
+                }
+
+                state.noTmdbMatch -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    AotvEmptyState(
+                        icon = Icons.Outlined.LocalMovies,
+                        title = "Sem par no TMDB",
+                        message = "Os títulos desse catálogo não existem no TMDB, o que é comum em catálogo de anime",
+                    )
                 }
 
                 state.items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
@@ -137,6 +182,25 @@ fun DiscoverScreen(
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ActiveFiltersBar(state: DiscoverViewModel.UiState, vm: DiscoverViewModel) {
+    // Catálogo de addon: os chips ativos são os filtros do addon (tocar volta o
+    // obrigatório p/ a 1ª opção e limpa o opcional).
+    if (state.selectedCatalog != null) {
+        if (state.activeFilterCount == 0) { Spacer(Modifier.height(2.dp)); return }
+        FlowRow(
+            Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            state.selectedExtras.forEach { (name, value) ->
+                val extra = state.addonExtras.firstOrNull { it.name == name } ?: return@forEach
+                val isDefault = extra.isRequired && value == extra.options.firstOrNull()
+                if (!isDefault) FilterChipPill(value, true, onClick = {
+                    vm.setExtra(name, if (extra.isRequired) extra.options.firstOrNull().orEmpty() else "")
+                })
+            }
+        }
+        return
+    }
     if (state.activeFilterCount == 0) { Spacer(Modifier.height(2.dp)); return }
     FlowRow(
         Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -238,6 +302,11 @@ private fun DiscoverTopBar(
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun FiltersPanel(state: DiscoverViewModel.UiState, vm: DiscoverViewModel) {
+    // Catálogo de addon: os filtros do TMDB somem e entram os que o addon declara.
+    if (state.selectedCatalog != null) {
+        AddonFiltersPanel(state, vm)
+        return
+    }
     val isMovie = state.kind == DiscoverViewModel.Kind.MOVIE
     // Painel é uma superfície só, com borda e fundo próprios. Antes as seções ficavam soltas
     // sobre o fundo da tela e não dava pra saber onde o filtro acabava e o resultado começava.
@@ -312,6 +381,164 @@ private fun FiltersPanel(state: DiscoverViewModel.UiState, vm: DiscoverViewModel
 @Composable
 private fun FilterDivider() {
     Box(Modifier.fillMaxWidth().height(1.dp).background(Border.copy(alpha = 0.6f)))
+}
+
+/**
+ * Filtros do catálogo de addon (Lote 14): Tipo (Filmes/Séries mantém o mesmo addon) +
+ * um grupo por filtro que o addon declara. Filtro OBRIGATÓRIO abre na 1ª opção, sem
+ * "Todos"; opcional ganha o chip "Todos" na frente. Até 1.000 opções por filtro.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun AddonFiltersPanel(state: DiscoverViewModel.UiState, vm: DiscoverViewModel) {
+    val isMovie = state.kind == DiscoverViewModel.Kind.MOVIE
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 14.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(BackgroundCard)
+            .border(1.dp, Border, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 4.dp),
+    ) {
+        FilterGroup("Tipo", wrap = true) {
+            FilterChipPill("Filmes", isMovie, onClick = { vm.setKind(DiscoverViewModel.Kind.MOVIE) })
+            FilterChipPill("Séries", state.kind == DiscoverViewModel.Kind.SERIES,
+                onClick = { vm.setKind(DiscoverViewModel.Kind.SERIES) })
+        }
+        state.addonExtras.forEach { extra ->
+            FilterDivider()
+            // Poucas opções quebram linha; muitas rolam na horizontal.
+            val wrap = extra.options.size <= 12
+            val options = extra.options.take(com.aotv.app.data.remote.AddonLinks.MAX_FILTER_OPTIONS)
+            val current = state.selectedExtras[extra.name].orEmpty()
+            FilterGroup(extra.name, wrap = wrap, count = if (current.isNotBlank()) 1 else 0) {
+                if (!extra.isRequired) {
+                    FilterChipPill("Todos", current.isBlank(), onClick = { vm.setExtra(extra.name, "") })
+                }
+                options.forEach { option ->
+                    FilterChipPill(option, current == option, onClick = { vm.setExtra(extra.name, option) })
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+/**
+ * Linha do seletor de catálogo: o catálogo atual + o botão "Selecionar catálogo".
+ * Só existe quando há catálogo de addon disponível (ver DiscoverScreen).
+ */
+@Composable
+private fun CatalogBar(label: String, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            label,
+            color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            fontFamily = ManropeFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(FillSubtle)
+                .border(1.dp, Border, RoundedCornerShape(999.dp))
+                .clickable(onClick = onPick)
+                .padding(start = 14.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                "Selecionar catálogo",
+                color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                fontFamily = ManropeFontFamily,
+            )
+            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = TextTertiary, modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/** Diálogo do seletor: TMDB primeiro, depois os catálogos dos addons por tipo. */
+@Composable
+private fun CatalogPickerDialog(
+    state: DiscoverViewModel.UiState,
+    onPick: (com.aotv.app.data.remote.AddonDiscoverCatalog?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val movies = state.catalogs.filter { it.type == "movie" }
+    val series = state.catalogs.filter { it.type == "series" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BackgroundCard,
+        title = { Text("Selecionar catálogo", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                CatalogOptionRow(
+                    label = "TMDB · Filtros avançados",
+                    selected = state.selectedCatalog == null,
+                    onClick = { onPick(null) },
+                )
+                if (movies.isNotEmpty()) {
+                    Text(
+                        "Filmes dos seus addons",
+                        color = TextTertiary, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                        fontFamily = ManropeFontFamily,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                    )
+                    movies.forEach { catalog ->
+                        CatalogOptionRow(
+                            label = catalog.label,
+                            selected = state.selectedCatalog == catalog,
+                            onClick = { onPick(catalog) },
+                        )
+                    }
+                }
+                if (series.isNotEmpty()) {
+                    Text(
+                        "Séries dos seus addons",
+                        color = TextTertiary, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+                        fontFamily = ManropeFontFamily,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                    )
+                    series.forEach { catalog ->
+                        CatalogOptionRow(
+                            label = catalog.label,
+                            selected = state.selectedCatalog == catalog,
+                            onClick = { onPick(catalog) },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+    )
+}
+
+@Composable
+private fun CatalogOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) AccentSoft else FillSubtle)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            label,
+            color = TextPrimary, fontSize = 14.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            fontFamily = ManropeFontFamily, modifier = Modifier.weight(1f),
+        )
+        if (selected) Icon(Icons.Default.Check, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+    }
 }
 
 /**

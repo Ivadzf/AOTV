@@ -107,6 +107,12 @@ private fun TvHomeScreenBody(
     var trailerCard by remember { mutableStateOf<MoviesHomeViewModel.TrailerCard?>(null) }
     var trailerTitle by remember { mutableStateOf("") }
     var trailerBusy by remember { mutableStateOf(false) }
+    // Painel de opções do título (Lote 14, v1.24.0): segurar OK no card do
+    // Continuar abre Ir para detalhes / Marcar como assistido / Remover.
+    // O "Remover" do painel cai na confirmação abaixo (mesmo padrão da TV
+    // Minha Lista); "Marcar" some com canal ao vivo (embedId "live|...").
+    var titleOptions by remember { mutableStateOf<MovieItem?>(null) }
+    var confirmRemove by remember { mutableStateOf<MovieItem?>(null) }
     fun playCard(card: MoviesHomeViewModel.TrailerCard) {
         if (trailerBusy) return
         trailerBusy = true
@@ -198,7 +204,8 @@ private fun TvHomeScreenBody(
                     contentPadding = PaddingValues(bottom = 4.r),
                 ) {
                     homeRails(state, viewModel, onItemClick, onFocus = { focusedItem = it }, onTrailer = ::playCard,
-                        collections = collections, onFolderClick = onFolderClick)
+                        collections = collections, onFolderClick = onFolderClick,
+                        onTitleOptions = { titleOptions = it })
                 }
             }
         }
@@ -224,6 +231,27 @@ private fun TvHomeScreenBody(
                     }
                 },
                 onNext = next?.let { n -> { trailer = null; playCard(n) } },
+            )
+        }
+        // Painel de opções do título + confirmação do remover (Lote 14, v1.24.0).
+        titleOptions?.let { item ->
+            TvTitleOptionsPanel(
+                item = item,
+                showMarkWatched = !item.embedId.startsWith("live|"),
+                onDismiss = { titleOptions = null },
+                onGoToDetails = { onItemClick(item) },
+                onMarkWatched = { viewModel.markContinueWatched(item) },
+                onRemove = { confirmRemove = item },
+            )
+        }
+        confirmRemove?.let { item ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmRemove = null },
+                title = { Text("Remover de Continuar assistindo?") },
+                text = { Text(item.title) },
+                confirmButton = { TvButton("Remover", { viewModel.removeFromContinue(item.tmdbId, item.type.name); confirmRemove = null }, primary = true) },
+                dismissButton = { TvButton("Cancelar", { confirmRemove = null }) },
+                containerColor = BackgroundCard,
             )
         }
     }
@@ -381,6 +409,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
     onTrailer: (MoviesHomeViewModel.TrailerCard) -> Unit,
     collections: List<MediaCollection>,
     onFolderClick: (String, String) -> Unit,
+    /** Segurar OK no card do Continuar abre o painel de opções (Lote 14, v1.24.0). */
+    onTitleOptions: (MovieItem) -> Unit = {},
 ) {
     state.layout.forEach { row ->
         when (row.system) {
@@ -391,6 +421,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
                             item, { onItemClick(item) }, artwork = state.continueArtwork[posterKey(item)],
                             progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
                             episode = state.continueEpisode[item.tmdbId].orEmpty(), onFocus = { onFocus(item) },
+                            // Segurar OK abre o painel de opções (Lote 14, v1.24.0).
+                            onLongClick = { onTitleOptions(item) },
                         )
                     }
                 }

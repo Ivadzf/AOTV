@@ -99,6 +99,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
+import kotlin.math.roundToLong
 
 import com.aotv.app.data.live.LiveSource
 import com.aotv.app.data.live.LiveTvRepository
@@ -718,6 +719,26 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         delay(450)
         extSync?.setDelay(audioDelay)
         if (extUrl != null) saveExt()
+        else {
+            // Áudio próprio (Lote 14 item 3): o atraso vai p/ o processador de PCM e fica salvo por título.
+            ownAudioDelayProcessor.setDelayMs((audioDelay * 1000).roundToLong())
+            if (audioDelay != 0.0 || progressVm.ownAudioDelay(extKey) != null) saveOwnAudio()
+        }
+    }
+    // Lote 14 item 4 — folha de fontes estável: anota cada leva de fontes e,
+    // sem fonte nova há 1,5 s, fotografa o ranking uma única vez. O efeito
+    // recomeça a cada lista nova, então o prazo só vence com a busca quieta.
+    LaunchedEffect(currentSources) {
+        noteSourcesArrived()
+        delay(1500)
+        markSourcesSettled()
+    }
+    // Lote 14 item 4 — quem focou numa fonte da folha nunca tem a ordem mudada sozinha:
+    // o foco do D-pad marca a fonte como tocada (o toque marca no onPick da ação).
+    LaunchedEffect(sourcePanelOpen, panelKind, sourcePanelIdx) {
+        if (!sourcePanelOpen || panelKind != "sources") return@LaunchedEffect
+        val url = sourceActions.getOrNull(sourcePanelIdx)?.stream?.url
+        if (!url.isNullOrBlank()) markSourceTouched(url)
     }
     // Transmitindo, o som vai pela TV. Desliga o da outra fonte.
     LaunchedEffect(casting) { if (casting) dropExt() }
@@ -1125,9 +1146,14 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                     }
                 }
                 // Barra de sincronia do som. Setas mudam o atraso e segurar acelera.
+                // Áudio próprio (Lote 14 item 3): só atrasa (0 a +10 s) — o passo
+                // negativo diminui o atraso até zero, nunca abaixo dele.
                 if (syncBarOpen) {
                     val r = ev.nativeKeyEvent.repeatCount
-                    fun shift(base: Double) { audioDelay = addDelay(audioDelay, syncStep(base, r)) }
+                    fun shift(base: Double) {
+                        audioDelay = if (extUrl != null) addDelay(audioDelay, syncStep(base, r))
+                        else addDelay(audioDelay, syncStep(base, r)).coerceIn(0.0, OWN_AUDIO_DELAY_MAX_SEC)
+                    }
                     when (kc) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> shift(-0.05)
                         KeyEvent.KEYCODE_DPAD_RIGHT -> shift(0.05)
@@ -1139,7 +1165,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         KeyEvent.KEYCODE_PROG_RED -> audioDelay = 0.0
                         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_SPACE -> togglePlay()
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                            syncBarOpen = false; saveExt()
+                            syncBarOpen = false; if (extUrl != null) saveExt() else saveOwnAudio()
                         }
                     }
                     controlsVisible = false
@@ -1527,13 +1553,19 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
             onChooseSource = if (currentSources.size > 1) ({ sourceFailed = false; openDpadPanel("sources") }) else null,
         )
 
-        if (syncBarOpen && extUrl != null && !inPip && !locked) {
+        // Barra de sincronia do som (Lote 14 item 3): renderiza também p/ o áudio
+        // próprio, sem som de outra fonte — aí ajusta o atraso do PCM (só atrasa).
+        if (syncBarOpen && !inPip && !locked) {
             SyncBar(
                 delaySec = audioDelay,
-                onShift = { audioDelay = addDelay(audioDelay, it) },
+                onShift = {
+                    audioDelay = if (extUrl != null) addDelay(audioDelay, it)
+                    else addDelay(audioDelay, it).coerceIn(0.0, OWN_AUDIO_DELAY_MAX_SEC)
+                },
                 onBack5 = { seekBy(-5_000); controlsVisible = false },
                 onZero = { audioDelay = 0.0 },
-                onClose = { syncBarOpen = false; saveExt() },
+                onClose = { syncBarOpen = false; if (extUrl != null) saveExt() else saveOwnAudio() },
+                ownAudio = extUrl == null,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -1911,7 +1943,13 @@ class PlayerSession(
     var extSync by run { mutableStateOf<ExtAudioSync?>(null) }
     var extUrl by run { mutableStateOf<String?>(null) }
     var extHeld by run { mutableStateOf(false) }
-    var audioDelay by run { mutableDoubleStateOf(0.0) }
+    // Sincronia do áudio próprio (Lote 14 item 3, v1.24.0): [audioDelay] é o
+    // valor exibido nos dois casos — com som de outra fonte ele é o atraso
+    // do som externo, sem ele é o atraso do áudio próprio (salvo por
+    // título, como o ExtAudioPick; 0 = sincronia original). O processador
+    // que atrasa o PCM vive na sessão p/ o player ser criado com ele.
+    val ownAudioDelayProcessor = AudioDelayProcessor()
+    var audioDelay by run { mutableDoubleStateOf(progressVm.ownAudioDelay(extKey)?.delaySec ?: 0.0) }
     var syncBarOpen by run { mutableStateOf(false) }
     var extRestored by run { mutableStateOf(false) }
     val extKey get() = "$type:$tmdbId"
@@ -2019,6 +2057,17 @@ class PlayerSession(
     var chipsExpanded by run { mutableStateOf(false) }
     /** Folha de fontes em ranking (melhor → pior) nesta sessão; espelha a pref `pref_player_sources_ranked`. */
     var sourcesRanked by run { mutableStateOf(false) }
+    // ── Lote 14 item 4 — folha de fontes estável durante a busca (v1.24.0) ──
+    /** Ordem congelada da folha (URLs na ordem em que apareceram). Novas entram no fim. */
+    var sourceSheetOrder by run { mutableStateOf<List<String>>(emptyList()) }
+    /** Chave do título/episódio da ordem congelada; trocar de episódio zera a ordem. */
+    var sourceSheetOrderKey by run { mutableStateOf("") }
+    /** Busca assentada: sem fonte nova há 1,5 s (ver o efeito em PlayerSourceEffects). */
+    var sourcesSettled by run { mutableStateOf(false) }
+    /** Ranking fotografado no assentamento (URLs, melhor → pior); null = ainda não assentou. */
+    var sourceSettledOrder by run { mutableStateOf<List<String>?>(null) }
+    /** URLs que o usuário tocou/focou na folha — nunca mudam de lugar sozinhas. */
+    var sourceTouchedUrls by run { mutableStateOf<Set<String>>(emptySet()) }
     /** Salva a vista da folha no perfil (ligado pela tela a [PlayerPrefsViewModel.setSourcesRanked]). */
     var onSourcesRankedChange: (Boolean) -> Unit = {}
     /** Repo da TV ao vivo p/ o On Demand da folha (ligado pela tela; null = sem repo). */
@@ -2094,7 +2143,7 @@ class PlayerSession(
             .build()
         try {
             ExoPlayer.Builder(context)
-                .setRenderersFactory(decoderRenderersFactory(context, decoderMode))
+                .setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setMediaSourceFactory(mediaSourceFactory(context))
                 .setAudioAttributes(audioAttrs, true)
@@ -2113,11 +2162,15 @@ class PlayerSession(
                         .build()
                 }
         } catch (_: Exception) {
-            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode))
+            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
                 .build().apply { playWhenReady = true }
         }
+    }.also {
+        // Sincronia do áudio próprio (Lote 14 item 3): o atraso salvo vale
+        // desde o 1º quadro, sem esperar o efeito debounced de 450 ms.
+        ownAudioDelayProcessor.setDelayMs((audioDelay * 1000).roundToLong())
     }
     // Controle pela tela bloqueada, fone Bluetooth e Google Assistant. Só o player LOCAL —
     // o Cast tem a própria sessão separada via Google Cast framework.
@@ -2315,13 +2368,26 @@ class PlayerSession(
         val src = currentSources.firstOrNull { it.url == extUrl }
         progressVm.saveExtAudio(extKey, src?.let { sourceSig(it, title) }, audioDelay)
     }
-    fun dropExt() {
+    /** Grava o atraso do áudio próprio do título (só o atraso; 0.0 apaga o registro). */
+    fun saveOwnAudio() {
+        progressVm.saveOwnAudioDelay(extKey, audioDelay)
+    }
+    /**
+     * Volta [audioDelay] p/ o atraso do áudio próprio salvo do título
+     * (Lote 14 item 3). Chamado quando o som de outra fonte sai: sem
+     * isso, o atraso do som externo ficaria valendo p/ o áudio próprio.
+     */
+    fun restoreOwnAudioDelay() {
+        audioDelay = progressVm.ownAudioDelay(extKey)?.delaySec ?: 0.0
+    }
+    fun dropExt(restoreOwn: Boolean = true) {
         extSync?.release()
         extSync = null; extUrl = null; extHeld = false; syncBarOpen = false
+        if (restoreOwn) restoreOwnAudioDelay()
     }
     /** Liga o som de [src] com a imagem atual. [onDone] diz se deu certo. */
     fun setExt(src: MoviePlayerSource, onDone: (Boolean) -> Unit) {
-        dropExt()
+        dropExt(restoreOwn = false)
         val ext = ExoPlayer.Builder(context).setMediaSourceFactory(mediaSourceFactory(context)).build().apply {
             // Só o som. Sem decodificar imagem nem legenda.
             trackSelectionParameters = trackSelectionParameters.buildUpon()
@@ -2691,6 +2757,85 @@ class PlayerSession(
         return out
     }
 
+    // ── Lote 14 item 4 — folha de fontes estável durante a busca (v1.24.0) ──
+    // Por que precisou de fix (NÃO estava certa): o `merge()` das séries
+    // põe as fontes novas NA FRENTE (`novas + sobras`) e o `rankedSourceOrder()`
+    // é recalculado a cada recomposição a partir dos `facts()` — cada probe
+    // que completa (ou addon que responde) reordenava a folha no meio da
+    // busca, exatamente o que o JOTV tirou na 1.0.20 (análise §4.3).
+    /** Chave da ordem congelada da folha: título + episódio atual. */
+    fun sourceOrderKey() = "$type:$tmdbId:$curSeason:$curEpisode"
+
+    /**
+     * Anota as fontes que chegaram: a ordem congelada só cresce no fim —
+     * o que já apareceu fica onde está. Trocar de episódio zera tudo
+     * (ordem, assentamento e toques). Chamar a cada lista nova (o efeito
+     * em PlayerSourceEffects faz isso).
+     */
+    fun noteSourcesArrived() {
+        val key = sourceOrderKey()
+        val urls = currentSources.map { it.url }
+        if (key != sourceSheetOrderKey) {
+            sourceSheetOrderKey = key
+            sourceSheetOrder = urls
+            sourcesSettled = false
+            sourceSettledOrder = null
+            sourceTouchedUrls = emptySet()
+            return
+        }
+        val known = sourceSheetOrder.toSet()
+        val newcomers = urls.filter { it !in known }
+        if (newcomers.isNotEmpty()) {
+            sourceSheetOrder = sourceSheetOrder + newcomers
+            // Leva nova: o ranking fotografado não vale mais — fotografa de novo no próximo assentamento.
+            sourcesSettled = false
+            sourceSettledOrder = null
+        }
+    }
+
+    /**
+     * Assentou (sem fonte nova há 1,5 s): fotografa o ranking uma única
+     * vez por leva. O ranking continua sendo o [rankedSourceOrder] — só
+     * não é recalculado a cada probe/addon que chega.
+     */
+    fun markSourcesSettled() {
+        if (sourceSettledOrder != null) return
+        sourceSettledOrder = rankedSourceOrder().mapNotNull { currentSources.getOrNull(it)?.url }
+        sourcesSettled = true
+    }
+
+    /** Marca a fonte como tocada/focada pelo usuário na folha. */
+    fun markSourceTouched(url: String) {
+        if (url.isBlank() || url in sourceTouchedUrls) return
+        sourceTouchedUrls = sourceTouchedUrls + url
+    }
+
+    /**
+     * Ordem de exibição da folha (índices em [currentSources]).
+     * Antes de assentar: ordem de chegada (congelada + novas no fim).
+     * Depois de assentar: o ranking fotografado, com as fontes que
+     * chegaram depois no fim. Quem o usuário tocou/focou fica na posição
+     * em que apareceu, mesmo depois do ranking. Identidade por URL (o
+     * mesmo pressuposto do `merge()`: a URL identifica a fonte).
+     */
+    fun stableSourceOrder(): List<Int> {
+        val urls = currentSources.map { it.url }
+        if (urls.isEmpty()) return emptyList()
+        val frozen = sourceSheetOrder.filter { it in urls }
+        val newcomers = urls.filter { it !in frozen }
+        val shown = frozen + newcomers
+        val snap = sourceSettledOrder
+        val base = if (snap == null) shown
+        else snap.filter { it in urls } + newcomers.filter { it !in snap }
+        val touched = sourceTouchedUrls.filter { it in urls }
+        if (touched.isEmpty()) return base.map { urls.indexOf(it) }
+        val rest = base.filter { it !in touched }.toMutableList()
+        touched.sortedBy { frozen.indexOf(it) }.forEach { url ->
+            rest.add(frozen.indexOf(url).coerceIn(0, rest.size), url)
+        }
+        return rest.map { urls.indexOf(it) }
+    }
+
     /** Palavras do título p/ casar com o On Demand (minúsculas, sem pontuação). */
     private fun vodTitleWords(t: String): List<String> =
         t.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 1 }
@@ -2832,7 +2977,12 @@ class PlayerSession(
     // Painel D-pad separado por tipo: "sources" (fontes+episódios), "subs" (legendas), "audio".
     val sourceActions: List<TvPlayerAction> get() {
         val playing = currentSources.getOrNull(currentSourceIdx)?.url
-        val groups = groupReleases(currentSources.map { it.stream ?: com.aotv.app.data.remote.StremioStream(it.label, it.url, it.addon,
+        // Lote 14 item 4: os grupos seguem a ordem congelada da folha (ver
+        // [stableSourceOrder]) — a ordem de chegada dos addons não reordena
+        // nada. O `sortedByDescending` abaixo só move o grupo da fonte que
+        // está TOCANDO p/ o topo, e só quando a fonte em reprodução muda
+        // (escolha do usuário ou troca automática), nunca pela busca.
+        val groups = groupReleases(stableSourceOrder().map { idx -> currentSources[idx] }.map { it.stream ?: com.aotv.app.data.remote.StremioStream(it.label, it.url, it.addon,
             qualityRank = com.aotv.app.data.remote.qualityRankOf(it.label)) })
             .sortedByDescending { g -> g.members.any { it.url == playing } }
         return buildList {
@@ -2851,7 +3001,9 @@ class PlayerSession(
                 // pior (mesmo escore do bestSourceIndex — ver
                 // [rankedSourceOrder]). A #1 leva o "Melhor fonte" do
                 // detalhe; a que está tocando segue marcada como ativa.
-                val order = rankedSourceOrder()
+                // Lote 14 item 4: a ordem é a estável ([stableSourceOrder]) —
+                // o ranking vale uma única vez, no assentamento da busca.
+                val order = stableSourceOrder()
                 order.take(sourceLimit).forEachIndexed { rank, idx ->
                     val src = currentSources.getOrNull(idx) ?: return@forEachIndexed
                     val stream = src.stream ?: com.aotv.app.data.remote.StremioStream(src.label, src.url, src.addon,
@@ -2860,6 +3012,7 @@ class PlayerSession(
                     add(TvPlayerAction(src.label, true, src.url == playing, addon = src.addon, stream = stream,
                         sub = "#${rank + 1}" + (if (best) " · Melhor fonte" else "") + " · " + src.addon,
                         header = if (rank == 0) "Ranking da melhor para a pior" else "") {
+                        markSourceTouched(src.url)
                         if (src.url != playing) applyMovieSource(idx, manual = true)
                     })
                 }
@@ -2871,6 +3024,7 @@ class PlayerSession(
                     val src = group.members.firstOrNull { it.url == playing } ?: group.lead
                     add(TvPlayerAction(src.label, true, active, addon = src.addon, stream = src,
                         providers = group.members.map { it.addon }.distinct()) {
+                        markSourceTouched(src.url)
                         if (!active) applyMovieSource(currentSources.indexOfFirst { it.url == src.url }, manual = true)
                     })
                 }
@@ -3002,9 +3156,12 @@ class PlayerSession(
                 }
             })
         }
-        if (ext != null) add(TvPlayerAction(
+        // Sincronia do som (Lote 14 item 3): a ação existe também sem som de
+        // outra fonte — aí ela abre a barra p/ o áudio próprio (só atrasa).
+        add(TvPlayerAction(
             "Ajustar sincronia", false, false, header = "Sincronia do som",
-            sub = audioDelayLabel(audioDelay) + "  ·  o filme continua tocando",
+            sub = if (ext != null) audioDelayLabel(audioDelay) + "  ·  o filme continua tocando"
+            else audioDelayLabel(audioDelay) + "  ·  áudio da própria fonte (só atrasa o som)",
         ) { syncBarOpen = true; controlsVisible = false })
     }
     val speedActions get() = speeds.mapIndexed { i, speed ->

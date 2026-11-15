@@ -238,6 +238,66 @@ class LibraryRepository @Inject constructor(
         )
     }
 
+    /**
+     * Marca VARIOS episodios da mesma temporada como vistos, tudo ou nada
+     * (Lote 14, v1.24.0 — painel de opções do episódio: "anteriores" e
+     * "temporada"). Só marca o que o chamador passou — em geral os números
+     * que existem no catálogo local da tela de detalhe; nada é inventado.
+     */
+    suspend fun markEpisodesWatched(seriesTmdbId: Int, season: Int, episodes: List<Int>, profileId: String? = null) {
+        if (episodes.isEmpty()) return
+        val target = profileId ?: pid
+        val now = System.currentTimeMillis()
+        db.withTransaction {
+            episodes.forEach { ep ->
+                watchedEpisodeDao.markWatched(
+                    WatchedEpisodeEntity(target, seriesTmdbId, season, ep, now)
+                )
+            }
+        }
+    }
+
+    /**
+     * "Marcar como assistido" no cartão do Continuar assistindo (Lote 14,
+     * v1.24.0 — painel de opções do título). Reusa o mecanismo que já tira
+     * um título terminado da fileira ([MoviesHomeViewModel.resolveHistoryItem]):
+     * filme completa o progresso (posição = duração → some do Continuar);
+     * série marca o episódio em andamento como visto E completa o progresso
+     * (→ avança p/ o próximo episódio, ou some se era o último). Sem duração
+     * conhecida não há progresso p/ completar: o filme sai do Continuar do
+     * mesmo jeito (nada mais há p/ marcar) e a série só marca o episódio.
+     * Ao vivo (type LIVE) não tem "assistido" — devolve false sem mexer.
+     * Devolve se fez alguma coisa.
+     */
+    suspend fun markContinueWatched(tmdbId: Int): Boolean {
+        val row = recentlyPlayedNow().firstOrNull { it.tmdbId == tmdbId } ?: return false
+        if (row.type == "LIVE") return false
+        if (row.type == "SERIES") {
+            val m = Regex("T(\\d+):E(\\d+)").find(row.lastEpisode)
+            val season = m?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val episode = m?.groupValues?.getOrNull(2)?.toIntOrNull()
+            if (season != null && episode != null && season > 0 && episode > 0) {
+                markEpisodeWatched(row.tmdbId, season, episode)
+            }
+            if (row.durationMs > 0) {
+                saveProgress(row.tmdbId, row.type, row.title, row.posterUrl,
+                    positionMs = row.durationMs, durationMs = row.durationMs,
+                    lastEpisode = row.lastEpisode, lastSourceUrl = row.lastSourceUrl, lastAddon = row.lastAddon)
+                return true
+            }
+            return season != null && episode != null
+        }
+        // Filme (ou outro tipo com progresso): completa o progresso.
+        if (row.durationMs > 0) {
+            saveProgress(row.tmdbId, row.type, row.title, row.posterUrl,
+                positionMs = row.durationMs, durationMs = row.durationMs,
+                lastEpisode = row.lastEpisode, lastSourceUrl = row.lastSourceUrl, lastAddon = row.lastAddon)
+            return true
+        }
+        removePlaybackAnyType(row.tmdbId, row.type)
+        return true
+    }
+
     /** Desmarca um episodio (remove de vistos). */
     suspend fun unmarkEpisodeWatched(seriesTmdbId: Int, season: Int, episode: Int) =
         watchedEpisodeDao.unmark(pid, seriesTmdbId, season, episode)
