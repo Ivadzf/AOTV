@@ -114,7 +114,12 @@ android {
         buildConfig = true
     }
     // Nativo do torrent comprimido no APK (sem isso o APK cresce uns 27 MB).
-    packaging { jniLibs { useLegacyPackaging = true } }
+    // META-INF/INDEX.LIST: as libs do Google Drive (v1.20.0) trazem o arquivo
+    // em 2 jars com conteúdo diferente — o merge aborta sem esta exclusão.
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+        resources { excludes += "META-INF/INDEX.LIST" }
+    }
 }
 
 // Runtime Python dos addons Kodi (v1.1, Fase 0 — spike). Chaquopy 17.2.0.
