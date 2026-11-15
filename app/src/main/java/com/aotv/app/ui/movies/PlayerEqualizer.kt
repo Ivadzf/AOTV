@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -290,7 +291,7 @@ private fun EqActionRow(
             Text(sub, color = TextTertiary, fontSize = 13.sp)
         }
         if (active) androidx.compose.material3.Icon(
-            androidx.compose.material.icons.filled.Check, "Ativo", tint = Accent, modifier = Modifier.size(20.dp),
+            Icons.Default.Check, "Ativo", tint = Accent, modifier = Modifier.size(20.dp),
         )
     }
 }
