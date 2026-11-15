@@ -49,9 +49,11 @@ import com.aotv.app.ui.theme.TextSecondary
 private fun OptionsRow(
     label: String,
     icon: ImageVector,
-    onClick: () -> Unit,
     destructive: Boolean = false,
+    onClick: () -> Unit,
 ) {
+    // onClick por último de propósito: as chamadas usam trailing lambda
+    // (build #251: com onClick no meio, a lambda caía em `destructive`).
     Row(
         Modifier.fillMaxWidth()
             .clickable(onClick = onClick)
