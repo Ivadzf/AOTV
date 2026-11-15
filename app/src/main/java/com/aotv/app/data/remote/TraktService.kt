@@ -76,11 +76,12 @@ data class TraktScrobblePayload(
 )
 
 /** Tipo comum de filme/série do Trakt — sem ele, `e.movie ?: e.show` vira Any e
- *  `m.ids/title/year` não resolve (build #231). */
+ *  `m.ids/title/year` não resolve (build #231/#232). Vale p/ os Refs (scrobble,
+ *  ids não-nulo) e p/ os History (watchlist/playback, ids anulável). */
 interface TraktMediaRef {
     val title: String?
     val year: Int?
-    val ids: TraktIds
+    val ids: TraktIds?
 }
 
 data class TraktMovieRef(
@@ -111,16 +112,16 @@ data class TraktHistoryEntry(
 )
 
 data class TraktHistoryMovie(
-    @SerializedName("title") val title: String? = null,
-    @SerializedName("year") val year: Int? = null,
-    @SerializedName("ids") val ids: TraktIds? = null,
-)
+    @SerializedName("title") override val title: String? = null,
+    @SerializedName("year") override val year: Int? = null,
+    @SerializedName("ids") override val ids: TraktIds? = null,
+) : TraktMediaRef
 
 data class TraktHistoryShow(
-    @SerializedName("title") val title: String? = null,
-    @SerializedName("year") val year: Int? = null,
-    @SerializedName("ids") val ids: TraktIds? = null,
-)
+    @SerializedName("title") override val title: String? = null,
+    @SerializedName("year") override val year: Int? = null,
+    @SerializedName("ids") override val ids: TraktIds? = null,
+) : TraktMediaRef
 
 data class TraktHistoryEpisode(
     @SerializedName("season") val season: Int = 0,
