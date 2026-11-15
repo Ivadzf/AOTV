@@ -80,6 +80,7 @@ internal val SCOPED_KEYS = listOf(
     "trakt_enabled_v1", "trakt_user_v1",
     "home_layout_v1", "home_hero_v1", "pref_subtitle_on", "pref_sub_lang", "collections_v1",
     "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
+    "pref_poster_quality_badges",
     "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
     "pref_detail_cinematic", "pref_detail_poster_transition", "pref_detail_icon_actions",
     "pref_detail_tabs", "pref_detail_episode_style", "pref_detail_episode_ratings",
@@ -90,6 +91,9 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
     "pref_player_auto_switch", "pref_player_source_timeout",
+    // Lote 11 — Guarda de duração (v1.21.0): avisar antes de tocar um
+    // arquivo cuja duração destoa >10% da do título no TMDB.
+    "pref_duration_guard",
     "pref_player_animeskip_client_id", "pref_player_speed", "pref_player_swipe_seek",
     // Lote 4 — Player parte 2 (v1.12.0): idioma de áudio preferido, reutilizar
     // a última fonte do título e o mapa da última fonte escolhida por título.
@@ -143,6 +147,14 @@ internal val SCOPED_KEYS = listOf(
     "live_show_logos", "live_show_names", "live_show_numbers", "live_clean_group_names",
     "live_backup_channel", "live_in_continue", "live_remember_audio", "live_catchup_hls",
     "live_audio_v1", "live_group_favorites_v1",
+    // Lote 11 (v1.21.0) — PIN parental por grupo (Frente 2): grupos de canais
+    // trancados com PIN (lista de nomes de grupo, por perfil). O PIN em si é
+    // o PIN dos pais do aparelho ("parental_pin_hash", segredo global — ver
+    // AotvBackup.SECRET_GLOBAL_KEYS); só os NOMES dos grupos viajam aqui.
+    "live_locked_groups_v1",
+    // Lote 11 (v1.21.0) — Blur anti-spoiler (Frente 2): borrar arte e esconder
+    // título/sinopse dos episódios não assistidos no detalhe da série.
+    "pref_detail_spoiler_blur",
     // Lote 10 — VPN (v1.20.0): perfis trazidos pelo usuário. A Frente 3 (VPN)
     // é dona de quem ESCREVE estas chaves; o backup/sync só as CARREGA no
     // payload (o mesmo JSON do backup local). `vpn_profiles_v1` é JSON com os
@@ -637,6 +649,40 @@ class PlatformPrefs @Inject constructor(
         liveGroupFavorites = if (clean in liveGroupFavorites) liveGroupFavorites - clean else liveGroupFavorites + clean
     }
 
+    // ── PIN parental por grupo (Lote 11, v1.21.0) ─────────────────────────
+    // Grupos de canais trancados com o PIN dos pais (o mesmo PIN global de
+    // "parental_pin_hash" — sem PIN novo e sem hash novo). A lista guarda só
+    // os NOMES dos grupos, como "live_group_favorites_v1" (por perfil,
+    // SCOPED_KEYS). Vazio = nenhum grupo trancado. O desbloqueio vale só
+    // p/ a sessão (a tela guarda os grupos liberados em memória); fechar o
+    // app tranca de novo. NÃO há detecção de conteúdo adulto — o usuário
+    // marca os grupos que quer trancar, um por um, no cartão do grupo.
+
+    private val _liveLockedGroups = MutableStateFlow(readStringList("live_locked_groups_v1"))
+    /** Nomes dos grupos de canais trancados com o PIN dos pais, que avisam quem observa. */
+    val liveLockedGroupsFlow: StateFlow<List<String>> = _liveLockedGroups.asStateFlow()
+    /** Nomes dos grupos de canais trancados com o PIN dos pais. Vazio = nenhum trancado. */
+    var liveLockedGroups: List<String>
+        get() = _liveLockedGroups.value
+        set(value) { writeStringList("live_locked_groups_v1", value); _liveLockedGroups.value = value }
+
+    /** O grupo está trancado com o PIN dos pais? */
+    fun isLiveGroupLocked(group: String): Boolean = group.trim() in liveLockedGroups
+
+    /** Liga/desliga o cadeado de um grupo de canais. */
+    fun toggleLiveGroupLocked(group: String) {
+        val clean = group.trim()
+        if (clean.isBlank()) return
+        liveLockedGroups = if (clean in liveLockedGroups) liveLockedGroups - clean else liveLockedGroups + clean
+    }
+
+    /** Destranca um grupo (tira da lista). Usado ao remover o cadeado pelas Configurações. */
+    fun unlockLiveGroup(group: String) {
+        val clean = group.trim()
+        if (clean.isBlank()) return
+        liveLockedGroups = liveLockedGroups - clean
+    }
+
     // ── MDBList / AniList / TheTVDB (v1.17.0) ───────────────────────────────
     // Mesmo padrão do Trakt: chave de conta é DO APARELHO (a chave de API
     // ou o client ID é um só p/ o aparelho), sessão e toggles são POR
@@ -863,6 +909,33 @@ class PlatformPrefs @Inject constructor(
         get() = _panelBlur.value
         set(value) { prefs.edit().putBoolean(KEY_PANEL_BLUR, value).apply(); _panelBlur.value = value }
 
+    // ── Ícone do app (Lote 11, v1.21.0) — do aparelho, como o tema ────────
+    // Variante de ícone colorido (ver AppIconVariants): o ícone é do
+    // aparelho, não do perfil — trocar vale p/ todo mundo que usa o aparelho.
+    // "default" é o ícone atual (fundo preto, wordmark vermelho + turquesa).
+    // NÃO vai p/ SCOPED_KEYS: é global e viaja no backup (ver
+    // AotvBackup.GLOBAL_KEYS). A troca em si (liga/desliga os activity-alias)
+    // mora em [AppIconVariants.applyVariant].
+
+    /** Id da variante de ícone ativa ("default" = o ícone atual). */
+    var appIconVariant: String
+        get() = prefs.getString("app_icon_variant", AppIconVariants.DEFAULT_ID) ?: AppIconVariants.DEFAULT_ID
+        set(value) {
+            val clean = if (AppIconVariants.byId(value) != null) value else AppIconVariants.DEFAULT_ID
+            prefs.edit().putString("app_icon_variant", clean).apply()
+        }
+
+    // ── Ajuste inicial (Lote 11, v1.21.0) — do aparelho ───────────────────
+    // O auto-ajuste da primeira abertura só pergunta uma vez: true depois
+    // que a sugestão foi mostrada (aplicada ou dispensada) ou quando não
+    // havia nada a sugerir. NÃO vai p/ SCOPED_KEYS nem p/ o backup: num
+    // aparelho novo a medição é outra e a sugestão vale ser refeita.
+
+    /** O ajuste inicial da primeira abertura já foi oferecido (ou não havia o que sugerir). */
+    var tuningSuggested: Boolean
+        get() = prefs.getBoolean("tuning_suggested_v1", false)
+        set(value) { prefs.edit().putBoolean("tuning_suggested_v1", value).apply() }
+
     // ── Backup e restauração (v1.13.0) ───────────────────────────────────────
     // Títulos removidos do Continuar assistindo: segurar o card esconde o
     // título por perfil, para um backup antigo (ou a sincronia) não trazer
@@ -1050,6 +1123,20 @@ class PlatformPrefs @Inject constructor(
         get() = _calendarHideSpoilers.value
         set(value) { prefs.edit().putBoolean(sk("calendar_hide_spoilers"), value).apply(); _calendarHideSpoilers.value = value }
 
+    // ── Blur anti-spoiler (Lote 11, v1.21.0) ───────────────────────────────
+    // Borra a arte e esconde título/sinopse dos episódios NÃO assistidos no
+    // detalhe da série (mesma lógica de "não assistido = sem spoiler visível"
+    // da pref `calendar_hide_spoilers` do Lote 8). Episódio visto ou em
+    // andamento nunca é borrado. Desligado por padrão (opt-in). Reaproveita
+    // o blur do Lote 3/4 (RenderEffect no Android 12+, véu escuro abaixo).
+    private val _detailSpoilerBlur = MutableStateFlow(prefs.getBoolean(sk("pref_detail_spoiler_blur"), false))
+    /** Blur anti-spoiler nos cards de episódio não assistidos, que avisa quem observa. */
+    val detailSpoilerBlurFlow: StateFlow<Boolean> = _detailSpoilerBlur.asStateFlow()
+    /** Blur anti-spoiler nos cards de episódio não assistidos. */
+    var detailSpoilerBlur: Boolean
+        get() = _detailSpoilerBlur.value
+        set(value) { prefs.edit().putBoolean(sk("pref_detail_spoiler_blur"), value).apply(); _detailSpoilerBlur.value = value }
+
     private val _recordingsFolderUri = MutableStateFlow(prefs.getString(KEY_RECORDINGS_FOLDER_URI, "") ?: "")
     /** URI SAF da pasta de gravações, que avisa quem observa. "" = pasta do app (padrão). Do aparelho, como a de downloads. */
     val recordingsFolderUriFlow: StateFlow<String> = _recordingsFolderUri.asStateFlow()
@@ -1210,6 +1297,9 @@ class PlatformPrefs @Inject constructor(
             posterRadiusDp = prefs.getInt(sk("pref_poster_radius"), 14).coerceIn(4, 24),
             density = density,
             showPosterBadges = prefs.getBoolean(sk("pref_poster_badges"), false),
+            // Lote 11 (v1.21.0): selos de qualidade/fonte LIGADOS por padrão
+            // (decisão do Davi) — diferente do showPosterBadges da Fase B.
+            showQualityBadges = prefs.getBoolean(sk("pref_poster_quality_badges"), true),
             heroStyle = hero,
             dynamicBackground = prefs.getBoolean(sk("pref_dynamic_bg"), false),
             sectionUnderline = prefs.getBoolean(sk("pref_section_underline"), true),
@@ -1229,6 +1319,7 @@ class PlatformPrefs @Inject constructor(
                 .putInt(sk("pref_poster_radius"), value.posterRadiusDp)
                 .putString(sk("pref_home_density"), value.density.name)
                 .putBoolean(sk("pref_poster_badges"), value.showPosterBadges)
+                .putBoolean(sk("pref_poster_quality_badges"), value.showQualityBadges)
                 .putString(sk("pref_hero_style"), value.heroStyle.name)
                 .putBoolean(sk("pref_dynamic_bg"), value.dynamicBackground)
                 .putBoolean(sk("pref_section_underline"), value.sectionUnderline)
@@ -1636,6 +1727,13 @@ class PlatformPrefs @Inject constructor(
     var playerAutoSwitch: Boolean
         get() = _playerAutoSwitch.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_auto_switch"), value).apply(); _playerAutoSwitch.value = value }
+
+    private val _durationGuard = MutableStateFlow(prefs.getBoolean(sk("pref_duration_guard"), true))
+    /** Guarda de duração (Lote 11, v1.21.0): antes de tocar um filme, avisa quando a duração do arquivo destoa >10% da do título no TMDB. Ligada por padrão. */
+    val durationGuardFlow: StateFlow<Boolean> = _durationGuard.asStateFlow()
+    var durationGuard: Boolean
+        get() = _durationGuard.value
+        set(value) { prefs.edit().putBoolean(sk("pref_duration_guard"), value).apply(); _durationGuard.value = value }
 
     private val _playerSourceTimeout = MutableStateFlow(prefs.getInt(sk("pref_player_source_timeout"), 12))
     /** Tempo que o watchdog espera antes de trocar de fonte, em segundos (8/12/20/30/45/60). */
@@ -2357,6 +2455,7 @@ class PlatformPrefs @Inject constructor(
         _playerAutoNext.value = prefs.getBoolean(sk("pref_player_auto_next"), true)
         _playerAutoNextDelay.value = prefs.getInt(sk("pref_player_auto_next_delay"), 10)
         _playerAutoSwitch.value = prefs.getBoolean(sk("pref_player_auto_switch"), true)
+        _durationGuard.value = prefs.getBoolean(sk("pref_duration_guard"), true)
         _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
         _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
         _playerAudioLang.value =
@@ -2383,6 +2482,13 @@ class PlatformPrefs @Inject constructor(
         _liveCatchupHls.value = prefs.getBoolean(sk("live_catchup_hls"), false)
         // Lote 9 — Hub da Live TV (v1.19.0): grupos favoritos, por perfil.
         _liveGroupFavorites.value = readStringList("live_group_favorites_v1")
+        // Lote 11 (v1.21.0): grupos trancados com o PIN dos pais, por perfil.
+        _liveLockedGroups.value = readStringList("live_locked_groups_v1")
+        // Lote 11 (v1.21.0): blur anti-spoiler + o esconder-spoilers do
+        // calendário (Lote 8, que não era recarregado na troca de perfil —
+        // o valor ficava o do perfil anterior até reiniciar o app).
+        _detailSpoilerBlur.value = prefs.getBoolean(sk("pref_detail_spoiler_blur"), false)
+        _calendarHideSpoilers.value = prefs.getBoolean(sk("calendar_hide_spoilers"), false)
     }
 
     private fun computeLayout(): List<HomeRowPref> {

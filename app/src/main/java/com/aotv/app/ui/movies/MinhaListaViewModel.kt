@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.mapLatest
@@ -71,12 +72,42 @@ class MinhaListaViewModel @Inject constructor(
     /** Remove um item de "Continuar assistindo" e guarda o oculto por perfil (v1.13.0). */
     fun removeFromContinue(tmdbId: Int, type: String) {
         viewModelScope.launch {
-            prefs.hideContinue(tmdbId, type)
-            library.removePlayback(tmdbId, type)
+            // v1.21.0: resolve o tipo ARMAZENADO na linha do histórico (o tipo
+            // do card pode divergir do da linha — ver LibraryRepository).
+            library.removePlaybackAnyType(tmdbId, type)
         }
     }
 
-    // ── Calendário da Biblioteca (Lote 2, item 6) ───────────────────────────
+    // ── Ainda não assistidos (Lote 11, v1.21.0) ───────────────────────────
+    // Títulos da Minha Lista que o perfil ainda NÃO assistiu: sem entrada no
+    // histórico de reproduções E, p/ séries, sem nenhum episódio marcado
+    // como visto. Usa o histórico CRU (library.recentlyPlayed), não o
+    // filtrado por `hiddenContinue`: tirar um título do Continuar não faz
+    // dele "não assistido" — ele já foi assistido. A série que só foi
+    // marcada como vista (sem dar play) também não entra aqui.
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val notWatchedYet: StateFlow<List<WatchlistEntity>> =
+        combine(
+            library.watchlist(),
+            library.recentlyPlayed(),
+            library.watchedSeriesIds(),
+        ) { saved, played, watchedSeries ->
+            val playedKeys = played.map { it.tmdbId to it.type }.toSet()
+            saved.filterNot { w ->
+                (w.tmdbId to w.type) in playedKeys ||
+                    (w.type == SERIES_TYPE && w.tmdbId in watchedSeries)
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
+    /** Apaga todo o histórico de reproduções do perfil (aba Histórico, com confirmação na tela). */
+    fun clearHistory() {
+        viewModelScope.launch { library.clearHistory() }
+    }
     // Conjunto: séries da Minha Lista + séries do Continuar assistindo, sem
     // duplicar, com teto de CALENDAR_MAX_SERIES (o mesmo conjunto da fileira
     // "Novos episódios" da Início). Só recarrega quando o conjunto muda (ou

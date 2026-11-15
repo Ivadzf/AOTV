@@ -53,6 +53,7 @@ object SettingsAnchors {
     const val APPEAR_THEME = "aparencia-tema"
     const val APPEAR_CUSTOM = "aparencia-tema-personalizado"
     const val APPEAR_PANELS = "aparencia-paineis"
+    const val APPEAR_ICON = "aparencia-icone"
     const val APPEAR_DEVICE = "aparencia-aparelho"
     // Reprodução
     const val PLAY_MAIN = "reproducao-reproducao"
@@ -85,6 +86,11 @@ object SettingsAnchors {
     const val PARTY_JOIN = "party-entrar"
     const val PARTY_MEMBERS = "party-participantes"
     const val PARTY_SYNC = "party-sincronizacao"
+    // Diagnóstico (Lote 11, v1.21.0)
+    const val DIAG_DEVICE = "diagnostico-aparelho"
+    const val DIAG_ADDONS = "diagnostico-addons"
+    const val DIAG_FRAMES = "diagnostico-quadros"
+    const val DIAG_SUGGESTION = "diagnostico-sugestao"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -144,8 +150,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Mostrar selos nos pôsteres",
-        sub = "Etiqueta e selos 4K, Dolby, HDR e DUB",
-        keywords = listOf("selos", "etiqueta", "4K", "Dolby", "HDR", "DUB", "emblema"),
+        sub = "Etiqueta do topo do pôster",
+        keywords = listOf("selos", "etiqueta", "emblema"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_POSTERS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Selos de qualidade e fonte",
+        sub = "4K, Remux, BluRay, WEB-DL, DV, HDR10+ e DUB no pôster — ligados por padrão",
+        keywords = listOf("selos", "qualidade", "4K", "Remux", "BluRay", "WEB-DL", "DV", "HDR10+", "fonte", "emblema"),
         pageId = SettingsPageIds.Layout,
         anchor = SettingsAnchors.LAYOUT_POSTERS,
         kidsHidden = true,
@@ -287,6 +301,13 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Mostrar notas dos episódios",
         sub = "A nota do TMDB nos cards de episódio",
         keywords = listOf("notas", "avaliação", "rating", "episódios"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_EPISODES,
+    ),
+    SettingOptionEntry(
+        title = "Blur anti-spoiler",
+        sub = "Borra a arte e esconde o título dos episódios não assistidos",
+        keywords = listOf("spoiler", "blur", "desfoque", "episódio", "não assistido", "sinopse"),
         pageId = SettingsPageIds.Detalhe,
         anchor = SettingsAnchors.DETAIL_EPISODES,
     ),
@@ -662,6 +683,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         kidsHidden = true,
     ),
     SettingOptionEntry(
+        title = "Grupos trancados com PIN",
+        sub = "Grupos de canais ao vivo trancados com o PIN dos pais",
+        keywords = listOf("pin", "grupo", "trancar", "cadeado", "bloqueio", "ao vivo", "canais"),
+        pageId = SettingsPageIds.Acompanhamento,
+        anchor = SettingsAnchors.TRACK_PROFILE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
         title = "Chave TMDB",
         sub = "Sua chave TMDB (opcional)",
         keywords = listOf("tmdb", "chave", "api", "api key", "catálogo", "busca"),
@@ -699,6 +728,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("blur", "desfoque", "vidro", "painéis"),
         pageId = SettingsPageIds.Aparencia,
         anchor = SettingsAnchors.APPEAR_PANELS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Ícone do app",
+        sub = "Ícone colorido: Padrão, Vermelho, Turquesa, Verde, Amarelo, Roxo ou Rosa",
+        keywords = listOf("ícone", "icone", "cor", "colorido", "launcher", "tela inicial"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_ICON,
         kidsHidden = true,
     ),
     SettingOptionEntry(
@@ -863,6 +900,13 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Troca automática de fonte",
         sub = "Se a fonte travar, troca sozinha por outra",
         keywords = listOf("troca automática", "fonte", "travar", "falhar"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Avisar quando a duração não bate",
+        sub = "Pergunta antes de tocar um arquivo com duração muito diferente da do título",
+        keywords = listOf("duração", "guarda", "arquivo", "outro filme", "minutos"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
@@ -1217,6 +1261,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("watch party", "sincronização", "sincronizar", "play", "pause", "seek"),
         pageId = SettingsPageIds.WatchParty,
         anchor = SettingsAnchors.PARTY_SYNC,
+        kidsHidden = true,
+    ),
+    // ── Diagnóstico (Lote 11, v1.21.0) ────────────────────────────────────
+    SettingOptionEntry(
+        title = "Diagnóstico",
+        sub = "Aparelho, addons, fontes e quadros — tudo medido",
+        keywords = listOf("diagnóstico", "diagnostico", "aparelho", "memória", "quadros", "addons", "fontes", "tela"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_DEVICE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Ajuste inicial",
+        sub = "Sugestão de buffer e rede a partir do aparelho medido",
+        keywords = listOf("ajuste", "sugestão", "buffer", "rede", "primeira abertura", "auto-ajuste"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_SUGGESTION,
         kidsHidden = true,
     ),
 )

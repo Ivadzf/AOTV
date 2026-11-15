@@ -5,6 +5,8 @@ import android.net.ConnectivityManager
 import com.aotv.app.data.remote.StremioAddonService
 import com.aotv.app.data.remote.StremioStream
 import com.aotv.app.data.remote.TmdbApiService
+import com.aotv.app.data.remote.bestReleaseKind
+import com.aotv.app.data.remote.hasHdr10Plus
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -26,10 +28,10 @@ import java.util.Calendar
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Resumo das fontes dos addons de um título. [n] é quantas fontes vieram e [at] quando foi lido. */
+/** Resumo das fontes dos addons de um título. [n] é quantas fontes vieram e [at] quando foi lido. [kind] é a melhor origem do arquivo ("Remux", "BluRay" ou "WEB-DL", "" sem origem informada) e [hdr10plus] é HDR10+ (metadado dinâmico) — os dois viram selo no pôster (Lote 11, v1.21.0). */
 data class SourceQuality(
     val q: Int, val hdr: Boolean, val dolbyVision: Boolean, val atmos: Boolean, val ptAudio: Boolean,
-    val n: Int, val at: Long,
+    val n: Int, val at: Long, val kind: String = "", val hdr10plus: Boolean = false,
 )
 
 /** Posição de hoje (1 a 25) por id do TMDB, separada em filmes e séries. */
@@ -58,7 +60,7 @@ fun rankMap(ids: List<Int>): Map<Int, Int> {
     return out
 }
 
-/** Melhor resolução, HDR (Dolby Vision também é HDR), Dolby e áudio em português da lista. */
+/** Melhor resolução, HDR (Dolby Vision também é HDR), Dolby e áudio em português da lista. A origem do arquivo e o HDR10+ vêm do texto das fontes (releaseText, senão o rótulo). */
 fun summarize(list: List<StremioStream>, now: Long) = SourceQuality(
     q = list.maxOfOrNull { it.qualityRank } ?: 0,
     hdr = list.any { it.hdr || it.dolbyVision },
@@ -67,6 +69,8 @@ fun summarize(list: List<StremioStream>, now: Long) = SourceQuality(
     ptAudio = list.any { it.ptAudio },
     n = list.size,
     at = now,
+    kind = bestReleaseKind(list.map { it.releaseText.ifBlank { it.label } }),
+    hdr10plus = list.any { hasHdr10Plus(it.releaseText.ifBlank { it.label }) },
 )
 
 /** Resumo vale uma semana no cartão. */
@@ -163,7 +167,8 @@ class PosterInfo @Inject constructor(
         // cartões) nem recopia o mapa inteiro. Velho ou diferente, atualiza.
         if (list.isNotEmpty() && old != null && old.fresh(now) && old.q == freshSummary.q &&
             old.hdr == freshSummary.hdr && old.dolbyVision == freshSummary.dolbyVision &&
-            old.atmos == freshSummary.atmos && old.ptAudio == freshSummary.ptAudio && old.n == freshSummary.n
+            old.atmos == freshSummary.atmos && old.ptAudio == freshSummary.ptAudio && old.n == freshSummary.n &&
+            old.kind == freshSummary.kind && old.hdr10plus == freshSummary.hdr10plus
         ) return
         _quality.update { m ->
             val cur = m[key]
@@ -251,7 +256,8 @@ class PosterInfo @Inject constructor(
         _quality.value.entries.sortedByDescending { it.value.at }.take(500).forEach { (k, q) ->
             items.put(
                 k, JSONObject().put("q", q.q).put("h", q.hdr).put("d", q.dolbyVision).put("a", q.atmos)
-                    .put("p", q.ptAudio).put("n", q.n).put("t", q.at),
+                    .put("p", q.ptAudio).put("n", q.n).put("t", q.at)
+                    .put("k", q.kind).put("h10", q.hdr10plus),
             )
         }
         val sig = synchronized(lock) { addonSig }
@@ -301,7 +307,7 @@ class PosterInfo @Inject constructor(
                 val v = items.getJSONObject(k)
                 SourceQuality(
                     v.optInt("q"), v.optBoolean("h"), v.optBoolean("d"), v.optBoolean("a"), v.optBoolean("p"),
-                    v.optInt("n"), v.optLong("t"),
+                    v.optInt("n"), v.optLong("t"), v.optString("k", ""), v.optBoolean("h10", false),
                 )
             }
             synchronized(lock) { if (addonSig.isEmpty()) addonSig = sig }

@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Translate
@@ -168,9 +169,10 @@ object SettingsPageIds {
     const val Trackers = "trackers"
     const val Vpn = "vpn"
     const val WatchParty = "watchparty"
+    const val Diagnostico = "diagnostico"
 
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, Diagnostico)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -186,6 +188,7 @@ object SettingsPageIds {
         Trackers -> "Trackers e Sincronização"
         Vpn -> "VPN"
         WatchParty -> "Watch Party"
+        Diagnostico -> "Diagnóstico"
         else -> "Configurações"
     }
 }
@@ -233,6 +236,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
         SettingsPageIds.Vpn -> VpnScreen(onBack, highlightAnchor)
         SettingsPageIds.WatchParty -> WatchPartyScreen(onBack, highlightAnchor)
+        SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
             sub = null,
@@ -683,12 +687,27 @@ private fun LayoutPage(
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Visibility,
                 title = "Mostrar selos nos pôsteres",
-                sub = if (display.showPosterBadges) "Etiqueta do topo e selos 4K, Dolby, HDR e DUB visíveis"
-                    else "Só nota e ano + gênero. Liga para ver etiqueta e selos de novo",
+                sub = if (display.showPosterBadges) "Etiqueta do topo visível (ranking, estreia, idioma)"
+                    else "Sem etiqueta no topo. Liga para ver a etiqueta de novo",
                 // A linha liga e desliga. O Switch fica fora do caminho do controle.
                 trailing = { Switch(checked = display.showPosterBadges, onCheckedChange = { viewModel.setShowPosterBadges(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setShowPosterBadges(!display.showPosterBadges) },
                 grouped = true,
+            )
+            // Selos de qualidade/fonte (Lote 11, v1.21.0): 4K, Remux, BluRay,
+            // WEB-DL, DV, HDR10+ e DUB no canto do pôster. LIGADOS por padrão
+            // (decisão do Davi) — diferente da etiqueta acima (Fase B,
+            // desligada por padrão). Só aparecem quando o resumo das fontes
+            // do título existe: sem fonte lida, sem selo inventado.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Label,
+                title = "Selos de qualidade e fonte",
+                sub = if (display.showQualityBadges) "4K, Remux, BluRay, WEB-DL, DV, HDR10+ e DUB no canto do pôster"
+                    else "Sem selos de qualidade no pôster. Liga para ver de novo",
+                trailing = { Switch(checked = display.showQualityBadges, onCheckedChange = { viewModel.setShowQualityBadges(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setShowQualityBadges(!display.showQualityBadges) },
+                grouped = true,
+                divider = true,
             )
         }
 
@@ -857,6 +876,8 @@ private fun DetalhePage(
     val tabs by viewModel.detailTabs.collectAsStateWithLifecycle()
     val episodeStyle by viewModel.detailEpisodeStyle.collectAsStateWithLifecycle()
     val episodeRatings by viewModel.detailEpisodeRatings.collectAsStateWithLifecycle()
+    // Blur anti-spoiler (Lote 11, v1.21.0): episódios não assistidos sem arte/título/sinopse.
+    val spoilerBlur by viewModel.detailSpoilerBlur.collectAsStateWithLifecycle()
     val originalTitle by viewModel.detailOriginalTitle.collectAsStateWithLifecycle()
     val showAggregateRating by viewModel.detailShowAggregateRating.collectAsStateWithLifecycle()
     val showTraktReviews by viewModel.detailShowTraktReviews.collectAsStateWithLifecycle()
@@ -923,6 +944,16 @@ private fun DetalhePage(
                     else "Sem notas: os cards mostram só data e duração, e o mapa de notas fica oculto",
                 trailing = { Switch(checked = episodeRatings, onCheckedChange = { viewModel.setDetailEpisodeRatings(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setDetailEpisodeRatings(!episodeRatings) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VisibilityOff,
+                title = "Blur anti-spoiler",
+                sub = if (spoilerBlur) "Episódios não assistidos ficam com a arte borrada e sem título nem sinopse (abaixo do Android 12, véu escuro no lugar do blur)"
+                    else "Desligado: os episódios mostram arte, título e sinopse normalmente",
+                trailing = { Switch(checked = spoilerBlur, onCheckedChange = { viewModel.setDetailSpoilerBlur(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setDetailSpoilerBlur(!spoilerBlur) },
                 grouped = true,
             )
         }
@@ -1390,6 +1421,11 @@ private fun AcompanhamentoPage(
 ) {
     var showSetPin by remember { mutableStateOf(false) }
     val hasPin = viewModel.hasParentalPin
+    // Grupos trancados com o PIN (Lote 11, v1.21.0): gerenciar os cadeados
+    // aqui (destrancar pede o PIN); trancar é no cartão do grupo, no Ao vivo.
+    val lockedGroups by viewModel.liveLockedGroups.collectAsStateWithLifecycle()
+    var showLockedGroups by remember { mutableStateOf(false) }
+    var pendingRemoveLock by remember { mutableStateOf<String?>(null) }
     // Chave TMDB (Lote 6, v1.15.0): saiu de Integrações p/ cá, junto dos
     // trackers. Escondida no infantil — a chave continua atrás do PIN dos pais.
     val customTmdbKey by viewModel.customTmdbApiKey.collectAsStateWithLifecycle()
@@ -1418,6 +1454,16 @@ private fun AcompanhamentoPage(
                     grouped = true,
                     divider = true,
                 )
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = Icons.Default.Lock,
+                    title = "Grupos trancados com PIN",
+                    sub = if (lockedGroups.isEmpty()) "Nenhum grupo trancado. Toque no cadeado do cartão do grupo, na aba Ao vivo, para trancar"
+                        else if (lockedGroups.size == 1) "1 grupo trancado — toque para gerenciar"
+                        else "${lockedGroups.size} grupos trancados — toque para gerenciar",
+                    onClick = { showLockedGroups = true },
+                    grouped = true,
+                    divider = true,
+                )
             }
         }
         if (showSetPin) SetPinDialog(
@@ -1425,6 +1471,59 @@ private fun AcompanhamentoPage(
             onSet = { pin -> viewModel.setParentalPin(pin); showSetPin = false },
             onDismiss = { showSetPin = false },
         )
+        if (showLockedGroups) {
+            AlertDialog(
+                onDismissRequest = { showLockedGroups = false },
+                title = { Text("Grupos trancados") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (lockedGroups.isEmpty()) {
+                            Text(
+                                "Nenhum grupo trancado. Na aba Ao vivo, toque no cadeado do cartão do grupo para trancar — abrir o grupo passa a pedir o PIN dos pais.",
+                                color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                            )
+                        } else {
+                            Text(
+                                "Abrir um destes grupos pede o PIN dos pais. Destrancar também pede o PIN.",
+                                color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                            )
+                            lockedGroups.forEach { group ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Icon(Icons.Default.Lock, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
+                                    Text(group, color = TextPrimary, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                                    TextButton(onClick = { pendingRemoveLock = group }) {
+                                        Text("Destrancar", color = Accent)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showLockedGroups = false }) {
+                        Text("Fechar", color = Accent, fontWeight = FontWeight.Bold)
+                    }
+                },
+            )
+        }
+        pendingRemoveLock?.let { group ->
+            VerifyPinDialog(
+                title = "PIN dos pais",
+                onConfirm = { pin ->
+                    if (viewModel.checkParentalPin(pin)) {
+                        viewModel.unlockLiveGroup(group)
+                        pendingRemoveLock = null
+                        true
+                    } else {
+                        false
+                    }
+                },
+                onDismiss = { pendingRemoveLock = null },
+            )
+        }
 
         // TMDB (veio de Integrações). A chave é do perfil ativo e libera o
         // catálogo, a busca e as fileiras; sem ela, vale a chave padrão do app.
@@ -1599,6 +1698,27 @@ private fun AparenciaPage(
                 grouped = true,
             )
         }
+        // Ícone do app (Lote 11, v1.21.0): 7 variantes coloridas por
+        // activity-alias. O Padrão é o ícone atual e não muda. Na TV o ícone
+        // não aparece (o launcher da TV usa o banner, igual em todas as
+        // cores), então a linha só abre o seletor no celular/tablet.
+        SettingsSection("Ícone do app", anchor = SettingsAnchors.APPEAR_ICON)
+        var showIconPicker by remember { mutableStateOf(false) }
+        val appIconVariant by viewModel.appIconVariant.collectAsStateWithLifecycle()
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Image,
+                title = "Ícone do app",
+                sub = "Ícone atual: " + (com.aotv.app.data.local.AppIconVariants.byId(appIconVariant)?.label ?: "Padrão") + ". Toque para trocar a cor.",
+                onClick = { showIconPicker = true },
+                grouped = true,
+            )
+        }
+        if (showIconPicker) AppIconPickerDialog(
+            currentId = appIconVariant,
+            onPick = { viewModel.setAppIconVariant(it) },
+            onDismiss = { showIconPicker = false },
+        )
         SettingsSection("Aparelho", anchor = SettingsAnchors.APPEAR_DEVICE)
         Text(
             "Layout atual ${deviceLayout.label}. O modo automático reconhece TV e adapta celular e tablet ao espaço disponível.",
@@ -1694,6 +1814,7 @@ private fun ReproducaoPage(
     val autoNext by playerPrefs.autoNext.collectAsStateWithLifecycle()
     val autoNextDelay by playerPrefs.autoNextDelay.collectAsStateWithLifecycle()
     val autoSwitch by playerPrefs.autoSwitch.collectAsStateWithLifecycle()
+    val durationGuard by playerPrefs.durationGuard.collectAsStateWithLifecycle()
     val sourceTimeout by playerPrefs.sourceTimeout.collectAsStateWithLifecycle()
     val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
     // Personalização de legenda e velocidade padrão (v1.9.0).
@@ -1923,6 +2044,20 @@ private fun ReproducaoPage(
                     else "Se a fonte travar, espera nela sem trocar",
                 trailing = { Switch(checked = autoSwitch, onCheckedChange = { playerPrefs.setAutoSwitch(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setAutoSwitch(!autoSwitch) },
+                grouped = true,
+                divider = true,
+            )
+            // Guarda de duração (Lote 11, v1.21.0): antes de tocar um filme,
+            // avisa quando o arquivo tem duração >10% diferente da do título
+            // no TMDB (pode ser outro filme com o mesmo nome). Sem duração
+            // conhecida de um dos lados, toca normal sem perguntar.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Timer,
+                title = "Avisar quando a duração não bate",
+                sub = if (durationGuard) "Antes de tocar, avisa se o arquivo tem duração muito diferente da do título"
+                    else "Toca direto, mesmo se a duração do arquivo for muito diferente da do título",
+                trailing = { Switch(checked = durationGuard, onCheckedChange = { playerPrefs.setDurationGuard(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setDurationGuard(!durationGuard) },
                 grouped = true,
                 divider = true,
             )

@@ -940,8 +940,9 @@ class MoviesHomeViewModel @Inject constructor(
     /** Remove do Continuar assistindo e guarda o oculto por perfil (long-press no card, v1.13.0). */
     fun removeFromContinue(tmdbId: Int, type: String) {
         viewModelScope.launch {
-            prefs.hideContinue(tmdbId, type)
-            library.removePlayback(tmdbId, type)
+            // v1.21.0: resolve o tipo ARMAZENADO na linha do histórico (o tipo
+            // do card pode ser MOVIE p/ um canal "LIVE" — ver LibraryRepository).
+            library.removePlaybackAnyType(tmdbId, type)
         }
     }
 

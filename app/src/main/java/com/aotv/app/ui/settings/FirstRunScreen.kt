@@ -1,5 +1,6 @@
 package com.aotv.app.ui.settings
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -25,6 +26,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.TuningSuggestion
+import com.aotv.app.data.local.bufferLabel
+import com.aotv.app.data.local.measureDeviceFacts
+import com.aotv.app.data.local.suggestTuning
+import com.aotv.app.ui.common.AotvButton
+import com.aotv.app.ui.common.ButtonTone
 import com.aotv.app.ui.common.LocalIsTv
 import com.aotv.app.ui.common.PageHeader
 import com.aotv.app.ui.common.SettingsRow
@@ -34,10 +41,14 @@ import com.aotv.app.ui.common.pagePadding
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
 @HiltViewModel
-class FirstRunViewModel @Inject constructor(private val prefs: PlatformPrefs) : ViewModel() {
+class FirstRunViewModel @Inject constructor(
+    private val prefs: PlatformPrefs,
+    @ApplicationContext private val appContext: Context,
+) : ViewModel() {
     val initialName: String get() = prefs.profiles.value.first().name
     val initialMode: PlatformMode get() = prefs.platformMode
 
@@ -48,6 +59,37 @@ class FirstRunViewModel @Inject constructor(private val prefs: PlatformPrefs) : 
         if (clean.isNotBlank() && clean != p.name) prefs.updateProfile(p.copy(name = clean))
         prefs.platformMode = mode
         prefs.onboarded = true
+    }
+
+    // ── Ajuste inicial (Lote 11, v1.21.0) ────────────────────────────────
+    // Sugestão a partir do que foi MEDIDO no aparelho (memória, rede). null
+    // quando não há nada a sugerir (o atual já é o sugerido) ou quando o
+    // ajuste já foi oferecido. NUNCA aplica sozinho: a tela mostra o passo
+    // e os botões "Aplicar sugestão" / "Manter padrão" decidem.
+
+    /** Sugestão de ajuste da primeira abertura. null = nada a sugerir ou já oferecida. */
+    val tuningSuggestion: TuningSuggestion?
+        get() = if (prefs.tuningSuggested) null else suggestTuning(
+            measureDeviceFacts(appContext), prefs.playerBuffer, prefs.downloadsWifiOnly,
+        )
+
+    /** Perfil de buffer atual, p/ mostrar "Normal → Alto" no passo do ajuste. */
+    val currentBuffer: String get() = prefs.playerBuffer
+
+    /** "Só Wi-Fi" atual, p/ mostrar a mudança no passo do ajuste. */
+    val currentWifiOnly: Boolean get() = prefs.downloadsWifiOnly
+
+    /** Aplica a sugestão e marca o ajuste como oferecido. */
+    fun applyTuning() {
+        val s = tuningSuggestion ?: return
+        if (s.buffer != null) prefs.playerBuffer = s.buffer
+        if (s.wifiOnly != null) prefs.downloadsWifiOnly = s.wifiOnly
+        prefs.tuningSuggested = true
+    }
+
+    /** Dispensa a sugestão e marca o ajuste como oferecido (não pergunta de novo). */
+    fun dismissTuning() {
+        prefs.tuningSuggested = true
     }
 }
 
@@ -61,8 +103,22 @@ fun FirstRunScreen(onDone: () -> Unit, vm: FirstRunViewModel = hiltViewModel()) 
     var name by remember { mutableStateOf(vm.initialName) }
     var mode by remember { mutableStateOf(vm.initialMode) }
     var naming by remember { mutableStateOf(false) }
+    // Passo do ajuste inicial (Lote 11, v1.21.0): só aparece quando há algo
+    // a sugerir — sem sugestão, "Continuar" termina direto, sem passo vazio.
+    var tuning by remember { mutableStateOf<TuningSuggestion?>(null) }
     val autoLabel = currentDeviceLayout(PlatformMode.AUTO).label
     val pad = pagePadding()
+
+    if (tuning != null) {
+        TuningSuggestionStep(
+            suggestion = tuning ?: return,
+            currentBuffer = vm.currentBuffer,
+            currentWifiOnly = vm.currentWifiOnly,
+            onApply = { vm.applyTuning(); onDone() },
+            onKeep = { vm.dismissTuning(); onDone() },
+        )
+        return
+    }
 
     if (naming) {
         com.aotv.app.ui.common.TvTextPrompt(
@@ -114,7 +170,11 @@ fun FirstRunScreen(onDone: () -> Unit, vm: FirstRunViewModel = hiltViewModel()) 
 
             Spacer(Modifier.weight(1f).heightIn(min = 24.dp))
             com.aotv.app.ui.common.AotvButton(
-                "Continuar", { vm.confirm(name, mode); onDone() },
+                "Continuar", {
+                    vm.confirm(name, mode)
+                    val s = vm.tuningSuggestion
+                    if (s != null) tuning = s else onDone()
+                },
                 tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
                 enabled = name.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
@@ -140,4 +200,57 @@ private fun FirstRunPlatformOption(
         trailing = if (selected) ({ Icon(Icons.Default.CheckCircle, "Selecionado", tint = Accent) }) else null,
         onClick = onClick,
     )
+}
+
+/**
+ * Passo do ajuste inicial (Lote 11, v1.21.0): mostra o que foi medido e o
+ * que mudaria, e só aplica com o botão. "Manter padrão" dispensa sem mudar
+ * nada. O buffer manual (Lote 5) continua existindo e manda sobre a
+ * sugestão — isto só sugere uma vez, na primeira abertura.
+ */
+@Composable
+private fun TuningSuggestionStep(
+    suggestion: TuningSuggestion,
+    currentBuffer: String,
+    currentWifiOnly: Boolean,
+    onApply: () -> Unit,
+    onKeep: () -> Unit,
+) {
+    val pad = pagePadding()
+    Column(Modifier.fillMaxSize().background(Background).topInsetsPadding().verticalScroll(rememberScrollState())) {
+        PageHeader("Ajuste inicial", Modifier.padding(horizontal = pad, vertical = 10.dp), sub = "Medimos este aparelho — uma sugestão, nada aplicado ainda")
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = pad).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SettingsSection("Sugestão")
+            suggestion.reasons.forEach { reason ->
+                Text(reason, fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp)
+            }
+            SettingsSection("O que mudaria")
+            if (suggestion.buffer != null) Text(
+                "Buffer do player: ${bufferLabel(currentBuffer)} → ${bufferLabel(suggestion.buffer)}",
+                fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+            )
+            if (suggestion.wifiOnly != null) Text(
+                "Downloads: " + if (currentWifiOnly) "só Wi-Fi já ligado" else "só Wi-Fi desligado → ligado",
+                fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+            )
+            Text(
+                "Dá p/ mudar depois: o buffer está em Configurações → Reprodução e o \"Só Wi-Fi\" em Configurações → Downloads. O diagnóstico (Configurações → Diagnóstico) mostra a sugestão de novo.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            Spacer(Modifier.weight(1f).heightIn(min = 24.dp))
+            AotvButton(
+                "Aplicar sugestão", onApply,
+                tone = ButtonTone.PRIMARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            AotvButton(
+                "Manter padrão", onKeep,
+                tone = ButtonTone.SECONDARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
 }

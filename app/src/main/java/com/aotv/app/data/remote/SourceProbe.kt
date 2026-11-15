@@ -102,6 +102,19 @@ fun durationMismatch(runtimeMin: Int, sec: Double): Boolean {
     return abs(sec / 60 - runtimeMin) > max(7.0, runtimeMin * 0.06)
 }
 
+/**
+ * Guarda de duração (v1.21.0): o arquivo/stream destoa MAIS DE 10% da
+ * duração do título no TMDB. Só vale quando as DUAS durações são
+ * conhecidas (runtimeMin > 0 e sec > 0); sem uma delas, NÃO dispara —
+ * toca normal, sem inventar duração. Diferente de [durationMismatch]
+ * (7 min ou 6%, p/ o auto-fallback silencioso do player), esta é a regra
+ * da pergunta ANTES de tocar.
+ */
+fun durationGuardMismatch(runtimeMin: Int, sec: Double): Boolean {
+    if (runtimeMin <= 0 || sec.isNaN() || sec <= 0) return false
+    return abs(sec / 60 - runtimeMin) > runtimeMin * 0.10
+}
+
 private val DUB = Regex("dublad|\\bdub\\b|dual|portugu|pt-?br|nacional", RegexOption.IGNORE_CASE)
 private val LEG = Regex("legendad|\\bleg\\b|\\bsub(s|bed)?\\b", RegexOption.IGNORE_CASE)
 
@@ -160,6 +173,36 @@ private val PT_WORD = Regex("\\b(portugu[eêÊ]s|portuguese|pt-?br)\\b", RegexOp
 fun hasDolbyVision(text: String) = DOLBY_VISION.containsMatchIn(text)
 fun hasHdr(text: String) = HDR.containsMatchIn(text)
 fun hasAtmos(text: String) = ATMOS.containsMatchIn(text)
+
+// HDR10+ é HDR10 com metadado dinâmico: "HDR10+" ou "HDR10Plus" no texto.
+private val HDR10_PLUS = Regex("HDR10\\+|HDR10Plus", RegexOption.IGNORE_CASE)
+fun hasHdr10Plus(text: String) = HDR10_PLUS.containsMatchIn(text)
+
+// Origem do arquivo (mesmo padrão do RELEASE_KIND de ReleaseInfo.kt, aqui p/
+// o resumo do pôster não depender da tela de detalhes). Normalizado p/ o
+// rótulo que o selo mostra. "" = origem não informada no texto.
+private val RELEASE_KIND = Regex("\\b(web[ .-]?dl|web[ .-]?rip|blu[ .-]?ray|remux|hdtv|dvd[ .-]?rip)\\b", RegexOption.IGNORE_CASE)
+fun releaseKindOf(text: String): String {
+    val found = RELEASE_KIND.find(text)?.value?.uppercase(java.util.Locale.ROOT)
+        ?.replace("WEBDL", "WEB-DL")?.replace("WEBRIP", "WEBRip")?.replace("BLURAY", "BluRay")
+    return if (found in listOf("Remux", "BluRay", "WEB-DL", "WEBRip", "HDTV", "DVDRip")) found ?: "" else ""
+}
+
+/** Melhor origem do arquivo numa lista de textos: Remux vale mais que BluRay, que vale mais que WEB-DL. */
+fun bestReleaseKind(texts: List<String>): String {
+    val rank = mapOf("Remux" to 3, "BluRay" to 2, "WEB-DL" to 1)
+    var best = ""
+    var bestRank = 0
+    for (t in texts) {
+        val kind = releaseKindOf(t)
+        val r = rank[kind] ?: 0
+        if (r > bestRank) {
+            best = kind
+            bestRank = r
+        }
+    }
+    return best
+}
 
 /**
  * Áudio em português. Dublado ou dual áudio, ou a bandeira e o nome do idioma quando o texto não

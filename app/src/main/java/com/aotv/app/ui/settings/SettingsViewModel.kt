@@ -185,6 +185,11 @@ class SettingsViewModel @Inject constructor(
 
     val hasParentalPin: Boolean get() = platformPrefs.hasParentalPin
     fun setParentalPin(pin: String) = platformPrefs.setParentalPin(pin)
+    fun checkParentalPin(pin: String): Boolean = platformPrefs.checkParentalPin(pin)
+
+    // Lote 11 (v1.21.0): grupos de canais trancados com o PIN dos pais.
+    val liveLockedGroups: StateFlow<List<String>> = platformPrefs.liveLockedGroupsFlow
+    fun unlockLiveGroup(group: String) = platformPrefs.unlockLiveGroup(group)
 
     private val _audio = MutableStateFlow(platformPrefs.audioPref)
     val audioPref: StateFlow<String> = _audio.asStateFlow()
@@ -218,10 +223,29 @@ class SettingsViewModel @Inject constructor(
     val detailEpisodeRatings: StateFlow<Boolean> = platformPrefs.detailEpisodeRatingsFlow
     fun setDetailEpisodeRatings(v: Boolean) { platformPrefs.detailEpisodeRatings = v }
 
+    // Lote 11 (v1.21.0): blur anti-spoiler nos episódios não assistidos.
+    val detailSpoilerBlur: StateFlow<Boolean> = platformPrefs.detailSpoilerBlurFlow
+    fun setDetailSpoilerBlur(v: Boolean) { platformPrefs.detailSpoilerBlur = v }
+
     // ── Aparência (Lote 3, v1.11.0; do aparelho, como o tema) ──
     // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
     val panelBlur: StateFlow<Boolean> = platformPrefs.panelBlurFlow
     fun setPanelBlur(v: Boolean) { platformPrefs.panelBlur = v }
+
+    // ── Ícone do app (Lote 11, v1.21.0) — do aparelho ─────────────────────
+    // A troca (liga/desliga os activity-alias) mora em AppIconVariants; aqui
+    // só o estado p/ a tela e a gravação da pref depois que a troca dá certo.
+    private val _appIconVariant = MutableStateFlow(platformPrefs.appIconVariant)
+    /** Id da variante de ícone ativa ("default" = o ícone atual). */
+    val appIconVariant: StateFlow<String> = _appIconVariant.asStateFlow()
+
+    /** Troca o ícone. false = o PackageManager recusou (a pref não muda). */
+    fun setAppIconVariant(id: String): Boolean {
+        if (!com.aotv.app.data.local.AppIconVariants.applyVariant(appContext, id)) return false
+        platformPrefs.appIconVariant = id
+        _appIconVariant.value = id
+        return true
+    }
 
     // Lote 3 item 6 (v1.11.0): título em idioma original na página de detalhes.
     val detailOriginalTitle: StateFlow<Boolean> = platformPrefs.detailOriginalTitleFlow
@@ -296,6 +320,8 @@ class SettingsViewModel @Inject constructor(
     fun setHomeDensity(v: com.aotv.app.data.local.HomeDensity) =
         platformPrefs.updateHomeDisplay { it.copy(density = v) }
     fun setShowPosterBadges(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(showPosterBadges = v) }
+    /** Selos de qualidade/fonte (Lote 11, v1.21.0): LIGADOS por padrão (decisão do Davi). */
+    fun setShowQualityBadges(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(showQualityBadges = v) }
     fun setHeroStyle(v: com.aotv.app.data.local.HeroStyle) =
         platformPrefs.updateHomeDisplay { it.copy(heroStyle = v) }
     fun setDynamicBackground(v: Boolean) = platformPrefs.updateHomeDisplay { it.copy(dynamicBackground = v) }

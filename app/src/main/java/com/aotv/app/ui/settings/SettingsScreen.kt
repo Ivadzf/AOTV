@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
@@ -340,6 +341,14 @@ private val hubEntries = listOf(
         kidsHidden = true,
     ),
     HubEntry(
+        id = SettingsPageIds.Diagnostico,
+        title = "Diagnóstico",
+        sub = "Aparelho, fontes e quadros — tudo medido",
+        icon = Icons.Default.Speed,
+        keywords = listOf("Diagnóstico", "aparelho", "memória", "quadros", "addons", "fontes", "ajuste", "buffer", "rede"),
+        kidsHidden = true,
+    ),
+    HubEntry(
         id = SettingsPageIds.Reproducao,
         title = "Reprodução",
         sub = "Áudio, qualidade, trailer e legendas",
@@ -391,16 +400,16 @@ private val hubEntriesById = hubEntries.associateBy { it.id }
 
 /**
  * Os 8 cartões do hub, na ordem do Nuvio — cada cartão é um grupo de páginas:
- * Conta (só o backup real — sem fingir sync), Aparência, Layout (Início,
- * detalhes e streams, como o "Layout" do Nuvio), Conteúdo & Descoberta,
- * Reprodução (com Downloads), Integrações, Acompanhamento (com Trackers) e
- * Conexão (VPN + Watch Party, Lote 10).
+ * Conta (só o backup real — sem fingir sync), Aparência (com Diagnóstico,
+ * Lote 11), Layout (Início, detalhes e streams, como o "Layout" do Nuvio),
+ * Conteúdo & Descoberta, Reprodução (com Downloads), Integrações,
+ * Acompanhamento (com Trackers) e Conexão (VPN + Watch Party, Lote 10).
  * Sem "Notificações" (não existe no AOTV) e sem "Avançadas" (sem conteúdo
  * real) — grupos omitidos de propósito.
  */
 private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Backup),
-    listOf(SettingsPageIds.Aparencia),
+    listOf(SettingsPageIds.Aparencia, SettingsPageIds.Diagnostico),
     listOf(SettingsPageIds.Layout, SettingsPageIds.Detalhe, SettingsPageIds.Streams),
     listOf(SettingsPageIds.Conteudo),
     listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),

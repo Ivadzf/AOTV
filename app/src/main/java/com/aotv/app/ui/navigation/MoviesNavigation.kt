@@ -13,8 +13,10 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -144,6 +146,9 @@ private data class PlayerData(
     // de erro do player, p/ o Davi mandar o print quando o ExoPlayer não
     // carregar o stream resolvido. Vazio p/ todo o resto (Nuvio, Stremio...).
     val kodiDiag: String = "",
+    // Fonte travada (guarda de duração confirmada, v1.21.0): o player abre
+    // com userLockedSource e não auto-troca por duração nem por lentidão.
+    val lockedSource: Boolean = false,
 )
 private val playerCache = mutableMapOf<Int, PlayerData>()
 private var playerIdCounter = 0
@@ -196,6 +201,7 @@ fun MoviesNavigation(
         season: Int = 0, episode: Int = 0, episodeTotal: Int = 0,
         sources: List<MoviePlayerSource> = emptyList(),
         kodiDiag: String = "",
+        lockedSource: Boolean = false,
     ) {
         // Novo play mata o mini player ativo (só existe 1 player por vez — sem
         // isso o áudio minimizado seguiria tocando junto com o novo).
@@ -203,7 +209,7 @@ fun MoviesNavigation(
         val playId = ++playerIdCounter
         playerCache[playId] = PlayerData(
             embedUrl, title, tmdbId, type, posterUrl, lastEpisode, startPositionMs, backdropUrl,
-            season, episode, episodeTotal, sources, kodiDiag,
+            season, episode, episodeTotal, sources, kodiDiag, lockedSource,
         )
         navController.navigate(MoviesRoute.Player.create(playId))
     }
@@ -345,6 +351,18 @@ fun MoviesNavigation(
                         sources = sources,
                     )
                 }
+                // Guarda de duração confirmada (v1.21.0): o play sai com a fonte
+                // travada, p/ o player não auto-trocar por duração — o usuário
+                // já viu o aviso e mandou tocar mesmo assim. Só o detalhe do
+                // celular passa este callback; a TV usa o normal.
+                val onPlayDirectLockedCb: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = { url, startPos, lastEp, sources, season, episode, epTotal ->
+                    navigateToPlayer(
+                        url, stub.title, tmdbId = stub.tmdbId, type = stub.type.name,
+                        posterUrl = stub.posterUrl, lastEpisode = lastEp, startPositionMs = startPos, backdropUrl = stub.backdropUrl,
+                        season = season, episode = episode, episodeTotal = epTotal,
+                        sources = sources, lockedSource = true,
+                    )
+                }
                 val onBackCb: () -> Unit = { navController.popBackStack() }
                 val onRelatedCb: (MovieItem) -> Unit = { rel ->
                     movieCache[cacheKey(rel.tmdbId, rel.type, rel.embedId)] = rel
@@ -362,6 +380,7 @@ fun MoviesNavigation(
                         item = stub,
                         onPlayEpisode = onPlayEpisodeCb,
                         onPlayDirect = onPlayDirectCb,
+                        onPlayDirectLocked = onPlayDirectLockedCb,
                         onBack = onBackCb,
                         onRelatedClick = onRelatedCb,
                         onOpenKodiAddon = { addonId, searchTitle -> navController.navigate(MoviesRoute.KodiBrowser.create(addonId, searchTitle)) },
@@ -403,6 +422,7 @@ fun MoviesNavigation(
                     episodeTotal = data.episodeTotal,
                     sources     = data.sources,
                     kodiDiag    = data.kodiDiag,
+                    startLocked = data.lockedSource,
                     television = isTV,
                     onBack      = { navController.popBackStack() },
                     // Mini player (Fase C): expandir reabre ESTA sessão (mesmo
@@ -1085,6 +1105,12 @@ private fun MinhaListaScreen(
     val watchlist by vm.watchlist.collectAsStateWithLifecycle()
     val recent by vm.recentlyPlayed.collectAsStateWithLifecycle()
     val recentArtwork by vm.recentArtwork.collectAsStateWithLifecycle()
+    // Ainda não assistidos (Lote 11, v1.21.0): títulos da Minha Lista sem
+    // nenhuma reprodução e sem episódio visto.
+    val notWatched by vm.notWatchedYet.collectAsStateWithLifecycle()
+    // Abas da Biblioteca (Lote 11, v1.21.0): 0 = Biblioteca (o de sempre),
+    // 1 = Histórico (o histórico de reproduções, com busca e ordenação).
+    var tab by remember { mutableStateOf(0) }
     // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
     val panelBlurOn by androidx.hilt.navigation.compose.hiltViewModel<com.aotv.app.ui.movies.DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
     // Calendário (Lote 2, item 6): carrega 1x ao abrir a Biblioteca; o "Atualizar"
@@ -1168,6 +1194,17 @@ private fun MinhaListaScreen(
             title = "Minha Lista",
             sub = if (watchlist.isEmpty() && recent.isEmpty()) null else "${watchlist.size} salvos  ·  ${recent.size} em andamento",
         )
+        // Abas (Lote 11, v1.21.0): Biblioteca e Histórico. Na TV não há abas
+        // (TvMyListScreen, sem mudanças).
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(start = com.aotv.app.ui.common.pagePadding(), end = com.aotv.app.ui.common.pagePadding(), bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            com.aotv.app.ui.common.FilterChipPill("Biblioteca", tab == 0, onClick = { tab = 0 })
+            com.aotv.app.ui.common.FilterChipPill("Histórico", tab == 1, onClick = { tab = 1 })
+        }
+        if (tab == 0) {
         // Downloads saiu da barra (Fase A, pílula de 4 abas): a entrada fica aqui,
         // na Biblioteca. Sempre visível, mesmo com a lista vazia.
         Row(
@@ -1225,7 +1262,7 @@ private fun MinhaListaScreen(
         val availableWidth = config.screenWidthDp - if (config.screenWidthDp >= 600 && config.screenHeightDp >= 480) tabletRailWidth().value.toInt() else 0
         val perRow = com.aotv.app.ui.common.posterColumns(availableWidth, config.fontScale)
 
-        if (watchlist.isEmpty() && recent.isEmpty()) {
+        if (tab == 0 && watchlist.isEmpty() && recent.isEmpty()) {
             // Estado vazio premium centralizado.
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 com.aotv.app.ui.common.AotvEmptyState(
@@ -1270,6 +1307,37 @@ private fun MinhaListaScreen(
                                 progress = pct,
                                 onLongClick = { pendingRemove = h }, // segurar → remover
                                 frosted = panelBlurOn,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── (A) Ainda não assistidos (Lote 11, v1.21.0) ─────────────────
+            // Fileira horizontal com os títulos da Minha Lista que o perfil
+            // ainda não assistiu (ver MinhaListaViewModel.notWatchedYet).
+            // Some quando não há nenhum — a seção "Salvos" continua abaixo.
+            if (notWatched.isNotEmpty()) {
+                item {
+                    com.aotv.app.ui.common.SectionHeader(
+                        title = "Ainda não assistidos",
+                        eyebrow = "Minha Lista",
+                        action = { CountPill(notWatched.size) },
+                    )
+                }
+                item {
+                    val railWidth = com.aotv.app.ui.common.posterWidthFor(com.aotv.app.data.local.PosterSize.SMALL)
+                    androidx.compose.foundation.lazy.LazyRow(
+                        contentPadding = PaddingValues(horizontal = pad),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(notWatched, key = { "${it.tmdbId}:${it.type}" }) { w ->
+                            val item = rebuild(w.tmdbId, typeOf(w.type), w.title, w.posterUrl, w.year)
+                            com.aotv.app.ui.common.PosterCard(
+                                item = item,
+                                onClick = { onItemClick(item) },
+                                modifier = Modifier.width(railWidth),
+                                onLongClick = { pendingUnsave = w }, // segurar → tirar da lista
                             )
                         }
                     }
@@ -1382,6 +1450,151 @@ private fun MinhaListaScreen(
                 }
             }
 
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+        } else {
+            HistoryTab(
+                history = recent,
+                onItemClick = onItemClick,
+                onRemoveRequest = { pendingRemove = it },
+                onClearHistory = { vm.clearHistory() },
+                rebuild = { h -> rebuild(h.tmdbId, typeOf(h.type), h.title, h.posterUrl, "") },
+            )
+        }
+    }
+}
+
+/**
+ * Aba "Histórico" da Biblioteca (Lote 11, v1.21.0): o histórico de
+ * reproduções do perfil (movie_history, o mesmo do Continuar assistindo —
+ * no máximo 30 registros, os mais recentes primeiro). Busca por título e
+ * ordenação por data (padrão) ou por título. Tocar abre o detalhe; o
+ * botão de lixeira remove (o mesmo diálogo do Continuar); "Limpar
+ * histórico" apaga tudo, com confirmação. Na TV a aba não existe
+ * (TvMyListScreen, sem mudanças).
+ */
+@Composable
+private fun HistoryTab(
+    history: List<com.aotv.app.data.local.entity.MovieHistoryEntity>,
+    onItemClick: (MovieItem) -> Unit,
+    onRemoveRequest: (com.aotv.app.data.local.entity.MovieHistoryEntity) -> Unit,
+    onClearHistory: () -> Unit,
+    rebuild: (com.aotv.app.data.local.entity.MovieHistoryEntity) -> MovieItem,
+) {
+    var query by remember { mutableStateOf("") }
+    var sortByTitle by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    val shown = remember(history, query, sortByTitle) {
+        val filtered = if (query.isBlank()) history
+            else history.filter { it.title.contains(query, ignoreCase = true) }
+        if (sortByTitle) filtered.sortedBy { it.title.lowercase() } else filtered
+    }
+    if (confirmClear) {
+        ConfirmRemoveDialog(
+            title = "Limpar todo o histórico?",
+            body = "Apaga as ${history.size} reproduções registradas. A Minha Lista não é afetada.",
+            onConfirm = { onClearHistory(); confirmClear = false },
+            onDismiss = { confirmClear = false },
+        )
+    }
+    val pad = com.aotv.app.ui.common.pagePadding()
+    androidx.compose.foundation.layout.Column(
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        androidx.compose.material3.OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            placeholder = { Text("Buscar no histórico", color = com.aotv.app.ui.theme.TextTertiary) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(20.dp)) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp),
+            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = com.aotv.app.ui.theme.Accent,
+                unfocusedBorderColor = com.aotv.app.ui.theme.Border,
+                focusedTextColor = com.aotv.app.ui.theme.TextPrimary,
+                unfocusedTextColor = com.aotv.app.ui.theme.TextPrimary,
+                cursorColor = com.aotv.app.ui.theme.Accent,
+                focusedContainerColor = com.aotv.app.ui.theme.Surface2,
+                unfocusedContainerColor = com.aotv.app.ui.theme.Surface2,
+            ),
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(start = pad, end = pad, bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            com.aotv.app.ui.common.FilterChipPill("Mais recentes", !sortByTitle, onClick = { sortByTitle = false })
+            com.aotv.app.ui.common.FilterChipPill("Título A–Z", sortByTitle, onClick = { sortByTitle = true })
+            Spacer(Modifier.weight(1f))
+            if (history.isNotEmpty()) {
+                TextButton(onClick = { confirmClear = true }) {
+                    Text("Limpar histórico", color = com.aotv.app.ui.theme.LiveRed, fontSize = 13.sp)
+                }
+            }
+        }
+        if (history.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                com.aotv.app.ui.common.AotvEmptyState(
+                    icon = androidx.compose.material.icons.Icons.Default.History,
+                    title = "Nenhuma reprodução ainda",
+                    message = "Os títulos que você assistir aparecem aqui, com a data e o progresso.",
+                )
+            }
+            return@Column
+        }
+        if (shown.isEmpty()) {
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Nada com esse nome no histórico.",
+                    color = com.aotv.app.ui.theme.TextTertiary,
+                    fontSize = 15.sp,
+                )
+            }
+            return@Column
+        }
+        androidx.compose.foundation.lazy.LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = WindowInsets.navigationBars.asPaddingValues(),
+        ) {
+            items(shown, key = { "${it.tmdbId}:${it.type}" }) { h ->
+                val pct = if (h.durationMs > 0L)
+                    (h.positionMs.toFloat() / h.durationMs).coerceIn(0f, 1f) else null
+                val sub = buildList {
+                    if (h.lastEpisode.isNotBlank()) add(h.lastEpisode)
+                    add(
+                        java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("pt", "BR"))
+                            .format(java.util.Date(h.lastWatchedAt)),
+                    )
+                    if (pct != null) add("${(pct * 100).toInt()}% assistido")
+                }.joinToString("  ·  ")
+                Row(
+                    Modifier.fillMaxWidth()
+                        .padding(horizontal = pad, vertical = 4.dp)
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                        .background(com.aotv.app.ui.theme.BackgroundCard)
+                        .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = { onItemClick(rebuild(h)) })
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Icon(Icons.Default.History, null, tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(24.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            h.title,
+                            color = com.aotv.app.ui.theme.TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                            maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(sub, color = com.aotv.app.ui.theme.TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                    }
+                    IconButton(onClick = { onRemoveRequest(h) }) {
+                        Icon(Icons.Default.Delete, "Remover do histórico", tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
             item { Spacer(Modifier.height(24.dp)) }
         }
     }

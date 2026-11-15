@@ -16,6 +16,10 @@ internal class DetailPrimary(
     /** Pode tocar agora (pronto, com fonte e não é só outro filme). */
     val enabled: Boolean,
     val play: () -> Unit,
+    /** Mesmo play, mas pela fonte travada (guarda de duração confirmada, v1.21.0). */
+    val playLocked: () -> Unit,
+    /** URL que o botão principal tocaria num filme (null p/ séries ou sem fonte). */
+    val pendingMovieUrl: String?,
     /** Todas as fontes do filme, na ordem, para o seletor do player. */
     val playerSources: List<MoviePlayerSource>,
     /** Série terminada e a primeira série relacionada, para o "Próximo seriado". */
@@ -30,6 +34,8 @@ internal fun rememberDetailPrimary(
     viewModel: MovieDetailViewModel,
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit,
+    /** Play com a fonte travada (guarda de duração confirmada). Padrão = o play normal. */
+    onPlayDirectLocked: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = onPlayDirect,
 ): DetailPrimary {
     val isSeries = item.type == MediaType.SERIES
     val playerSources = state.stremioStreams.map { MoviePlayerSource(it.label, it.url, addon = it.addon, stream = it) }
@@ -80,8 +86,28 @@ internal fun rememberDetailPrimary(
         else -> "Assistir"
     }
 
-    fun play() {
+    fun play() { playInternal(locked = false) }
+
+    /** Mesmo play, mas a fonte sai travada (o player não auto-troca por duração). */
+    fun playLocked() { playInternal(locked = true) }
+
+    /**
+     * URL que o botão principal tocaria num filme (retomada ou melhor fonte).
+     * Null p/ séries (a guarda de duração não vale p/ episódios, como a
+     * checagem de outro filme) ou sem fonte. A tela usa p/ perguntar ANTES
+     * de tocar, quando a duração do arquivo destoa da do título.
+     */
+    fun pendingMovieUrl(): String? {
+        if (isSeries || !enabled) return null
+        if (canResume) return state.resumeSourceUrl
+        return playerSources.getOrNull(viewModel.bestSourceIndex())?.url
+    }
+
+    fun playInternal(locked: Boolean) {
         if (!enabled) return
+        // Fonte travada: o player abre com userLockedSource (não auto-troca
+        // por lentidão nem por duração — o usuário já confirmou esta fonte).
+        val direct = if (locked) onPlayDirectLocked else onPlayDirect
         viewModel.recordPlayback()
         if (nextEpisodeInSeason > 0) {
             onPlayEpisode(item.tmdbId, histSeason, nextEpisodeInSeason, epsInHistSeason)
@@ -101,7 +127,7 @@ internal fun rememberDetailPrimary(
             val saved = playerSources.any { it.url == state.resumeSourceUrl }
             val sources = if (saved) playerSources
                 else listOf(MoviePlayerSource("Fonte salva", state.resumeSourceUrl)) + playerSources
-            onPlayDirect(state.resumeSourceUrl, state.resumePositionMs, state.resumeLastEpisode, sources, histSeason, histEpisode, total)
+            direct(state.resumeSourceUrl, state.resumePositionMs, state.resumeLastEpisode, sources, histSeason, histEpisode, total)
             return
         }
         if (isSeries) {
@@ -111,11 +137,12 @@ internal fun rememberDetailPrimary(
             return
         }
         val first = playerSources.getOrNull(viewModel.bestSourceIndex()) ?: return
-        onPlayDirect(first.url, 0, "", playerSources, 0, 0, 0)
+        direct(first.url, 0, "", playerSources, 0, 0, 0)
     }
 
     return DetailPrimary(
         label = label, ready = ready, enabled = enabled, play = ::play,
+        playLocked = ::playLocked, pendingMovieUrl = pendingMovieUrl(),
         playerSources = playerSources,
         nextSeries = if (seriesFinished) state.related.firstOrNull { it.type == MediaType.SERIES } else null,
         numberOfSeasons = numberOfSeasons,

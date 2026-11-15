@@ -12,6 +12,8 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Newspaper
@@ -164,6 +166,13 @@ fun LiveGroupCards(
     showNames: Boolean = true,
     showNumbers: Boolean = false,
     cleanGroups: Boolean = false,
+    // PIN parental por grupo (Lote 11, v1.21.0): grupos trancados com o PIN
+    // dos pais. O desbloqueio vale só p/ a sessão (a tela guarda os grupos
+    // liberados em memória). null = sem cadeado (TV, que não tem essa UI).
+    lockedGroups: List<String> = emptyList(),
+    unlockedGroups: Set<String> = emptySet(),
+    onToggleGroupLock: ((String) -> Unit)? = null,
+    onRequestUnlock: ((String) -> Unit)? = null,
 ) {
     val pad = com.aotv.app.ui.common.pagePadding()
     // Favoritos primeiro (estável: mantém a ordem da lista dentro de cada
@@ -180,11 +189,20 @@ fun LiveGroupCards(
         items(ordered, key = { it.key }) { (group, rows) ->
             val isFav = group in favorites
             val isOpen = group in expanded
+            // PIN por grupo (Lote 11): trancado e sem liberação na sessão =
+            // o cartão não expande nem mostra logos/canais; tocar pede o PIN.
+            val isLocked = group in lockedGroups && group !in unlockedGroups
             Column(
                 Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(BackgroundCard2)
-                    .clickable { expanded = if (isOpen) expanded - group else expanded + group }
+                    .clickable {
+                        if (isLocked) {
+                            onRequestUnlock?.invoke(group)
+                        } else {
+                            expanded = if (isOpen) expanded - group else expanded + group
+                        }
+                    }
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -207,22 +225,41 @@ fun LiveGroupCards(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            // Até 4 logos de canais do grupo (só os que têm logo).
-                            rows.mapNotNull { it.channel.logo.ifBlank { null } }.take(4).forEach { logo ->
-                                Box(
-                                    Modifier.size(width = 36.dp, height = 24.dp)
-                                        .clip(RoundedCornerShape(6.dp)).background(Surface2),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    AsyncImage(
-                                        logo, null, contentScale = ContentScale.Fit,
-                                        modifier = Modifier.fillMaxSize().padding(2.dp),
-                                    )
+                            // Logos dos canais (só os que têm logo). Grupo
+                            // trancado não mostra logo — o conteúdo fica
+                            // escondido até o PIN liberar.
+                            if (!isLocked) {
+                                rows.mapNotNull { it.channel.logo.ifBlank { null } }.take(4).forEach { logo ->
+                                    Box(
+                                        Modifier.size(width = 36.dp, height = 24.dp)
+                                            .clip(RoundedCornerShape(6.dp)).background(Surface2),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        AsyncImage(
+                                            logo, null, contentScale = ContentScale.Fit,
+                                            modifier = Modifier.fillMaxSize().padding(2.dp),
+                                        )
+                                    }
                                 }
                             }
                             Text(
-                                if (rows.size == 1) "1 canal" else "${rows.size} canais",
+                                if (isLocked) "Trancado com PIN"
+                                else if (rows.size == 1) "1 canal" else "${rows.size} canais",
                                 color = TextSecondary, fontSize = 13.sp, maxLines = 1,
+                            )
+                        }
+                    }
+                    // Cadeado do grupo (Lote 11): tranca/destranca com o PIN
+                    // dos pais (o fluxo do PIN vive na tela, via callback).
+                    if (onToggleGroupLock != null) {
+                        IconButton(
+                            onClick = { onToggleGroupLock(group) },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(
+                                if (group in lockedGroups) Icons.Default.Lock else Icons.Default.LockOpen,
+                                if (group in lockedGroups) "Destrancar $group (pede o PIN)" else "Trancar $group com o PIN dos pais",
+                                tint = if (group in lockedGroups) Accent else TextTertiary,
                             )
                         }
                     }
@@ -242,7 +279,7 @@ fun LiveGroupCards(
                         tint = TextTertiary, modifier = Modifier.size(24.dp),
                     )
                 }
-                if (isOpen) {
+                if (isOpen && !isLocked) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         rows.forEach { row ->
                             ChannelRow(

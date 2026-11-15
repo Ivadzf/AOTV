@@ -8,7 +8,7 @@ import androidx.room.Entity
 data class MovieHistoryEntity(
     @ColumnInfo(defaultValue = "main") val profileId: String = "main",
     val tmdbId: Int,
-    val type: String, // MOVIE | SERIES
+    val type: String, // MOVIE | SERIES | LIVE (canal ao vivo, v1.18.0)
     val title: String,
     val posterUrl: String,
     val lastWatchedAt: Long,

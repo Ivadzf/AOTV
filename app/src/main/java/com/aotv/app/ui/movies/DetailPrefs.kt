@@ -40,4 +40,10 @@ class DetailPrefsViewModel @Inject constructor(
     val showQuotes: StateFlow<Boolean> = prefs.detailShowQuotesFlow
     /** Blur real atrás das folhas do detalhe (Lote 3 item 4; padrão: ligado). */
     val panelBlur: StateFlow<Boolean> = prefs.panelBlurFlow
+    /** Guarda de duração (Lote 11, v1.21.0; padrão: ligada). */
+    val durationGuard: StateFlow<Boolean> = prefs.durationGuardFlow
+    /** Blur anti-spoiler nos episódios não assistidos (Lote 11, v1.21.0; padrão: desligado). */
+    val spoilerBlur: StateFlow<Boolean> = prefs.detailSpoilerBlurFlow
+    /** Esconder título/episódio até ir ao ar (Lote 8; também vale no detalhe, p/ episódios futuros). */
+    val calendarHideSpoilers: StateFlow<Boolean> = prefs.calendarHideSpoilersFlow
 }

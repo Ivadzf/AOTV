@@ -30,6 +30,8 @@ data class TmdbSeriesDetailDto(
     @SerializedName("last_episode_to_air") val lastEpisodeToAir: TmdbNextEpisodeDto? = null,
     @SerializedName("status")              val status: String? = null,
     @SerializedName("in_production")       val inProduction: Boolean = false,
+    // Estúdios de produção (folha Sobre, v1.21.0). Só vem em /tv/{id}.
+    @SerializedName("production_companies") val productionCompanies: List<TmdbCompanyDto> = emptyList(),
 )
 
 data class TmdbNextEpisodeDto(

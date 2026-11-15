@@ -237,6 +237,8 @@ class MovieDetailViewModel @Inject constructor(
         val watchingSeason: Int = 0,
         // Elenco + filmes/séries relacionados (TMDB credits + recommendations)
         val cast: List<com.aotv.app.domain.model.CastMember> = emptyList(),
+        /** Estúdios de produção (TMDB, folha Sobre v1.21.0). Vazio = sem dado (a linha some). */
+        val studios: List<String> = emptyList(),
         val related: List<MovieItem> = emptyList(),
         // ── Coleção/franquia do filme, em ordem cronológica de lançamento ──
         val collectionName: String = "",
@@ -537,7 +539,7 @@ class MovieDetailViewModel @Inject constructor(
                 // Mostra o filme JÁ (hero). As fontes dos addons entram conforme chegam.
                 val trailer = detailDto?.videos.bestTrailerKey()
                 val trailers = detailDto?.videos.trailerKeys()
-                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
+                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() }, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
                 loadDetailExtras(tmdbId, detail?.title.orEmpty(), detail?.year?.toIntOrNull(), true, detailDto?.originalTitle.orEmpty())
 
@@ -616,6 +618,7 @@ class MovieDetailViewModel @Inject constructor(
                         series = seriesDetail,
                         originalTitle = detailDto?.originalName.orEmpty(),
                         cast = castList,
+                        studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() },
                         related = relatedList,
                         trailerKey = trailer,
                         trailerKeys = trailers,

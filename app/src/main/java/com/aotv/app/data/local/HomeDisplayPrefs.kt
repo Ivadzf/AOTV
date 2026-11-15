@@ -22,13 +22,19 @@ enum class HomeDensity { COMPACT, COMFORTABLE }
 /**
  * Exibição da Início, por perfil. O padrão é o compacto: pôster pequeno, fileiras
  * apertadas, sem selos nem etiqueta no pôster, herói em tela cheia, fundo sólido
- * e sublinhado de destaque nas seções.
+ * e sublinhado de destaque nas seções. Os selos de QUALIDADE/FONTE (4K, Remux,
+ * BluRay, WEB-DL, DV, HDR10+) são outra coisa: decisão do Davi (Lote 11,
+ * v1.21.0), vão LIGADOS por padrão e têm toggle próprio ([showQualityBadges]) —
+ * a etiqueta do topo continua no [showPosterBadges] da Fase B, desligada por
+ * padrão. Os selos de qualidade só aparecem quando o resumo das fontes do
+ * título existe (ver PosterInfo): sem fonte lida, sem selo inventado.
  */
 data class HomeDisplayPrefs(
     val posterSize: PosterSize = PosterSize.SMALL,
     val posterRadiusDp: Int = 14,
     val density: HomeDensity = HomeDensity.COMPACT,
     val showPosterBadges: Boolean = false,
+    val showQualityBadges: Boolean = true,
     val heroStyle: HeroStyle = HeroStyle.FULL_BLEED,
     val dynamicBackground: Boolean = false,
     val sectionUnderline: Boolean = true,

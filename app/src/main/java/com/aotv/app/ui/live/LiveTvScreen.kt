@@ -71,6 +71,63 @@ fun LiveTvScreen(
     // para não quebrar o D-pad. Grupos favoritos do hub (a estrela no cartão).
     val isTv = com.aotv.app.ui.common.LocalIsTv.current
     val groupFavorites by prefs.liveGroupFavoritesFlow.collectAsStateWithLifecycle()
+    // PIN parental por grupo (Lote 11, v1.21.0): grupos trancados com o PIN
+    // dos pais (o mesmo PIN global). O desbloqueio vale só p/ a sessão:
+    // fechar o app tranca de novo. Na TV não há cadeado nem gate — a tela
+    // segue como antes (documentado no relatório do lote).
+    val lockedGroups by prefs.liveLockedGroupsFlow.collectAsStateWithLifecycle()
+    var unlockedGroups by remember { mutableStateOf(setOf<String>()) }
+    // Grupo esperando o PIN: abrir (liberação da sessão) ou destrancar
+    // (tirar da lista — só via cadeado ou Configurações). pendingPlayChannel
+    // = canal que tentou tocar num grupo trancado (grade plana).
+    var pendingUnlockGroup by remember { mutableStateOf<String?>(null) }
+    var pendingUnlockRemovesLock by remember { mutableStateOf(false) }
+    var pendingPlayChannel by remember { mutableStateOf<String?>(null) }
+    // Grupo esperando a CRIAÇÃO do PIN (trancar sem PIN definido ainda).
+    var pendingLockGroup by remember { mutableStateOf<String?>(null) }
+    var showSetPinForLock by remember { mutableStateOf(false) }
+
+    /** Tocar um canal respeitando o cadeado do grupo (só no celular). */
+    fun playChannel(channel: com.aotv.app.data.live.LiveChannel) {
+        if (!isTv && prefs.isLiveGroupLocked(channel.group) && channel.group !in unlockedGroups) {
+            pendingUnlockGroup = channel.group
+            pendingUnlockRemovesLock = false
+            pendingPlayChannel = channel.id
+        } else {
+            onPlay(channel.id)
+        }
+    }
+
+    pendingUnlockGroup?.let { group ->
+        com.aotv.app.ui.settings.VerifyPinDialog(
+            title = "PIN dos pais",
+            onConfirm = { pin ->
+                if (prefs.checkParentalPin(pin)) {
+                    if (pendingUnlockRemovesLock) prefs.unlockLiveGroup(group)
+                    else unlockedGroups = unlockedGroups + group
+                    pendingPlayChannel?.let { onPlay(it) }
+                    pendingPlayChannel = null
+                    pendingUnlockGroup = null
+                    true
+                } else {
+                    false
+                }
+            },
+            onDismiss = { pendingUnlockGroup = null; pendingPlayChannel = null },
+        )
+    }
+    if (showSetPinForLock) {
+        com.aotv.app.ui.settings.SetPinDialog(
+            title = "Criar PIN dos pais",
+            onSet = { pin ->
+                prefs.setParentalPin(pin)
+                pendingLockGroup?.let { prefs.toggleLiveGroupLocked(it) }
+                pendingLockGroup = null
+                showSetPinForLock = false
+            },
+            onDismiss = { pendingLockGroup = null; showSetPinForLock = false },
+        )
+    }
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -209,6 +266,26 @@ fun LiveTvScreen(
                 onToggleGroupFavorite = { prefs.toggleLiveGroupFavorite(it) },
                 showLogos = v.showLogos, showNames = v.showNames,
                 showNumbers = v.showNumbers, cleanGroups = v.cleanGroupNames,
+                // PIN por grupo (Lote 11): cadeado no cartão + PIN ao abrir
+                // um grupo trancado. Trancar sem PIN pede p/ criar o PIN
+                // primeiro; destrancar pede o PIN.
+                lockedGroups = lockedGroups,
+                unlockedGroups = unlockedGroups,
+                onToggleGroupLock = { group ->
+                    if (prefs.isLiveGroupLocked(group)) {
+                        pendingUnlockGroup = group
+                        pendingUnlockRemovesLock = true
+                    } else if (!prefs.hasParentalPin) {
+                        pendingLockGroup = group
+                        showSetPinForLock = true
+                    } else {
+                        prefs.toggleLiveGroupLocked(group)
+                    }
+                },
+                onRequestUnlock = { group ->
+                    pendingUnlockGroup = group
+                    pendingUnlockRemovesLock = false
+                },
             )
             return@Column
         }
@@ -222,7 +299,9 @@ fun LiveTvScreen(
         ) {
             items(v.rows, key = { it.channel.id }) { row ->
                 ChannelRow(
-                    row, v.now, onClick = { onPlay(row.channel.id) }, onFavorite = { viewModel.toggleFavorite(row.channel.id) },
+                    // PIN por grupo (Lote 11): tocar um canal de grupo
+                    // trancado pede o PIN (só no celular; na TV, sem gate).
+                    row, v.now, onClick = { playChannel(row.channel) }, onFavorite = { viewModel.toggleFavorite(row.channel.id) },
                     showLogos = v.showLogos, showNames = v.showNames, showNumbers = v.showNumbers, cleanGroups = v.cleanGroupNames,
                 )
             }

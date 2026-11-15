@@ -421,10 +421,12 @@ fun MediaCard(
     item: MovieItem,
     onClick: () -> Unit,
     showBadges: Boolean = true,
+    showQualityBadges: Boolean = true,
     cornerRadius: Dp = 14.dp,
 ) {
     com.aotv.app.ui.common.PosterCard(
-        item = item, onClick = onClick, showBadges = showBadges, cornerRadius = cornerRadius,
+        item = item, onClick = onClick, showBadges = showBadges, showQualityBadges = showQualityBadges,
+        cornerRadius = cornerRadius,
     )
 }
 
@@ -1074,6 +1076,7 @@ private fun SectionRow(
                     badge = badges?.get(item.tmdbId),
                     progress = progressMap?.get(item.tmdbId),
                     showBadges = display.showPosterBadges,
+                    showQualityBadges = display.showQualityBadges,
                     cornerRadius = display.posterRadiusDp.dp,
                 )
             }
@@ -1135,7 +1138,8 @@ private fun CatalogGridView(
                     val click = remember(item) { { onItemClick(item) } }
                     MediaCard(
                         item = item, onClick = click,
-                        showBadges = display.showPosterBadges, cornerRadius = display.posterRadiusDp.dp,
+                        showBadges = display.showPosterBadges, showQualityBadges = display.showQualityBadges,
+                        cornerRadius = display.posterRadiusDp.dp,
                     )
                 }
                 if (state.gridLoadingMore) {

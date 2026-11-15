@@ -217,10 +217,10 @@ internal val DolbyIcon: ImageVector by lazy {
 
 /**
  * Pôster do catálogo igual ao do webOS. Etiqueta no topo, faixa de ano, gênero e nota na cor
- * tirada do pôster e, no canto, o que as fontes dos addons têm (4K, Dolby, HDR, DUB). [badge]
- * troca a etiqueta por um selo da tela e tira os selos de qualidade, [typeBadge] mostra Filme ou
- * Série e [showTag] falso tira a etiqueta (franquia, que tem o número no canto). Título embaixo
- * quando [caption] não é nulo.
+ * tirada do pôster e, no canto, o que as fontes dos addons têm (4K, Remux, BluRay, WEB-DL, DV,
+ * HDR10+, Dolby, DUB — Lote 11, v1.21.0). [badge] troca a etiqueta por um selo da tela e tira
+ * os selos de qualidade, [typeBadge] mostra Filme ou Série e [showTag] falso tira a etiqueta
+ * (franquia, que tem o número no canto). Título embaixo quando [caption] não é nulo.
  */
 @Composable
 fun PosterCard(
@@ -237,10 +237,12 @@ fun PosterCard(
     onLongClick: (() -> Unit)? = null,
     /** Falso esconde a etiqueta do topo e os selos de qualidade (Fase B, modo compacto). */
     showBadges: Boolean = true,
+    /** Falso esconde SÓ os selos de qualidade/fonte (Lote 11, v1.21.0 — ligados por padrão). */
+    showQualityBadges: Boolean = true,
     /** Raio dos cantos do pôster (Fase B, configurável na página Layout). */
     cornerRadius: Dp = 14.dp,
 ) {
-    val visual = rememberPosterVisual(item, badge, typeBadge, showTag, showBadges = showBadges)
+    val visual = rememberPosterVisual(item, badge, typeBadge, showTag, showBadges = showBadges, showQualityBadges = showQualityBadges)
     val unit = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f).dp
     // decor estável por item/visual: lambda nova a cada composição tornava o
     // card não-pulável. Só desenha depois que a imagem carregou (loaded).
@@ -322,14 +324,22 @@ internal fun rememberPosterVisual(
     requestQuality: Boolean = true,
     /** Falso esconde a etiqueta automática do topo e os selos de qualidade (Fase B, compacto). */
     showBadges: Boolean = true,
+    /**
+     * Falso esconde SÓ os selos de qualidade/fonte (4K, Remux, BluRay, WEB-DL,
+     * DV, HDR10+, DUB). Lote 11 (v1.21.0): decisão do Davi, LIGADO por padrão —
+     * separado do [showBadges] da Fase B, que continua controlando a etiqueta
+     * do topo (desligada por padrão). A leitura das fontes só é pedida quando
+     * estes selos estão ligados: sem eles, nada aparece em lugar nenhum.
+     */
+    showQualityBadges: Boolean = true,
 ): PosterVisual {
     val info = LocalPosterInfo.current
     val key = posterKey(item)
     val ranks = LocalPosterRanks.current?.value
     val qualityMap = LocalPosterQuality.current
     // O cartão só recompõe quando o resumo dele muda, e não a cada resumo novo de qualquer título.
-    val quality by remember(key, qualityMap, badge, showBadges) {
-        derivedStateOf { qualityMap?.value?.get(key)?.takeIf { showBadges && badge == null && it.fresh(System.currentTimeMillis()) } }
+    val quality by remember(key, qualityMap, badge, showQualityBadges) {
+        derivedStateOf { qualityMap?.value?.get(key)?.takeIf { showQualityBadges && badge == null && it.fresh(System.currentTimeMillis()) } }
     }
 
     var hue by remember(key) { mutableStateOf(if (key.isEmpty()) null else info?.tint(key)) }
@@ -400,8 +410,8 @@ internal fun rememberPosterVisual(
         info?.putTint(key, h)
     }
     // Cartão parado na tela por 0,7 s pede a leitura das fontes. Saiu antes da vez, sai da fila.
-    // Sem selos (compacto) nem pede: a leitura não aparece em lugar nenhum.
-    if (showBadges && requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
+    // Sem selos de qualidade nem pede: a leitura não aparece em lugar nenhum.
+    if (showQualityBadges && requestQuality && info != null && badge == null && key.isNotEmpty()) LaunchedEffect(key) {
         delay(700)
         info.want(item)
         try { awaitCancellation() } finally { info.unwant(item) }
@@ -490,29 +500,48 @@ private fun StripDot(unit: Dp, textUnit: TextUnit) = Text(
     modifier = Modifier.padding(horizontal = unit * 4),
 )
 
+/**
+ * Selos de qualidade/fonte no canto do pôster (Lote 11, v1.21.0): resolução,
+ * origem do arquivo (Remux, BluRay ou WEB-DL), Dolby/DV/HDR10+/HDR e DUB.
+ * A origem só vira selo quando o texto da fonte informou (sem origem, sem
+ * selo inventado); sem nenhum selo, não desenha nada. O "HDR" vira "DV"
+ * quando há Dolby Vision e "HDR10+" quando há HDR10+ sem Dolby Vision.
+ */
 @Composable
 private fun QualityChips(q: SourceQuality, modifier: Modifier, unit: Dp, textUnit: TextUnit) {
-    val res = qualityLabel(q.q) ?: return
+    val res = qualityLabel(q.q)
+    val kind = q.kind.takeIf { it == "Remux" || it == "BluRay" || it == "WEB-DL" }
     val dolby = q.dolbyVision || q.atmos
-    val hdr = q.hdr || q.dolbyVision
+    val hdrLabel = when {
+        q.dolbyVision -> "DV"
+        q.hdr10plus -> "HDR10+"
+        q.hdr -> "HDR"
+        else -> null
+    }
+    if (res == null && kind == null && !dolby && hdrLabel == null && !q.ptAudio) return
     Column(
         modifier.padding(top = unit * 21, end = unit * 5),
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(unit * 3),
     ) {
-        Text(
+        if (res != null) Text(
             res, color = Color(0xFF0D0D0D), fontSize = textUnit * 10f, lineHeight = textUnit * 12f, fontWeight = FontWeight.ExtraBold,
             fontFamily = Inter,
             modifier = Modifier.background(Color(0xFFF2F2F2), CHIP).padding(horizontal = unit * 5, vertical = unit),
         )
-        if (dolby || hdr) Row(
+        if (kind != null) Text(
+            kind, color = Color.White, fontSize = textUnit * 8.5f, lineHeight = textUnit * 10f, fontWeight = FontWeight.ExtraBold,
+            fontFamily = Inter, letterSpacing = textUnit * .4f,
+            modifier = Modifier.background(Color.Black.copy(alpha = .8f), CHIP).padding(horizontal = unit * 4, vertical = unit * 2),
+        )
+        if (dolby || hdrLabel != null) Row(
             Modifier.background(Color.Black.copy(alpha = .8f), CHIP).padding(horizontal = unit * 4, vertical = unit * 2),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (dolby) Icon(DolbyIcon, "Dolby", tint = Color.White, modifier = Modifier.size(unit * 13))
-            if (dolby && hdr) Spacer(Modifier.width(unit * 3))
-            if (hdr) Text(
-                "HDR", color = Color.White, fontSize = textUnit * 8f, lineHeight = textUnit * 10f, fontWeight = FontWeight.ExtraBold,
+            if (dolby && hdrLabel != null) Spacer(Modifier.width(unit * 3))
+            if (hdrLabel != null) Text(
+                hdrLabel, color = Color.White, fontSize = textUnit * 8f, lineHeight = textUnit * 10f, fontWeight = FontWeight.ExtraBold,
                 fontFamily = Inter, letterSpacing = textUnit * .4f,
                 modifier = Modifier.border(unit, Color.White.copy(alpha = .92f), RoundedCornerShape(unit * 3)).padding(horizontal = unit * 3),
             )

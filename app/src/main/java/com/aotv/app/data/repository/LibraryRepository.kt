@@ -12,6 +12,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -189,6 +190,23 @@ class LibraryRepository @Inject constructor(
     /** Remove UM item do "continuar assistindo". */
     suspend fun removePlayback(tmdbId: Int, type: String) = movieHistoryDao.delete(pid, tmdbId, type)
 
+    /**
+     * Remove um título do "continuar assistindo" PELO TIPO ARMAZENADO
+     * (v1.21.0 — regressão do long-press no card): o tipo que chega do
+     * card pode divergir do da linha (o MovieItem só tem MOVIE/SERIES, e
+     * um canal ao vivo "LIVE" vira MOVIE no card). Esconde e apaga a linha
+     * em TODOS os tipos armazenados; sem linha nenhuma, usa o tipo que
+     * chegou como fallback (nunca deixa o item preso na lista).
+     */
+    suspend fun removePlaybackAnyType(tmdbId: Int, fallbackType: String) {
+        val stored = runCatching { movieHistoryDao.typesFor(pid, tmdbId) }.getOrDefault(emptyList())
+        val types = stored.ifEmpty { listOf(fallbackType) }
+        types.forEach { t ->
+            prefs.hideContinue(tmdbId, t)
+            movieHistoryDao.delete(pid, tmdbId, t)
+        }
+    }
+
     /** Limpa todo o historico de reproducoes. */
     suspend fun clearHistory() = movieHistoryDao.clear(pid)
 
@@ -197,6 +215,11 @@ class LibraryRepository @Inject constructor(
     /** Episodios ja vistos de uma serie. */
     fun watchedEpisodes(seriesTmdbId: Int): Flow<List<WatchedEpisodeEntity>> =
         prefs.profileId.flatMapLatest { watchedEpisodeDao.getForSeries(it, seriesTmdbId) }
+
+    /** Ids das séries com pelo menos um episódio visto (p/ a prateleira "Ainda não assistidos"). */
+    fun watchedSeriesIds(): Flow<Set<Int>> =
+        prefs.profileId.flatMapLatest { watchedEpisodeDao.watchedSeriesIds(it) }
+            .map { it.toSet() }
 
     /** O perfil ativo já viu esse episódio? Com [profileId], confere nesse perfil em vez do ativo. */
     suspend fun isEpisodeWatched(seriesTmdbId: Int, season: Int, episode: Int, profileId: String? = null): Boolean =

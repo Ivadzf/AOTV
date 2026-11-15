@@ -242,6 +242,9 @@ fun MoviePlayerScreen(
     /** Diagnóstico do play Kodi (resolveu= + http:) — v1.2.7: aparece na
      *  tela de erro quando o ExoPlayer não carrega o stream resolvido. */
     kodiDiag: String = "",
+    /** Fonte travada ao abrir (guarda de duração confirmada, v1.21.0): o
+     *  player não auto-troca por duração nem por lentidão nesta fonte. */
+    startLocked: Boolean = false,
     television: Boolean = com.aotv.app.ui.common.LocalIsTv.current,
     progressVm: PlayerProgressViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     episodeVm: EpisodePlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
@@ -1659,7 +1662,8 @@ class PlayerSession(
     // Índice da fonte ativa (identidade estável — labels/urls podem repetir).
     var currentSourceIdx by run { mutableIntStateOf(sources.indexOfFirst { it.url == embedUrl }.coerceAtLeast(0)) }
     // Fonte escolhida À MÃO pelo usuário → NÃO auto-troca (mesmo lenta). Ele que decide.
-    var userLockedSource by run { mutableStateOf(false) }
+    // startLocked (v1.21.0): a guarda de duração já foi confirmada no detalhe.
+    var userLockedSource by run { mutableStateOf(startLocked) }
     // FIXAR FONTE (escolha explícita do usuário no chip). Diferente do userLockedSource, que
     // é implícito e cai a cada episódio novo. Fixado, o auto-fallback NUNCA troca de fonte,
     // nem por lentidão, nem por erro, e a trava atravessa a troca de episódio/temporada.

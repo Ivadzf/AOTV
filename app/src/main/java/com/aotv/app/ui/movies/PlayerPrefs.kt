@@ -127,6 +127,10 @@ class PlayerPrefsViewModel @Inject constructor(
     val autoSwitch: StateFlow<Boolean> = prefs.playerAutoSwitchFlow
     fun setAutoSwitch(v: Boolean) { prefs.playerAutoSwitch = v }
 
+    /** Guarda de duração (Lote 11, v1.21.0): avisar antes de tocar um arquivo com duração >10% diferente da do título. */
+    val durationGuard: StateFlow<Boolean> = prefs.durationGuardFlow
+    fun setDurationGuard(v: Boolean) { prefs.durationGuard = v }
+
     /** Tempo do watchdog antes de trocar de fonte, em segundos (8/12/20/30/45/60). */
     val sourceTimeout: StateFlow<Int> = prefs.playerSourceTimeoutFlow
     fun setSourceTimeout(v: Int) {

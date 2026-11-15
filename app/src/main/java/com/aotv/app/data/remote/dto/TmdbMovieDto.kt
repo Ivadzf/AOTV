@@ -48,6 +48,8 @@ data class TmdbMovieDto(
     @SerializedName("videos")           val videos: TmdbVideosDto? = null,
     // Coleção/franquia do filme (Harry Potter, Velozes…). Só vem em /movie/{id}.
     @SerializedName("belongs_to_collection") val collection: TmdbCollectionRefDto? = null,
+    // Estúdios de produção (folha Sobre, v1.21.0). Só vem em /movie/{id}.
+    @SerializedName("production_companies") val productionCompanies: List<TmdbCompanyDto> = emptyList(),
     // Função na equipe (combined_credits.crew). "Director" alimenta a fonte de diretor das coleções.
     val job: String? = null,
 )

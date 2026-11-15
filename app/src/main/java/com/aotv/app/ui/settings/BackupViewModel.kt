@@ -15,6 +15,7 @@ import com.aotv.app.data.repository.LibraryRepository
 import com.aotv.app.ui.theme.CustomThemeColors
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +64,7 @@ class BackupViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val plugins: PluginStore,
     private val drive: DriveSyncService,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
     /** Restauração aguardando confirmação (resumo mostrado antes de aplicar). */
@@ -462,6 +464,15 @@ class BackupViewModel @Inject constructor(
         str("theme_palette_v1")?.let { prefs.themePaletteId = it }
         str("custom_theme_v1")?.let { prefs.customTheme = CustomThemeColors.fromJson(it) }
         bool("pref_panel_blur")?.let { prefs.panelBlur = it }
+        // Lote 11 (v1.21.0): a variante de ícone do backup vira o alias ativo
+        // — a pref crua sozinha não trocaria o ícone da tela inicial. Se a
+        // troca falhar, a pref volta p/ a variante ativa de fato (nunca diz
+        // uma cor que não está no launcher).
+        str("app_icon_variant")?.let { id ->
+            if (!com.aotv.app.data.local.AppIconVariants.applyVariant(appContext, id)) {
+                prefs.appIconVariant = com.aotv.app.data.local.AppIconVariants.currentVariantId(appContext)
+            }
+        }
         bool("aotv_catalog_on")?.let { prefs.catalogOn = it }
         int("plugin_timeout_sec")?.let { prefs.pluginTimeoutSec = it }
         int("plugin_concurrency")?.let { prefs.pluginConcurrency = it }

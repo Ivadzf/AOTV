@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,6 +52,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.launch
@@ -75,6 +78,12 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.remote.durationGuardMismatch
+import com.aotv.app.data.remote.hasAtmos
+import com.aotv.app.data.remote.hasDolbyVision
+import com.aotv.app.data.remote.hasHdr
+import com.aotv.app.data.remote.heightLabel
+import com.aotv.app.data.remote.langOf
 import com.aotv.app.domain.model.EpisodeItem
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
@@ -105,6 +114,9 @@ fun MovieDetailScreen(
     // (url, startPos, lastEp, sources, season, episode, episodeTotal)
     // season/episode/episodeTotal != 0 habilitam os botões anterior/próximo episódio no player.
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = { _, _, _, _, _, _, _ -> },
+    // Mesmo play, com a fonte travada (guarda de duração confirmada, v1.21.0).
+    // Padrão = o play normal; a navegação passa o travado.
+    onPlayDirectLocked: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = onPlayDirect,
     // v1.4, Fase 4 — tocar um addon Kodi na folha de fontes abre o
     // navegador dele (a navegação passa pela MoviesNavigation).
     // v1.5 — busca automática: leva (addonId, título) — filme: título do
@@ -127,6 +139,9 @@ fun MovieDetailScreen(
     var trailerOpen by remember { mutableStateOf(false) }  // IFrame (fallback)
     var trailerExo by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
     var trailerLoading by remember { mutableStateOf(false) }
+    // Folha Sobre o título (Lote 11, v1.21.0) e guarda de duração.
+    var aboutOpen by remember { mutableStateOf(false) }
+    var guardPending by remember { mutableStateOf<GuardPending?>(null) }
     val detailScope = rememberCoroutineScope()
     // Foco inicial (TV): botão Assistir/Continuar já vem selecionado no D-pad.
     val primaryFocus = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -136,10 +151,41 @@ fun MovieDetailScreen(
     // Item que chegou só com o id IMDb e teve o TMDB resolvido ao abrir: o resto da tela
     // (temporadas, player) usa o id resolvido.
     val detailItem = if (state.resolvedTmdbId > 0) item.copy(tmdbId = state.resolvedTmdbId) else item
-    val primary = rememberDetailPrimary(detailItem, state, viewModel, onPlayEpisode, onPlayDirect)
+    val primary = rememberDetailPrimary(detailItem, state, viewModel, onPlayEpisode, onPlayDirect, onPlayDirectLocked)
     val playerSources = primary.playerSources
-    // Clique numa fonte: toca no ExoPlayer.
+    // Guarda de duração (Lote 11, v1.21.0): (runtimeMin, fileMin) quando o
+    // arquivo da URL destoa >10% da duração do título no TMDB; null quando
+    // toca direto (séries, guarda desligada, ou sem uma das durações).
+    val durationGuardOn by detailPrefs.durationGuard.collectAsStateWithLifecycle()
+    fun guardFor(url: String): Pair<Int, Int>? {
+        if (item.type == MediaType.SERIES || !durationGuardOn) return null
+        val runtime = state.runtimeMin
+        if (runtime <= 0) return null
+        val sec = state.probes[url]?.sec ?: return null
+        if (!durationGuardMismatch(runtime, sec)) return null
+        return runtime to roundToInt(sec / 60)
+    }
+    /** Botão principal com a guarda: pergunta antes de tocar, quando a duração destoa. */
+    fun tryPrimaryPlay() {
+        if (!primary.enabled) return
+        val g = primary.pendingMovieUrl?.let { guardFor(it) }
+        if (g == null) { primary.play(); return }
+        guardPending = GuardPending.Primary(fileMin = g.second, runtimeMin = g.first)
+    }
+    /** Confirmação da guarda: toca com a fonte travada (o player não auto-troca). */
+    fun confirmGuard(p: GuardPending) {
+        when (p) {
+            is GuardPending.Primary -> primary.playLocked()
+            is GuardPending.Source -> {
+                viewModel.recordPlayback()
+                onPlayDirectLocked(p.stream.url, 0, "", playerSources, 0, 0, 0)
+            }
+        }
+    }
+    // Clique numa fonte: toca no ExoPlayer (com a guarda de duração p/ filmes).
     fun playStremio(s: com.aotv.app.data.remote.StremioStream) {
+        val g = guardFor(s.url)
+        if (g != null) { guardPending = GuardPending.Source(s, fileMin = g.second, runtimeMin = g.first); return }
         viewModel.recordPlayback(); onPlayDirect(s.url, 0, "", playerSources, 0, 0, 0)
     }
 
@@ -161,6 +207,13 @@ fun MovieDetailScreen(
     val nextEpDateStr = fmtIsoDateMobile(state.series?.nextEpisodeDate.orEmpty())
     // Série terminada (último ep ≥90%) → sugere "Próximo seriado" (1ª série relacionada).
     val nextSeries = primary.nextSeries
+
+    // Folha Sobre (Lote 11, v1.21.0): o botão só aparece quando há pelo
+    // menos um dado real p/ a ficha — sem dado, não há o que mostrar.
+    val hasAbout = state.originalTitle.isNotBlank() && !state.originalTitle.equals(title, ignoreCase = true) ||
+        releaseDateStr.isNotBlank() || nextEpDateStr.isNotBlank() || certification.isNotBlank() ||
+        rating > 0 || state.aggregateScore != null || state.cast.isNotEmpty() ||
+        state.studios.isNotEmpty() || state.collectionName.isNotBlank()
 
     // Ken Burns scale animation — parado com a folha de fontes aberta: a
     // animação infinita recompõe o hero a cada quadro por baixo da folha.
@@ -192,8 +245,14 @@ fun MovieDetailScreen(
     // fosco ([FrostedScrim], Lote 4) — o toggle continua valendo lá.
     val panelBlurOn by detailPrefs.panelBlur.collectAsStateWithLifecycle()
     val panelBlurEffect = rememberPanelBlurEffect()
+    // Blur anti-spoiler (Lote 11, v1.21.0): com a pref ligada, os episódios
+    // não assistidos escondem arte, título e sinopse no card. A pref do
+    // calendário (Lote 8) também vale aqui: episódio que ainda não foi ao ar
+    // esconde o título até a data, mesmo com o blur desligado.
+    val spoilerBlurOn by detailPrefs.spoilerBlur.collectAsStateWithLifecycle()
+    val calendarHideSpoilersOn by detailPrefs.calendarHideSpoilers.collectAsStateWithLifecycle()
     val blurBehindSheets = panelBlurOn && panelBlurEffect != null &&
-        (sheetOpen || state.personName != null)
+        (sheetOpen || state.personName != null || aboutOpen)
     // Título em idioma original (Lote 3 item 6, por perfil; padrão: desligado).
     val showOriginalTitle by detailPrefs.originalTitle.collectAsStateWithLifecycle()
 
@@ -571,7 +630,7 @@ fun MovieDetailScreen(
                     ) {
                         AotvPrimaryButton(
                             text = primary.label,
-                            onClick = primary.play,
+                            onClick = { tryPrimaryPlay() },
                             icon = if (primary.enabled) Icons.Default.PlayArrow else null,
                             enabled = primary.enabled,
                             modifier = Modifier.fillMaxWidth(if (fontScale > 1.3f || configuration.screenWidthDp < 420) 1f else .62f).focusRequester(primaryFocus)
@@ -598,6 +657,17 @@ fun MovieDetailScreen(
                                 saved = state.isSaved,
                                 onClick = { viewModel.toggleSave() },
                             )
+                            // Folha Sobre o título (Lote 11, v1.21.0): ficha do TMDB.
+                            // Só aparece quando há pelo menos um dado p/ a ficha.
+                            if (hasAbout) {
+                                GlassCircleButton(
+                                    icon = Icons.Default.Info,
+                                    onClick = { aboutOpen = true },
+                                    size = 52.dp,
+                                    iconTint = TextPrimary,
+                                    contentDescription = "Sobre o título",
+                                )
+                            }
                         }
                     }
 
@@ -623,6 +693,52 @@ fun MovieDetailScreen(
                                 tint = if (state.isSaved) Accent else TextPrimary,
                                 onClick = { viewModel.toggleSave() },
                             )
+                            // Folha Sobre o título (Lote 11, v1.21.0).
+                            if (hasAbout) {
+                                DetailActionIcon(
+                                    icon = Icons.Default.Info,
+                                    label = "Sobre",
+                                    onClick = { aboutOpen = true },
+                                )
+                            }
+                        }
+                    }
+
+                    // Linha "Ready" (Lote 11, v1.21.0): a melhor fonte antes de
+                    // tocar — resolução, HDR/DV/áudio. Só com fontes prontas e
+                    // pelo menos um dado real; sem dado nenhum, some (nunca inventa).
+                    if (!isSeries && primary.ready) {
+                        val facts = state.movieFacts()
+                        val bestFact = facts.getOrNull(viewModel.bestSourceIndex())
+                        val readyParts = bestFact?.let { f ->
+                            buildList {
+                                if (f.rank > 0) add(heightLabel(f.rank))
+                                if (hasDolbyVision(f.label)) add("Dolby Vision") else if (hasHdr(f.label)) add("HDR")
+                                if (hasAtmos(f.label)) add("Atmos")
+                                when (langOf(f.label)) {
+                                    "dub" -> add("Dublado")
+                                    "leg" -> add("Legendado")
+                                }
+                            }
+                        }.orEmpty()
+                        if (readyParts.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Icon(Icons.Default.Check, null, tint = Accent, modifier = Modifier.size(16.dp))
+                                Text(
+                                    "Melhor fonte · " + readyParts.joinToString(" · "),
+                                    fontSize = 13.sp,
+                                    color = TextSecondary,
+                                    fontFamily = ManropeFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
 
@@ -935,6 +1051,9 @@ fun MovieDetailScreen(
                         style = episodeStyle,
                         // (Lote 2 item 5) notas desligadas somem da meta do card.
                         showRating = showEpisodeRatings,
+                        // (Lote 11, v1.21.0) blur anti-spoiler + esconder-spoilers do calendário.
+                        spoilerBlur = spoilerBlurOn,
+                        hideUnairedSpoilers = calendarHideSpoilersOn,
                         modifier = Modifier.padding(horizontal = pad, vertical = 5.dp),
                         onPlay = {
                             onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
@@ -1164,6 +1283,43 @@ fun MovieDetailScreen(
             com.aotv.app.ui.common.TrailerYoutubeOverlay(state.trailerKeys.ifEmpty { listOf(state.trailerKey) }) { trailerOpen = false }
         }
 
+        // ── Guarda de duração (Lote 11, v1.21.0): pergunta antes de tocar ───
+        guardPending?.let { g ->
+            AlertDialog(
+                onDismissRequest = { guardPending = null },
+                title = { Text("Duração diferente do esperado?") },
+                text = { Text("Este arquivo tem ${g.fileMin} min, mas o título tem ${g.runtimeMin} min no TMDB. Pode ser outro filme com o mesmo nome.") },
+                confirmButton = {
+                    TextButton(onClick = { guardPending = null; confirmGuard(g) }) { Text("Tocar mesmo assim") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { guardPending = null }) { Text("Escolher outra fonte") }
+                },
+            )
+        }
+
+        // ── Sobre o título (Lote 11, v1.21.0): ficha do TMDB ────────────────
+        if (aboutOpen) {
+            AboutTitleSheet(
+                title = title,
+                originalTitle = state.originalTitle,
+                isSeries = isSeries,
+                releaseDate = if (isSeries) state.series?.firstAirDate.orEmpty() else state.item?.releaseDate.orEmpty(),
+                nextEpisodeDate = state.series?.nextEpisodeDate.orEmpty(),
+                nextEpisodeSE = state.series?.nextEpisodeSE.orEmpty(),
+                certification = certification,
+                rating = rating,
+                voteCount = state.item?.voteCount ?: 0,
+                aggregateScore = state.aggregateScore,
+                cast = state.cast,
+                studios = state.studios,
+                collectionName = state.collectionName,
+                collectionItems = state.collectionItems,
+                blurred = blurBehindSheets,
+                onDismiss = { aboutOpen = false },
+            )
+        }
+
         // ── Filmografia do ATOR (clicou no elenco) ──────────────────────────────
         state.personName?.let { person ->
             PersonFilmographySheet(
@@ -1177,6 +1333,124 @@ fun MovieDetailScreen(
             )
         }
 
+    }
+}
+
+// ── Guarda de duração (Lote 11, v1.21.0) ─────────────────────────────────────
+// Play pendente de confirmação: o arquivo destoa >10% da duração do título.
+private sealed interface GuardPending {
+    val fileMin: Int
+    val runtimeMin: Int
+    data class Primary(override val fileMin: Int, override val runtimeMin: Int) : GuardPending
+    data class Source(val stream: com.aotv.app.data.remote.StremioStream, override val fileMin: Int, override val runtimeMin: Int) : GuardPending
+}
+
+// ── Folha Sobre o título (Lote 11, v1.21.0) ──────────────────────────────────
+// Ficha do TMDB: datas de lançamento, classificação etária, notas, pessoas,
+// estúdios e coleção. Cada linha SOME sem dado real — nunca inventa. Mesmo
+// visual da folha de filmografia (scrim + card inferior). Só no detalhe do
+// celular; na TV o detalhe não tem esta folha (documentado).
+@Composable
+private fun AboutTitleSheet(
+    title: String,
+    originalTitle: String,
+    isSeries: Boolean,
+    releaseDate: String,
+    nextEpisodeDate: String,
+    nextEpisodeSE: String,
+    certification: String,
+    rating: Double,
+    voteCount: Int,
+    aggregateScore: Int?,
+    cast: List<com.aotv.app.domain.model.CastMember>,
+    studios: List<String>,
+    collectionName: String,
+    collectionItems: List<MovieItem>,
+    blurred: Boolean = false,
+    onDismiss: () -> Unit,
+) {
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.75f))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().fillMaxHeight(0.82f)
+                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .background(if (blurred) Background.copy(alpha = 0.86f) else Background)
+                .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+                .padding(16.dp)
+                .navigationBarsPadding(),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("SOBRE", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = ManropeFontFamily, letterSpacing = 1.2.sp)
+                    Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                GlassCircleButton(icon = Icons.Default.Close, onClick = onDismiss, size = 38.dp, iconTint = TextSecondary, contentDescription = "Fechar")
+            }
+            Spacer(Modifier.height(6.dp))
+            // Notas: TMDB (com votos) + agregada (MDBList). Sem nota nenhuma, a linha some.
+            val notesValue = buildList {
+                if (rating > 0) {
+                    val votes = if (voteCount > 0) " · ${java.text.NumberFormat.getInstance(java.util.Locale("pt", "BR")).format(voteCount)} votos" else ""
+                    add("TMDB · ${"%.1f".format(rating).replace('.', ',')}/10$votes")
+                }
+                if (aggregateScore != null) add("Agregada · $aggregateScore/100")
+            }.joinToString("\n")
+            val hasAnyRow = (originalTitle.isNotBlank() && !originalTitle.equals(title, ignoreCase = true)) ||
+                releaseDate.isNotBlank() || nextEpisodeDate.isNotBlank() || certification.isNotBlank() ||
+                notesValue.isNotBlank() || cast.isNotEmpty() || studios.isNotEmpty() || collectionName.isNotBlank()
+            if (!hasAnyRow) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Sem ficha disponível", color = TextTertiary, fontSize = 14.sp)
+                }
+            } else {
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                    if (originalTitle.isNotBlank() && !originalTitle.equals(title, ignoreCase = true)) {
+                        item { AboutRow("Título original", originalTitle) }
+                    }
+                    if (releaseDate.isNotBlank()) {
+                        item { AboutRow(if (isSeries) "Estreia" else "Lançamento", fmtIsoDateMobile(releaseDate)) }
+                    }
+                    if (nextEpisodeDate.isNotBlank()) {
+                        val nextValue = if (nextEpisodeSE.isNotBlank()) "$nextEpisodeSE · ${fmtIsoDateMobile(nextEpisodeDate)}" else fmtIsoDateMobile(nextEpisodeDate)
+                        item { AboutRow("Próximo episódio", nextValue) }
+                    }
+                    if (certification.isNotBlank()) {
+                        item { AboutRow("Classificação etária", certification) }
+                    }
+                    if (notesValue.isNotBlank()) {
+                        item { AboutRow("Notas", notesValue) }
+                    }
+                    if (cast.isNotEmpty()) {
+                        val shown = cast.take(8)
+                        val lines = shown.joinToString("\n") { m ->
+                            m.name + if (m.character.isNotBlank()) " — ${m.character}" else ""
+                        } + if (cast.size > 8) "\n+ mais ${cast.size - 8}" else ""
+                        item { AboutRow("Elenco", lines) }
+                    }
+                    if (studios.isNotEmpty()) {
+                        item { AboutRow("Estúdios", studios.joinToString(" · ")) }
+                    }
+                    if (collectionName.isNotBlank()) {
+                        val count = if (collectionItems.isNotEmpty()) " · ${collectionItems.size} filmes" else ""
+                        item { AboutRow("Coleção", collectionName + count) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Uma linha da ficha: rótulo pequeno + valor. */
+@Composable
+private fun AboutRow(label: String, value: String) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+        Text(label, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = ManropeFontFamily, letterSpacing = 1.2.sp)
+        Text(value, color = TextPrimary, fontSize = 15.sp, fontFamily = ManropeFontFamily, lineHeight = 22.sp)
     }
 }
 
@@ -2055,6 +2329,11 @@ private fun EpisodeRowCard(
     // (Lote 2 item 5) notas desligadas: a "★ nota" some da meta do card
     // (nos dois estilos). A nota da série no hero NÃO é afetada — só a do episódio.
     showRating: Boolean = true,
+    // (Lote 11, v1.21.0) blur anti-spoiler: com a pref ligada, o episódio
+    // não assistido (e não em andamento) esconde arte, título e sinopse.
+    spoilerBlur: Boolean = false,
+    // (Lote 8) esconder título/episódio até ir ao ar: vale aqui também.
+    hideUnairedSpoilers: Boolean = false,
     modifier: Modifier = Modifier,
     onPlay: () -> Unit,
     onSelect: () -> Unit,
@@ -2071,6 +2350,21 @@ private fun EpisodeRowCard(
         watching -> watchingColor.copy(alpha = 0.55f)
         else -> Border
     }
+    // ── Anti-spoiler (Lote 11, v1.21.0) ─────────────────────────────────
+    // "Não assistido = sem spoiler visível": com o blur ligado, o episódio
+    // não visto (e não em andamento) perde arte, título e sinopse — só o
+    // número ("Episódio 5") e a meta (data/duração) continuam. Episódio
+    // visto ou em andamento nunca é escondido. A pref do calendário (Lote 8)
+    // soma a mesma regra p/ episódios que ainda não foram ao ar: sem data
+    // no TMDB, não há como saber — aí não esconde por esse motivo.
+    // O efeito é o blur do Lote 3/4 (RenderEffect no Android 12+); abaixo
+    // dele o efeito é null e o véu escuro cobre a arte no lugar do blur.
+    val spoilerBlurEffect = rememberPanelBlurEffect(radius = 20f)
+    val airMs = episode.airDate.takeIf { it.isNotBlank() }?.let { airDateMs(it) }
+    val unairedHidden = hideUnairedSpoilers && airMs != null && airMs >= todayMs()
+    val hideSpoiler = (spoilerBlur && !watched && !watching) || unairedHidden
+    // Título sem spoiler: só o número. Com spoiler visível, o de sempre.
+    val displayTitle = if (hideSpoiler) "Episódio ${episode.episodeNumber}" else "${episode.episodeNumber}. ${episode.name}"
     // Meta do episódio: data de lançamento · duração · nota (minimalista).
     // A nota só entra quando as notas estão ligadas (item 5) — e só quando
     // existe (rating 0 = sem votos no TMDB, não "nota zero").
@@ -2101,7 +2395,7 @@ private fun EpisodeRowCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    "${episode.episodeNumber}. ${episode.name}",
+                    displayTitle,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 14.sp,
                     color = TextPrimary,
@@ -2142,7 +2436,7 @@ private fun EpisodeRowCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (episode.overview.isNotBlank()) {
+            if (episode.overview.isNotBlank() && !hideSpoiler) {
                 Text(
                     episode.overview,
                     fontSize = 12.sp,
@@ -2202,7 +2496,18 @@ private fun EpisodeRowCard(
                     model = episode.stillUrl,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
+                    // Anti-spoiler (Lote 11): a arte do episódio não assistido
+                    // é desfocada; abaixo do Android 12 o efeito é null e o
+                    // véu escuro abaixo cobre a arte no lugar do blur.
+                    modifier = Modifier.fillMaxSize().blurBehind(hideSpoiler, spoilerBlurEffect),
+                )
+            }
+            // Véu escuro p/ esconder a arte sem RenderEffect (abaixo do Android 12).
+            if (hideSpoiler && spoilerBlurEffect == null) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f)),
                 )
             }
             // Dark overlay p/ legibilidade do play
@@ -2263,7 +2568,7 @@ private fun EpisodeRowCard(
         ) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    "${episode.episodeNumber}. ${episode.name}",
+                    displayTitle,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 13.5.sp,
                     color = TextPrimary,
@@ -2305,7 +2610,7 @@ private fun EpisodeRowCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (episode.overview.isNotBlank()) {
+            if (episode.overview.isNotBlank() && !hideSpoiler) {
                 Text(
                     episode.overview,
                     fontSize = 11.5.sp,

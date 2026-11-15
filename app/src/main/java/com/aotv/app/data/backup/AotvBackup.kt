@@ -96,6 +96,10 @@ object AotvBackup {
         // o mesmo arquivo no Drive sem procurar de novo.
         "drive_account_email", "drive_file_id", "drive_last_sync_at",
         "drive_last_remote_modified_ms",
+        // Lote 11 (v1.21.0) — variante de ícone do app (não é segredo: só o
+        // nome da cor). Restaurar o backup volta o ícone escolhido (a troca
+        // é aplicada no restore, ver BackupViewModel.refreshGlobalFlows).
+        "app_icon_variant",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */
