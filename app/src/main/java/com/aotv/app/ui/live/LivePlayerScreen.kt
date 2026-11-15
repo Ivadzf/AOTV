@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,6 +15,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.List
@@ -29,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -53,7 +56,13 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import android.widget.Toast
 import com.aotv.app.data.live.LiveChannel
+import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.recordings.RecordingService
+import com.aotv.app.data.recordings.RecordingStore
+import com.aotv.app.data.recordings.ScheduledRecording
+import com.aotv.app.ui.movies.RecordProgramDialog
 import com.aotv.app.ui.theme.*
 import kotlinx.coroutines.delay
 
@@ -73,6 +82,10 @@ fun LivePlayerScreen(
     // Catch-up (v1.17.0): início e fim do programa, em epoch segundos; 0 = ao vivo normal.
     catchupStart: Long = 0L,
     catchupStop: Long = 0L,
+    // Lote 12 (v1.22.0): abrir o guia a partir do player — voltar do guia
+    // retorna ao player (a rota do guia fica por cima na pilha). Sem ele,
+    // o botão do guia não aparece.
+    onOpenGuide: (String) -> Unit = {},
 ) {
     com.aotv.app.ui.common.ImmersiveFullscreen()
     com.aotv.app.ui.common.KeepScreenOn()
@@ -96,6 +109,10 @@ fun LivePlayerScreen(
     var failDetail by remember { mutableStateOf<String?>(null) }
     var showAudioPicker by remember { mutableStateOf(false) }
     var audioAppliedFor by remember { mutableStateOf<String?>(null) }
+    // Lote 12 — Frente 2: gravar o programa atual (ou o de catch-up).
+    var showRecordDialog by remember { mutableStateOf(false) }
+    val recordStore = remember { RecordingStore(context) }
+    val recordPrefs = remember { PlatformPrefs(context) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
     // Catch-up: programa passado vira uma sessão com início/fim; sem URL de catch-up,
@@ -243,6 +260,45 @@ fun LivePlayerScreen(
         viewModel.watched(c.id)
     }
 
+    // ── Lote 12 — Frente 2: gravar o programa atual ─────────────────────
+    // Ao vivo: o programa do guia agora. Em catch-up: o programa da janela
+    // de catch-up (o título e os horários vêm da janela, não do "agora").
+    // Sem programa no guia, não há o que gravar — o botão avisa, sem inventar.
+    val recordProgram = channel?.let { c ->
+        if (inCatchup) viewModel.nowNext(c.id, catchupStart * 1000L).first
+        else viewModel.nowNext(c.id, now).first
+    }
+    val recordStartMs = if (inCatchup) catchupStart * 1000L else recordProgram?.start ?: 0L
+    val recordStopMs = if (inCatchup) catchupStop * 1000L else recordProgram?.stop ?: 0L
+    val recordTitle = recordProgram?.title?.takeIf { it.isNotBlank() }
+
+    fun onRecordClick() {
+        val c = channel ?: return
+        if (recordTitle == null || recordStartMs <= 0L || recordStopMs <= recordStartMs) {
+            Toast.makeText(context, "Sem programa no guia para gravar agora", Toast.LENGTH_LONG).show()
+            return
+        }
+        // Uma gravação por vez (padrão do Lote 8): o serviço recusa a 2ª.
+        if (recordStore.list().any { it.status == ScheduledRecording.STATUS_RECORDING }) {
+            Toast.makeText(context, "Já há uma gravação em andamento", Toast.LENGTH_LONG).show()
+            return
+        }
+        // Aviso de espaço (padrão do Lote 8): o serviço pára abaixo do limite.
+        val freeMb = runCatching {
+            android.os.StatFs(context.filesDir.path).availableBytes / (1024L * 1024L)
+        }.getOrDefault(0L)
+        val limitMb = recordPrefs.recordLowSpaceMb
+        if (limitMb > 0 && freeMb < limitMb) {
+            Toast.makeText(
+                context,
+                "Espaço livre abaixo de $limitMb MB ($freeMb MB livres) — libere espaço antes de gravar",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        showRecordDialog = true
+    }
+
     LaunchedEffect(channel?.id) { channel?.let { play(it) } }
     // Canal caiu. Tenta de novo duas vezes; depois, com o canal reserva
     // ligado, tenta UMA vez outro canal com o mesmo nome de outra fonte
@@ -275,9 +331,24 @@ fun LivePlayerScreen(
     val backupAvailable = channel != null && backupId == null && viewModel.backupEnabled &&
         viewModel.backupChannel(channel) != null
     val showError = failed && retries >= 2 && !backupAvailable
+    // Lote 12 (v1.22.0): swipe vertical troca de canal (p/ cima = próximo,
+    // p/ baixo = anterior). O `step` fecha sobre `siblings`, que muda com o
+    // grupo — o rememberUpdatedState lê sempre a versão atual.
+    val latestStep = rememberUpdatedState({ d: Int -> step(d) })
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
+            .pointerInput(Unit) {
+                var total = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { total = 0f },
+                    onVerticalDrag = { _, amount -> total += amount },
+                    onDragEnd = {
+                        if (total < -120f) latestStep.value(1)
+                        else if (total > 120f) latestStep.value(-1)
+                    },
+                )
+            }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { overlay = !overlay; if (!overlay) panel = false },
     ) {
         AndroidView(
@@ -340,6 +411,11 @@ fun LivePlayerScreen(
                     IconButton(onClick = { panel = !panel; overlay = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Default.List, "Lista de canais", tint = Color.White)
                     }
+                    // Lote 12 (v1.22.0): guia a partir do player — voltar do
+                    // guia retorna a este player (rota por cima na pilha).
+                    IconButton(onClick = { channel?.let { onOpenGuide(it.id) } }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.GridView, "Guia de programação", tint = Color.White)
+                    }
                 }
                 // Base com agora e a seguir, e as setas de canal.
                 Row(
@@ -377,6 +453,12 @@ fun LivePlayerScreen(
                     // neste canal e volta sozinha na próxima vez.
                     TextButton(onClick = { showAudioPicker = true }) {
                         Text("Áudio", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    // Lote 12 — Frente 2: gravar o programa atual (em
+                    // catch-up, grava o programa em catch-up). Só com o app
+                    // aberto — o diálogo avisa (ver RecordProgramDialog).
+                    TextButton(onClick = { onRecordClick() }) {
+                        Text("Gravar", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -463,6 +545,30 @@ fun LivePlayerScreen(
                     }
                 },
                 confirmButton = { TextButton(onClick = { showAudioPicker = false }) { Text("Fechar", color = TextSecondary) } },
+            )
+        }
+
+        // Lote 12 — Frente 2: diálogo de gravar (reuso do Lote 8). Em
+        // catch-up, grava pela URL de catch-up (o ao vivo não tem o programa
+        // passado); ao vivo, pelo canal. A janela é início−2min/fim+5min
+        // (prefs do perfil); o programa atual já está na janela, então o
+        // serviço começa na hora. Só com o app aberto — o diálogo avisa.
+        if (showRecordDialog && channel != null && recordTitle != null && recordStartMs > 0L && recordStopMs > recordStartMs) {
+            val c = channel
+            RecordProgramDialog(
+                channelId = c.id,
+                channelName = c.name,
+                channelUrl = if (inCatchup) viewModel.getCatchupUrl(c, catchupStart, catchupStop) ?: c.url else c.url,
+                channelHeaders = c.headers,
+                programTitle = recordTitle,
+                startMs = recordStartMs,
+                stopMs = recordStopMs,
+                onDismiss = { showRecordDialog = false },
+                onScheduled = { rec ->
+                    showRecordDialog = false
+                    RecordingService.start(context, rec.id)
+                    Toast.makeText(context, "Gravação iniciada: ${rec.programTitle}", Toast.LENGTH_LONG).show()
+                },
             )
         }
     }

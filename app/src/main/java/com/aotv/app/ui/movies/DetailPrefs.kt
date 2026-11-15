@@ -34,6 +34,8 @@ class DetailPrefsViewModel @Inject constructor(
     val originalTitle: StateFlow<Boolean> = prefs.detailOriginalTitleFlow
     /** Nota agregada (MDBList) na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */
     val showAggregateRating: StateFlow<Boolean> = prefs.detailShowAggregateRatingFlow
+    /** Fonte da nota exibida de filmes e séries (Lote 12 — Frente 3, v1.22.0): "auto" | "mdblist" | "tmdb". Episódios seguem sempre TMDB. */
+    val ratingsSource: StateFlow<String> = prefs.ratingsSourceFlow
     /** Avaliações do Trakt na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */
     val showTraktReviews: StateFlow<Boolean> = prefs.detailShowTraktReviewsFlow
     /** Frases e ficha (Wikiquote/Wikipédia) na página de detalhes (Lote 8, v1.18.0; padrão: mostrar). */

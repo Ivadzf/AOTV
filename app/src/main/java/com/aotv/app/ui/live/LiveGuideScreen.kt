@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
@@ -52,8 +53,18 @@ fun LiveGuideScreen(
     viewModel: LiveTvViewModel = hiltViewModel(),
     /** Rota de catch-up pronta (ver [livePlayerCatchupRoute]); sem ele, passado com catch-up cai no ao vivo. */
     onPlayCatchup: ((String) -> Unit)? = null,
+    /** Voltar (rota própria do guia, aberta do player — Lote 12, v1.22.0). Sem ele, a grade vive dentro da aba Ao vivo e não tem botão de voltar. */
+    onBack: (() -> Unit)? = null,
+    /** Buscar o título do programa nos addons (Lote 12, v1.22.0): abre a busca com a query. Sem ele, o botão some. */
+    onSearchTitle: ((String) -> Unit)? = null,
+    /** Canal a destacar ao abrir (vindo do player). */
+    focusChannelId: String? = null,
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
+    // Guia instantâneo (Lote 12, v1.22.0): a grade já abriu com o EPG salvo
+    // em disco (o repo carrega o arquivo no init); aqui só pede a
+    // atualização em 2º plano quando passou o intervalo — sem travar a tela.
+    LaunchedEffect(Unit) { viewModel.refreshEpgIfStale() }
     // Lote 8 (v1.18.0): janela visível continua 4 h, mas os limites vêm das
     // prefs — não rola para antes de (agora − horas atrás) nem para depois de
     // (agora + dias à frente). windowStart = agora − 1 h + deslocamento, então
@@ -69,6 +80,12 @@ fun LiveGuideScreen(
     val totalWidth = HOUR_WIDTH_DP * WINDOW_HOURS
     // Um só ScrollState para o cabeçalho e todas as linhas: as colunas ficam alinhadas.
     val scroll = rememberScrollState()
+    // Lote 12 (v1.22.0): abrir do player rola até o canal que estava em tela cheia.
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(focusChannelId, v.rows) {
+        val idx = v.rows.indexOfFirst { it.channel.id == focusChannelId }
+        if (idx >= 0) listState.scrollToItem(idx)
+    }
     val density = LocalDensity.current
     val hourPx = with(density) { HOUR_WIDTH_DP.toPx() }
     val nowXdp = ((now - windowStart).toFloat() / HOUR_MS * HOUR_WIDTH_DP.value).dp
@@ -79,6 +96,20 @@ fun LiveGuideScreen(
     var record by remember { mutableStateOf<Pair<LiveChannel, LiveProgram>?>(null) }
 
     Column(Modifier.fillMaxSize()) {
+        // Lote 12 (v1.22.0): voltar da rota própria do guia retorna ao
+        // player do canal que estava aberto (popBackStack na navegação).
+        if (onBack != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar ao canal", tint = TextPrimary)
+                }
+                Text("Guia de programação", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -91,6 +122,14 @@ fun LiveGuideScreen(
                 "${hhmm(windowStart)} – ${hhmm(windowEnd)}", color = TextTertiary, fontSize = 13.sp,
                 modifier = Modifier.padding(start = 4.dp),
             )
+            // Guia instantâneo (Lote 12, v1.22.0): de quando é o guia salvo
+            // que a grade está mostrando (nunca inventado: sem hora, sem linha).
+            if (v.epgUpdatedAt > 0) {
+                Text(
+                    if (v.epgLoading) "Guia de ${hhmm(v.epgUpdatedAt)} · atualizando…" else "Guia de ${hhmm(v.epgUpdatedAt)}",
+                    color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp),
+                )
+            }
         }
 
         Row(Modifier.fillMaxWidth()) {
@@ -113,6 +152,7 @@ fun LiveGuideScreen(
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -181,16 +221,31 @@ fun LiveGuideScreen(
             title = { Text(program.title, color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Lote 12 (v1.22.0): pôster do programa, SÓ quando o EPG
+                    // traz `<icon src>` — sem imagem, sem espaço reservado.
+                    if (program.image.isNotBlank()) {
+                        AsyncImage(
+                            program.image, program.title, contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(12.dp)),
+                        )
+                    }
                     Text("${channel.name} · ${hhmm(program.start)} até ${hhmm(program.stop)}", color = TextSecondary, fontSize = 14.sp)
                     if (program.desc.isNotBlank()) Text(program.desc, color = TextSecondary, fontSize = 14.sp)
                 }
             },
             confirmButton = {
-                when {
-                    isCurrent -> TextButton(onClick = { onPlay(channel.id); detail = null }) { Text("Assistir ao vivo", color = Accent, fontWeight = FontWeight.ExtraBold) }
-                    // Lote 8 (v1.18.0): gravar programa futuro ou atual (passado não grava).
-                    program.stop > now -> TextButton(onClick = { record = channel to program; detail = null }) { Text("Gravar", color = Accent, fontWeight = FontWeight.ExtraBold) }
-                    else -> TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
+                // Lote 12 (v1.22.0): "Buscar nos addons" abre a busca com o
+                // título do programa (mesma busca do detalhe, via rota).
+                Column(horizontalAlignment = Alignment.End) {
+                    when {
+                        isCurrent -> TextButton(onClick = { onPlay(channel.id); detail = null }) { Text("Assistir ao vivo", color = Accent, fontWeight = FontWeight.ExtraBold) }
+                        // Lote 8 (v1.18.0): gravar programa futuro ou atual (passado não grava).
+                        program.stop > now -> TextButton(onClick = { record = channel to program; detail = null }) { Text("Gravar", color = Accent, fontWeight = FontWeight.ExtraBold) }
+                        else -> TextButton(onClick = { detail = null }) { Text("Fechar", color = TextSecondary) }
+                    }
+                    if (onSearchTitle != null) {
+                        TextButton(onClick = { onSearchTitle(program.title); detail = null }) { Text("Buscar nos addons", color = Accent) }
+                    }
                 }
             },
             dismissButton = {

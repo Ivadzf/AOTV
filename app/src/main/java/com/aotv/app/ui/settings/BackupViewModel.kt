@@ -478,6 +478,12 @@ class BackupViewModel @Inject constructor(
         int("plugin_concurrency")?.let { prefs.pluginConcurrency = it }
         bool("plugin_auto_update")?.let { prefs.pluginAutoUpdate = it }
         bool("plugin_global_enabled")?.let { prefs.pluginGlobalEnabled = it }
+        // Lote 12 — Frente 3 (v1.22.0): checagem de atualização do app.
+        // Long não tem helper aqui: o valor cru já foi restaurado pelo loop
+        // genérico; o setter abaixo só sincroniza o fluxo em memória.
+        bool("app_update_check_enabled")?.let { prefs.appUpdateCheckEnabled = it }
+        (AotvBackup.decodePrefValue(obj.optJSONObject("app_update_last_check_v1")) as? Long)
+            ?.let { prefs.appUpdateLastCheck = it }
     }
 
     private fun profileJson(p: Profile, includeSecrets: Boolean): JSONObject {

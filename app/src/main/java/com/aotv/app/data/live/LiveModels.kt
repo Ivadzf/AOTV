@@ -42,8 +42,8 @@ data class LiveChannel(
     val catchupTemplate: String = "",
 )
 
-/** Programa do guia. Horários em epoch ms. */
-data class LiveProgram(val start: Long, val stop: Long, val title: String, val desc: String = "") {
+/** Programa do guia. Horários em epoch ms. [image] é o pôster do programa quando o XMLTV traz `<icon src>` — vazio sem imagem (nunca inventada). */
+data class LiveProgram(val start: Long, val stop: Long, val title: String, val desc: String = "", val image: String = "") {
     fun isNow(now: Long) = now in start until stop
     fun progress(now: Long): Float = if (stop <= start) 0f else ((now - start).toFloat() / (stop - start)).coerceIn(0f, 1f)
 }

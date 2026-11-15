@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Gravações (Lote 8): aviso de início/fim/falha (Android 13+, pedido em runtime ao agendar) e serviço em 2º plano. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Atualizador dentro do app (Lote 12, v1.22.0): instalar o APK baixado
+         da release oficial do GitHub. A permissão é pedida em runtime só
+         quando o usuário aceita instalar a atualização. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Microfone opcional: aparelho sem ele instala normal e a busca por voz some. -->
@@ -256,6 +260,19 @@
                 <data android:scheme="aotv" android:host="party" />
             </intent-filter>
         </activity-alias>
+
+        <!-- Atualizador dentro do app (Lote 12, v1.22.0): expõe o APK baixado
+             da release oficial p/ o instalador do sistema. Só o cache do app,
+             só o arquivo da atualização — nenhum outro diretório. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.aotv.app.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- Gravação de stream ao vivo (Lote 8): baixa HLS/TS em 2º plano com notificação persistente. -->
         <service

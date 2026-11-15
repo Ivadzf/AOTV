@@ -104,6 +104,18 @@ private sealed class MoviesRoute(val route: String) {
     object LiveSources : MoviesRoute("movies_live_sources")
     // On Demand Xtream (Lote 9, v1.19.0) — o hub da Live TV (Frente 3) linka esta rota.
     object LiveOnDemand : MoviesRoute("live_ondemand")
+    // Live TV parte 2 (Lote 12, v1.22.0 — Frente 1): Multiview, guia em
+    // rota própria (aberta do player) e gerenciador de canais.
+    object LiveMultiview : MoviesRoute("live_multiview")
+    object LiveGuide : MoviesRoute("movies_live_guide/{channelId}") {
+        fun create(channelId: String) = "movies_live_guide/" + android.net.Uri.encode(channelId)
+    }
+    object LiveChannelsManage : MoviesRoute("live_channels_manage")
+    // Busca com query pronta (Lote 12, v1.22.0 — Frente 1): o painel do
+    // programa no guia abre a busca com o título ("Buscar nos addons").
+    object SearchWithQuery : MoviesRoute("movies_search_query/{query}") {
+        fun create(query: String) = "movies_search_query/" + android.net.Uri.encode(query)
+    }
     object LivePlayer : MoviesRoute("movies_live_player/{id}?start={start}&stop={stop}") {
         fun create(id: String) = "movies_live_player/" + android.net.Uri.encode(id)
         // Catch-up (v1.17.0): [start]/[stop] em epoch segundos; 0 = ao vivo normal.
@@ -191,6 +203,10 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.Accounts.route ||
         currentRoute == MoviesRoute.LiveSources.route ||
         currentRoute == MoviesRoute.LiveOnDemand.route ||
+        currentRoute == MoviesRoute.LiveMultiview.route ||
+        currentRoute == MoviesRoute.LiveChannelsManage.route ||
+        currentRoute?.startsWith("movies_live_guide") == true ||
+        currentRoute?.startsWith("movies_search_query") == true ||
         currentRoute?.startsWith("movies_live_player") == true
     val showTabletRail = deviceLayout == DeviceLayout.TABLET && !isFullscreen
 
@@ -518,6 +534,9 @@ fun MoviesNavigation(
                         onOpenMediaServers = { navController.navigate(MoviesRoute.MediaServers.route) },
                         onOpenAccounts = { navController.navigate(MoviesRoute.Accounts.route) },
                         onOpenLive = { navController.navigate(MoviesRoute.LiveSources.route) },
+                        // Lote 12 (v1.22.0 — Frente 1): gerenciar canais, a
+                        // partir de Integrações → Multiview e canais.
+                        onOpenLiveChannels = { navController.navigate(MoviesRoute.LiveChannelsManage.route) },
                         onOpenCollections = { navController.navigate(MoviesRoute.Collections.route) },
                     )
                 }
@@ -619,10 +638,73 @@ fun MoviesNavigation(
                     // quebrar a navegação.
                     onOpenCalendar = { navController.navigate(MoviesRoute.MinhaLista.route) },
                     onOpenVod = { runCatching { navController.navigate(com.aotv.app.ui.live.LIVE_ON_DEMAND_ROUTE) } },
+                    // Lote 12 (v1.22.0 — Frente 1): Multiview e "Buscar nos
+                    // addons" a partir do programa no guia.
+                    onOpenMultiview = { navController.navigate(MoviesRoute.LiveMultiview.route) },
+                    onSearchTitle = { title -> navController.navigate(MoviesRoute.SearchWithQuery.create(title)) },
                 )
             }
             composable(MoviesRoute.LiveSources.route) {
-                tvScale(isTV) { com.aotv.app.ui.live.LiveSourcesScreen(onBack = { navController.popBackStack() }) }
+                tvScale(isTV) {
+                    com.aotv.app.ui.live.LiveSourcesScreen(
+                        onBack = { navController.popBackStack() },
+                        onManageChannels = { navController.navigate(MoviesRoute.LiveChannelsManage.route) },
+                    )
+                }
+            }
+            // Multiview (Lote 12, v1.22.0 — Frente 1): até 4 canais ao mesmo
+            // tempo; expandir abre o player cheio do canal.
+            composable(MoviesRoute.LiveMultiview.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.live.LiveMultiviewScreen(
+                        onBack = { navController.popBackStack() },
+                        onExpand = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                    )
+                }
+            }
+            // Guia em rota própria (Lote 12, v1.22.0 — Frente 1): aberta do
+            // player; voltar retorna ao player do canal (popBackStack).
+            composable(
+                MoviesRoute.LiveGuide.route,
+                arguments = listOf(navArgument("channelId") { type = NavType.StringType }),
+            ) { entry ->
+                val channelId = entry.arguments?.getString("channelId").orEmpty()
+                tvScale(isTV) {
+                    com.aotv.app.ui.live.LiveGuideScreen(
+                        onPlay = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                        onPlayCatchup = { route -> navController.navigate(route) },
+                        onBack = { navController.popBackStack() },
+                        onSearchTitle = { title -> navController.navigate(MoviesRoute.SearchWithQuery.create(title)) },
+                        focusChannelId = channelId,
+                    )
+                }
+            }
+            // Gerenciar canais (Lote 12, v1.22.0 — Frente 1): ocultar,
+            // reordenar, renomear, Assign EPG, time shift e logo.
+            composable(MoviesRoute.LiveChannelsManage.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.live.LiveChannelManagerScreen(
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+            }
+            // Busca com query pronta (Lote 12, v1.22.0 — Frente 1): o painel
+            // do programa no guia abre a busca com o título.
+            composable(
+                MoviesRoute.SearchWithQuery.route,
+                arguments = listOf(navArgument("query") { type = NavType.StringType }),
+            ) { entry ->
+                val onSearchItem: (MovieItem) -> Unit = { item ->
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
+                    navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
+                }
+                tvScale(isTV) {
+                    MediaSearchScreen(
+                        onItemClick = onSearchItem,
+                        onBack = { navController.popBackStack() },
+                        initialQuery = entry.arguments?.getString("query").orEmpty(),
+                    )
+                }
             }
             // On Demand Xtream (Lote 9, v1.19.0): filmes e séries da conta já
             // configurada; toca pelo player existente (mesmo caminho do detalhe).
@@ -657,6 +739,9 @@ fun MoviesNavigation(
                     onBack = { navController.popBackStack() },
                     catchupStart = entry.arguments?.getLong("start") ?: 0L,
                     catchupStop = entry.arguments?.getLong("stop") ?: 0L,
+                    // Lote 12 (v1.22.0 — Frente 1): guia a partir do player;
+                    // voltar do guia retorna a este player.
+                    onOpenGuide = { id -> navController.navigate(MoviesRoute.LiveGuide.create(id)) },
                 )
             }
 

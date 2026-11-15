@@ -54,6 +54,8 @@ fun RecordProgramDialog(
     stopMs: Long,
     onDismiss: () -> Unit,
     onScheduled: (ScheduledRecording) -> Unit,
+    /** Título da série, quando conhecido (Lote 12 — Frente 2): a gravação vai p/ a pasta da série. "" = sem pasta. */
+    seriesTitle: String = "",
 ) {
     val context = LocalContext.current
     val prefs = remember { PlatformPrefs(context) }
@@ -68,7 +70,7 @@ fun RecordProgramDialog(
         val rec = store.schedule(
             channelId = channelId, channelName = channelName, channelUrl = channelUrl,
             channelHeaders = channelHeaders, programTitle = programTitle,
-            startMs = startMs, stopMs = stopMs,
+            startMs = startMs, stopMs = stopMs, seriesTitle = seriesTitle,
         )
         onScheduled(rec)
     }

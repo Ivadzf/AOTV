@@ -193,7 +193,11 @@ fun MovieDetailScreen(
     val overview    = state.item?.overview ?: state.series?.overview ?: item.overview
     val backdropUrl = state.item?.backdropUrl ?: state.series?.backdropUrl ?: item.backdropUrl
     val year        = state.item?.year ?: state.series?.firstAirYear ?: item.year
-    val rating      = state.item?.rating ?: state.series?.rating ?: item.rating
+    // Nota exibida (Lote 12 — Frente 3, v1.22.0): a agregada do MDBList
+    // quando a fonte permite e há nota p/ o título; sem ela, a do TMDB.
+    // Episódios seguem sempre TMDB (a API do MDBList não tem nota por episódio).
+    val rating      = state.displayRating ?: (state.item?.rating ?: state.series?.rating ?: item.rating)
+    val ratingSource = if (state.displayRating != null) state.displayRatingSource else "TMDB"
     val genres      = state.item?.genres ?: state.series?.genres ?: item.genres
     val certification = state.item?.certification ?: state.series?.certification ?: ""
     val isSeries    = item.type == MediaType.SERIES
@@ -553,6 +557,15 @@ fun MovieDetailScreen(
                                     fontSize = 15.sp,
                                     color = Gold,
                                     fontFamily = ManropeFontFamily,
+                                )
+                                // Fonte da nota exibida (MDBList ou TMDB).
+                                Text(
+                                    ratingSource,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp,
+                                    color = TextTertiary,
+                                    fontFamily = ManropeFontFamily,
+                                    modifier = Modifier.align(Alignment.CenterVertically),
                                 )
                                 MetaDot(Modifier.align(Alignment.CenterVertically))
                             }
@@ -1309,6 +1322,7 @@ fun MovieDetailScreen(
                 nextEpisodeSE = state.series?.nextEpisodeSE.orEmpty(),
                 certification = certification,
                 rating = rating,
+                ratingSource = ratingSource,
                 voteCount = state.item?.voteCount ?: 0,
                 aggregateScore = state.aggregateScore,
                 cast = state.cast,
@@ -1360,6 +1374,7 @@ private fun AboutTitleSheet(
     nextEpisodeSE: String,
     certification: String,
     rating: Double,
+    ratingSource: String = "TMDB",
     voteCount: Int,
     aggregateScore: Int?,
     cast: List<com.aotv.app.domain.model.CastMember>,
@@ -1392,11 +1407,13 @@ private fun AboutTitleSheet(
                 GlassCircleButton(icon = Icons.Default.Close, onClick = onDismiss, size = 38.dp, iconTint = TextSecondary, contentDescription = "Fechar")
             }
             Spacer(Modifier.height(6.dp))
-            // Notas: TMDB (com votos) + agregada (MDBList). Sem nota nenhuma, a linha some.
+            // Notas: fonte da nota exibida (MDBList ou TMDB) + agregada
+            // (MDBList). Os votos são do TMDB e só acompanham a nota TMDB.
+            // Sem nota nenhuma, a linha some.
             val notesValue = buildList {
                 if (rating > 0) {
-                    val votes = if (voteCount > 0) " · ${java.text.NumberFormat.getInstance(java.util.Locale("pt", "BR")).format(voteCount)} votos" else ""
-                    add("TMDB · ${"%.1f".format(rating).replace('.', ',')}/10$votes")
+                    val votes = if (ratingSource == "TMDB" && voteCount > 0) " · ${java.text.NumberFormat.getInstance(java.util.Locale("pt", "BR")).format(voteCount)} votos" else ""
+                    add("$ratingSource · ${"%.1f".format(rating).replace('.', ',')}/10$votes")
                 }
                 if (aggregateScore != null) add("Agregada · $aggregateScore/100")
             }.joinToString("\n")

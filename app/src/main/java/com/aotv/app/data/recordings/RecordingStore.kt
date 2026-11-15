@@ -29,6 +29,10 @@ data class ScheduledRecording(
     val channelUrl: String,
     val channelHeaders: Map<String, String> = emptyMap(),
     val programTitle: String,
+    /** Título da série, quando a gravação é de uma série (Lote 12 — Frente 2):
+     *  a gravação vai p/ a pasta da série (ver [RecordingStore.folderNameFor]).
+     *  "" = sem pasta (filme, jogo ou programa sem série conhecida). */
+    val seriesTitle: String = "",
     /** Início do programa (epoch ms, como veio do EPG). */
     val startMs: Long,
     /** Fim do programa (epoch ms, como veio do EPG). */
@@ -88,11 +92,13 @@ class RecordingStore @Inject constructor(
         programTitle: String,
         startMs: Long,
         stopMs: Long,
+        seriesTitle: String = "",
     ): ScheduledRecording {
         val rec = ScheduledRecording(
             id = UUID.randomUUID().toString(),
             channelId = channelId, channelName = channelName, channelUrl = channelUrl,
             channelHeaders = channelHeaders, programTitle = programTitle,
+            seriesTitle = seriesTitle,
             startMs = startMs, stopMs = stopMs,
             createdAt = System.currentTimeMillis(),
         )
@@ -147,6 +153,16 @@ class RecordingStore @Inject constructor(
         return "aotv-rec-$clean-$date.ts"
     }
 
+    /**
+     * Pasta da série da gravação (Lote 12 — Frente 2): o título da série
+     * limpo p/ nome de pasta ("" = sem pasta, vai na raiz das gravações).
+     * O serviço cria a pasta na hora de gravar; a lista agrupa por ela.
+     */
+    fun folderNameFor(rec: ScheduledRecording): String =
+        rec.seriesTitle.trim().lowercase()
+            .map { c -> if (c.isLetterOrDigit() || c == '-' || c == '_') c else '_' }
+            .joinToString("").trim('_').take(48)
+
     private fun save(list: List<ScheduledRecording>) {
         val arr = JSONArray()
         list.forEach { rec ->
@@ -158,6 +174,7 @@ class RecordingStore @Inject constructor(
                     .put("channelName", rec.channelName).put("channelUrl", rec.channelUrl)
                     .put("headers", headers.toString())
                     .put("programTitle", rec.programTitle)
+                    .put("seriesTitle", rec.seriesTitle)
                     .put("startMs", rec.startMs).put("stopMs", rec.stopMs)
                     .put("status", rec.status).put("fileName", rec.fileName)
                     .put("error", rec.error).put("createdAt", rec.createdAt),
@@ -178,6 +195,7 @@ class RecordingStore @Inject constructor(
                 channelName = o.optString("channelName"), channelUrl = o.optString("channelUrl"),
                 channelHeaders = headers.keys().asSequence().associateWith { headers.optString(it) },
                 programTitle = o.optString("programTitle"),
+                seriesTitle = o.optString("seriesTitle", ""),
                 startMs = o.optLong("startMs"), stopMs = o.optLong("stopMs"),
                 status = o.optString("status", ScheduledRecording.STATUS_SCHEDULED),
                 fileName = o.optString("fileName"), error = o.optString("error"),

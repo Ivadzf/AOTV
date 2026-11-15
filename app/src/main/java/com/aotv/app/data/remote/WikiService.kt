@@ -55,7 +55,7 @@ class WikiService @Inject constructor(
         URLEncoder.encode(title, "UTF-8").replace("+", "%20")
 
     private suspend fun getJson(url: String): JSONObject? = withContext(Dispatchers.IO) {
-        val req = Request.Builder().url(url).header("User-Agent", "AOTV/1.21.0 (Android)").build()
+        val req = Request.Builder().url(url).header("User-Agent", "AOTV/1.22.0 (Android)").build()
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return@withContext null
             val body = resp.body?.string().orEmpty()

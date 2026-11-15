@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.LiveTv
@@ -50,6 +51,10 @@ fun LiveTvScreen(
     onOpenCalendar: () -> Unit = {},
     /** Abre o On Demand (rota "live_ondemand", Frente 2 do Lote 9). */
     onOpenVod: () -> Unit = {},
+    /** Abre o Multiview (Lote 12, v1.22.0): até 4 canais ao mesmo tempo. */
+    onOpenMultiview: () -> Unit = {},
+    /** Buscar o título de um programa do guia nos addons (Lote 12, v1.22.0). */
+    onSearchTitle: ((String) -> Unit)? = null,
     viewModel: LiveTvViewModel = hiltViewModel(),
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
@@ -199,6 +204,8 @@ fun LiveTvScreen(
         ) {
             item { com.aotv.app.ui.common.FilterChipPill("Canais", !guide, { guide = false }, icon = Icons.Default.List) }
             item { com.aotv.app.ui.common.FilterChipPill("Guia", guide, { guide = true }, icon = Icons.Default.GridView) }
+            // Lote 12 (v1.22.0): Multiview — até 4 canais ao mesmo tempo (só no celular; na TV a tela avisa).
+            item { com.aotv.app.ui.common.FilterChipPill("Multiview", false, onOpenMultiview, icon = Icons.Default.Dashboard) }
             item { com.aotv.app.ui.common.FilterChipPill("Todos ${v.total}", v.filter == LiveTvViewModel.ALL, { viewModel.setFilter(LiveTvViewModel.ALL) }) }
             if (v.favoriteCount > 0) item {
                 com.aotv.app.ui.common.FilterChipPill("Favoritos ${v.favoriteCount}", v.filter == LiveTvViewModel.FAV, { viewModel.setFilter(LiveTvViewModel.FAV) }, icon = Icons.Default.Star)
@@ -250,7 +257,7 @@ fun LiveTvScreen(
             return@Column
         }
         if (guide) {
-            LiveGuideScreen(onPlay = onPlay, onPlayCatchup = onPlayCatchup)
+            LiveGuideScreen(onPlay = onPlay, onPlayCatchup = onPlayCatchup, onSearchTitle = onSearchTitle)
             return@Column
         }
         // Lote 9 (v1.19.0): no celular e na vista padrão (sem filtro nem

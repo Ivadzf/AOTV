@@ -15,6 +15,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
@@ -96,6 +98,36 @@ internal fun orderTopActions(order: List<String>): List<String> {
     if (order.isEmpty()) return com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
     val known = com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS.toSet()
     return order.filter { it in known }.distinct()
+}
+
+/**
+ * Recolhe/expande a barra de botões do player (Lote 12 — Frente 2, v1.22.0,
+ * igual ao Nuvio: barra recolhida + ">" p/ expandir).
+ *
+ * Recolhido (só no celular): o botão principal + os 5 primeiros botões da
+ * ordem configurada + o chevron ">" ([id] "expand"). Expandido: todos os
+ * botões + o chevron "<" ([id] "collapse") p/ recolher de novo. Na TV não
+ * recolhe (o D-pad precisa de todos os botões na mesma fileira) e com 5 ou
+ * menos botões não há o que recolher. Os chevrons NÃO entram na lista
+ * canônica [DEFAULT_PLAYER_BUTTONS] nem na pref de ordem: são estado da
+ * sessão, criados aqui depois da ordenação.
+ */
+internal fun collapsePlayerChips(
+    chips: List<PlayerChipItem>,
+    expanded: Boolean,
+    isTv: Boolean,
+    onExpand: () -> Unit,
+    onCollapse: () -> Unit,
+): List<PlayerChipItem> {
+    if (isTv) return chips
+    val main = chips.filter { it.main }
+    val rest = chips.filter { !it.main }
+    if (rest.size <= 5) return chips
+    return if (expanded) {
+        chips + PlayerChipItem(Icons.Default.ChevronLeft, "Menos opções", id = "collapse") { onCollapse() }
+    } else {
+        main + rest.take(5) + PlayerChipItem(Icons.Default.ChevronRight, "Mais opções", id = "expand") { onExpand() }
+    }
 }
 
 internal fun formatTime(ms: Long): String {

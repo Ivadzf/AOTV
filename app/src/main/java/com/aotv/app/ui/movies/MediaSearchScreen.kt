@@ -153,7 +153,14 @@ fun MediaSearchScreen(
     onItemClick: (MovieItem) -> Unit,
     onBack: () -> Unit,
     viewModel: MediaSearchViewModel = hiltViewModel(),
+    // Lote 12 (v1.22.0 — Frente 1): query pronta (ex.: título de um
+    // programa do guia, "Buscar nos addons") — busca na hora, sem digitar.
+    initialQuery: String = "",
 ) {
+    // A query inicial dispara a busca ao vivo do ViewModel (debounce de 250 ms).
+    androidx.compose.runtime.LaunchedEffect(initialQuery) {
+        if (initialQuery.isNotBlank()) viewModel.onQueryChange(initialQuery)
+    }
     val query by viewModel.query.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

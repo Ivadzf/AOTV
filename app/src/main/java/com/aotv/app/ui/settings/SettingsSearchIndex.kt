@@ -45,6 +45,8 @@ object SettingsAnchors {
     // Integrações
     const val INTEGR_ACCOUNTS = "integracoes-contas"
     const val INTEGR_LIVE = "integracoes-tv"
+    // Live TV parte 2 (Lote 12 — Frente 1, v1.22.0): Multiview e canais.
+    const val INTEGR_LIVE_MANAGE = "integracoes-tv-canais"
     // Acompanhamento
     const val TRACK_PROFILE = "acompanhamento-perfil"
     const val TRACK_TMDB = "acompanhamento-tmdb"
@@ -55,6 +57,8 @@ object SettingsAnchors {
     const val APPEAR_PANELS = "aparencia-paineis"
     const val APPEAR_ICON = "aparencia-icone"
     const val APPEAR_DEVICE = "aparencia-aparelho"
+    // Atualizações do app (Lote 12 — Frente 3, v1.22.0).
+    const val APPEAR_UPDATE = "aparencia-atualizacoes"
     // Reprodução
     const val PLAY_MAIN = "reproducao-reproducao"
     const val PLAY_SUBS = "reproducao-legendas"
@@ -322,6 +326,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Nota agregada",
         sub = "Nota de 0 a 100 com as notas por fonte (MDBList)",
         keywords = listOf("nota agregada", "nota", "avaliação", "MDBList", "IMDb", "TMDB"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_RATINGS,
+    ),
+    // Lote 12 — Frente 3 (Notas, v1.22.0): fonte da nota exibida.
+    SettingOptionEntry(
+        title = "Fonte da nota exibida",
+        sub = "Automática (MDBList quando conectado), MDBList ou TMDB",
+        keywords = listOf("fonte da nota", "nota", "MDBList", "TMDB", "avaliação"),
         pageId = SettingsPageIds.Detalhe,
         anchor = SettingsAnchors.DETAIL_RATINGS,
     ),
@@ -666,6 +678,32 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.INTEGR_LIVE,
         kidsHidden = true,
     ),
+    // ── Live TV parte 2 (Lote 12, v1.22.0 — Frente 1) ─────────────────
+    // Caem na seção "Multiview e canais" de Integrações.
+    SettingOptionEntry(
+        title = "Multiview",
+        sub = "Até 4 canais ao mesmo tempo, com áudio só na célula em foco",
+        keywords = listOf("multiview", "multi", "4 canais", "2 canais", "tela dividida", "ao vivo"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE_MANAGE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Gerenciar canais",
+        sub = "Ocultar, reordenar, renomear, trocar a logo e associar o guia de cada canal",
+        keywords = listOf("gerenciar canais", "ocultar canal", "renomear", "renumerar", "reordenar", "logo", "grupo próprio"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE_MANAGE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Assign EPG",
+        sub = "Associar manualmente uma fonte de guia a um canal e deslocar o guia em horas",
+        keywords = listOf("assign epg", "associar guia", "epg", "time shift", "deslocar guia", "guia do canal"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE_MANAGE,
+        kidsHidden = true,
+    ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Trocar de perfil",
@@ -760,6 +798,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("celular", "tablet", "toque"),
         pageId = SettingsPageIds.Aparencia,
         anchor = SettingsAnchors.APPEAR_DEVICE,
+        kidsHidden = true,
+    ),
+    // Lote 12 — Frente 3 (Atualizador, v1.22.0).
+    SettingOptionEntry(
+        title = "Verificar atualizações",
+        sub = "Consulta a release mais recente no GitHub e instala o APK",
+        keywords = listOf("atualização", "atualizar", "versão", "nova versão", "release", "apk", "github"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_UPDATE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Verificação automática de atualização",
+        sub = "Avisa quando houver versão nova (no máximo 1 vez por dia)",
+        keywords = listOf("atualização automática", "atualizar", "versão", "aviso"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_UPDATE,
         kidsHidden = true,
     ),
     // ── Reprodução ───────────────────────────────────────────────────────
@@ -928,6 +983,21 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Velocidade padrão",
         sub = "0,5x a 2x",
         keywords = listOf("velocidade", "reprodução", "2x", "lenta", "rápida"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    // ── Lote 12 — Frente 2 (Player e fontes, v1.22.0) ─────────────────────
+    SettingOptionEntry(
+        title = "Modo de tela padrão",
+        sub = "Automático, Ajustar, Preencher, Zoom ou Esticar",
+        keywords = listOf("tela", "modo de tela", "automático", "ajustar", "preencher", "zoom", "esticar", "proporção"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Fontes em ranking",
+        sub = "Folha de fontes da melhor para a pior em vez de agrupada por addon",
+        keywords = listOf("ranking", "fontes", "melhor", "pior", "ordem", "folha de fontes"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),

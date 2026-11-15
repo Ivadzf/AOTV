@@ -269,6 +269,15 @@ class MovieDetailViewModel @Inject constructor(
         val aggregateScore: Int? = null,
         val aggregateSources: List<DetailSourceRating> = emptyList(),
         val aggregateError: String? = null,
+        // ── Lote 12 — Frente 3 (Notas, v1.22.0) ───────────────────────
+        // Nota EXIBIDA de filmes e séries (0–10): a agregada do MDBList
+        // quando a pref de fonte permite e há nota p/ o título; null =
+        // sem nota MDBList (ou fonte TMDB) e a tela usa a nota do TMDB
+        // como fallback — a nota nunca some por falta do MDBList nem é
+        // inventada. displayRatingSource diz de onde ela veio ("MDBList"
+        // ou "TMDB") e a UI mostra o selo. Episódios seguem sempre TMDB.
+        val displayRating: Double? = null,
+        val displayRatingSource: String = "TMDB",
         // Avaliações do Trakt: série e episódio SEPARADOS — a aba de
         // episódio nunca mostra os comentários da série. Erro real em
         // traktReviewsError; sem Trakt configurado as listas ficam vazias.
@@ -674,18 +683,53 @@ class MovieDetailViewModel @Inject constructor(
         return scaled.roundToInt().coerceIn(0, 100)
     }
 
+    /**
+     * Nota agregada do MDBList (0–100) a partir do mapa de fontes
+     * ([MDBListService.getRatings]): média das fontes habilitadas, cada uma
+     * normalizada p/ 0–100 ([normalizeSourceScore] — mesmo cálculo da seção
+     * agregada do Lote 8). null = nenhuma fonte com nota p/ o título.
+     */
+    fun aggregateMdbScore100(ratings: Map<String, Double?>): Int? {
+        val sources = ratings.mapNotNull { (source, value) ->
+            if (value == null) null else normalizeSourceScore(source, value)
+        }
+        return if (sources.isEmpty()) null else sources.sum() / sources.size
+    }
+
+    /**
+     * A nota exibida de filmes/séries pode vir do MDBList? Só quando a pref
+     * de fonte permite ("auto" ou "mdblist" — "tmdb" força o TMDB) E o
+     * MDBList está habilitado (chave configurada + ligado no perfil).
+     * "auto" sem chave ou com MDBList desligado cai no TMDB, como hoje.
+     */
+    fun useMdbListRating(): Boolean =
+        prefs.ratingsSource != "tmdb" && mdbList.isEnabled
+
     private fun loadDetailExtras(tmdbId: Int, title: String, year: Int?, isMovie: Boolean, originalTitle: String) {
         if (title.isBlank()) return
-        // Nota agregada (MDBList): só quando a pref está ligada e o serviço
-        // está habilitado (chave configurada). Sem fonte com nota, fica null.
-        if (prefs.detailShowAggregateRating && mdbList.isEnabled) {
+        // Nota agregada (MDBList) + nota exibida: UMA só chamada p/ os dois
+        // usos. Busca quando a seção agregada está ligada OU quando a nota
+        // exibida pode vir do MDBList; sem fonte com nota, fica null e a
+        // seção some / o TMDB assume como fallback (nunca inventa nota).
+        if ((prefs.detailShowAggregateRating || useMdbListRating()) && mdbList.isEnabled) {
             viewModelScope.launch {
                 mdbList.getRatings(title, year, isMovie).onSuccess { ratings ->
                     val sources = ratings.mapNotNull { (source, value) ->
                         if (value == null) null else DetailSourceRating(source, normalizeSourceScore(source, value))
                     }
-                    val score = if (sources.isEmpty()) null else sources.sumOf { it.score100 } / sources.size
-                    _uiState.update { it.copy(aggregateScore = score, aggregateSources = sources, aggregateError = null) }
+                    val score = aggregateMdbScore100(ratings)
+                    _uiState.update {
+                        it.copy(
+                            aggregateScore = if (prefs.detailShowAggregateRating) score else it.aggregateScore,
+                            aggregateSources = if (prefs.detailShowAggregateRating) sources else it.aggregateSources,
+                            aggregateError = null,
+                            // Nota exibida em 0–10 (mesma média da agregada).
+                            // Sem nota MDBList p/ o título, displayRating fica
+                            // null e a tela mostra a nota do TMDB.
+                            displayRating = if (useMdbListRating() && score != null) score / 10.0 else it.displayRating,
+                            displayRatingSource = if (useMdbListRating() && score != null) "MDBList" else it.displayRatingSource,
+                        )
+                    }
                 }.onFailure { e ->
                     _uiState.update { it.copy(aggregateError = e.message ?: e.javaClass.simpleName) }
                 }

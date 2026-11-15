@@ -23,6 +23,7 @@ class SettingsViewModel @Inject constructor(
     private val trakt: com.aotv.app.data.remote.TraktService,
     private val history: com.aotv.app.data.local.dao.MovieHistoryDao,
     private val recordings: RecordingStore,
+    private val updateService: com.aotv.app.data.remote.AppUpdateService,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -254,6 +255,63 @@ class SettingsViewModel @Inject constructor(
     // Lote 8 — Tela de detalhe (v1.18.0): nota agregada, avaliações do Trakt, frases/ficha.
     val detailShowAggregateRating: StateFlow<Boolean> = platformPrefs.detailShowAggregateRatingFlow
     fun setDetailShowAggregateRating(v: Boolean) { platformPrefs.detailShowAggregateRating = v }
+
+    // Lote 12 — Frente 3 (Notas, v1.22.0): fonte da nota exibida de filmes
+    // e séries ("auto" | "mdblist" | "tmdb"). Episódios seguem sempre TMDB.
+    val ratingsSource: StateFlow<String> = platformPrefs.ratingsSourceFlow
+    fun setRatingsSource(v: String) { platformPrefs.ratingsSource = v }
+
+    // ── Atualizador dentro do app (Lote 12 — Frente 3, v1.22.0) ──────────
+    // Consulta a release mais recente do repo público no GitHub (sem login).
+    // Sem releases publicadas, o estado é NoReleases — nunca "atualizado".
+    val installedAppVersion: String get() = updateService.installedVersionName
+    val appUpdateCheckEnabled: StateFlow<Boolean> = platformPrefs.appUpdateCheckEnabledFlow
+    fun setAppUpdateCheckEnabled(v: Boolean) { platformPrefs.appUpdateCheckEnabled = v }
+
+    private val _updateState = MutableStateFlow<com.aotv.app.data.remote.UpdateCheckResult?>(null)
+    /** Último resultado da checagem. null = ainda não checado nesta sessão. */
+    val updateState: StateFlow<com.aotv.app.data.remote.UpdateCheckResult?> = _updateState.asStateFlow()
+    private val _updateDownloading = MutableStateFlow(false)
+    val updateDownloading: StateFlow<Boolean> = _updateDownloading.asStateFlow()
+    private val _updateDownloadError = MutableStateFlow<String?>(null)
+    val updateDownloadError: StateFlow<String?> = _updateDownloadError.asStateFlow()
+    private val _updateNeedsPermission = MutableStateFlow(false)
+    /** O sistema ainda não permite instalar apps desconhecidos do AOTV. */
+    val updateNeedsPermission: StateFlow<Boolean> = _updateNeedsPermission.asStateFlow()
+
+    fun checkForUpdates() {
+        viewModelScope.launch { _updateState.value = updateService.checkLatest() }
+    }
+
+    /** Checa sozinho quando ligada a checagem automática e já passou 24 h. */
+    fun maybeAutoCheckForUpdates() {
+        if (updateService.shouldAutoCheck()) checkForUpdates()
+    }
+
+    /** Baixa o APK da release oficial e pede a instalação (ou a permissão). */
+    fun downloadAndInstallUpdate() {
+        if (_updateDownloading.value) return
+        val release = (_updateState.value as? com.aotv.app.data.remote.UpdateCheckResult.Available)?.release ?: return
+        viewModelScope.launch {
+            _updateDownloading.value = true
+            _updateDownloadError.value = null
+            updateService.downloadApk(appContext, release)
+                .onSuccess { file ->
+                    when (val req = updateService.installApk(appContext, file)) {
+                        is com.aotv.app.data.remote.InstallRequest.Ready -> appContext.startActivity(req.intent)
+                        com.aotv.app.data.remote.InstallRequest.NeedsPermission -> _updateNeedsPermission.value = true
+                    }
+                }
+                .onFailure { e -> _updateDownloadError.value = e.message ?: e.javaClass.simpleName }
+            _updateDownloading.value = false
+        }
+    }
+
+    fun openUnknownSourcesSettings() {
+        appContext.startActivity(updateService.unknownSourcesSettingsIntent(appContext))
+    }
+
+    fun dismissUpdatePermission() { _updateNeedsPermission.value = false }
 
     val detailShowTraktReviews: StateFlow<Boolean> = platformPrefs.detailShowTraktReviewsFlow
     fun setDetailShowTraktReviews(v: Boolean) { platformPrefs.detailShowTraktReviews = v }

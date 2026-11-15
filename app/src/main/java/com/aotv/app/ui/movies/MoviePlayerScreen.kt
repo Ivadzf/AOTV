@@ -100,7 +100,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
 
+import com.aotv.app.data.live.LiveSource
+import com.aotv.app.data.live.LiveTvRepository
+import com.aotv.app.data.live.VodItem
 import com.aotv.app.data.remote.SourceFacts
+import com.aotv.app.data.remote.bestIndex
 import com.aotv.app.data.remote.durationMismatch
 import com.aotv.app.data.remote.heightLabel
 import com.aotv.app.data.remote.langOf
@@ -115,6 +119,9 @@ data class MoviePlayerSource(
     val addon: String = "",
     val stream: com.aotv.app.data.remote.StremioStream? = null,
 )
+
+/** Um resultado do On Demand Xtream na folha de fontes (Lote 12 — Frente 2). */
+data class OnDemandHit(val item: VodItem, val isSeries: Boolean)
 
 /** Nome amigável de uma faixa de áudio (label do stream → idioma → "Faixa N"). */
 @OptIn(UnstableApi::class)
@@ -333,10 +340,24 @@ fun MoviePlayerScreen(
     // daqui e a sessão avisa de volta por onPrivateModeToggle.
     val playerPrivateMode by playerPrefsVm.privateMode.collectAsState()
     val playerSpeed by playerPrefsVm.speed.collectAsState()
+    // Lote 12 — Frente 2: modo de tela padrão e vista da folha (prefs por perfil).
+    val playerScreenMode by playerPrefsVm.screenMode.collectAsState()
+    val playerSourcesRanked by playerPrefsVm.sourcesRanked.collectAsState()
     // Notas dos episódios (Lote 2 item 5): a mesma pref do detalhe — o painel
     // de episódios do player esconde o "★ nota" junto com os cards.
     val showEpisodeRatings by playerPrefsVm.episodeRatings.collectAsState()
     s.showEpisodeRatings = showEpisodeRatings
+    // Lote 12 — Frente 2: vista da folha (pref) e modo de tela (o chip
+    // salva de volta por onScreenModeChange; o LaunchedEffect aplica o modo
+    // do perfil ao abrir, como a velocidade faz com playerSpeed).
+    s.sourcesRanked = playerSourcesRanked
+    s.onSourcesRankedChange = { playerPrefsVm.setSourcesRanked(it) }
+    s.onScreenModeChange = { playerPrefsVm.setScreenMode(it) }
+    LaunchedEffect(playerScreenMode) { s.screenModeIdx = playerScreenMode }
+    // On Demand da folha: repo da TV ao vivo (só lê as fontes Xtream já
+    // configuradas; nada de rede até abrir a folha — ver loadOnDemand).
+    val liveRepo = remember { LiveTvRepository(context, com.aotv.app.data.local.PlatformPrefs(context)) }
+    s.onDemandRepo = liveRepo
     s.panelBlurOn = panelBlurOn
     s.playerButtonOrder = playerButtons
     s.playerTopActions = playerTopActionsPref
@@ -630,6 +651,9 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             // Resolução real do que está tocando (ex "1080p") — mostrada junto da fonte.
             override fun onVideoSizeChanged(size: androidx.media3.common.VideoSize) {
                 videoQualityLabel = videoResolutionLabel(size.width, size.height)
+                // Lote 12 — Frente 2: o modo "Automático" compara com a tela.
+                videoWidth = size.width
+                videoHeight = size.height
                 refreshTechInfo()
             }
             // Sessão de áudio (re)criada: (re)aplica o Volume Boost nela.
@@ -1287,9 +1311,9 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         }
                     },
                     update = {
-                        it.resizeMode = screenModes[screenModeIdx].second
-                        it.scaleX = if (screenModeIdx == 2) 1.33f else 1f
-                        it.scaleY = if (screenModeIdx == 2) 1.33f else 1f
+                        it.resizeMode = effectiveResizeMode(it.width, it.height)
+                        it.scaleX = if (screenModeIdx == 3) 1.33f else 1f
+                        it.scaleY = if (screenModeIdx == 3) 1.33f else 1f
                         // Legenda embutida segue o tamanho e o fundo escolhidos.
                         it.subtitleView?.apply {
                             setFractionalTextSize(androidx.media3.ui.SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * subSize)
@@ -1895,9 +1919,17 @@ class PlayerSession(
     var casting by run { mutableStateOf(false) }
     // Overlay de gesto (volume/brilho) — null = escondido
     var gestureHud by run { mutableStateOf<Pair<String, Float>?>(null) }
-    // Modos de tela (resizeMode do PlayerView)
+    // Modos de tela (resizeMode do PlayerView). O índice 0 é o "Automático"
+    // (Lote 12 — Frente 2, v1.22.0, padrão): compara a proporção do vídeo
+    // com a da tela e escolhe FIT ou ZOOM (ver [effectiveResizeMode]) — o
+    // resizeMode guardado aqui p/ ele é só o fallback FIT. Os outros são os
+    // de antes, deslocados de 1: 1 Ajustar, 2 Preencher, 3 Zoom (+33%),
+    // 4 Esticar. O modo é persistido por perfil (pref
+    // `pref_player_screen_mode`) e a tela abre nele — antes zerava a cada
+    // reprodução. [onScreenModeChange] salva a cada troca.
     val screenModes = run {
         listOf(
+            "Automático" to AspectRatioFrameLayout.RESIZE_MODE_FIT,
             "Ajustar" to AspectRatioFrameLayout.RESIZE_MODE_FIT,
             "Preencher" to AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
             "Zoom" to AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
@@ -1905,6 +1937,30 @@ class PlayerSession(
         )
     }
     var screenModeIdx by run { mutableIntStateOf(0) }
+    /** Salva o modo de tela no perfil (ligado pela tela a [PlayerPrefsViewModel.setScreenMode]). */
+    var onScreenModeChange: (Int) -> Unit = {}
+    /** Proporção real do vídeo (de onVideoSizeChanged): o Automático compara com a da tela. 0 = ainda sem medir. */
+    var videoWidth by run { mutableIntStateOf(0) }
+    var videoHeight by run { mutableIntStateOf(0) }
+
+    /**
+     * Modo de tela efetivo p/ o PlayerView (Lote 12 — Frente 2).
+     * Automático (idx 0): proporções próximas (até 10% de diferença) →
+     * ZOOM, preenche a tela cortando no máximo ~10% das bordas; proporções
+     * distantes → FIT, mostra o vídeo inteiro com barras. Sem medida do
+     * vídeo ou da tela, FIT (nunca corta no escuro).
+     */
+    fun effectiveResizeMode(viewW: Int, viewH: Int): Int {
+        if (screenModeIdx != 0) return screenModes[screenModeIdx].second
+        if (videoWidth <= 0 || videoHeight <= 0 || viewW <= 0 || viewH <= 0) {
+            return AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+        val videoAR = videoWidth.toFloat() / videoHeight
+        val screenAR = viewW.toFloat() / viewH
+        val ratio = videoAR / screenAR
+        return if (ratio in 0.9f..1.1f) AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        else AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
     // Tela travada (ignora toques até destravar)
     var locked by run { mutableStateOf(false) }
     var lockHintVisible by run { mutableStateOf(false) }
@@ -1958,6 +2014,26 @@ class PlayerSession(
     var onEqSave: (String, String) -> Unit = { _, _ -> }
     /** A tela liga ao PlayerPrefsViewModel (liga/desliga o equalizador). */
     var onEqToggle: (Boolean) -> Unit = {}
+    // ── Lote 12 — Frente 2 (Player e fontes, v1.22.0) ─────────────────────
+    /** Barra de botões expandida nesta sessão (recolhida = 5 primeiros + ">"). Por sessão, sem pref. */
+    var chipsExpanded by run { mutableStateOf(false) }
+    /** Folha de fontes em ranking (melhor → pior) nesta sessão; espelha a pref `pref_player_sources_ranked`. */
+    var sourcesRanked by run { mutableStateOf(false) }
+    /** Salva a vista da folha no perfil (ligado pela tela a [PlayerPrefsViewModel.setSourcesRanked]). */
+    var onSourcesRankedChange: (Boolean) -> Unit = {}
+    /** Repo da TV ao vivo p/ o On Demand da folha (ligado pela tela; null = sem repo). */
+    var onDemandRepo: LiveTvRepository? = null
+    /** Fonte Xtream usada no On Demand da folha (a conta já configurada). */
+    var onDemandSource: LiveSource? = null
+    var onDemandLoading by run { mutableStateOf(false) }
+    /** Resultados do On Demand com este título (filmes + séries), na ordem da API. */
+    var onDemandItems by run { mutableStateOf<List<OnDemandHit>>(emptyList()) }
+    /** Erro REAL da busca no On Demand (null = sem erro ou sem conta). */
+    var onDemandError: String? by run { mutableStateOf<String?>(null) }
+    /** Nome da conta Xtream do On Demand (""). Sem conta, a seção mostra o vazio honesto. */
+    var onDemandSourceName by run { mutableStateOf("") }
+    /** Título p/ o qual o On Demand já foi buscado ("tipo:título") — não busca 2x. */
+    var onDemandLoadedFor by run { mutableStateOf("") }
     /** true entre minimizar e expandir/fechar: o dispose da tela NÃO libera o player. */
     var minimizedByUser by run { mutableStateOf(false) }
     /** playId da rota que abriu esta sessão (p/ o mini player reabrir a mesma). */
@@ -2593,6 +2669,116 @@ class PlayerSession(
         )
     }
 
+    /**
+     * Ordem em ranking de TODAS as fontes, da melhor p/ pior (Lote 12 —
+     * Frente 2, v1.22.0). Reusa o MESMO escore do `bestSourceIndex()`:
+     * tira o melhor que sobrou com [bestIndex], repete com o resto. O #1
+     * daqui é o mesmo #1 que o "Assistir" escolhe. Sem o teto de qualidade
+     * do perfil (a sessão não o lê): a ordem relativa é a mesma, só sem
+     * o corte de quem passa do teto.
+     */
+    fun rankedSourceOrder(): List<Int> {
+        val f = facts()
+        if (f.isEmpty()) return emptyList()
+        val remaining = f.indices.toMutableList()
+        val out = ArrayList<Int>()
+        while (remaining.isNotEmpty()) {
+            val sub = remaining.map { f[it] }
+            val best = bestIndex(sub).coerceIn(0, sub.lastIndex)
+            out += remaining[best]
+            remaining.removeAt(best)
+        }
+        return out
+    }
+
+    /** Palavras do título p/ casar com o On Demand (minúsculas, sem pontuação). */
+    private fun vodTitleWords(t: String): List<String> =
+        t.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length > 1 }
+
+    /** O item do On Demand é este título? Todas as palavras do título mais curto estão no mais longo. */
+    internal fun vodMatches(title: String, itemTitle: String): Boolean {
+        val a = vodTitleWords(title)
+        val b = vodTitleWords(itemTitle)
+        if (a.isEmpty() || b.isEmpty()) return false
+        val (short, long) = if (a.size <= b.size) a to b else b to a
+        return short.all { it in long }
+    }
+
+    /**
+     * Busca o título no On Demand Xtream p/ a folha de fontes (Lote 12 —
+     * Frente 2). Só com a conta Xtream já configurada; sem conta, a seção
+     * fica no vazio honesto (ver [sourceActions]). Busca 1x por título.
+     * Filmes primeiro, depois séries, no máximo 6 — sem inventar resultado.
+     */
+    fun loadOnDemand() {
+        val repo = onDemandRepo ?: return
+        val key = "$type:$title"
+        if (onDemandLoadedFor == key || onDemandLoading) return
+        onDemandLoadedFor = key
+        onDemandLoading = true
+        onDemandError = null
+        scope.launch {
+            runCatching {
+                val source = repo.xtreamSources().firstOrNull()
+                if (source == null) {
+                    onDemandSource = null
+                    onDemandSourceName = ""
+                    onDemandItems = emptyList()
+                } else {
+                    onDemandSource = source
+                    onDemandSourceName = source.name
+                    val movies = repo.fetchOnDemand(source, false)?.second.orEmpty()
+                    val series = repo.fetchOnDemand(source, true)?.second.orEmpty()
+                    val hits = (movies.map { OnDemandHit(it, false) } + series.map { OnDemandHit(it, true) })
+                        .filter { vodMatches(title, it.item.title) }
+                        .take(6)
+                    onDemandItems = hits
+                }
+            }.onFailure {
+                onDemandError = it.message?.takeIf { m -> m.isNotBlank() } ?: "Não deu para carregar o On Demand"
+                onDemandItems = emptyList()
+            }
+            onDemandLoading = false
+        }
+    }
+
+    /**
+     * Toca um resultado do On Demand pelo player existente (Lote 12 —
+     * Frente 2): vira uma fonte "On Demand" na lista e aplica como escolha
+     * manual (mantém o tempo). Série toca o 1º episódio da API — a folha
+     * não tem como escolher episódio; o detalhe completo fica no On Demand
+     * da aba Ao vivo. Sem URL, o toast explica — sem inventar stream.
+     */
+    fun playOnDemand(hit: OnDemandHit) {
+        val repo = onDemandRepo
+        val source = onDemandSource
+        if (repo == null || source == null) {
+            toastMsg = "On Demand indisponível — sem conta Xtream configurada"
+            return
+        }
+        if (!hit.isSeries) {
+            val url = repo.vodStreamUrl(source, hit.item)
+            currentSources = currentSources + MoviePlayerSource("On Demand · ${hit.item.title}", url, addon = "On Demand")
+            applyMovieSource(currentSources.lastIndex, manual = true)
+            toastMsg = "Tocando versão On Demand: ${hit.item.title}"
+            return
+        }
+        scope.launch {
+            val url = runCatching {
+                val detail = repo.fetchSeriesDetail(source, hit.item.id)
+                val ep = detail?.episodes?.firstOrNull { it.id.isNotBlank() } ?: return@runCatching null
+                repo.episodeStreamUrl(source, ep)
+            }.getOrNull()
+            if (url.isNullOrBlank()) {
+                toastMsg = "Não deu para abrir esta série no On Demand"
+                return@launch
+            }
+            currentSources = currentSources + MoviePlayerSource("On Demand · ${hit.item.title}", url, addon = "On Demand")
+            applyMovieSource(currentSources.lastIndex, manual = true)
+            toastMsg = "Tocando versão On Demand: ${hit.item.title} (1º episódio)"
+        }
+    }
+
     // Próxima FONTE (auto-fallback). Ainda não tentada, fugindo de outro filme, de fonte morta
     // e do addon que acabou de falhar. Retorna false se não sobrou nenhuma.
     // [slow] = troca por lentidão. Aí só vale fonte que não seja de outro filme, senão é melhor
@@ -2650,16 +2836,75 @@ class PlayerSession(
             qualityRank = com.aotv.app.data.remote.qualityRankOf(it.label)) })
             .sortedByDescending { g -> g.members.any { it.url == playing } }
         return buildList {
-            groups.take(sourceLimit).forEach { group ->
-                val active = group.members.any { it.url == playing }
-                val src = group.members.firstOrNull { it.url == playing } ?: group.lead
-                add(TvPlayerAction(src.label, true, active, addon = src.addon, stream = src,
-                    providers = group.members.map { it.addon }.distinct()) {
-                    if (!active) applyMovieSource(currentSources.indexOfFirst { it.url == src.url }, manual = true)
-                })
+            // Lote 12 — Frente 2: alterna a vista da folha entre agrupada
+            // por addon e ranking único da melhor p/ pior. Salva no perfil.
+            add(TvPlayerAction(
+                if (sourcesRanked) "Vista: ranking (melhor → pior)" else "Vista: agrupada por addon",
+                false, sourcesRanked, header = "Fontes",
+                sub = "Toque para alternar a vista da folha", keepOpen = true,
+            ) {
+                sourcesRanked = !sourcesRanked
+                onSourcesRankedChange(sourcesRanked)
+            })
+            if (sourcesRanked) {
+                // Ranking: lista única de TODAS as streams, da melhor p/
+                // pior (mesmo escore do bestSourceIndex — ver
+                // [rankedSourceOrder]). A #1 leva o "Melhor fonte" do
+                // detalhe; a que está tocando segue marcada como ativa.
+                val order = rankedSourceOrder()
+                order.take(sourceLimit).forEachIndexed { rank, idx ->
+                    val src = currentSources.getOrNull(idx) ?: return@forEachIndexed
+                    val stream = src.stream ?: com.aotv.app.data.remote.StremioStream(src.label, src.url, src.addon,
+                        qualityRank = com.aotv.app.data.remote.qualityRankOf(src.label))
+                    val best = rank == 0
+                    add(TvPlayerAction(src.label, true, src.url == playing, addon = src.addon, stream = stream,
+                        sub = "#${rank + 1}" + (if (best) " · Melhor fonte" else "") + " · " + src.addon,
+                        header = if (rank == 0) "Ranking da melhor para a pior" else "") {
+                        if (src.url != playing) applyMovieSource(idx, manual = true)
+                    })
+                }
+                if (order.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
+                    sub = "${order.size - sourceLimit} fontes", keepOpen = true) { sourceLimit += 30 })
+            } else {
+                groups.take(sourceLimit).forEach { group ->
+                    val active = group.members.any { it.url == playing }
+                    val src = group.members.firstOrNull { it.url == playing } ?: group.lead
+                    add(TvPlayerAction(src.label, true, active, addon = src.addon, stream = src,
+                        providers = group.members.map { it.addon }.distinct()) {
+                        if (!active) applyMovieSource(currentSources.indexOfFirst { it.url == src.url }, manual = true)
+                    })
+                }
+                if (groups.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
+                    sub = "${groups.size - sourceLimit} versões", keepOpen = true) { sourceLimit += 30 })
             }
-            if (groups.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
-                sub = "${groups.size - sourceLimit} versões", keepOpen = true) { sourceLimit += 30 })
+            // ── On Demand Xtream na folha (Lote 12 — Frente 2) ─────────
+            // Mesma conta Xtream já configurada; sem conta ou sem resultado,
+            // estado vazio honesto — nunca inventa resultado.
+            if (onDemandLoading) {
+                add(TvPlayerAction("Buscando no On Demand…", false, false, header = "On Demand Xtream",
+                    sub = onDemandSourceName, disabled = true, keepOpen = true) {})
+            } else if (onDemandSource == null) {
+                add(TvPlayerAction("Sem conta Xtream configurada", false, false, header = "On Demand Xtream",
+                    sub = "Adicione uma conta em Fontes de canais para ver o On Demand aqui", disabled = true, keepOpen = true) {})
+            } else if (onDemandError != null) {
+                add(TvPlayerAction("On Demand indisponível", false, false, header = "On Demand Xtream",
+                    sub = onDemandError.orEmpty(), keepOpen = true) { onDemandLoadedFor = ""; loadOnDemand() })
+            } else if (onDemandItems.isEmpty()) {
+                add(TvPlayerAction("Nada no On Demand com este título", false, false, header = "On Demand Xtream",
+                    sub = "Conta: $onDemandSourceName", disabled = true, keepOpen = true) {})
+            } else {
+                onDemandItems.forEachIndexed { i, hit ->
+                    val detail = hit.item.year.takeIf { it.isNotBlank() }
+                        ?: hit.item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }
+                    add(TvPlayerAction(hit.item.title, true, false, addon = "On Demand",
+                        header = if (i == 0) "On Demand Xtream" else "",
+                        sub = (if (hit.isSeries) "Série · 1º episódio" else "Filme") +
+                            (detail?.let { " · $it" } ?: "") + " · $onDemandSourceName",
+                        stream = com.aotv.app.data.remote.StremioStream(hit.item.title, "", "On Demand")) {
+                        playOnDemand(hit)
+                    })
+                }
+            }
         }
     }
     val subActions: List<TvPlayerAction> get() = buildList {
@@ -2772,8 +3017,14 @@ class PlayerSession(
         }
     }
     val screenActions get() = screenModes.mapIndexed { i, mode ->
-        val descriptions = listOf("Mantém a proporção do vídeo", "Ocupa a tela cortando as bordas", "Aproxima a imagem em 33%", "Ocupa a tela alterando a proporção")
-        TvPlayerAction(mode.first, false, i == screenModeIdx, sub = descriptions[i]) { screenModeIdx = i }
+        val descriptions = listOf(
+            "Ajusta sozinho: preenche quando o vídeo tem a proporção da tela, ajusta quando não tem",
+            "Mantém a proporção do vídeo", "Ocupa a tela cortando as bordas", "Aproxima a imagem em 33%", "Ocupa a tela alterando a proporção")
+        TvPlayerAction(mode.first, false, i == screenModeIdx, sub = descriptions[i]) {
+            screenModeIdx = i
+            // Lote 12 — Frente 2: o modo fica salvo no perfil e vale na próxima reprodução.
+            onScreenModeChange(i)
+        }
     }
 
     fun selectPanelSeason(target: Int) {
@@ -2857,6 +3108,9 @@ class PlayerSession(
         sourcePanelOpen = true
         if (kind == "sources") sourceLimit = 30
         if (kind == "color") colorFocusIdx = 0
+        // Lote 12 — Frente 2: abrir a folha de fontes busca o título no On
+        // Demand Xtream (1x por título; sem conta, a seção fica vazia).
+        if (kind == "sources") loadOnDemand()
         // Infos técnicas (Lote 4 item 4): lê os dados do stream na hora de abrir.
         // Lote 5 item 2: junto, os stats do torrent (se a fonte for P2P).
         if (kind == "info") { refreshTechInfo(); refreshTorrentStats() }
@@ -2866,7 +3120,8 @@ class PlayerSession(
     // usa como `actions`, a TV como `tvChips`). Cada chip tem o id canônico
     // da pref `playerButtons` e a lista final passa por [orderPlayerChips]
     // (Fase C): ordem escolhida, desligado some, chip novo vai p/ o fim.
-    val tvChips: List<PlayerChipItem> get() = orderPlayerChips(buildList {
+    val tvChips: List<PlayerChipItem> get() {
+        val ordered = orderPlayerChips(buildList {
         add(PlayerChipItem(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
             if (isPlaying) "Pausar" else "Assistir", main = true) { togglePlay() })
         if (subActions.isNotEmpty()) add(PlayerChipItem(WebPlayerIcons.Subtitles, "Legendas", active = subtitleOn || selectedSubUrl != null, id = "subs") { openDpadPanel("subs") })
@@ -2928,7 +3183,13 @@ class PlayerSession(
                 }
             })
         }
-    }, playerButtonOrder)
+        }, playerButtonOrder)
+        // Lote 12 — Frente 2: barra recolhida no celular (5 primeiros + ">");
+        // expandida mostra todos. Na TV não recolhe (o D-pad precisa de
+        // todos os botões na mesma fileira) — ver [collapsePlayerChips].
+        return collapsePlayerChips(ordered, chipsExpanded, isTv,
+            onExpand = { chipsExpanded = true }, onCollapse = { chipsExpanded = false })
+    }
 
 }
 

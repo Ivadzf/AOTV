@@ -169,17 +169,27 @@ class RecordingService : Service() {
         }
     }
 
-    /** Abre o arquivo de saída: pasta do app (File) ou pasta SAF escolhida (DocumentFile). */
+    /** Abre o arquivo de saída: pasta do app (File) ou pasta SAF escolhida (DocumentFile).
+     * Lote 12 — Frente 2: gravação de série vai p/ a subpasta da série
+     * (ver [RecordingStore.folderNameFor]); sem série, vai na raiz. */
     private fun openOutput(rec: ScheduledRecording, fileName: String): Triple<OutputStream, File?, Uri?> {
         val folderUri = prefs.recordingsFolderUri
+        val folder = store.folderNameFor(rec)
         if (folderUri.isBlank()) {
-            val dir = File(applicationContext.filesDir, "recordings").apply { mkdirs() }
+            val dir = File(applicationContext.filesDir, "recordings").let {
+                if (folder.isBlank()) it else File(it, folder)
+            }.apply { mkdirs() }
             val file = File(dir, fileName)
             return Triple(FileOutputStream(file), file, null)
         }
         val treeUri = Uri.parse(folderUri)
-        val dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri)
+        var dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri)
             ?: throw IOException("Pasta de gravações sem acesso — escolha a pasta de novo em Downloads")
+        if (folder.isNotBlank()) {
+            dirDoc = dirDoc.findFile(folder)?.takeIf { it.isDirectory }
+                ?: dirDoc.createDirectory(folder)
+                ?: throw IOException("Não consegui criar a pasta da série nas gravações")
+        }
         val doc = dirDoc.createFile("video/mp2t", fileName)
             ?: throw IOException("Não consegui criar o arquivo na pasta de gravações")
         val stream = applicationContext.contentResolver.openOutputStream(doc.uri)
@@ -347,19 +357,24 @@ class RecordingService : Service() {
         }
     }
 
-    /** Mantém só as N gravações mais recentes (a mais antiga sai). */
+    /** Mantém só as N gravações mais recentes (a mais antiga sai).
+     * Lote 12 — Frente 2: olha também as subpastas de séries (1 nível). */
     private fun pruneRetention() {
         val keep = prefs.recordKeepEpisodes
         runCatching {
             if (prefs.recordingsFolderUri.isBlank()) {
                 val dir = File(applicationContext.filesDir, "recordings")
-                val files = dir.listFiles()?.filter { it.name.startsWith("aotv-rec-") }
-                    ?.sortedByDescending { it.lastModified() }.orEmpty()
+                val files = (dir.listFiles()?.toList().orEmpty())
+                    .flatMap { f -> if (f.isDirectory) f.listFiles()?.toList().orEmpty() else listOf(f) }
+                    .filter { it.name.startsWith("aotv-rec-") }
+                    .sortedByDescending { it.lastModified() }
                 files.drop(keep).forEach { it.delete() }
             } else {
                 val treeUri = Uri.parse(prefs.recordingsFolderUri)
                 val dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@runCatching
-                val docs = dirDoc.listFiles()
+                val docs = dirDoc.listFiles().flatMap { d ->
+                    if (d.isDirectory) d.listFiles().toList() else listOf(d)
+                }
                     .filter { (it.name.orEmpty()).startsWith("aotv-rec-") }
                     .sortedByDescending { it.lastModified() }
                 docs.drop(keep).forEach { it.delete() }

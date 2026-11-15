@@ -108,10 +108,17 @@ internal val SCOPED_KEYS = listOf(
     // automático, cartão "A seguir" e equalizador (liga, preset, bandas em dB).
     "pref_player_autosync", "pref_player_auto_skip", "pref_player_up_next",
     "pref_player_equalizer", "pref_player_eq_preset", "pref_player_eq_bands",
+    // Lote 12 — Frente 2 (Player e fontes, v1.22.0): modo de tela padrão,
+    // vista em ranking da folha de fontes e gravações marcadas como vistas.
+    "pref_player_screen_mode", "pref_player_sources_ranked", "recordings_seen_v1",
     // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
     "pref_detail_original_title",
     // Lote 8 — Tela de detalhe (v1.18.0): toggles das seções novas.
     "pref_detail_show_aggregate_rating", "pref_detail_show_trakt_reviews", "pref_detail_show_quotes",
+    // Lote 12 — Frente 3 (Notas e atualizador, v1.22.0): fonte da nota
+    // exibida de filmes e séries ("auto" = MDBList quando conectado, senão
+    // TMDB; "mdblist" / "tmdb" forçam uma fonte). Episódios seguem TMDB.
+    "pref_ratings_source",
     // Lote 2 — modo privado (v1.10.0): assistir sem gravar nada no perfil.
     "pref_private_mode",
     // Lote 2 — Biblioteca e Descoberta: Continuar assistindo novo + Modo aleatório.
@@ -147,6 +154,13 @@ internal val SCOPED_KEYS = listOf(
     "live_show_logos", "live_show_names", "live_show_numbers", "live_clean_group_names",
     "live_backup_channel", "live_in_continue", "live_remember_audio", "live_catchup_hls",
     "live_audio_v1", "live_group_favorites_v1",
+    // Lote 12 (v1.22.0) — Live TV parte 2 (Frente 1): Multiview, gerenciar
+    // canais (ocultar, ordem, renomear, grupo, número), Assign EPG + time
+    // shift e logo próprio por canal (tudo por perfil, mapas JSON).
+    "live_multiview_layout",
+    "live_hidden_channels_v1", "live_channel_order_v1",
+    "live_channel_names_v1", "live_channel_groups_v1", "live_channel_numbers_v1",
+    "live_epg_assign_v1", "live_epg_shift_v1", "live_channel_logos_v1",
     // Lote 11 (v1.21.0) — PIN parental por grupo (Frente 2): grupos de canais
     // trancados com PIN (lista de nomes de grupo, por perfil). O PIN em si é
     // o PIN dos pais do aparelho ("parental_pin_hash", segredo global — ver
@@ -683,6 +697,119 @@ class PlatformPrefs @Inject constructor(
         liveLockedGroups = liveLockedGroups - clean
     }
 
+    // ── Lote 12 — Live TV parte 2 (v1.22.0, Frente 1) ─────────────────────
+    // Multiview, gerenciar canais, Assign EPG + time shift e logo próprio
+    // por canal. Tudo por perfil (sk + SCOPED_KEYS). Os mapas são JSON
+    // (canal → valor) no mesmo padrão de "live_audio_v1"; as listas usam
+    // readStringList/writeStringList. Sem fluxo p/ os mapas: quem lê é o
+    // repositório ao montar a lista de exibição (ver LiveTvRepository).
+    // As listas (ocultos e ordem) têm fluxo: a aba Ao vivo reage na hora.
+
+    private val _liveMultiviewLayout = MutableStateFlow(prefs.getInt(sk("live_multiview_layout"), 1))
+    /** Canais na tela do Multiview: 1, 2 ou 4 (padrão 1). Fora da faixa volta p/ 1. */
+    val liveMultiviewLayoutFlow: StateFlow<Int> = _liveMultiviewLayout.asStateFlow()
+    var liveMultiviewLayout: Int
+        get() = _liveMultiviewLayout.value
+        set(value) { val v = if (value == 2 || value == 4) value else 1; prefs.edit().putInt(sk("live_multiview_layout"), v).apply(); _liveMultiviewLayout.value = v }
+
+    private val _liveHiddenChannels = MutableStateFlow(readStringList("live_hidden_channels_v1"))
+    /** Ids dos canais ocultos pelo usuário — somem de todas as vistas (hub, grade, lista, busca, guia e player). */
+    val liveHiddenChannelsFlow: StateFlow<List<String>> = _liveHiddenChannels.asStateFlow()
+    var liveHiddenChannels: List<String>
+        get() = _liveHiddenChannels.value
+        set(value) { writeStringList("live_hidden_channels_v1", value); _liveHiddenChannels.value = value }
+
+    /** Oculta ou mostra um canal. */
+    fun toggleLiveChannelHidden(channelId: String) {
+        if (channelId.isBlank()) return
+        liveHiddenChannels = if (channelId in liveHiddenChannels) liveHiddenChannels - channelId else liveHiddenChannels + channelId
+    }
+
+    private val _liveChannelOrder = MutableStateFlow(readStringList("live_channel_order_v1"))
+    /** Ordem própria dos canais (ids, na ordem de exibição). Canal fora da lista fica depois, na ordem da fonte. */
+    val liveChannelOrderFlow: StateFlow<List<String>> = _liveChannelOrder.asStateFlow()
+    var liveChannelOrder: List<String>
+        get() = _liveChannelOrder.value
+        set(value) { writeStringList("live_channel_order_v1", value); _liveChannelOrder.value = value }
+
+    /** Nome próprio de um canal (vazio = o nome da lista). */
+    var liveChannelNames: Map<String, String>
+        get() = readStringMap("live_channel_names_v1")
+        set(value) { writeStringMap("live_channel_names_v1", value) }
+
+    /** Renomeia um canal (nome em branco volta ao nome da lista). */
+    fun setLiveChannelName(channelId: String, name: String) {
+        if (channelId.isBlank()) return
+        val m = liveChannelNames.toMutableMap()
+        if (name.isBlank()) m.remove(channelId) else m[channelId] = name.trim()
+        liveChannelNames = m
+    }
+
+    /** Grupo próprio de um canal (vazio = o grupo da lista). */
+    var liveChannelGroups: Map<String, String>
+        get() = readStringMap("live_channel_groups_v1")
+        set(value) { writeStringMap("live_channel_groups_v1", value) }
+
+    /** Muda o grupo de um canal (grupo em branco volta ao grupo da lista). */
+    fun setLiveChannelGroup(channelId: String, group: String) {
+        if (channelId.isBlank()) return
+        val m = liveChannelGroups.toMutableMap()
+        if (group.isBlank()) m.remove(channelId) else m[channelId] = group.trim()
+        liveChannelGroups = m
+    }
+
+    /** Número próprio de um canal (id → número). */
+    var liveChannelNumbers: Map<String, Int>
+        get() = readStringMap("live_channel_numbers_v1").mapNotNull { (k, v) -> v.toIntOrNull()?.let { k to it } }.toMap()
+        set(value) { writeStringMap("live_channel_numbers_v1", value.mapValues { it.value.toString() }) }
+
+    /** Renumera um canal (null ou ≤ 0 volta ao número da lista). */
+    fun setLiveChannelNumber(channelId: String, number: Int?) {
+        if (channelId.isBlank()) return
+        val m = liveChannelNumbers.toMutableMap()
+        if (number == null || number <= 0) m.remove(channelId) else m[channelId] = number
+        liveChannelNumbers = m
+    }
+
+    /** EPG associado manualmente a um canal (id do canal → id do guia). */
+    var liveEpgAssign: Map<String, String>
+        get() = readStringMap("live_epg_assign_v1")
+        set(value) { writeStringMap("live_epg_assign_v1", value) }
+
+    /** Associa uma fonte de EPG a um canal (id em branco desfaz a associação). */
+    fun setLiveEpgAssign(channelId: String, epgId: String) {
+        if (channelId.isBlank()) return
+        val m = liveEpgAssign.toMutableMap()
+        if (epgId.isBlank()) m.remove(channelId) else m[channelId] = epgId.trim()
+        liveEpgAssign = m
+    }
+
+    /** Deslocamento do guia por canal, em horas (id → -24..+24). */
+    var liveEpgShift: Map<String, Int>
+        get() = readStringMap("live_epg_shift_v1").mapNotNull { (k, v) -> v.toIntOrNull()?.takeIf { it in -24..24 }?.let { k to it } }.toMap()
+        set(value) { writeStringMap("live_epg_shift_v1", value.mapValues { it.value.toString() }) }
+
+    /** Desloca o guia de um canal em horas (passo 1 h, -24..+24; 0 limpa). */
+    fun setLiveEpgShift(channelId: String, hours: Int) {
+        if (channelId.isBlank()) return
+        val m = liveEpgShift.toMutableMap()
+        if (hours == 0) m.remove(channelId) else m[channelId] = hours.coerceIn(-24, 24)
+        liveEpgShift = m
+    }
+
+    /** Logo próprio de um canal (id → URL). Vazio = a logo da lista. */
+    var liveChannelLogos: Map<String, String>
+        get() = readStringMap("live_channel_logos_v1")
+        set(value) { writeStringMap("live_channel_logos_v1", value) }
+
+    /** Troca a logo de um canal (URL em branco volta à logo da lista). */
+    fun setLiveChannelLogo(channelId: String, url: String) {
+        if (channelId.isBlank()) return
+        val m = liveChannelLogos.toMutableMap()
+        if (url.isBlank()) m.remove(channelId) else m[channelId] = url.trim()
+        liveChannelLogos = m
+    }
+
     // ── MDBList / AniList / TheTVDB (v1.17.0) ───────────────────────────────
     // Mesmo padrão do Trakt: chave de conta é DO APARELHO (a chave de API
     // ou o client ID é um só p/ o aparelho), sessão e toggles são POR
@@ -1015,6 +1142,24 @@ class PlatformPrefs @Inject constructor(
     var downloadsWifiOnly: Boolean
         get() = _downloadsWifiOnly.value
         set(value) { prefs.edit().putBoolean(KEY_DOWNLOADS_WIFI_ONLY, value).apply(); _downloadsWifiOnly.value = value }
+
+    // Lote 12 — Frente 3 (Notas e atualizador, v1.22.0): checagem de
+    // atualização do app (releases do GitHub). Tudo GLOBAL (do aparelho,
+    // não do perfil; ver AotvBackup.GLOBAL_KEYS): a versão instalada é uma
+    // só p/ o aparelho. Nada aqui é segredo.
+    private val _appUpdateCheckEnabled = MutableStateFlow(prefs.getBoolean("app_update_check_enabled", true))
+    /** Checagem automática de atualização ligada. Padrão: ligada. */
+    val appUpdateCheckEnabledFlow: StateFlow<Boolean> = _appUpdateCheckEnabled.asStateFlow()
+    var appUpdateCheckEnabled: Boolean
+        get() = _appUpdateCheckEnabled.value
+        set(value) { prefs.edit().putBoolean("app_update_check_enabled", value).apply(); _appUpdateCheckEnabled.value = value }
+
+    private val _appUpdateLastCheck = MutableStateFlow(prefs.getLong("app_update_last_check_v1", 0L))
+    /** Última checagem de atualização (ms desde epoch). 0 = nunca checado. */
+    val appUpdateLastCheckFlow: StateFlow<Long> = _appUpdateLastCheck.asStateFlow()
+    var appUpdateLastCheck: Long
+        get() = _appUpdateLastCheck.value
+        set(value) { prefs.edit().putLong("app_update_last_check_v1", value).apply(); _appUpdateLastCheck.value = value }
 
     private val _downloadFolderUri = MutableStateFlow(prefs.getString(KEY_DOWNLOADS_FOLDER_URI, "") ?: "")
     /** URI SAF da pasta de download, que avisa quem observa. "" = pasta do app (padrão). */
@@ -1420,6 +1565,23 @@ class PlatformPrefs @Inject constructor(
         get() = _detailShowQuotes.value
         set(value) { prefs.edit().putBoolean(sk("pref_detail_show_quotes"), value).apply(); _detailShowQuotes.value = value }
 
+    // Lote 12 — Frente 3 (Notas e atualizador, v1.22.0): fonte da nota
+    // exibida de FILMES e SÉRIES no detalhe (e da série no navegador de
+    // episódios). "auto" (padrão) = MDBList quando conectado e ligado, senão
+    // TMDB; "mdblist" força o MDBList (sem nota p/ o título, o TMDB assume
+    // como fallback — nunca se inventa nota); "tmdb" força o TMDB.
+    // EPISÓDIOS seguem sempre com TMDB: a API do MDBList não tem nota por
+    // episódio (`m` só aceita `movie|show`). Por perfil (SCOPED_KEYS).
+    private val _ratingsSource = MutableStateFlow(prefs.getString(sk("pref_ratings_source"), "auto") ?: "auto")
+    /** Fonte da nota exibida de filmes e séries: "auto" | "mdblist" | "tmdb". */
+    val ratingsSourceFlow: StateFlow<String> = _ratingsSource.asStateFlow()
+    var ratingsSource: String
+        get() = _ratingsSource.value
+        set(value) {
+            val clean = if (value in setOf("auto", "mdblist", "tmdb")) value else "auto"
+            prefs.edit().putString(sk("pref_ratings_source"), clean).apply(); _ratingsSource.value = clean
+        }
+
     // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
     // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
     // que avisa quem observa (a folha lê daqui e aplica na hora); o var é o valor
@@ -1496,6 +1658,20 @@ class PlatformPrefs @Inject constructor(
         val arr = org.json.JSONArray()
         value.forEach { arr.put(it) }
         prefs.edit().putString(sk(key), arr.toString()).apply()
+    }
+
+    // Lote 12 (v1.22.0): mapa canal → texto guardado como objeto JSON
+    // (mesmo padrão de "live_audio_v1"). Chave vazia ou valor em branco
+    // não entram; leitura tolera JSON quebrado (volta vazio).
+    private fun readStringMap(key: String): Map<String, String> = runCatching {
+        val o = org.json.JSONObject(prefs.getString(sk(key), null) ?: "{}")
+        o.keys().asSequence().associateWith { k -> o.optString(k) }.filterValues { it.isNotBlank() }
+    }.getOrDefault(emptyMap())
+
+    private fun writeStringMap(key: String, value: Map<String, String>) {
+        val o = org.json.JSONObject()
+        value.entries.filter { it.key.isNotBlank() && it.value.isNotBlank() }.forEach { (k, v) -> o.put(k, v) }
+        prefs.edit().putString(sk(key), o.toString()).apply()
     }
 
     /** Grava a lista de fixadas no dono efetivo (ver [pinnedOwnerId]). */
@@ -1685,6 +1861,40 @@ class PlatformPrefs @Inject constructor(
     var playerEqBands: String
         get() = _playerEqBands.value
         set(value) { prefs.edit().putString(sk("pref_player_eq_bands"), value).apply(); _playerEqBands.value = value }
+
+    // ── Lote 12 — Frente 2 (Player e fontes, v1.22.0) ───────────────────────
+    // Modo de tela padrão do player (0 = Automático, 1 = Ajustar, 2 =
+    // Preencher, 3 = Zoom, 4 = Esticar). O chip "Tela" do player salva aqui
+    // a cada troca; o player abre no modo guardado (antes zerava sempre).
+
+    private val _playerScreenMode = MutableStateFlow(prefs.getInt(sk("pref_player_screen_mode"), 0).coerceIn(0, 4))
+    /** Modo de tela padrão do player (0 = Automático). Vale a partir da próxima reprodução. */
+    val playerScreenModeFlow: StateFlow<Int> = _playerScreenMode.asStateFlow()
+    var playerScreenMode: Int
+        get() = _playerScreenMode.value
+        set(value) { val clean = value.coerceIn(0, 4); prefs.edit().putInt(sk("pref_player_screen_mode"), clean).apply(); _playerScreenMode.value = clean }
+
+    private val _playerSourcesRanked = MutableStateFlow(prefs.getBoolean(sk("pref_player_sources_ranked"), false))
+    /** Folha de fontes em ranking (melhor → pior) em vez de agrupada por addon. */
+    val playerSourcesRankedFlow: StateFlow<Boolean> = _playerSourcesRanked.asStateFlow()
+    var playerSourcesRanked: Boolean
+        get() = _playerSourcesRanked.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_sources_ranked"), value).apply(); _playerSourcesRanked.value = value }
+
+    private val _recordingsSeen = MutableStateFlow(readStringList("recordings_seen_v1").toSet())
+    /** Ids das gravações marcadas como vistas (por perfil). */
+    val recordingsSeenFlow: StateFlow<Set<String>> = _recordingsSeen.asStateFlow()
+    var recordingsSeen: Set<String>
+        get() = _recordingsSeen.value
+        set(value) { writeStringList("recordings_seen_v1", value.sorted()); _recordingsSeen.value = value }
+
+    /** Marca (ou desmarca) uma gravação como vista. */
+    fun setRecordingSeen(id: String, seen: Boolean) {
+        recordingsSeen = if (seen) recordingsSeen + id else recordingsSeen - id
+    }
+
+    /** Esta gravação já foi marcada como vista. */
+    fun isRecordingSeen(id: String): Boolean = id in recordingsSeen
 
     private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
     /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
@@ -2418,6 +2628,7 @@ class PlatformPrefs @Inject constructor(
         _detailShowAggregateRating.value = prefs.getBoolean(sk("pref_detail_show_aggregate_rating"), true)
         _detailShowTraktReviews.value = prefs.getBoolean(sk("pref_detail_show_trakt_reviews"), true)
         _detailShowQuotes.value = prefs.getBoolean(sk("pref_detail_show_quotes"), true)
+        _ratingsSource.value = prefs.getString(sk("pref_ratings_source"), "auto") ?: "auto"
         _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
         _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
         _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)
@@ -2445,6 +2656,10 @@ class PlatformPrefs @Inject constructor(
         _playerEqualizer.value = prefs.getBoolean(sk("pref_player_equalizer"), false)
         _playerEqPreset.value = prefs.getString(sk("pref_player_eq_preset"), "flat") ?: "flat"
         _playerEqBands.value = prefs.getString(sk("pref_player_eq_bands"), "") ?: ""
+        // Lote 12 — Frente 2 (Player e fontes, v1.22.0).
+        _playerScreenMode.value = prefs.getInt(sk("pref_player_screen_mode"), 0).coerceIn(0, 4)
+        _playerSourcesRanked.value = prefs.getBoolean(sk("pref_player_sources_ranked"), false)
+        _recordingsSeen.value = readStringList("recordings_seen_v1").toSet()
         _subColor.value = prefs.getInt(sk("sub_color"), -1)
         _subBgOpacity.value = prefs.getFloat(sk("sub_bg_opacity"), 0.78f)
         _subOutline.value = prefs.getBoolean(sk("sub_outline"), true)
@@ -2484,6 +2699,12 @@ class PlatformPrefs @Inject constructor(
         _liveGroupFavorites.value = readStringList("live_group_favorites_v1")
         // Lote 11 (v1.21.0): grupos trancados com o PIN dos pais, por perfil.
         _liveLockedGroups.value = readStringList("live_locked_groups_v1")
+        // Lote 12 (v1.22.0): Multiview e gerenciar canais (listas com fluxo).
+        // Os mapas (nomes, grupos, números, EPG, logos) são lidos direto do
+        // disco a cada acesso, sem fluxo — não precisam de reload aqui.
+        _liveMultiviewLayout.value = prefs.getInt(sk("live_multiview_layout"), 1).let { if (it == 2 || it == 4) it else 1 }
+        _liveHiddenChannels.value = readStringList("live_hidden_channels_v1")
+        _liveChannelOrder.value = readStringList("live_channel_order_v1")
         // Lote 11 (v1.21.0): blur anti-spoiler + o esconder-spoilers do
         // calendário (Lote 8, que não era recarregado na troca de perfil —
         // o valor ficava o do perfil anterior até reiniciar o app).

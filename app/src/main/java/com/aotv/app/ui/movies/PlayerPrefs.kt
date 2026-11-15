@@ -272,4 +272,14 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Bandas do equalizador em dB inteiros, CSV ("0,3,-2,0,0"); "" = tudo em 0 dB. */
     val eqBands: StateFlow<String> = prefs.playerEqBandsFlow
     fun setEqBands(v: String) { prefs.playerEqBands = v }
+
+    // ── Lote 12 — Frente 2 (Player e fontes, v1.22.0) ───────────────────────
+
+    /** Modo de tela padrão do player (0 = Automático, 1 = Ajustar, 2 = Preencher, 3 = Zoom, 4 = Esticar). */
+    val screenMode: StateFlow<Int> = prefs.playerScreenModeFlow
+    fun setScreenMode(v: Int) { prefs.playerScreenMode = v }
+
+    /** Folha de fontes em ranking (melhor → pior) em vez de agrupada por addon (padrão desligado). */
+    val sourcesRanked: StateFlow<Boolean> = prefs.playerSourcesRankedFlow
+    fun setSourcesRanked(v: Boolean) { prefs.playerSourcesRanked = v }
 }

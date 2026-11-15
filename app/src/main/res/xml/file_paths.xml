@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Caminhos do FileProvider do atualizador (Lote 12, v1.22.0): só o cache
+     do app, onde o AppUpdateService baixa o APK da release oficial. -->
+<paths>
+    <cache-path name="update" path="." />
+</paths>

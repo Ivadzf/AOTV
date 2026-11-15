@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Comment
 import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Code
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -118,10 +120,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.MobileDataUsage
+import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.recordings.RecordingStore
 import com.aotv.app.data.recordings.ScheduledRecording
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
@@ -210,6 +215,7 @@ fun SettingsPageScreen(
     onOpenMediaServers: () -> Unit = {},
     onOpenAccounts: () -> Unit = {},
     onOpenLive: () -> Unit = {},
+    onOpenLiveChannels: () -> Unit = {},
     onOpenCollections: () -> Unit = {},
     onBack: () -> Unit,
     onPlatformChanged: () -> Unit,
@@ -227,7 +233,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Streams -> StreamsPage(onBack, highlightAnchor = highlightAnchor)
         SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onOpenMediaServers, onBack, viewModel, highlightAnchor)
-        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor, onOpenLiveChannels)
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
@@ -377,6 +383,56 @@ private fun recordingSub(rec: ScheduledRecording): String {
 }
 
 /**
+ * Abre uma gravação p/ assistir (Lote 12 — Frente 2). A gravação em
+ * andamento toca o arquivo parcial (o player abre o arquivo como está).
+ * Pasta SAF: o arquivo abre no player do sistema pela URI de conteúdo
+ * (com a pasta da série, quando houver). Pasta do app: o arquivo é privado
+ * e não há FileProvider p/ ele (só p/ o APK do atualizador) — o toast
+ * explica e indica a pasta compartilhada. Tocar dentro do app a partir
+ * daqui precisa do callback de navegação p/ o player, fora desta frente.
+ */
+private fun playRecording(
+    context: android.content.Context,
+    rec: ScheduledRecording,
+    folderUri: String,
+    store: RecordingStore,
+) {
+    if (rec.fileName.isBlank()) {
+        Toast.makeText(context, "A gravação ainda não começou — não há arquivo para assistir", Toast.LENGTH_LONG).show()
+        return
+    }
+    if (folderUri.isBlank()) {
+        val base = java.io.File(context.filesDir, "recordings")
+        val folder = store.folderNameFor(rec)
+        val dir = if (folder.isBlank()) base else java.io.File(base, folder)
+        if (!java.io.File(dir, rec.fileName).exists()) {
+            Toast.makeText(context, "Arquivo da gravação não encontrado", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(
+            context,
+            "A gravação está na pasta do app — escolha uma pasta compartilhada em Downloads → Gravações para assistir fora do app",
+            Toast.LENGTH_LONG,
+        ).show()
+        return
+    }
+    val uri = runCatching {
+        var dir = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return@runCatching null
+        val folder = store.folderNameFor(rec)
+        if (folder.isNotBlank()) dir = dir.findFile(folder) ?: return@runCatching null
+        dir.findFile(rec.fileName)?.uri
+    }.getOrNull()
+    if (uri == null) {
+        Toast.makeText(context, "Arquivo da gravação não encontrado na pasta", Toast.LENGTH_LONG).show()
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { context.startActivity(Intent.createChooser(intent, "Assistir gravação")) }
+        .onFailure { Toast.makeText(context, "Nenhum player instalado para abrir este arquivo", Toast.LENGTH_LONG).show() }
+}
+
+/**
  * Página "Downloads": "Só Wi-Fi", pasta de download (SAF) e dados móveis.
  * A pasta é do aparelho (não do perfil); os contadores mostram só o que o
  * app mediu de fato (downloads .mp4 — ver MobileDataUsage). O limite é só
@@ -405,6 +461,10 @@ private fun DownloadsPage(
     val recLowSpace by viewModel.recordLowSpaceMb.collectAsStateWithLifecycle()
     val recNotifications by viewModel.recordNotifications.collectAsStateWithLifecycle()
     val recordings by viewModel.recordingsList.collectAsStateWithLifecycle()
+    // Lote 12 — Frente 2: gravações vistas (pref por perfil) e assistir.
+    val recPrefs = remember { PlatformPrefs(context) }
+    val recStore = remember { RecordingStore(context) }
+    val seenRecordings by recPrefs.recordingsSeenFlow.collectAsStateWithLifecycle()
     var recFreeMb by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) { viewModel.refreshMobileData(); viewModel.refreshRecordings(); recFreeMb = viewModel.recordingsFreeMb() }
 
@@ -589,19 +649,42 @@ private fun DownloadsPage(
                 )
             }
         } else {
-            SettingsCard {
-                recordings.forEachIndexed { index, rec ->
-                    if (index > 0) Spacer(Modifier.height(12.dp))
-                    Text(rec.programTitle, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text(recordingSub(rec), color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp)
-                    if (rec.status == ScheduledRecording.STATUS_FAILED && rec.error.isNotBlank()) {
-                        Text("Erro: ${rec.error}", color = DangerText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        when (rec.status) {
-                            ScheduledRecording.STATUS_SCHEDULED -> TextButton(onClick = { viewModel.cancelRecording(rec.id) }) { Text("Cancelar", color = Accent) }
-                            ScheduledRecording.STATUS_DONE, ScheduledRecording.STATUS_FAILED, ScheduledRecording.STATUS_CANCELLED ->
-                                TextButton(onClick = { viewModel.removeRecording(rec.id) }) { Text("Apagar", color = Accent) }
+            // Lote 12 — Frente 2: gravações de séries agrupadas na pasta da
+            // série; as outras ficam em "Gravações". A em andamento aparece
+            // como tocável (toca o arquivo parcial).
+            val grouped = recordings.groupBy { it.seriesTitle.trim() }
+            val orderedGroups = grouped.entries.sortedBy { (series, _) -> if (series.isBlank()) 1 else 0 }
+            orderedGroups.forEachIndexed { groupIndex, (series, items) ->
+                if (groupIndex > 0) Spacer(Modifier.height(12.dp))
+                SettingsCard {
+                    Text(
+                        if (series.isBlank()) "Gravações" else series,
+                        color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold,
+                    )
+                    items.forEachIndexed { index, rec ->
+                        if (index > 0) Spacer(Modifier.height(12.dp))
+                        Text(rec.programTitle, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            recordingSub(rec) + if (rec.id in seenRecordings) " · Vista" else "",
+                            color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                        )
+                        if (rec.status == ScheduledRecording.STATUS_FAILED && rec.error.isNotBlank()) {
+                            Text("Erro: ${rec.error}", color = DangerText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            if (rec.status == ScheduledRecording.STATUS_RECORDING || rec.status == ScheduledRecording.STATUS_DONE) {
+                                TextButton(onClick = { playRecording(context, rec, recFolderUri, recStore) }) {
+                                    Text(if (rec.status == ScheduledRecording.STATUS_RECORDING) "Assistir (gravando)" else "Assistir", color = Accent)
+                                }
+                                TextButton(onClick = { recPrefs.setRecordingSeen(rec.id, rec.id !in seenRecordings) }) {
+                                    Text(if (rec.id in seenRecordings) "Vista ✓" else "Marcar como vista", color = Accent)
+                                }
+                            }
+                            when (rec.status) {
+                                ScheduledRecording.STATUS_SCHEDULED -> TextButton(onClick = { viewModel.cancelRecording(rec.id) }) { Text("Cancelar", color = Accent) }
+                                ScheduledRecording.STATUS_DONE, ScheduledRecording.STATUS_FAILED, ScheduledRecording.STATUS_CANCELLED ->
+                                    TextButton(onClick = { viewModel.removeRecording(rec.id) }) { Text("Apagar", color = Accent) }
+                            }
                         }
                     }
                 }
@@ -880,6 +963,8 @@ private fun DetalhePage(
     val spoilerBlur by viewModel.detailSpoilerBlur.collectAsStateWithLifecycle()
     val originalTitle by viewModel.detailOriginalTitle.collectAsStateWithLifecycle()
     val showAggregateRating by viewModel.detailShowAggregateRating.collectAsStateWithLifecycle()
+    // Fonte da nota exibida (Lote 12 — Frente 3, v1.22.0).
+    val ratingsSource by viewModel.ratingsSource.collectAsStateWithLifecycle()
     val showTraktReviews by viewModel.detailShowTraktReviews.collectAsStateWithLifecycle()
     val showQuotes by viewModel.detailShowQuotes.collectAsStateWithLifecycle()
     SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack, highlightAnchor = highlightAnchor) {
@@ -974,6 +1059,25 @@ private fun DetalhePage(
                 trailing = { Switch(checked = showAggregateRating, onCheckedChange = { viewModel.setDetailShowAggregateRating(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setDetailShowAggregateRating(!showAggregateRating) },
                 grouped = true,
+            )
+        }
+        // Lote 12 — Frente 3 (Notas, v1.22.0): fonte da nota exibida de
+        // filmes e séries. Episódios seguem sempre com TMDB (a API do
+        // MDBList não tem nota por episódio). Sem nota MDBList p/ o título,
+        // o TMDB assume como fallback — nunca se inventa nota.
+        SettingsCard {
+            PrefRow(
+                "Fonte da nota exibida",
+                listOf(
+                    "auto" to "Automática (MDBList quando conectado)",
+                    "mdblist" to "MDBList",
+                    "tmdb" to "TMDB",
+                ),
+                ratingsSource, viewModel::setRatingsSource,
+            )
+            Text(
+                "A nota de filmes e séries na página de detalhes. Automática usa a nota agregada do MDBList quando há chave configurada e ele está ligado; sem chave, ou sem nota p/ o título, vale a do TMDB.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
         }
         SettingsSection("O que estão dizendo", anchor = SettingsAnchors.DETAIL_REVIEWS)
@@ -1238,6 +1342,8 @@ private fun IntegracoesPage(
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
     highlightAnchor: String? = null,
+    // Lote 12 (v1.22.0): abre o gerenciador de canais.
+    onOpenLiveChannels: () -> Unit = {},
 ) {
     // A chave TMDB saiu daqui (Lote 6, v1.15.0): agora mora em Acompanhamento,
     // junto dos trackers. Esta página fica só com contas e TV ao vivo.
@@ -1255,6 +1361,11 @@ private fun IntegracoesPage(
     val liveInContinue by viewModel.liveInContinue.collectAsStateWithLifecycle()
     val liveRememberAudio by viewModel.liveRememberAudio.collectAsStateWithLifecycle()
     val liveCatchupHls by viewModel.liveCatchupHls.collectAsStateWithLifecycle()
+    // Lote 12 (v1.22.0): Multiview — a pref vive no PlatformPrefs direto
+    // (o SettingsViewModel não ganhou setter novo nesta frente).
+    val context = LocalContext.current
+    val livePrefs = remember(context) { com.aotv.app.data.local.PlatformPrefs(context) }
+    val liveMultiviewLayout by livePrefs.liveMultiviewLayoutFlow.collectAsStateWithLifecycle()
     SettingsPageScaffold("Integrações", "Contas e TV ao vivo", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Contas", anchor = SettingsAnchors.INTEGR_ACCOUNTS)
         com.aotv.app.ui.common.SettingsGroup {
@@ -1282,6 +1393,30 @@ private fun IntegracoesPage(
         // tudo sob a mesma seção "TV ao vivo" (anchor INTEGR_LIVE), logo após
         // a entrada das fontes. O botão "Atualizar agora" fica nas telas Ao vivo
         // e Fontes (força listas + guia na hora, com banner de progresso).
+        // Lote 12 (v1.22.0): Multiview e gerenciar canais — tudo sob a
+        // seção "TV ao vivo" (anchor INTEGR_LIVE_MANAGE).
+        SettingsSection("Multiview e canais", anchor = SettingsAnchors.INTEGR_LIVE_MANAGE)
+        SettingsCard {
+            PrefRow(
+                "Multiview: canais na tela",
+                listOf(1 to "1 canal", 2 to "2 canais", 4 to "4 canais"),
+                liveMultiviewLayout, { livePrefs.liveMultiviewLayout = it },
+            )
+            Text(
+                "Só no celular: na TV o Multiview não entra e a tela avisa. A célula em foco é a que tem áudio.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Edit,
+                iconTint = Accent,
+                title = "Gerenciar canais",
+                sub = "Ocultar, reordenar, renomear, trocar a logo e associar o guia de cada canal.",
+                onClick = onOpenLiveChannels,
+                grouped = true,
+            )
+        }
         SettingsSection("Guia de programação")
         SettingsCard {
             PrefRow(
@@ -1752,6 +1887,86 @@ private fun AparenciaPage(
                 divider = true,
             )
         }
+        // Atualizações do app (Lote 12 — Frente 3, v1.22.0): checagem manual
+        // + aviso discreto da release mais recente do repo público no GitHub
+        // (sem login). Sem releases publicadas, mostra o estado honesto —
+        // nunca afirma que está atualizado. Não bloqueia o uso.
+        SettingsSection("Atualizações", anchor = SettingsAnchors.APPEAR_UPDATE)
+        val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+        val updateDownloading by viewModel.updateDownloading.collectAsStateWithLifecycle()
+        val updateDownloadError by viewModel.updateDownloadError.collectAsStateWithLifecycle()
+        val updateNeedsPermission by viewModel.updateNeedsPermission.collectAsStateWithLifecycle()
+        val updateCheckEnabled by viewModel.appUpdateCheckEnabled.collectAsStateWithLifecycle()
+        LaunchedEffect(Unit) { viewModel.maybeAutoCheckForUpdates() }
+        val updateStatus = when (val s = updateState) {
+            null -> "Ainda não verificado nesta sessão."
+            com.aotv.app.data.remote.UpdateCheckResult.NoReleases -> "Nenhuma release publicada ainda."
+            is com.aotv.app.data.remote.UpdateCheckResult.UpToDate -> "Você está na versão mais recente (${s.latestTag})."
+            is com.aotv.app.data.remote.UpdateCheckResult.Available -> "Nova versão disponível: ${s.release.tag}."
+            is com.aotv.app.data.remote.UpdateCheckResult.Error -> "Não foi possível verificar: ${s.message}"
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Refresh,
+                title = "Versão instalada",
+                sub = "AOTV ${viewModel.installedAppVersion}. $updateStatus",
+                trailing = null,
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Sync,
+                title = "Verificação automática",
+                sub = if (updateCheckEnabled) "Avisa quando houver versão nova (checa no máximo 1 vez por dia)"
+                    else "Só verifica quando você tocar em \"Verificar atualizações\"",
+                trailing = { Switch(checked = updateCheckEnabled, onCheckedChange = { viewModel.setAppUpdateCheckEnabled(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setAppUpdateCheckEnabled(!updateCheckEnabled) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Refresh,
+                title = "Verificar atualizações",
+                sub = "Consulta a release mais recente no GitHub",
+                busy = updateDownloading,
+                onClick = { viewModel.checkForUpdates() },
+                grouped = true,
+                divider = true,
+            )
+            val available = updateState as? com.aotv.app.data.remote.UpdateCheckResult.Available
+            if (available != null) {
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = Icons.Default.FiberManualRecord,
+                    title = if (updateDownloading) "Baixando atualização…" else "Baixar e instalar ${available.release.tag}",
+                    sub = "Baixa o APK da release oficial e pede p/ instalar",
+                    onClick = { viewModel.downloadAndInstallUpdate() },
+                    grouped = true,
+                    divider = true,
+                )
+            }
+        }
+        if (updateDownloadError != null) {
+            SettingsCard {
+                Text(
+                    "Falha no download: $updateDownloadError",
+                    fontSize = 14.sp, color = DangerText, lineHeight = 20.sp,
+                )
+            }
+        }
+        if (updateNeedsPermission) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissUpdatePermission() },
+                title = { Text("Permitir instalação") },
+                text = { Text("O Android ainda não permite que o AOTV instale apps. Ative \"Instalar apps desconhecidos\" p/ o AOTV nas configurações do sistema e tente de novo.") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissUpdatePermission(); viewModel.openUnknownSourcesSettings() }) {
+                        Text("Abrir configurações")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissUpdatePermission() }) { Text("Agora não") }
+                },
+            )
+        }
     }
 }
 
@@ -1823,6 +2038,9 @@ private fun ReproducaoPage(
     val subOutline by playerPrefs.subOutline.collectAsStateWithLifecycle()
     val subFont by playerPrefs.subFont.collectAsStateWithLifecycle()
     val playerSpeed by playerPrefs.speed.collectAsStateWithLifecycle()
+    // Lote 12 — Frente 2: modo de tela padrão e vista da folha de fontes.
+    val screenMode by playerPrefs.screenMode.collectAsStateWithLifecycle()
+    val sourcesRanked by playerPrefs.sourcesRanked.collectAsStateWithLifecycle()
     // Motor do player (Lote 4, v1.12.0): player padrão e decoder.
     val playerEngine by playerPrefs.engine.collectAsStateWithLifecycle()
     val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
@@ -2074,6 +2292,19 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Folha de fontes em ranking (Lote 12 — Frente 2): lista única da
+            // melhor p/ pior em vez de agrupada por addon. Vale na próxima
+            // vez que a folha abrir; o toggle da folha muda aqui também.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.FormatListNumbered,
+                title = "Fontes em ranking",
+                sub = if (sourcesRanked) "A folha de fontes lista da melhor para a pior (#1, #2, #3…)"
+                    else "A folha de fontes agrupa as fontes por addon",
+                trailing = { Switch(checked = sourcesRanked, onCheckedChange = { playerPrefs.setSourcesRanked(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSourcesRanked(!sourcesRanked) },
+                grouped = true,
+                divider = true,
+            )
         }
         // Velocidade padrão (v1.9.0): o player abre nela; mudar no player salva aqui.
         SettingsCard {
@@ -2081,6 +2312,19 @@ private fun ReproducaoPage(
                 "Velocidade padrão",
                 listOf(0.5f to "0,5x", 1f to "1x", 1.5f to "1,5x", 2f to "2x"),
                 playerSpeed, playerPrefs::setSpeed,
+            )
+        }
+        // Modo de tela padrão (Lote 12 — Frente 2): o player abre nele; mudar no chip "Tela" salva aqui.
+        SettingsCard {
+            PrefRow(
+                "Modo de tela padrão",
+                listOf(0 to "Automático", 1 to "Ajustar", 2 to "Preencher", 3 to "Zoom", 4 to "Esticar"),
+                screenMode, playerPrefs::setScreenMode,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Automático: preenche a tela quando o vídeo tem a proporção dela e ajusta com barras quando não tem. Vale a partir da próxima reprodução.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
             )
         }
         Column(Modifier.alpha(if (volBoost) 1f else 0.45f)) {

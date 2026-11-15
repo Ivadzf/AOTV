@@ -39,7 +39,12 @@ import com.aotv.app.ui.theme.*
 
 /** Fontes da TV ao vivo. Listas M3U, contas Xtream, guia extra e a aba na barra. */
 @Composable
-fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hiltViewModel()) {
+fun LiveSourcesScreen(
+    onBack: () -> Unit,
+    viewModel: LiveSourcesViewModel = hiltViewModel(),
+    /** Abre o gerenciador de canais (Lote 12, v1.22.0). Sem ele, o botão some. */
+    onManageChannels: () -> Unit = {},
+) {
     val st by viewModel.state.collectAsStateWithLifecycle()
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val pad = com.aotv.app.ui.common.pagePadding()
@@ -147,11 +152,24 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text(s.name, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                                // Lote 12 (v1.22.0): detalhes da conta Xtream — SÓ o que
+                                // `player_api.php?action=user_info` devolve (ver
+                                // XtreamParser::account): status, expiração, conexões
+                                // máximas e formatos. Sem dado, a linha some. A API
+                                // NÃO devolve nº de VOD/séries — por isso não há
+                                // essas linhas aqui (o nº de canais vem da lista
+                                // já carregada, não da conta).
                                 val parts = listOfNotNull(
                                     if (s.type == LiveSourceType.M3U) "Lista M3U" else "Xtream",
                                     if (s.enabled) "$count canais" else "Desligada",
-                                    acc?.let { a -> if (a.expiresAt > 0) "vence em ${date(a.expiresAt)}" else a.status.ifBlank { null } },
-                                )
+                                ) + (acc?.let { a ->
+                                    listOfNotNull(
+                                        a.status.takeIf { it.isNotBlank() },
+                                        if (a.expiresAt > 0) "vence em ${date(a.expiresAt)}" else null,
+                                        if (a.maxConnections > 0) "até ${a.maxConnections} conexões" else null,
+                                        a.formats.takeIf { it.isNotEmpty() }?.let { "formatos: ${it.joinToString(", ")}" },
+                                    )
+                                }.orEmpty())
                                 Text(parts.joinToString(" · "), color = TextTertiary, fontSize = 13.sp)
                             }
                             Switch(
@@ -178,6 +196,15 @@ fun LiveSourcesScreen(onBack: () -> Unit, viewModel: LiveSourcesViewModel = hilt
                             )
                         },
                         onClick = { viewModel.setShowInBar(!st.showInBar) },
+                    )
+                    // Lote 12 (v1.22.0): gerenciar canais — ocultar, reordenar,
+                    // renomear, renumerar, grupo próprio, Assign EPG, time
+                    // shift e logo (por perfil).
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.Edit,
+                        title = "Gerenciar canais",
+                        sub = "Ocultar, reordenar, renomear, trocar a logo e associar o guia de cada canal",
+                        onClick = onManageChannels,
                     )
                 }
 

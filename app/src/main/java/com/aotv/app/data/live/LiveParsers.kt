@@ -280,6 +280,9 @@ object XmltvParser {
         var stop = 0L
         var title = ""
         var desc = ""
+        // Lote 12 (v1.22.0): pôster do programa (`<icon src>` dentro do
+        // `<programme>`) — só quando o guia traz; vazio sem imagem.
+        var image = ""
         var tag = ""
         while (true) {
             val ev = p.next()
@@ -296,7 +299,12 @@ object XmltvParser {
                             progCh = p.getAttributeValue(null, "channel")?.trim()?.lowercase()
                             start = time(p.getAttributeValue(null, "start"))
                             stop = time(p.getAttributeValue(null, "stop"))
-                            title = ""; desc = ""
+                            title = ""; desc = ""; image = ""
+                        }
+                        // Pôster do programa (Lote 12, v1.22.0): `<icon src>`
+                        // dentro do `<programme>`; só a primeira vale.
+                        "icon" -> if (progCh != null && image.isBlank()) {
+                            image = p.getAttributeValue(null, "src")?.trim().orEmpty()
                         }
                     }
                 }
@@ -317,7 +325,7 @@ object XmltvParser {
                             val id = progCh
                             val chans = id?.let { idToChannels[it] ?: wanted[it] }
                             if (chans != null && stop > from && start < to && title.isNotEmpty()) {
-                                val prog = LiveProgram(start, if (stop > start) stop else start + 3_600_000L, title, desc.take(400))
+                                val prog = LiveProgram(start, if (stop > start) stop else start + 3_600_000L, title, desc.take(400), image.take(500))
                                 chans.forEach { c -> out.getOrPut(c) { mutableListOf() } += prog }
                             }
                             progCh = null

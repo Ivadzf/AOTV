@@ -51,6 +51,8 @@ class LiveTvViewModel @Inject constructor(
         val now: Long = System.currentTimeMillis(),
         /** Guia completo por canal (a grade usa a lista inteira, não só agora/a seguir). */
         val epg: Map<String, List<LiveProgram>> = emptyMap(),
+        /** Hora da última atualização do guia (epoch ms, 0 = nunca) — a grade mostra "guia salvo de HH:mm". */
+        val epgUpdatedAt: Long = 0L,
         // Lote 8 (v1.18.0): guia configurável e exibição de canais (por perfil).
         val guideDaysAhead: Int = 3,
         val guideHoursBack: Int = 1,
@@ -66,25 +68,31 @@ class LiveTvViewModel @Inject constructor(
 
     val view: StateFlow<View> = combine(repo.state, filter, query, clock) { st, f, q, now ->
         val favs = st.favorites
-        val byId = st.channels.associateBy { it.id }
+        // Lote 12 (v1.22.0): canais de exibição — ocultos fora, nome/número/
+        // grupo/logo próprios aplicados e na ordem do usuário. O guia já vem
+        // com Assign EPG + time shift (ver repo.epgForChannel). Tudo abaixo
+        // usa ESTA lista e ESTE guia, nunca a lista crua do estado.
+        val display = repo.displayChannels(st.channels)
+        val epgById = display.associate { it.id to repo.epgForChannel(it.id) }
+        val byId = display.associateBy { it.id }
         val clean = prefs.liveCleanGroupNames
         val base = when {
-            f == FAV -> st.channels.filter { it.id in favs }
+            f == FAV -> display.filter { it.id in favs }
             f == RECENT -> st.recents.mapNotNull { byId[it] }
-            f.startsWith("g:") -> f.removePrefix("g:").let { g -> st.channels.filter { g in groupNames(it, clean) } }
-            else -> st.channels
+            f.startsWith("g:") -> f.removePrefix("g:").let { g -> display.filter { g in groupNames(it, clean) } }
+            else -> display
         }
         val needle = q.trim().lowercase()
         val list = if (needle.isEmpty()) base else base.filter { it.name.lowercase().contains(needle) || it.group.lowercase().contains(needle) }
         // Grupos na ordem em que aparecem na lista, com a contagem (uma passada só).
         val counts = LinkedHashMap<String, Int>()
-        st.channels.forEach { c -> groupNames(c, clean).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
+        display.forEach { c -> groupNames(c, clean).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
         val groups = counts.toList()
         // Lote 9 (v1.19.0): canais por grupo p/ os cartões do hub — a lista
         // inteira, sem o filtro nem a busca (o hub só aparece sem filtro e
         // sem busca; com filtro/busca a tela segue com a grade plana).
-        val allRows = st.channels.map { c ->
-            val (n, nx) = nowNext(st.epg[c.id], now)
+        val allRows = display.map { c ->
+            val (n, nx) = nowNext(epgById[c.id], now)
             LiveRow(c, n, nx, c.id in favs)
         }
         val groupedRows = LinkedHashMap<String, MutableList<LiveRow>>()
@@ -96,16 +104,17 @@ class LiveTvViewModel @Inject constructor(
         View(
             hasSources = st.hasSources,
             rows = list.map { c ->
-                val (n, nx) = nowNext(st.epg[c.id], now)
+                val (n, nx) = nowNext(epgById[c.id], now)
                 LiveRow(c, n, nx, c.id in favs)
             },
             groups = groups,
             groupedRows = groupedRows,
-            favoriteCount = st.channels.count { it.id in favs },
+            favoriteCount = display.count { it.id in favs },
             recentCount = st.recents.count { it in byId },
-            total = st.channels.size,
+            total = display.size,
             filter = f, query = q, loading = st.loading, epgLoading = st.epgLoading, error = st.error, now = now,
-            epg = st.epg,
+            epg = epgById,
+            epgUpdatedAt = repo.lastEpgAtMs(),
             guideDaysAhead = prefs.liveGuideDaysAhead,
             guideHoursBack = prefs.liveGuideHoursBack,
             showLogos = prefs.liveShowLogos,
@@ -122,6 +131,8 @@ class LiveTvViewModel @Inject constructor(
     }
 
     fun reload() { viewModelScope.launch { repo.refresh(true) } }
+    /** Guia instantâneo (Lote 12, v1.22.0): atualiza o EPG em 2º plano quando passou o intervalo — a grade já abriu com o salvo. */
+    fun refreshEpgIfStale() { viewModelScope.launch { repo.refreshEpgIfStale() } }
     fun setFilter(f: String) { filter.value = f }
     fun setQuery(q: String) { query.value = q }
     fun toggleFavorite(id: String) = repo.toggleFavorite(id)
@@ -173,7 +184,12 @@ class LivePlayerViewModel @Inject constructor(
     private val prefs: com.aotv.app.data.local.PlatformPrefs,
     private val library: com.aotv.app.data.repository.LibraryRepository,
 ) : ViewModel() {
-    val state = repo.state
+    // Lote 12 (v1.22.0): o player vê os canais de exibição (ocultos fora,
+    // nome/logo próprios aplicados) — a lista lateral e o próximo/anterior
+    // respeitam o gerenciar canais. O estado cru do repo não é exposto.
+    val state: StateFlow<LiveTvRepository.State> = repo.state
+        .map { st -> st.copy(channels = repo.displayChannels(st.channels)) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repo.state.value.copy(channels = repo.displayChannels()))
     fun channel(id: String) = repo.channel(id)
     fun watched(id: String) = repo.markWatched(id)
     fun toggleFavorite(id: String) = repo.toggleFavorite(id)
@@ -351,6 +367,58 @@ class LiveSourcesViewModel @Inject constructor(private val repo: LiveTvRepositor
     fun remove(id: String) = repo.remove(id)
     fun setShowInBar(on: Boolean) = repo.setShowInBar(on)
     fun clearMessage() = _ui.update { it.copy(message = null, error = null) }
+}
+
+/** Gerenciar canais (Lote 12, v1.22.0): ocultar, reordenar, renomear, renumerar, grupo próprio, Assign EPG, time shift e logo. */
+@HiltViewModel
+class LiveChannelManagerViewModel @Inject constructor(
+    private val repo: LiveTvRepository,
+    private val prefs: com.aotv.app.data.local.PlatformPrefs,
+) : ViewModel() {
+    val state = repo.state
+
+    /** Todos os canais (inclusive os ocultos), na ordem efetiva de exibição. */
+    fun orderedChannels(): List<LiveChannel> {
+        val all = repo.state.value.channels
+        val order = prefs.liveChannelOrder
+        if (order.isEmpty()) return all
+        val pos = order.withIndex().associate { it.value to it.index }
+        return all.sortedWith(compareBy({ pos[it.id] ?: Int.MAX_VALUE }, { all.indexOf(it) }))
+    }
+
+    fun displayChannel(c: LiveChannel): LiveChannel = repo.displayChannel(c)
+
+    /** Canais com guia, p/ o seletor de Assign EPG: (id do canal, nome, id do guia). Um id de guia aparece uma só vez. */
+    fun epgChoices(): List<Triple<String, String, String>> =
+        repo.state.value.channels.mapNotNull { c ->
+            val epgId = repo.effectiveEpgId(c)
+            if (epgId.isBlank() || repo.state.value.epg[c.id].isNullOrEmpty()) null
+            else Triple(c.id, repo.displayChannel(c).name, epgId)
+        }.distinctBy { it.third }
+
+    fun toggleHidden(id: String) = prefs.toggleLiveChannelHidden(id)
+    fun isHidden(id: String): Boolean = id in prefs.liveHiddenChannels
+
+    /** Move o canal na ordem própria (delta -1 sobe, +1 desce); sem efeito no topo/fim. */
+    fun move(id: String, delta: Int) {
+        val cur = orderedChannels().map { it.id }
+        val i = cur.indexOf(id)
+        val j = (i + delta).coerceIn(0, cur.size - 1)
+        if (i < 0 || i == j) return
+        val next = cur.toMutableList()
+        val moved = next.removeAt(i)
+        next.add(j, moved)
+        prefs.liveChannelOrder = next
+    }
+
+    fun setName(id: String, name: String) = prefs.setLiveChannelName(id, name)
+    fun setGroup(id: String, group: String) = prefs.setLiveChannelGroup(id, group)
+    fun setNumber(id: String, number: Int?) = prefs.setLiveChannelNumber(id, number)
+    fun setLogo(id: String, url: String) = prefs.setLiveChannelLogo(id, url)
+    fun setEpgAssign(id: String, epgId: String) = prefs.setLiveEpgAssign(id, epgId)
+    fun setEpgShift(id: String, hours: Int) = prefs.setLiveEpgShift(id, hours)
+    fun epgAssign(id: String): String? = prefs.liveEpgAssign[id]
+    fun epgShift(id: String): Int = prefs.liveEpgShift[id] ?: 0
 }
 
 /** On Demand Xtream (Lote 9, v1.19.0): filmes e séries da conta já configurada. */

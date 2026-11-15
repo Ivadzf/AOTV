@@ -100,6 +100,9 @@ object AotvBackup {
         // nome da cor). Restaurar o backup volta o ícone escolhido (a troca
         // é aplicada no restore, ver BackupViewModel.refreshGlobalFlows).
         "app_icon_variant",
+        // Lote 12 — Frente 3 (Notas e atualizador, v1.22.0): checagem de
+        // atualização ligada + data da última checagem. Nada é segredo.
+        "app_update_check_enabled", "app_update_last_check_v1",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */

@@ -548,7 +548,10 @@ class LiveTvRepository @Inject constructor(
         val wanted = HashMap<String, MutableList<String>>()
         val names = HashMap<String, MutableList<String>>()
         channels.forEach { c ->
-            if (c.epgId.isNotBlank()) wanted.getOrPut(c.epgId.lowercase()) { mutableListOf() } += c.id
+            // Lote 12 (v1.22.0): o Assign EPG manual também entra no
+            // "wanted" — o guia associado é baixado junto com o resto.
+            val effId = effectiveEpgId(c)
+            if (effId.isNotBlank()) wanted.getOrPut(effId.lowercase()) { mutableListOf() } += c.id
             names.getOrPut(XmltvParser.norm(c.name)) { mutableListOf() } += c.id
         }
         val merged = HashMap<String, List<LiveProgram>>()
@@ -574,9 +577,92 @@ class LiveTvRepository @Inject constructor(
 
     fun channel(id: String): LiveChannel? = _state.value.channels.firstOrNull { it.id == id }
 
-    /** Programa de agora e o próximo. */
+    // ── Lote 12 (v1.22.0) — Gerenciar canais + Assign EPG + time shift ──
+    // As personalizações do usuário (por perfil, em PlatformPrefs) valem em
+    // TODAS as vistas: quem lê canais p/ exibir usa [displayChannels] e
+    // quem lê o guia usa [epgForChannel] — nunca a lista crua do estado.
+
+    /** Aplica nome, número, grupo e logo próprios de um canal (vazio = o da lista). */
+    fun displayChannel(c: LiveChannel): LiveChannel {
+        val names = platformPrefs.liveChannelNames
+        val groups = platformPrefs.liveChannelGroups
+        val numbers = platformPrefs.liveChannelNumbers
+        val logos = platformPrefs.liveChannelLogos
+        val name = names[c.id]
+        val group = groups[c.id]
+        val number = numbers[c.id]
+        val logo = logos[c.id]
+        if (name == null && group == null && number == null && logo == null) return c
+        return c.copy(
+            name = name ?: c.name,
+            group = group ?: c.group,
+            number = number ?: c.number,
+            logo = logo ?: c.logo,
+        )
+    }
+
+    /** Canais visíveis, com as personalizações aplicadas e na ordem própria. */
+    fun displayChannels(channels: List<LiveChannel> = _state.value.channels): List<LiveChannel> {
+        val hidden = platformPrefs.liveHiddenChannels.toSet()
+        val order = platformPrefs.liveChannelOrder
+        val visible = channels.filterNot { it.id in hidden }.map { displayChannel(it) }
+        if (order.isEmpty()) return visible
+        val pos = order.withIndex().associate { it.value to it.index }
+        // Canais na ordem própria primeiro; fora da lista, na ordem da fonte.
+        return visible.sortedWith(compareBy({ pos[it.id] ?: Int.MAX_VALUE }, { visible.indexOf(it) }))
+    }
+
+    /** Id do guia efetivo de um canal (Assign EPG manual, ou o tvg-id da lista). */
+    fun effectiveEpgId(channel: LiveChannel): String =
+        platformPrefs.liveEpgAssign[channel.id]?.takeIf { it.isNotBlank() } ?: channel.epgId
+
+    /** Deslocamento do guia de um canal, em horas (-24..+24; 0 = sem deslocar). */
+    fun epgShiftHours(channelId: String): Int = platformPrefs.liveEpgShift[channelId] ?: 0
+
+    /**
+     * Guia de um canal com Assign EPG + time shift aplicados. O deslocamento
+     * move TODOS os programas do canal (o "agora" casa com o guia deslocado);
+     * só vale p/ este canal. Sem associação nem deslocamento, é o guia cru.
+     */
+    fun epgForChannel(channelId: String): List<LiveProgram> {
+        // O Assign EPG já vale no download (ver refreshEpg): o guia
+        // associado chega guardado sob o id deste canal. Aqui só desloca.
+        val base = _state.value.epg[channelId].orEmpty()
+        val shift = platformPrefs.liveEpgShift[channelId] ?: 0
+        if (shift == 0) return base
+        val delta = shift * 3_600_000L
+        return base.map { it.copy(start = it.start + delta, stop = it.stop + delta) }
+    }
+
+    /** Hora da última atualização do guia (epoch ms, 0 = nunca) — p/ a grade mostrar "guia salvo de HH:mm". */
+    fun lastEpgAtMs(): Long = lastEpgAt
+
+    /**
+     * Guia instantâneo (Lote 12, v1.22.0): a grade abre na hora com o EPG
+     * salvo em disco (o init já o carrega); aqui só atualiza em 2º plano
+     * quando o app está aberto e passou o intervalo da pref — sem
+     * WorkManager (não há agendamento com o app fechado) e sem tocar nas
+     * listas. Sem efeito quando o guia ainda está fresco.
+     */
+    suspend fun refreshEpgIfStale() = lock.withLock {
+        withContext(Dispatchers.IO) {
+            if (System.currentTimeMillis() - lastEpgAt < epgIntervalMs()) return@withContext
+            val sources = _state.value.sources.filter { it.enabled }
+            if (sources.isEmpty()) return@withContext
+            val all = sources.flatMap { readChannels(it.id)?.first.orEmpty() }
+            val urls = LinkedHashSet<String>()
+            sources.forEach { s ->
+                readChannels(s.id)?.second?.let { urls += it }
+                if (s.epgUrl.startsWith("http", true)) urls += s.epgUrl
+            }
+            refreshEpg(all, urls.toList(), false)
+        }
+    }
+
+    /** Programa de agora e o próximo (com Assign EPG + time shift do canal). */
     fun nowNext(id: String, now: Long = System.currentTimeMillis()): Pair<LiveProgram?, LiveProgram?> {
-        val list = _state.value.epg[id] ?: return null to null
+        val list = epgForChannel(id)
+        if (list.isEmpty()) return null to null
         val i = list.indexOfFirst { it.isNow(now) }
         if (i < 0) return null to list.firstOrNull { it.start > now }
         return list[i] to list.getOrNull(i + 1)
@@ -671,7 +757,7 @@ class LiveTvRepository @Inject constructor(
         val root = JSONObject()
         map.forEach { (k, v) ->
             val a = JSONArray()
-            v.forEach { p -> a.put(JSONObject().put("s", p.start).put("e", p.stop).put("t", p.title).put("d", p.desc)) }
+            v.forEach { p -> a.put(JSONObject().put("s", p.start).put("e", p.stop).put("t", p.title).put("d", p.desc).put("i", p.image)) }
             root.put(k, a)
         }
         File(dir, "epg.json").writeText(JSONObject().put("at", System.currentTimeMillis()).put("sig", sig).put("p", root).toString())
@@ -684,7 +770,7 @@ class LiveTvRepository @Inject constructor(
         val p = o.getJSONObject("p")
         val map = p.keys().asSequence().associateWith { k ->
             val a = p.getJSONArray(k)
-            (0 until a.length()).map { i -> a.getJSONObject(i).let { LiveProgram(it.getLong("s"), it.getLong("e"), it.optString("t"), it.optString("d")) } }
+            (0 until a.length()).map { i -> a.getJSONObject(i).let { LiveProgram(it.getLong("s"), it.getLong("e"), it.optString("t"), it.optString("d"), it.optString("i")) } }
         }
         Triple(map, o.optString("sig"), o.optLong("at"))
     }.getOrNull()
