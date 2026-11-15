@@ -12,15 +12,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Gravações agendadas (Lote 8, v1.18.0).
+ * Gravações agendadas (Lote 8, v1.18.0; disparo com o app fechado no Lote 13, v1.23.0).
  *
  * Guarda em SharedPreferences próprio ("aotv_recordings") a lista de
  * gravações do aparelho — NÃO vai p/ o backup (o arquivo gravado é local e
  * a URI da pasta não viaja com a permissão, igual à pasta de downloads).
  * O agendamento em si é só um registro: quem dispara a gravação na hora
- * certa é o [RecordingService] (via [RecordingService.checkDue], chamado
- * quando o app abre — ver a limitação documentada lá: sem WorkManager no
- * gradle, NÃO há disparo com o app fechado).
+ * certa é o [RecordingService] — com o app aberto, via [RecordingService.checkDue]
+ * (chamado pela Início); com o app fechado, via WorkManager ([WorkScheduler]:
+ * [schedule] agenda o disparo, [cancel]/[remove] cancelam o trabalho).
  */
 data class ScheduledRecording(
     val id: String,
@@ -83,7 +83,7 @@ class RecordingStore @Inject constructor(
     /** Gravações agendadas (leitura direta). */
     fun list(): List<ScheduledRecording> = _recordings.value
 
-    /** Agenda a gravação de um programa. Devolve o registro criado. */
+    /** Agenda a gravação de um programa. Devolve o registro criado. Também agenda o disparo com o app fechado (WorkManager, Lote 13). */
     fun schedule(
         channelId: String,
         channelName: String,
@@ -103,6 +103,7 @@ class RecordingStore @Inject constructor(
             createdAt = System.currentTimeMillis(),
         )
         save(_recordings.value + rec)
+        WorkScheduler.scheduleRecording(context, rec)
         return rec
     }
 
@@ -116,16 +117,18 @@ class RecordingStore @Inject constructor(
         save(next)
     }
 
-    /** Cancela uma gravação agendada (só vale antes de começar). */
+    /** Cancela uma gravação agendada (só vale antes de começar). Também cancela o disparo com o app fechado (WorkManager, Lote 13). */
     fun cancel(id: String) {
         update(id) { rec ->
             if (rec.status == ScheduledRecording.STATUS_SCHEDULED) rec.copy(status = ScheduledRecording.STATUS_CANCELLED) else rec
         }
+        WorkScheduler.cancelRecording(context, id)
     }
 
-    /** Apaga o registro (o arquivo, quando existe, é apagado pelo chamador). */
+    /** Apaga o registro (o arquivo, quando existe, é apagado pelo chamador). Também cancela o disparo com o app fechado. */
     fun remove(id: String) {
         save(_recordings.value.filterNot { it.id == id })
+        WorkScheduler.cancelRecording(context, id)
     }
 
     /** Recarrega do disco (o serviço grava enquanto as Configurações estão abertas). */

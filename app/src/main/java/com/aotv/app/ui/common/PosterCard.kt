@@ -185,15 +185,22 @@ private fun posterHue(bmp: Bitmap): Int? = runCatching {
 }.getOrNull()
 
 /** Matiz do drawable JÁ exibido na tela, subamostrado para 8×12. Bitmap de hardware não deixa
- * ler pixel: copia para software antes (em Dispatchers.Default, pelo chamador). */
-private fun hueFromDrawable(drawable: Drawable): Int? {
-    val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return null
+ * ler pixel: copia para software antes (em Dispatchers.Default, pelo chamador).
+ * BLINDADO (Lote 13, v1.23.0 — Bug 1 da TV): qualquer falha aqui (cópia null, bitmap
+ * reciclado, GPU da TV sem readback) devolve null em vez de derrubar o app — a matiz
+ * fica null e o pôster usa a cor padrão. */
+private fun hueFromDrawable(drawable: Drawable): Int? = runCatching {
+    val bmp = (drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
+    if (bmp.isRecycled || bmp.width <= 0 || bmp.height <= 0) return@runCatching null
     if (bmp.config == Bitmap.Config.HARDWARE) {
-        val soft = bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return null
-        return posterHue(soft)
+        val soft = bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return@runCatching null
+        val h = posterHue(soft)
+        runCatching { soft.recycle() }
+        h
+    } else {
+        posterHue(bmp)
     }
-    return posterHue(bmp)
-}
+}.getOrNull()
 
 /** Espera o load() restaurar os tints salvos (no máximo 5 s): sem isso, a matiz inicial
  * null dispara a leitura do disco antes do salvo chegar. */
@@ -289,12 +296,15 @@ internal fun rememberPosterHue(item: MovieItem): Int? {
         info?.waitTintsLoaded()
         val cached = info?.tint(key)
         if (cached != null) { hue = cached; return@LaunchedEffect }
-        val small = context.imageLoader.execute(
-            ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
-        )
-        val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
-        val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@LaunchedEffect
+        // Blindado (Lote 13, v1.23.0): falha no disco não derruba o app.
+        val h = runCatching {
+            val small = context.imageLoader.execute(
+                ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                    .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
+            )
+            val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
+            withContext(Dispatchers.Default) { posterHue(bmp) }
+        }.getOrNull() ?: return@LaunchedEffect
         hue = h
         info?.putTint(key, h)
     }
@@ -308,8 +318,10 @@ internal data class PosterVisual(
     val onImage: ((Drawable) -> Unit)?,
     /** True quando a imagem exibida carregou — as decorações só desenham aí. */
     val loaded: Boolean = false,
-    /** True quando a matiz ainda precisa ser lida (nada em cache). A TV usa para
-     * desligar o hardware bitmap só nesse caso. */
+    /** True quando a matiz ainda precisa ser lida do drawable exibido (nada
+     * em cache). A TV usa para desligar o hardware bitmap só nesse caso —
+     * com fromDisplayed = false (Lote 13, v1.23.0) fica false e o bitmap
+     * de hardware continua ligado na TV. */
     val huePending: Boolean = false,
     /** Fallback 8×12 quando a imagem não carregou (sem bitmap exibido para ler). */
     val onImageError: (() -> Unit)? = null,
@@ -332,6 +344,16 @@ internal fun rememberPosterVisual(
      * estes selos estão ligados: sem eles, nada aparece em lugar nenhum.
      */
     showQualityBadges: Boolean = true,
+    /**
+     * Falso na TV (Lote 13, v1.23.0 — Bug 1): a matiz NUNCA sai do drawable
+     * exibido. Ler pixel do bitmap na tela é readback da GPU + cópia de
+     * hardware bitmap — suspeito do crash da Início da TV, que só acontece
+     * quando os pôsteres terminam de carregar. Com false, a matiz vem só
+     * da leitura 8×12 do disco (o LaunchedEffect abaixo), que já existe;
+     * sem ela, a faixa usa a cor padrão. O celular mantém true (default)
+     * e não muda nada.
+     */
+    fromDisplayed: Boolean = true,
 ): PosterVisual {
     val info = LocalPosterInfo.current
     val key = posterKey(item)
@@ -351,10 +373,11 @@ internal fun rememberPosterVisual(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Sempre presente: marca a imagem como carregada (as decorações dependem
-    // disso) e, quando falta a matiz, tira ela do drawable exibido.
-    val onImage = remember(key, readHue) { { drawable: Drawable ->
+    // disso) e, quando falta a matiz, tira ela do drawable exibido — salvo
+    // na TV, onde fromDisplayed é false (Lote 13, v1.23.0).
+    val onImage = remember(key, readHue, fromDisplayed) { { drawable: Drawable ->
         loaded = true
-        if (readHue) {
+        if (readHue && fromDisplayed) {
             scope.launch(Dispatchers.Default) {
                 if (hue != null) return@launch
                 // Espera os salvos: na abertura, a matiz inicial null disparava
@@ -371,6 +394,7 @@ internal fun rememberPosterVisual(
     } }
     // Só quando a imagem não carregou: espera o load() restaurar os tints
     // salvos, confere o cache e só então faz a leitura 8×12 do disco.
+    // Blindado (Lote 13, v1.23.0): falha no disco não derruba o app.
     val onImageError = remember(key, readHue) { {
         if (readHue) {
             scope.launch {
@@ -378,12 +402,14 @@ internal fun rememberPosterVisual(
                 if (hue != null) return@launch
                 val cached = info?.tint(key)
                 if (cached != null) { hue = cached; return@launch }
-                val small = context.imageLoader.execute(
-                    ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                        .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
-                )
-                val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@launch
-                val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@launch
+                val h = runCatching {
+                    val small = context.imageLoader.execute(
+                        ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                            .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
+                    )
+                    val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
+                    withContext(Dispatchers.Default) { posterHue(bmp) }
+                }.getOrNull() ?: return@launch
                 hue = h
                 info?.putTint(key, h)
             }
@@ -400,12 +426,16 @@ internal fun rememberPosterVisual(
         info?.waitTintsLoaded()
         val cached = info?.tint(key)
         if (cached != null) { hue = cached; return@LaunchedEffect }
-        val small = context.imageLoader.execute(
-            ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).networkCachePolicy(CachePolicy.DISABLED).build(),
-        )
-        val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@LaunchedEffect
-        val h = withContext(Dispatchers.Default) { posterHue(bmp) } ?: return@LaunchedEffect
+        // Blindado (Lote 13, v1.23.0): falha no disco não derruba o app.
+        // Na TV este é o ÚNICO caminho da matiz (fromDisplayed = false).
+        val h = runCatching {
+            val small = context.imageLoader.execute(
+                ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+                    .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).networkCachePolicy(CachePolicy.DISABLED).build(),
+            )
+            val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
+            withContext(Dispatchers.Default) { posterHue(bmp) }
+        }.getOrNull() ?: return@LaunchedEffect
         hue = h
         info?.putTint(key, h)
     }
@@ -427,7 +457,9 @@ internal fun rememberPosterVisual(
     }
     // A cor da faixa entra na hora. Animada, recompunha o cartão inteiro a cada quadro por 300 ms.
     val tint = tintColor(hue)
-    return PosterVisual(tint, tag, quality, onImage, loaded, readHue, onImageError)
+    // Na TV a matiz nunca sai do drawable exibido: huePending false desliga
+    // o allowHardware(false) do TvPoster (Lote 13, v1.23.0).
+    return PosterVisual(tint, tag, quality, onImage, loaded, readHue && fromDisplayed, onImageError)
 }
 
 @Composable

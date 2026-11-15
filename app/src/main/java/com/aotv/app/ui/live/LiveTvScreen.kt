@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,6 +54,8 @@ fun LiveTvScreen(
     onOpenVod: () -> Unit = {},
     /** Abre o Multiview (Lote 12, v1.22.0): até 4 canais ao mesmo tempo. */
     onOpenMultiview: () -> Unit = {},
+    /** Abre as tabelas de ligas (Lote 13, v1.23.0): placar, tabela e canais. */
+    onOpenTables: () -> Unit = {},
     /** Buscar o título de um programa do guia nos addons (Lote 12, v1.22.0). */
     onSearchTitle: ((String) -> Unit)? = null,
     viewModel: LiveTvViewModel = hiltViewModel(),
@@ -206,6 +209,8 @@ fun LiveTvScreen(
             item { com.aotv.app.ui.common.FilterChipPill("Guia", guide, { guide = true }, icon = Icons.Default.GridView) }
             // Lote 12 (v1.22.0): Multiview — até 4 canais ao mesmo tempo (só no celular; na TV a tela avisa).
             item { com.aotv.app.ui.common.FilterChipPill("Multiview", false, onOpenMultiview, icon = Icons.Default.Dashboard) }
+            // Lote 13 (v1.23.0): tabelas de ligas + League Networks + páginas de jogo.
+            item { com.aotv.app.ui.common.FilterChipPill("Tabelas", false, onOpenTables, icon = Icons.Default.TableChart) }
             item { com.aotv.app.ui.common.FilterChipPill("Todos ${v.total}", v.filter == LiveTvViewModel.ALL, { viewModel.setFilter(LiveTvViewModel.ALL) }) }
             if (v.favoriteCount > 0) item {
                 com.aotv.app.ui.common.FilterChipPill("Favoritos ${v.favoriteCount}", v.filter == LiveTvViewModel.FAV, { viewModel.setFilter(LiveTvViewModel.FAV) }, icon = Icons.Default.Star)

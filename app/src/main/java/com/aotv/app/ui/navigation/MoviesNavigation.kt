@@ -111,6 +111,14 @@ private sealed class MoviesRoute(val route: String) {
         fun create(channelId: String) = "movies_live_guide/" + android.net.Uri.encode(channelId)
     }
     object LiveChannelsManage : MoviesRoute("live_channels_manage")
+    // Esportes parte 2 (Lote 13, v1.23.0 — Frente 1): tabelas de ligas +
+    // League Networks e a página do jogo (placar, gols, estatísticas,
+    // escalações). A página do jogo leva liga + id do evento da ESPN.
+    object SportsTables : MoviesRoute("live_sports_tables")
+    object SportsGame : MoviesRoute("live_sports_game/{league}/{eventId}") {
+        fun create(league: String, eventId: String) =
+            "live_sports_game/" + android.net.Uri.encode(league) + "/" + android.net.Uri.encode(eventId)
+    }
     // Busca com query pronta (Lote 12, v1.22.0 — Frente 1): o painel do
     // programa no guia abre a busca com o título ("Buscar nos addons").
     object SearchWithQuery : MoviesRoute("movies_search_query/{query}") {
@@ -205,6 +213,8 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.LiveOnDemand.route ||
         currentRoute == MoviesRoute.LiveMultiview.route ||
         currentRoute == MoviesRoute.LiveChannelsManage.route ||
+        currentRoute == MoviesRoute.SportsTables.route ||
+        currentRoute?.startsWith("live_sports_game") == true ||
         currentRoute?.startsWith("movies_live_guide") == true ||
         currentRoute?.startsWith("movies_search_query") == true ||
         currentRoute?.startsWith("movies_live_player") == true
@@ -642,7 +652,37 @@ fun MoviesNavigation(
                     // addons" a partir do programa no guia.
                     onOpenMultiview = { navController.navigate(MoviesRoute.LiveMultiview.route) },
                     onSearchTitle = { title -> navController.navigate(MoviesRoute.SearchWithQuery.create(title)) },
+                    // Lote 13 (v1.23.0 — Frente 1): tabelas de ligas.
+                    onOpenTables = { navController.navigate(MoviesRoute.SportsTables.route) },
                 )
+            }
+            // Tabelas de ligas (Lote 13, v1.23.0 — Frente 1): placar do dia,
+            // tabela, League Networks e Fix Channel. O jogo abre a página
+            // dele; "Assistir" abre o player do canal resolvido.
+            composable(MoviesRoute.SportsTables.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.sports.SportsTablesScreen(
+                        onBack = { navController.popBackStack() },
+                        onPlayChannel = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                        onOpenGame = { league, eventId -> navController.navigate(MoviesRoute.SportsGame.create(league, eventId)) },
+                    )
+                }
+            }
+            // Página do jogo (Lote 13, v1.23.0 — Frente 1): placar, gols,
+            // estatísticas, escalações e Fix Channel.
+            composable(
+                MoviesRoute.SportsGame.route,
+                arguments = listOf(
+                    navArgument("league") { type = NavType.StringType },
+                    navArgument("eventId") { type = NavType.StringType },
+                ),
+            ) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.sports.SportsGameScreen(
+                        onBack = { navController.popBackStack() },
+                        onPlayChannel = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                    )
+                }
             }
             composable(MoviesRoute.LiveSources.route) {
                 tvScale(isTV) {

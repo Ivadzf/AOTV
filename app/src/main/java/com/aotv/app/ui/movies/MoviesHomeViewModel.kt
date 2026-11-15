@@ -46,6 +46,8 @@ class MoviesHomeViewModel @Inject constructor(
     private val continueArt: com.aotv.app.data.repository.ContinueArtworkRepository,
     /** Guia ao vivo (Lote 8, v1.18.0): os jogos da fileira "Próximos" vêm do EPG. */
     private val liveTv: com.aotv.app.data.live.LiveTvRepository,
+    /** Séries acompanhadas nos trackers, p/ o auto-add do calendário (Lote 13, v1.23.0). */
+    private val trackerShows: com.aotv.app.data.remote.TrackerShowsCache,
 ) : ViewModel() {
     /** Coleções do perfil, para as fileiras de pastas da Início. */
     val collectionsFlow: StateFlow<List<com.aotv.app.data.collections.MediaCollection>> = collections.flow
@@ -265,7 +267,7 @@ class MoviesHomeViewModel @Inject constructor(
                     newEpisodeOf(item, last, d.nextEpisodeToAir, seen, now)
                 }
             }.awaitAll().filterNotNull()
-            _uiState.update { it.copy(newEpisodes = sortNewEpisodes(out)) }
+            _uiState.update { it.copy(newEpisodes = sortNewEpisodes(out).filterNot { ep -> prefs.isNotToday(ep.item.tmdbId) }) }
         }
     }
     // ── Fileira "Próximos" (Lote 8, v1.18.0) ─────────────────────────────
@@ -491,6 +493,27 @@ class MoviesHomeViewModel @Inject constructor(
     /** Última lista de séries do histórico/Minha Lista (para repor Novos episódios ao religar a fileira). */
     private var lastNewEpSeries: List<Triple<Int, String, String>> = emptyList()
 
+    // Auto-add do calendário (Lote 13, v1.23.0): conjunto local (Minha Lista
+    // + Continuar) e séries dos trackers, separados p/ o merge (o local vem
+    // primeiro; o teto de 15 é aplicado depois da junção).
+    private var lastLocalSeries: List<Triple<Int, String, String>> = emptyList()
+    private var trackerSeries: List<Triple<Int, String, String>> = emptyList()
+
+    /** Junta o local com os trackers e reconstrói "Novos episódios" e "Próximos". */
+    private fun rebuildTrackedSeries() {
+        val merged = (lastLocalSeries +
+            if (prefs.calendarAutoAddTrackers) trackerSeries else emptyList())
+            .distinctBy { it.first }.take(15)
+        buildNewEpisodes(merged)
+        buildUpcomingEpisodes(merged)
+    }
+
+    /** "Não hoje" (Lote 13): dispensa o episódio novo até amanhã. */
+    fun markNewEpisodeNotToday(tmdbId: Int) {
+        prefs.markNotToday(tmdbId)
+        _uiState.update { it.copy(newEpisodes = it.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId }) }
+    }
+
     /** Fileiras visíveis na última aplicação do layout (para repor dados de quem voltou a aparecer). */
     private var lastVisibleKeys: Set<String> = emptySet()
 
@@ -584,8 +607,18 @@ class MoviesHomeViewModel @Inject constructor(
             kotlinx.coroutines.flow.combine(library.recentlyPlayed(), library.watchlist()) { h, w ->
                 (h.filter { it.type == MediaType.SERIES.name }.map { Triple(it.tmdbId, it.title, it.posterUrl) } +
                     w.filter { it.type == MediaType.SERIES.name }.map { Triple(it.tmdbId, it.title, it.posterUrl) })
-                    .distinctBy { it.first }.take(15)
-            }.collect { buildNewEpisodes(it); buildUpcomingEpisodes(it) }
+                    .distinctBy { it.first }
+            }.collect { lastLocalSeries = it; rebuildTrackedSeries() }
+        }
+        // Auto-add do calendário (Lote 13, v1.23.0): séries do Trakt/Simkl
+        // entram nas fileiras "Novos episódios" e "Próximos" sem estar na
+        // Minha Lista. O collect emite o valor atual na hora (carrega) e de
+        // novo quando o toggle muda.
+        viewModelScope.launch {
+            prefs.calendarAutoAddTrackersFlow.collect { on ->
+                trackerSeries = if (on) trackerShows.get() else emptyList()
+                rebuildTrackedSeries()
+            }
         }
         // Esportes e calendário (Lote 8, v1.18.0): as prefs do perfil no
         // UiState (a fileira "Próximos" e os lembretes leem daqui) e os jogos

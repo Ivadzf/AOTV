@@ -299,6 +299,11 @@ fun LivePlayerScreen(
         showRecordDialog = true
     }
 
+    // Lote 13 — Frente 1: placar fixado na tela cheia (item 19) — o placar
+    // do jogo (só quando o texto do EPG traz um) fica visível mesmo com os
+    // controles escondidos; sem placar no texto, sem chip na tela.
+    val pinned = channel?.let { viewModel.pinnedScore(it.id, now) }
+
     LaunchedEffect(channel?.id) { channel?.let { play(it) } }
     // Canal caiu. Tenta de novo duas vezes; depois, com o canal reserva
     // ligado, tenta UMA vez outro canal com o mesmo nome de outra fonte
@@ -364,6 +369,24 @@ fun LivePlayerScreen(
         )
 
         if (buffering && !failed) CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.align(Alignment.Center).size(44.dp))
+
+        // Lote 13 (v1.23.0, item 19): placar fixado — fica na tela mesmo
+        // com os controles escondidos (fora do AnimatedVisibility do
+        // overlay). Só aparece quando o EPG traz o placar (ver
+        // LivePlayerViewModel.pinnedScore); sem placar, sem chip.
+        if (pinned != null) {
+            Column(
+                Modifier.align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .padding(top = 72.dp)
+                    .clip(RoundedCornerShape(999.dp)).background(Color(0xCC000000))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(pinned.first, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Placar: ${pinned.second}", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
+            }
+        }
 
         if (showError) Column(
             Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xCC0B0F17)).padding(20.dp),

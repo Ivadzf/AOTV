@@ -26,6 +26,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DeviceFacts
+import com.aotv.app.data.local.CrashLog
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.local.PosterInfo
 import com.aotv.app.data.local.TuningSuggestion
@@ -62,6 +63,12 @@ import javax.inject.Inject
  * e não há ajuste de frame-rate no app, então ela não vira sugestão.
  * Na TV a tela funciona igual (mesma moldura das telas de VPN/Watch Party);
  * o amostrador de quadros mede a interface da TV como a do celular.
+ *
+ * Último crash (Lote 13, v1.23.0 — Frente 3, Bug 1 da TV): o [CrashLog]
+ * grava stack trace + aparelho/Android/hora num arquivo interno quando o
+ * app fecha sozinho, e esta tela mostra ele — a causa do crash da Início
+ * da TV só é confirmada quando o log aparecer aqui. Sem registro, a seção
+ * diz que não houve crash. O botão "Limpar registro" apaga o arquivo.
  */
 
 /** Estatísticas dos quadros medidos desde que a tela abriu. */
@@ -120,6 +127,8 @@ data class DiagnosticsUiState(
     val currentBuffer: String = "normal",
     val currentWifiOnly: Boolean = false,
     val applied: Boolean = false,
+    /** Registro do último crash (Lote 13, v1.23.0), ou null sem crash. */
+    val lastCrash: String? = null,
 )
 
 @HiltViewModel
@@ -149,7 +158,14 @@ class DiagnosticsViewModel @Inject constructor(
             currentWifiOnly = prefs.downloadsWifiOnly,
             suggestion = suggestTuning(facts, prefs.playerBuffer, prefs.downloadsWifiOnly),
             applied = false,
+            lastCrash = CrashLog.read(appContext),
         )
+    }
+
+    /** Apaga o registro do último crash e atualiza a tela. */
+    fun clearCrashLog() {
+        CrashLog.clear(appContext)
+        refresh()
     }
 
     fun startSampling() {
@@ -213,6 +229,27 @@ fun DiagnosticsScreen(
             "O resumo das fontes é o que os selos de qualidade do pôster mostram (4K, Remux, BluRay, WEB-DL, DV, HDR10+). Sem fonte lida, sem selo.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
+        VpnPartySection("Último crash", anchor = SettingsAnchors.DIAG_CRASH)
+        if (state.lastCrash == null) {
+            DiagCard {
+                Text(
+                    "Nenhum crash registrado desde que este registro foi instalado. Se o app fechar sozinho, volte aqui: o registro aparece nesta seção.",
+                    fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+                )
+            }
+        } else {
+            DiagCard {
+                Text(
+                    state.lastCrash.take(4000),
+                    fontSize = 13.sp, color = TextPrimary, lineHeight = 18.sp,
+                )
+            }
+            Text(
+                "Só fica no aparelho: nada deste registro sai do app. Anote o começo do erro (a primeira linha depois de \"Thread:\") e mande p/ quem mantém o app.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            AotvButton("Limpar registro", { viewModel.clearCrashLog() }, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
+        }
         VpnPartySection("Quadros", anchor = SettingsAnchors.DIAG_FRAMES)
         DiagCard {
             val stats = state.frameStats

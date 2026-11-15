@@ -143,6 +143,10 @@ class SettingsViewModel @Inject constructor(
     val calendarHideSpoilers: StateFlow<Boolean> = platformPrefs.calendarHideSpoilersFlow
     fun setCalendarHideSpoilers(v: Boolean) { platformPrefs.calendarHideSpoilers = v }
 
+    // Lote 13 (v1.23.0): auto-add do calendário via Trakt/Simkl.
+    val calendarAutoAddTrackers: StateFlow<Boolean> = platformPrefs.calendarAutoAddTrackersFlow
+    fun setCalendarAutoAddTrackers(v: Boolean) { platformPrefs.calendarAutoAddTrackers = v }
+
     val recordStartEarlyMin: StateFlow<Int> = platformPrefs.recordStartEarlyMinFlow
     fun setRecordStartEarlyMin(v: Int) { platformPrefs.recordStartEarlyMin = v }
 

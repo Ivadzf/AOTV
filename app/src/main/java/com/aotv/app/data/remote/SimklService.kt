@@ -15,6 +15,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -246,6 +247,55 @@ class SimklService @Inject constructor(
         }
         if (r.code !in 200..299) error("simkl ${r.code}")
         return requireJson(r.body) ?: error("simkl resposta inválida")
+    }
+
+    /**
+     * Como [call], mas a resposta é um array JSON (o `/sync/all-items`
+     * devolve array, não objeto). Mesmo fluxo de refresh/401.
+     */
+    private suspend fun callArray(method: String, path: String): JSONArray {
+        var s = session() ?: error("simkl sem sessão")
+        if (s.refresh != null && s.expiresAt <= System.currentTimeMillis() + 60_000L) {
+            if (!refreshSession()) error("simkl sessão expirada")
+            s = session() ?: error("simkl sem sessão")
+        }
+        var r = raw(method, url(path), null, s.access)
+        if (r.code == 401) {
+            if (refreshSession()) {
+                s = session() ?: error("simkl sem sessão")
+                r = raw(method, url(path), null, s.access)
+            }
+            if (r.code == 401) {
+                saveSession(null)
+                error("simkl 401")
+            }
+        }
+        if (r.code !in 200..299) error("simkl ${r.code}")
+        val t = r.body.trim()
+        if (!t.startsWith("[")) error("simkl resposta inválida")
+        return runCatching { JSONArray(t) }.getOrElse { error("simkl resposta inválida") }
+    }
+
+    /** Uma série acompanhada no Simkl (p/ o auto-add do calendário, Lote 13). */
+    data class SimklTrackedShow(val tmdbId: Int, val title: String)
+
+    /**
+     * Shows com status `watching`/`plantowatch` (Lote 13, v1.23.0 — auto-add
+     * do calendário). Só entra o que o Simkl devolver, com id do TMDB: sem
+     * tmdb, sem entrada — a série nunca é inventada. Result falho sem sessão
+     * ou sem rede (o chamador trata como lista vazia).
+     */
+    suspend fun getTrackedShows(): Result<List<SimklTrackedShow>> = runCatching {
+        val arr = callArray("GET", "/sync/all-items/shows")
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val status = o.optString("status")
+            if (status != "watching" && status != "plantowatch") return@mapNotNull null
+            val show = o.optJSONObject("show") ?: return@mapNotNull null
+            val tmdb = show.optJSONObject("ids")?.optInt("tmdb", 0) ?: 0
+            if (tmdb <= 0) return@mapNotNull null
+            SimklTrackedShow(tmdb, show.optString("title"))
+        }
     }
 
     // ── Login por código de dispositivo (V2 + PKCE) ─────────────────────────
@@ -502,7 +552,7 @@ class SimklService @Inject constructor(
         const val DEVELOPER_LIST_URL = "https://simkl.com/settings/developer/"
 
         const val APP_NAME = "aotv"
-        const val APP_VERSION = "1.22.1"
+        const val APP_VERSION = "1.23.0"
 
         val JSON = "application/json".toMediaType()
     }

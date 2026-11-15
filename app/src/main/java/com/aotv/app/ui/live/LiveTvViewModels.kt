@@ -244,6 +244,26 @@ class LivePlayerViewModel @Inject constructor(
     fun savedAudio(channelId: String): String? =
         if (!prefs.liveRememberAudio) null else prefs.liveAudioPicks[channelId]?.lang
 
+    /**
+     * Placar fixado na tela cheia (Lote 13, v1.23.0 — item 19): (título do
+     * programa, placar) ou null. Usa o placar que já existe — extraído do
+     * texto do EPG ([visibleScore]) — e SÓ aparece quando ele existe:
+     * sem placar no texto, sem placar na tela, nunca inventado. Respeita
+     * as prefs do perfil: `sports_live_scores` (placares ao vivo),
+     * `sports_hide_scores` (esconder) e `sports_score_delay_sec`
+     * (atraso anti-spoiler). Só p/ programa de esporte.
+     */
+    fun pinnedScore(channelId: String, now: Long): Pair<String, String>? {
+        if (!prefs.sportsLiveScores) return null
+        val (program, _) = repo.nowNext(channelId, now)
+        val p = program ?: return null
+        if (!com.aotv.app.data.sports.isSportsProgram(p)) return null
+        val score = com.aotv.app.data.sports.visibleScore(
+            p, now, prefs.sportsHideScores, prefs.sportsScoreDelaySec,
+        ) ?: return null
+        return p.title to score
+    }
+
     /** Guarda a faixa de áudio escolhida neste canal (só quando a pref está ligada). */
     fun saveAudio(channelId: String, lang: String) {
         if (!prefs.liveRememberAudio || lang.isBlank()) return

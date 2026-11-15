@@ -59,8 +59,9 @@ class LiveTvRepository @Inject constructor(
     // Lote 8 (v1.18.0): avisos de formato Xtream da última atualização (fonte
     // que não libera o formato escolhido) e a hora da última atualização de
     // listas e de guia — o refresh automático compara com os intervalos das
-    // prefs. Sem WorkManager no app (ver build.gradle.kts): não há agendamento
-    // em 2º plano; a checagem acontece ao abrir a aba Ao vivo + no manual.
+    // prefs. O refresh de listas/guia NÃO é agendado em 2º plano (o WorkManager
+    // do Lote 13, v1.23.0, serve só a alertas e gravações): a checagem acontece
+    // ao abrir a aba Ao vivo + no manual.
     private val formatWarnings = mutableListOf<String>()
     private var lastListsAt: Long
         get() = prefs.getLong("live_last_lists_at", 0L)

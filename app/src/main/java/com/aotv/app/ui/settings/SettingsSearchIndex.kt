@@ -95,6 +95,8 @@ object SettingsAnchors {
     const val DIAG_ADDONS = "diagnostico-addons"
     const val DIAG_FRAMES = "diagnostico-quadros"
     const val DIAG_SUGGESTION = "diagnostico-sugestao"
+    // Último crash (Lote 13, v1.23.0 — Frente 3, Bug 1 da TV).
+    const val DIAG_CRASH = "diagnostico-ultimo-crash"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -251,7 +253,7 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Alertas de jogo",
-        sub = "Avisa quando um jogo começa (só com o app aberto)",
+        sub = "Avisa quando um jogo começa, mesmo com o app fechado",
         keywords = listOf("alerta", "jogo", "notificação", "esporte", "começando"),
         pageId = SettingsPageIds.Layout,
         anchor = SettingsAnchors.LAYOUT_HOME,
@@ -261,6 +263,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Esconder spoilers do calendário",
         sub = "O episódio aparece sem T/E até ir ao ar",
         keywords = listOf("spoiler", "calendário", "episódio", "sinopse", "próximos"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    // ── Auto-add do calendário via trackers (Lote 13, v1.23.0) ──────────
+    SettingOptionEntry(
+        title = "Séries do Trakt/Simkl no calendário",
+        sub = "Séries acompanhadas no Trakt/Simkl entram no calendário sozinhas",
+        keywords = listOf("calendário", "trakt", "simkl", "auto-add", "séries", "episódio", "novos episódios"),
         pageId = SettingsPageIds.Layout,
         anchor = SettingsAnchors.LAYOUT_HOME,
         kidsHidden = true,
@@ -1348,6 +1359,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("ajuste", "sugestão", "buffer", "rede", "primeira abertura", "auto-ajuste"),
         pageId = SettingsPageIds.Diagnostico,
         anchor = SettingsAnchors.DIAG_SUGGESTION,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Último crash",
+        sub = "Registro do último fechamento do app, p/ confirmar a causa",
+        keywords = listOf("crash", "erro", "fechou", "travou", "registro", "stack trace"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_CRASH,
         kidsHidden = true,
     ),
 )

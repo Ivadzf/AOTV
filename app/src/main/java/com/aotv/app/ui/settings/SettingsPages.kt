@@ -880,6 +880,7 @@ private fun LayoutPage(
         val sportsScoreDelay by viewModel.sportsScoreDelaySec.collectAsStateWithLifecycle()
         val sportsAlerts by viewModel.sportsGameAlerts.collectAsStateWithLifecycle()
         val hideSpoilers by viewModel.calendarHideSpoilers.collectAsStateWithLifecycle()
+        val autoAddTrackers by viewModel.calendarAutoAddTrackers.collectAsStateWithLifecycle()
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.SportsSoccer,
@@ -913,7 +914,7 @@ private fun LayoutPage(
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Notifications,
                 title = "Alertas de jogo",
-                sub = if (sportsAlerts) "Avisa quando um jogo começa (só com o app aberto)"
+                sub = if (sportsAlerts) "Avisa quando um jogo começa, mesmo com o app fechado"
                     else "Sem aviso quando o jogo começa",
                 trailing = { Switch(checked = sportsAlerts, onCheckedChange = { viewModel.setSportsGameAlerts(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setSportsGameAlerts(!sportsAlerts) },
@@ -927,6 +928,18 @@ private fun LayoutPage(
                     else "T/E do episódio visível na fileira \"Próximos\"",
                 trailing = { Switch(checked = hideSpoilers, onCheckedChange = { viewModel.setCalendarHideSpoilers(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setCalendarHideSpoilers(!hideSpoilers) },
+                grouped = true,
+                divider = true,
+            )
+            // Auto-add do calendário (Lote 13, v1.23.0): séries do Trakt/Simkl
+            // entram no calendário sozinhas, sem estar na Minha Lista.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Sync,
+                title = "Séries do Trakt/Simkl no calendário",
+                sub = if (autoAddTrackers) "Séries acompanhadas no Trakt/Simkl entram no calendário sozinhas"
+                    else "Só Minha Lista e Continuar assistindo entram no calendário",
+                trailing = { Switch(checked = autoAddTrackers, onCheckedChange = { viewModel.setCalendarAutoAddTrackers(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setCalendarAutoAddTrackers(!autoAddTrackers) },
                 grouped = true,
                 divider = true,
             )

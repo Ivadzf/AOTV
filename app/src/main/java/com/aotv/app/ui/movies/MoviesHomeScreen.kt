@@ -462,6 +462,21 @@ private fun HomeSectionsTab(
             dismissButton = { TextButton(onClick = { pendingRemove = null }) { Text("Cancelar") } },
         )
     }
+    // "Não hoje" (Lote 13, v1.23.0): segurar o card de episódio novo dispensa
+    // o episódio até amanhã (mesmo padrão do remover acima).
+    var pendingNotToday by remember { mutableStateOf<MovieItem?>(null) }
+    pendingNotToday?.let { item ->
+        val ep = state.newEpisodes.firstOrNull { it.item.tmdbId == item.tmdbId }
+        AlertDialog(
+            onDismissRequest = { pendingNotToday = null },
+            title = { Text("Não ver hoje?") },
+            text = { Text(if (ep != null) "${item.title} — ${ep.sub} some até amanhã." else "${item.title} some até amanhã.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.markNewEpisodeNotToday(item.tmdbId); pendingNotToday = null }) { Text("Não hoje") }
+            },
+            dismissButton = { TextButton(onClick = { pendingNotToday = null }) { Text("Cancelar") } },
+        )
+    }
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
     // Blur/vidro fosco (Lote 4): mesma pref `pref_panel_blur` do detalhe.
     val panelBlurOn by hiltViewModel<DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
@@ -484,9 +499,12 @@ private fun HomeSectionsTab(
             onScheduled = { recordGame = null },
         )
     }
-    // Gravações e lembretes (Lote 8): dispara o que venceu e avisa o que
-    // começa em 1 minuto — SÓ com o app aberto (sem WorkManager no gradle,
-    // ver RecordingReminders): com o app fechado, nada dispara nem avisa.
+    // Gravações e lembretes (Lote 8; app fechado no Lote 13, v1.23.0): o
+    // in-app dispara o que venceu e avisa o que começa em 1 minuto, e o
+    // WorkManager agenda o MESMO p/ quando o app estiver fechado (o agendar
+    // é idempotente — agendar 2x não duplica nada). Com o app fechado, o
+    // worker dispara a gravação e posta o lembrete; o vigia de fim de
+    // jogo/placar roda a cada 15 min quando os alertas estão ligados.
     val context = LocalContext.current
     val currentState by rememberUpdatedState(state)
     LaunchedEffect(state.upcomingEpisodes, state.upcomingGames) {
@@ -495,6 +513,12 @@ private fun HomeSectionsTab(
             context, state.upcomingEpisodes, state.upcomingGames,
             state.calendarHideSpoilers, state.sportsGameAlerts,
         )
+        com.aotv.app.data.recordings.WorkScheduler.scheduleReminders(
+            context, state.upcomingEpisodes, state.upcomingGames, state.sportsGameAlerts,
+        )
+        com.aotv.app.data.recordings.WorkScheduler.scheduleAllRecordings(context)
+        com.aotv.app.data.recordings.WorkScheduler.syncGameScoreWatch(context, state.sportsGameAlerts)
+        com.aotv.app.data.recordings.WorkScheduler.noteLiveGames(context, state.upcomingGames)
     }
     LaunchedEffect(Unit) {
         while (true) {
@@ -504,6 +528,12 @@ private fun HomeSectionsTab(
                 context, currentState.upcomingEpisodes, currentState.upcomingGames,
                 currentState.calendarHideSpoilers, currentState.sportsGameAlerts,
             )
+            com.aotv.app.data.recordings.WorkScheduler.scheduleReminders(
+                context, currentState.upcomingEpisodes, currentState.upcomingGames, currentState.sportsGameAlerts,
+            )
+            com.aotv.app.data.recordings.WorkScheduler.scheduleAllRecordings(context)
+            com.aotv.app.data.recordings.WorkScheduler.syncGameScoreWatch(context, currentState.sportsGameAlerts)
+            com.aotv.app.data.recordings.WorkScheduler.noteLiveGames(context, currentState.upcomingGames)
         }
     }
     // Listas derivadas estáveis: map/associate novos a cada composição tornavam
@@ -600,6 +630,8 @@ private fun HomeSectionsTab(
                         display = display,
                         badges = newEpBadges,
                         subs = newEpSubs,
+                        // Segurar o card dispensa o episódio até amanhã ("Não hoje", Lote 13).
+                        onLongClick = { pendingNotToday = it },
                     )
                 }
                 SystemRow.RECOMMENDED -> if (state.recommended.isNotEmpty()) item(key = row.key) {
@@ -1034,6 +1066,8 @@ private fun SectionRow(
     onNearEnd: (() -> Unit)? = null,        // paginação da fileira (catálogo de addon)
     badges: Map<Int, String>? = null,       // selo no canto do pôster (Novos episódios)
     subs: Map<Int, String>? = null,         // linha embaixo do pôster
+    /** Segurar o card (Novos episódios: "Não hoje", Lote 13). null = sem ação. */
+    onLongClick: ((MovieItem) -> Unit)? = null,
     // Último de propósito. A lambda final das chamadas ("Ver Tudo") cai aqui. Antes caía no
     // onNearEnd e a grade abria sozinha quando a fileira era curta.
     onSeeMore: (() -> Unit)? = null,
@@ -1078,6 +1112,7 @@ private fun SectionRow(
                     showBadges = display.showPosterBadges,
                     showQualityBadges = display.showQualityBadges,
                     cornerRadius = display.posterRadiusDp.dp,
+                    onLongClick = onLongClick?.let { f -> { f(item) } },
                 )
             }
         }

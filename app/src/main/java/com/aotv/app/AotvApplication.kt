@@ -7,6 +7,7 @@ import coil.ImageLoaderFactory
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
+import com.aotv.app.data.local.CrashLog
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.Dispatchers
 
@@ -15,6 +16,9 @@ class AotvApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        // Registro do último crash (Lote 13, v1.23.0): arquivo local lido na
+        // página de Diagnóstico. Primeiro, para pegar crash de qualquer init.
+        CrashLog.install(this)
         // Inicializa o Google Cast (lazy). Em aparelho sem Google Play Services (algumas TV
         // boxes), getSharedInstance lança — engolimos: o app funciona sem Cast.
         runCatching {

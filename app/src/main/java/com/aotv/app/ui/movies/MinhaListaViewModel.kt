@@ -37,6 +37,8 @@ class MinhaListaViewModel @Inject constructor(
     private val continueArt: com.aotv.app.data.repository.ContinueArtworkRepository,
     private val seriesDetailCache: com.aotv.app.data.remote.SeriesDetailCache,
     private val prefs: com.aotv.app.data.local.PlatformPrefs,
+    /** Séries acompanhadas nos trackers, p/ o auto-add do calendário (Lote 13, v1.23.0). */
+    private val trackerShows: com.aotv.app.data.remote.TrackerShowsCache,
 ) : ViewModel() {
 
     val watchlist: StateFlow<List<WatchlistEntity>> =
@@ -125,8 +127,13 @@ class MinhaListaViewModel @Inject constructor(
         viewModelScope.launch {
             val watchlistNow = library.watchlist().first()
             val recentNow = library.recentlyPlayed().first()
+            // Auto-add (Lote 13, v1.23.0): séries do Trakt/Simkl entram no
+            // conjunto sozinhas, sem estar na Minha Lista (o cache é
+            // compartilhado com a Início — sem busca nova na maioria das vezes).
+            val tracker = if (prefs.calendarAutoAddTrackers) trackerShows.get(force) else emptyList()
             val series = (recentNow.filter { it.type == SERIES_TYPE }.map { Triple(it.tmdbId, it.title, it.posterUrl) } +
-                watchlistNow.filter { it.type == SERIES_TYPE }.map { Triple(it.tmdbId, it.title, it.posterUrl) })
+                watchlistNow.filter { it.type == SERIES_TYPE }.map { Triple(it.tmdbId, it.title, it.posterUrl) } +
+                tracker)
                 .distinctBy { it.first }.take(CALENDAR_MAX_SERIES)
             val key = series.joinToString(",") { it.first.toString() }
             if (key == lastCalendarKey && !force) return@launch

@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 59
-        versionName    = "1.22.1"
+        versionCode    = 60
+        versionName    = "1.23.0"
         // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
         // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
         // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com
@@ -202,11 +202,18 @@ dependencies {
     // play-services-auth 21.3.0, google-api-client-android 2.9.2 e
     // google-api-services-drive v3-rev20261106-2.9.2 (par 2.9.2, mesma linha).
     // GsonFactory/AndroidHttp vêm transitivamente do google-api-client
-    // (google-http-client-gson / google-http-client-android). NADA de
-    // WorkManager aqui (isso é do Lote 13).
+    // (google-http-client-gson / google-http-client-android).
     implementation("com.google.android.gms:play-services-auth:21.3.0")
     implementation("com.google.api-client:google-api-client-android:2.9.2")
     implementation("com.google.apis:google-api-services-drive:v3-rev20261106-2.9.2")
+
+    // Alertas e gravações com o app fechado (Lote 13, v1.23.0): WorkManager.
+    // Versão 2.10.0, estável, conferida no AndroidX em 2026-11-15. A estável
+    // mais recente é a 2.12.0 (set/2026), mas a 2.10.0 é a provada com o
+    // Kotlin 2.1.20 do projeto: a 2.12.0 pode trazer metadados Kotlin 2.2+
+    // que o compilador 2.1.20 rejeita — o mesmo tipo de quebra que o
+    // quickjs-kt 1.0.2 causou. minSdk 23 (o projeto é 24), compileSdk 35.
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     // Google Fonts (downloadable fonts via GMS)
     implementation("androidx.compose.ui:ui-text-google-fonts")

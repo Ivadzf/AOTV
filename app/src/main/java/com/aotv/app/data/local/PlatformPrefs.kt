@@ -126,9 +126,16 @@ internal val SCOPED_KEYS = listOf(
     // Lote 8 — Esportes, Gravações e Calendário (v1.18.0).
     "sports_show", "sports_hide_scores", "sports_score_delay_sec",
     "sports_live_scores", "sports_game_alerts",
+    // Lote 13 — Esportes parte 2 (v1.23.0): Fix Channel — override
+    // jogo/rede/time → canal (mapa JSON, por perfil, no padrão de
+    // "live_audio_v1"). Só ids de canal das listas do usuário.
+    "sports_fix_channel_v1",
     "record_start_early_min", "record_run_late_min", "record_keep_episodes",
     "record_low_space_mb", "record_notifications",
     "calendar_hide_spoilers",
+    // Lote 13 (v1.23.0): auto-add do calendário via trackers + "Não hoje"
+    // dos episódios novos (mapa tmdbId -> data do dispenso).
+    "calendar_auto_add_trackers", "not_today_v1",
     // v1.13.0 — Backup: títulos removidos do Continuar assistindo (por perfil).
     "hidden_continue_v1",
     // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
@@ -1226,6 +1233,44 @@ class PlatformPrefs @Inject constructor(
         get() = _sportsGameAlerts.value
         set(value) { prefs.edit().putBoolean(sk("sports_game_alerts"), value).apply(); _sportsGameAlerts.value = value }
 
+    // ── Lote 13 — Esportes parte 2 (v1.23.0): Fix Channel ─────────────────
+    // Override jogo/rede/time → canal (ver FixChannel.kt): quando o canal
+    // achado p/ um jogo está errado, o usuário escolhe o certo uma vez e o
+    // app lembra. Mapa JSON (chave "game:<id>" / "network:<rede>" /
+    // "team:<time>" → {c: id do canal, n: nome do canal, t: quando}),
+    // no mesmo padrão de "live_audio_v1". No máximo 100 (os mais recentes);
+    // o resto cai no cortar por [at]. Por perfil (SCOPED_KEYS
+    // "sports_fix_channel_v1"). Sem fluxo: só a tela de esportes lê e grava.
+    var sportsChannelFixes: Map<String, com.aotv.app.data.sports.ChannelFix>
+        get() = runCatching {
+            val o = org.json.JSONObject(prefs.getString(sk("sports_fix_channel_v1"), null) ?: "{}")
+            o.keys().asSequence().associateWith { k ->
+                val v = o.getJSONObject(k)
+                val scope = runCatching { com.aotv.app.data.sports.FixScope.valueOf(v.optString("s")) }.getOrDefault(com.aotv.app.data.sports.FixScope.GAME)
+                val key = v.optString("k")
+                com.aotv.app.data.sports.ChannelFix(scope, key, v.optString("c"), v.optString("n"), v.optLong("t", 0L))
+            }.filterValues { it.channelId.isNotBlank() && it.key.isNotBlank() }
+        }.getOrDefault(emptyMap())
+        set(value) {
+            val o = org.json.JSONObject()
+            value.entries.sortedByDescending { it.value.at }.take(100).forEach { (k, fix) ->
+                o.put(k, org.json.JSONObject().put("s", fix.scope.name).put("k", fix.key).put("c", fix.channelId).put("n", fix.channelName).put("t", fix.at))
+            }
+            prefs.edit().putString(sk("sports_fix_channel_v1"), o.toString()).apply()
+        }
+
+    /** Guarda um override de canal (Fix Channel). */
+    fun setChannelFix(fix: com.aotv.app.data.sports.ChannelFix) {
+        if (fix.channelId.isBlank() || fix.key.isBlank()) return
+        sportsChannelFixes = sportsChannelFixes + (com.aotv.app.data.sports.fixMapKey(fix.scope, fix.key) to fix)
+    }
+
+    /** Apaga um override de canal (pela chave do mapa). */
+    fun removeChannelFix(mapKey: String) {
+        if (mapKey.isBlank()) return
+        sportsChannelFixes = sportsChannelFixes - mapKey
+    }
+
     private val _recordStartEarlyMin = MutableStateFlow(prefs.getInt(sk("record_start_early_min"), 2))
     /** Começar a gravação este tanto de minutos ANTES do programa. */
     val recordStartEarlyMinFlow: StateFlow<Int> = _recordStartEarlyMin.asStateFlow()
@@ -1267,6 +1312,41 @@ class PlatformPrefs @Inject constructor(
     var calendarHideSpoilers: Boolean
         get() = _calendarHideSpoilers.value
         set(value) { prefs.edit().putBoolean(sk("calendar_hide_spoilers"), value).apply(); _calendarHideSpoilers.value = value }
+
+    private val _calendarAutoAddTrackers = MutableStateFlow(prefs.getBoolean(sk("calendar_auto_add_trackers"), true))
+    /**
+     * Auto-add do calendário (Lote 13, v1.23.0): séries acompanhadas no Trakt/Simkl
+     * entram no calendário e nas fileiras "Novos episódios"/"Próximos" sozinhas,
+     * sem estar na Minha Lista. Ligado por padrão (é o ponto do recurso); desligar
+     * volta ao conjunto local. Por perfil (SCOPED_KEYS "calendar_auto_add_trackers").
+     */
+    val calendarAutoAddTrackersFlow: StateFlow<Boolean> = _calendarAutoAddTrackers.asStateFlow()
+    var calendarAutoAddTrackers: Boolean
+        get() = _calendarAutoAddTrackers.value
+        set(value) { prefs.edit().putBoolean(sk("calendar_auto_add_trackers"), value).apply(); _calendarAutoAddTrackers.value = value }
+
+    /**
+     * "Não hoje" (Lote 13, v1.23.0): tmdbId -> data local (yyyy-MM-dd) em que o
+     * episódio novo da série foi dispensado. O cartão some até amanhã — a data
+     * guardada é a de hoje, então amanhã ele reaparece sozinho. Mapa lido do
+     * disco a cada acesso (como os mapas de canal), sem fluxo. Por perfil
+     * (SCOPED_KEYS "not_today_v1").
+     */
+    private var notTodayMap: Map<String, String>
+        get() = readStringMap("not_today_v1")
+        set(value) { writeStringMap("not_today_v1", value) }
+
+    /** O episódio novo desta série foi dispensado hoje ("Não hoje"). */
+    fun isNotToday(tmdbId: Int): Boolean =
+        tmdbId > 0 && notTodayMap[tmdbId.toString()] == dayString()
+
+    /** Dispensa o episódio novo desta série até amanhã. */
+    fun markNotToday(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        val m = notTodayMap.toMutableMap()
+        m[tmdbId.toString()] = dayString()
+        notTodayMap = m
+    }
 
     // ── Blur anti-spoiler (Lote 11, v1.21.0) ───────────────────────────────
     // Borra a arte e esconde título/sinopse dos episódios NÃO assistidos no
@@ -2710,6 +2790,9 @@ class PlatformPrefs @Inject constructor(
         // o valor ficava o do perfil anterior até reiniciar o app).
         _detailSpoilerBlur.value = prefs.getBoolean(sk("pref_detail_spoiler_blur"), false)
         _calendarHideSpoilers.value = prefs.getBoolean(sk("calendar_hide_spoilers"), false)
+        // Lote 13 (v1.23.0): auto-add do calendário via trackers. O mapa
+        // "Não hoje" é lido do disco a cada acesso — não precisa de reload.
+        _calendarAutoAddTrackers.value = prefs.getBoolean(sk("calendar_auto_add_trackers"), true)
     }
 
     private fun computeLayout(): List<HomeRowPref> {

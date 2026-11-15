@@ -5,7 +5,7 @@ import com.aotv.app.data.sports.SportsGame
 import com.aotv.app.ui.movies.CalendarEntry
 
 /**
- * Lembretes e alertas (Lote 8, v1.18.0).
+ * Lembretes e alertas (Lote 8, v1.18.0; app fechado no Lote 13, v1.23.0).
  *
  * - Lembrete 1 min antes: episódio da fileira "Próximos" ou jogo de esporte
  *   que começa dentro de 1 minuto (ou começou há menos de 1 minuto, caso o
@@ -13,12 +13,15 @@ import com.aotv.app.ui.movies.CalendarEntry
  * - Alerta de jogo: quando um programa de esporte começa (pref
  *   `sports_game_alerts`), na mesma janela de 1 minuto.
  *
- * LIMITAÇÃO HONESTA (agendamento): `androidx.work:work-runtime` NÃO está
- * no gradle e o brief proíbe adicionar dependência nova — então NÃO há
- * WorkManager nem alarme exato. [checkDue] só roda quando o app está
+ * AGENDAMENTO (Lote 13): [checkDue] continua sendo o caminho com o app
  * aberto (chamado pela Início ao abrir e a cada minuto com ela aberta, ver
- * MoviesHomeScreen): com o app fechado, NÃO há lembrete nem alerta. Cada
- * chave notificada é marcada no [RecordingStore] p/ não avisar 2x.
+ * MoviesHomeScreen), e o [WorkScheduler] agenda o MESMO lembrete no
+ * WorkManager p/ disparar com o app fechado (ver [ReminderWorker]). Os dois
+ * caminhos usam a MESMA chave ([reminderKeyFor]) e o MESMO registro de
+ * "já avisado" no [RecordingStore]: o que já avisou por um caminho não
+ * avisa de novo pelo outro. O texto é recalculado na hora de avisar
+ * ([reminderTextForEpisode]/[reminderTextForGame]), então um lembrete
+ * atrasado pelo Doze diz "começou agora" em vez de mentir "em 1 minuto".
  *
  * Modo privado: lembretes NÃO gravam nada (só leem a lista de episódios e
  * jogos e postam a notificação) — não há scrobble nem registro de assistido
@@ -29,7 +32,47 @@ import com.aotv.app.ui.movies.CalendarEntry
 object RecordingReminders {
 
     /** Janela do lembrete: 1 minuto antes do início. */
-    private const val REMINDER_MS = 60_000L
+    const val REMINDER_MS = 60_000L
+
+    /** Chave única do lembrete de um episódio (in-app e worker usam a mesma). */
+    fun reminderKeyFor(entry: CalendarEntry) =
+        "ep:${entry.tmdbId}:${entry.season}:${entry.episode}:${entry.airDate}"
+
+    /** Chave única do alerta de um jogo (in-app e worker usam a mesma). */
+    fun reminderKeyFor(game: SportsGame) = "game:${game.channelId}:${game.startMs}"
+
+    /**
+     * Texto do lembrete do episódio no instante [now]. null = fora da janela
+     * de 1 minuto (antes ou depois) — não há o que avisar.
+     */
+    fun reminderTextForEpisode(entry: CalendarEntry, hideSpoilers: Boolean, now: Long): String? {
+        val untilStart = entry.atMs - now
+        val startedAgo = now - entry.atMs
+        return when {
+            untilStart in 0..REMINDER_MS -> if (hideSpoilers) {
+                "Um episódio de ${entry.title} começa em 1 minuto"
+            } else {
+                "${entry.title} — ${entry.seLabel} começa em 1 minuto"
+            }
+            startedAgo in 0..REMINDER_MS -> if (hideSpoilers) {
+                "Um episódio de ${entry.title} começou agora"
+            } else {
+                "${entry.title} — ${entry.seLabel} começou agora"
+            }
+            else -> null
+        }
+    }
+
+    /** Texto do alerta do jogo no instante [now]. null = fora da janela de 1 minuto. */
+    fun reminderTextForGame(game: SportsGame, now: Long): String? {
+        val untilStart = game.startMs - now
+        val startedAgo = now - game.startMs
+        return when {
+            untilStart in 0..REMINDER_MS -> "Jogo começando: ${game.title} (${game.channelName})"
+            startedAgo in 0..REMINDER_MS -> "Jogo começou agora: ${game.title} (${game.channelName})"
+            else -> null
+        }
+    }
 
     /**
      * Checa episódios e jogos devidos e posta as notificações. [hideSpoilers]
@@ -48,23 +91,9 @@ object RecordingReminders {
         val now = System.currentTimeMillis()
         episodes.forEach { entry ->
             if (entry.isLastAired) return@forEach
-            val key = "ep:${entry.tmdbId}:${entry.season}:${entry.episode}:${entry.airDate}"
+            val key = reminderKeyFor(entry)
             if (store.wasNotified(key)) return@forEach
-            val untilStart = entry.atMs - now
-            val startedAgo = now - entry.atMs
-            val text = when {
-                untilStart in 0..REMINDER_MS -> if (hideSpoilers) {
-                    "Um episódio de ${entry.title} começa em 1 minuto"
-                } else {
-                    "${entry.title} — ${entry.seLabel} começa em 1 minuto"
-                }
-                startedAgo in 0..REMINDER_MS -> if (hideSpoilers) {
-                    "Um episódio de ${entry.title} começou agora"
-                } else {
-                    "${entry.title} — ${entry.seLabel} começou agora"
-                }
-                else -> return@forEach
-            }
+            val text = reminderTextForEpisode(entry, hideSpoilers, now) ?: return@forEach
             LocalNotifications.notify(
                 context, LocalNotifications.CHANNEL_REMINDERS,
                 key.hashCode(), "Próximo episódio", text,
@@ -73,15 +102,9 @@ object RecordingReminders {
         }
         if (!gameAlerts) return
         games.forEach { game ->
-            val key = "game:${game.channelId}:${game.startMs}"
+            val key = reminderKeyFor(game)
             if (store.wasNotified(key)) return@forEach
-            val untilStart = game.startMs - now
-            val startedAgo = now - game.startMs
-            val text = when {
-                untilStart in 0..REMINDER_MS -> "Jogo começando: ${game.title} (${game.channelName})"
-                startedAgo in 0..REMINDER_MS -> "Jogo começou agora: ${game.title} (${game.channelName})"
-                else -> return@forEach
-            }
+            val text = reminderTextForGame(game, now) ?: return@forEach
             LocalNotifications.notify(
                 context, LocalNotifications.CHANNEL_REMINDERS,
                 key.hashCode(), "Alerta de jogo", text,

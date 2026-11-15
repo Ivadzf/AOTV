@@ -20,6 +20,15 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- TV (Lote 13, v1.23.0): telas grandes são o caso da TV — a Philco do
+         Davi é 1080p. Declarar large/xlarge não muda nada no celular
+         (small/normal continuam true) e deixa explícito que o app é p/ TV. -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true" />
+
     <application
         android:name=".AotvApplication"
         android:allowBackup="false"

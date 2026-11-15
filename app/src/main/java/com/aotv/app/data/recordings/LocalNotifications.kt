@@ -10,13 +10,14 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 
 /**
- * Notificações locais (Lote 8, v1.18.0): gravações e lembretes.
+ * Notificações locais (Lote 8, v1.18.0; app fechado no Lote 13, v1.23.0): gravações e lembretes.
  *
- * Dois canais, sem som de alarme e sem agendamento do sistema: o app só
- * posta quando está aberto (ver [RecordingReminders]) ou gravando (o
- * serviço em 1º plano posta a persistente). Sem a permissão
- * POST_NOTIFICATIONS (Android 13+), [notify] não faz nada — a gravação
- * continua, só não avisa; a tela de Downloads mostra o erro real.
+ * Dois canais, sem som de alarme e sem agendamento do sistema: o app posta
+ * quando está aberto (ver [RecordingReminders]) ou gravando (o serviço em
+ * 1º plano posta a persistente) — e, desde o Lote 13, o WorkManager posta
+ * com o app fechado (ver [ReminderWorker] e [GameScoreWorker]). Sem a
+ * permissão POST_NOTIFICATIONS (Android 13+), [notify] não faz nada — a
+ * gravação continua, só não avisa; a tela de Downloads mostra o erro real.
  */
 object LocalNotifications {
     /** Início, fim e falha da gravação. */

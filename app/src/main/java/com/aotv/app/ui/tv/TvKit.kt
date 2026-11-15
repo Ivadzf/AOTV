@@ -73,8 +73,28 @@ import kotlinx.coroutines.awaitCancellation
 @ReadOnlyComposable
 fun remDp(): Float = LocalConfiguration.current.let { tvRem(it.screenWidthDp, it.screenHeightDp) }
 
+/** Fator de escala da TV (Lote 13, v1.23.0 — Bug 2): a interface em rem saía
+ * pequena e desfocada na TV 1080p do Davi, então tudo na TV cresce 25%.
+ * O piso antigo (coerceAtLeast(1f)) nunca pegava numa TV de verdade — o
+ * problema era a escala, não o piso. Numa 1080p (960×540 dp) o rem vai de
+ * 8 dp para 10 dp: o pôster de 12.5r vai de 100 dp para 125 dp (a fileira
+ * mostra ~6 em vez de ~8, continua cabendo e rolando) e o título da
+ * fileira de 1.65rs vai de 13.2 sp para 16.5 sp. */
+const val TV_REM_SCALE = 1.25f
+
 internal fun tvRem(widthDp: Int, heightDp: Int): Float =
-    minOf(widthDp / 120f, heightDp / 67.5f).coerceAtLeast(1f)
+    (minOf(widthDp / 120f, heightDp / 67.5f) * TV_REM_SCALE).coerceAtLeast(1.25f)
+
+/**
+ * URL do pôster na TV (Lote 13, v1.23.0 — Bug 2): w500 em vez de w342. O
+ * pôster exibido na TV tem 12.5r de largura (≈125 dp numa 1080p com o rem
+ * novo, ~250 px a 2x) e o w342 ficava desfocado ao ampliar; w500 cobre com
+ * folga sem pesar como o w780. Só reescreve o w342 do TMDB — backdrop
+ * (w780) e qualquer outra origem passam iguais. Ponto único: o celular
+ * não chama esta função e continua no w342.
+ */
+fun tvPosterUrl(url: String): String =
+    if ("/t/p/w342/" in url) url.replace("/t/p/w342/", "/t/p/w500/") else url
 
 /** Medida em rem do webOS. */
 val Number.r: Dp
@@ -276,7 +296,10 @@ fun TvPoster(
 ) {
     val title = item.title
     var focused by remember { mutableStateOf(false) }
-    val visual = rememberPosterVisual(item, badge, typeBadge != null, showTag = order <= 0, requestQuality = false)
+    // TV (Lote 13, v1.23.0): a matiz sai só do disco (fromDisplayed = false),
+    // então o hardware bitmap fica ligado — nada de allowHardware(false) aqui.
+    // O pôster usa w500 em vez de w342 (tvPosterUrl), sem tocar o celular.
+    val visual = rememberPosterVisual(item, badge, typeBadge != null, showTag = order <= 0, requestQuality = false, fromDisplayed = false)
     val posterInfo = com.aotv.app.ui.common.LocalPosterInfo.current
     if (focused && badge == null && posterInfo != null) LaunchedEffect(item.tmdbId, item.type, qualityNeighbors) {
         delay(700)
@@ -285,12 +308,8 @@ fun TvPoster(
         try { awaitCancellation() } finally { nearby.forEach(posterInfo::unwant) }
     }
     val context = LocalContext.current
-    // Só desliga o hardware bitmap quando a matiz ainda precisa ser lida do
-    // drawable exibido (onImage agora existe sempre, para marcar loaded).
-    val readColor = visual.huePending
-    val image = remember(context, item.posterUrl, item.backdropUrl, readColor) {
-        ImageRequest.Builder(context).data(item.posterUrl.ifBlank { item.backdropUrl })
-            .apply { if (readColor) allowHardware(false) }.build()
+    val image = remember(context, item.posterUrl, item.backdropUrl) {
+        ImageRequest.Builder(context).data(tvPosterUrl(item.posterUrl.ifBlank { item.backdropUrl })).build()
     }
     val s = tvFocusScale(focused, 1.06f)
     val shape = RoundedCornerShape(0.9.r)

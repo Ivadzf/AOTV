@@ -33,20 +33,21 @@ import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Gravação de stream ao vivo (Lote 8, v1.18.0).
+ * Gravação de stream ao vivo (Lote 8, v1.18.0; disparo com o app fechado no Lote 13, v1.23.0).
  *
  * ForegroundService com notificação persistente: a gravação continua com o
  * app em 2º plano enquanto o serviço vive. MPEG-TS direto grava os bytes do
  * stream; HLS baixa os segmentos da playlist em sequência e concatena num
  * só .ts (funciona quando os segmentos usam o mesmo codec — não há remux).
  *
- * LIMITAÇÃO HONESTA (agendamento): NÃO há WorkManager no gradle e o brief
- * proíbe adicionar dependência nova — então NADA dispara a gravação com o
- * app fechado. O disparo é [checkDue], chamado quando a Início abre (e a
- * cada minuto com ela aberta, ver MoviesHomeScreen): gravação agendada p/
- * quando o app estava fechado começa assim que o app abre, se ainda estiver
- * dentro da janela (início − antecedência até fim + tolerância). Fora da
- * janela, fica "Agendada" para sempre — a tela mostra e permite apagar.
+ * DISPARO: com o app aberto, [checkDue] (chamado quando a Início abre e a
+ * cada minuto com ela aberta, ver MoviesHomeScreen); com o app fechado, o
+ * WorkManager dispara o serviço na janela ([RecordingWorker], agendado pelo
+ * [WorkScheduler] ao criar a gravação — ver [RecordingStore.schedule]).
+ * Gravação agendada p/ quando o app estava fechado começa assim que o app
+ * abre (via [checkDue]) ou pelo worker, se ainda estiver dentro da janela
+ * (início − antecedência até fim + tolerância). Fora da janela, fica
+ * "Agendada" para sempre — a tela mostra e permite apagar.
  *
  * Erros: a falha grava a mensagem REAL da exceção no registro (nunca
  * genérico) e notifica com ela. Espaço: StatFs no filesDir; com pasta SAF
@@ -396,8 +397,8 @@ class RecordingService : Service() {
         /**
          * Dispara a gravação agendada cuja janela já abriu (início − antecedência)
          * e ainda não fechou (fim + tolerância). Uma por vez. false = nada a fazer.
-         * Chamado quando o app abre (e a cada minuto com a Início aberta) — ver
-         * a limitação de agendamento no comentário da classe.
+         * Caminho com o app aberto — com ele fechado, o WorkManager dispara
+         * (ver [RecordingWorker]); os dois usam a mesma janela e o mesmo serviço.
          */
         fun checkDue(context: Context): Boolean {
             val store = RecordingStore(context)
