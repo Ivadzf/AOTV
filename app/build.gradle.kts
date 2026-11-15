@@ -19,10 +19,13 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 58
-        versionName    = "1.22.0"
-        // v1.1: só arm64-v8a (o celular do Davi é arm64; o APK fica ~20 MB menor).
-        ndk { abiFilters += listOf("arm64-v8a") }
+        versionCode    = 59
+        versionName    = "1.22.1"
+        // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
+        // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
+        // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com
+        // "não é compatível com sua TV" (INSTALL_FAILED_NO_MATCHING_ABIS).
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         // Chave TMDB lida de gradle property (local.properties / ~/.gradle/gradle.properties),
         // fora do VCS. Sem ela, fica vazia e o usuário informa a própria chave em Configurações.
         val tmdbKey = (project.findProperty("TMDB_API_KEY") as String?) ?: ""
