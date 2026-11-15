@@ -25,9 +25,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.OpenInNew
@@ -263,6 +265,14 @@ fun MoviePlayerScreen(
     // Buffer do player (Lote 5 item 1, v1.14.0): lido ANTES do remember da
     // sessão, como o decoder — o LoadControl entra no construtor do ExoPlayer.
     val playerBuffer by playerPrefsVm.buffer.collectAsState()
+    // Lote 9 — Player parte 3 (v1.19.0): AutoSync, pular abertura automático,
+    // cartão "A seguir" e equalizador (prefs por perfil, ver PlayerPrefsViewModel).
+    val playerAutoSync by playerPrefsVm.autoSync.collectAsState()
+    val playerAutoSkip by playerPrefsVm.autoSkip.collectAsState()
+    val playerUpNext by playerPrefsVm.upNext.collectAsState()
+    val playerEqEnabled by playerPrefsVm.equalizer.collectAsState()
+    val playerEqPreset by playerPrefsVm.eqPreset.collectAsState()
+    val playerEqBands by playerPrefsVm.eqBands.collectAsState()
     // Estado e regra do player moram na sessão. A função de tela ficou pequena e o Android volta
     // a compilar o código (antes passava do limite de instruções e rodava interpretado).
     val forceTv = television
@@ -334,6 +344,24 @@ fun MoviePlayerScreen(
     s.miniEnabled = playerMini
     s.autoNextEnabled = playerAutoNext
     s.autoNextDelaySec = playerAutoNextDelay
+    // Lote 9 — Player parte 3 (v1.19.0).
+    s.autoSyncEnabled = playerAutoSync
+    s.autoSkipEnabled = playerAutoSkip
+    s.upNextEnabled = playerUpNext
+    s.eqEnabled = playerEqEnabled
+    s.eqPreset = playerEqPreset
+    s.eqBandsCsv = playerEqBands
+    // Equalizador: o painel salva de volta por onEqSave/onEqToggle (preset,
+    // bandas e liga/desliga), como o filtro de cor salva por onColorFilterSave.
+    s.onEqSave = { preset, bands ->
+        playerPrefsVm.setEqPreset(preset)
+        playerPrefsVm.setEqBands(bands)
+    }
+    s.onEqToggle = { playerPrefsVm.setEqualizer(it) }
+    // (Re)aplica o equalizador quando a pref muda (o LaunchedEffect do
+    // Volume Boost faz o mesmo p/ o LoudnessEnhancer; a 1ª aplicação é no
+    // onAudioSessionIdChanged, quando a sessão de áudio fica pronta).
+    LaunchedEffect(playerEqEnabled, playerEqPreset, playerEqBands) { s.applyEqualizer() }
     // v1.8.1: troca automática de fonte (toggle + tempo) e client ID do Anime-Skip.
     s.autoSwitchEnabled = playerAutoSwitch
     s.sourceTimeoutSec = playerSourceTimeout
@@ -601,7 +629,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 refreshTechInfo()
             }
             // Sessão de áudio (re)criada: (re)aplica o Volume Boost nela.
-            override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost() }
+            override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost(); applyEqualizer() }
         }
         exoPlayer.addListener(l); onDispose { exoPlayer.removeListener(l) }
     }
@@ -705,6 +733,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
                 progressVm.save(tmdbId, type, title, posterUrl, position, duration, curEp, streamUrl ?: activeUrl, preferredAddon)
                 sinceSave = 0
             }
+            // Pular abertura/encerramento automático (Lote 9 item 2): só
+            // quando o toggle está ligado e a reprodução entrou no segmento
+            // andando (não por pulo manual — ver maybeAutoSkip).
+            maybeAutoSkip()
             // VISTO ao passar de 90% da duração (série) — 1x por episódio.
             if (type == "SERIES" && curEpisode > 0 && duration > 0 &&
                 position >= duration * 0.9 && markedWatchedEp != curEpisode
@@ -721,7 +753,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             }
             // AUTO-PLAY: aviso de próximo episódio só no ÚLTIMO 1 MINUTO (antes aparecia a 90%,
             // cedo demais em episódios longos).
-            if (hasNextEpisode && duration > 60_000 && position >= duration - 60_000 && nextPromptEp != curEpisode) {
+            if (upNextEnabled && hasNextEpisode && duration > 60_000 && position >= duration - 60_000 && nextPromptEp != curEpisode) {
                 nextPromptEp = curEpisode; promptIsSeason = false; nextCountdown = autoNextDelaySec; showNextPrompt = true
             }
             // PRÉ-CARREGA o próximo (ou a próxima temporada) na METADE do episódio atual. Quando
@@ -737,7 +769,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             }
             // Último episódio da temporada com temporada seguinte → oferece a PRÓXIMA TEMPORADA
             // já nos créditos, não só quando o arquivo termina (muita fonte corta antes do fim).
-            if (!hasNextEpisode && hasNextSeason && duration > 60_000 &&
+            if (upNextEnabled && !hasNextEpisode && hasNextSeason && duration > 60_000 &&
                 position >= duration - 60_000 && nextPromptEp != curEpisode
             ) {
                 nextPromptEp = curEpisode; promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true
@@ -838,11 +870,21 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         if (!playbackEnded) return@LaunchedEffect
         playbackEnded = false
         saveNow()
+        // Sleep timer "no fim do episódio" (Lote 9 item 4): não avança nem
+        // volta — fica parado no último quadro, com o timer desligado.
+        if (sleepAtEpisodeEnd) {
+            sleepAtEpisodeEnd = false
+            sleepMinutes = null
+            return@LaunchedEffect
+        }
         when {
             // Tem próximo episódio na temporada → card "Próximo episódio".
-            type == "SERIES" && hasNextEpisode -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = autoNextDelaySec; showNextPrompt = true }
+            type == "SERIES" && hasNextEpisode && upNextEnabled -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = autoNextDelaySec; showNextPrompt = true }
             // Acabou a temporada e existe outra → card "Próxima temporada".
-            type == "SERIES" && hasNextSeason -> { promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true }
+            type == "SERIES" && hasNextSeason && upNextEnabled -> { promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true }
+            // "A seguir" desligado e há próximo: fica parado no fim (o chip
+            // "Próximo" e o botão Voltar continuam valendo).
+            type == "SERIES" && (hasNextEpisode || hasNextSeason) -> Unit
             else -> onBack() // filme ou fim da série
         }
     }
@@ -1124,6 +1166,15 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         return@onKeyEvent when (kc) {
                             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
                             else -> true
+                        }
+                    }
+                    // Painel do EQUALIZADOR (Lote 9 item 3): sliders e presets
+                    // com foco próprio — ←→ ajusta o slider com foco, o resto
+                    // passa p/ o composável (não navega a lista de ações).
+                    if (panelKind == "eq") {
+                        return@onKeyEvent when (kc) {
+                            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
+                            else -> false
                         }
                     }
                     val n = panelActions.size
@@ -1464,7 +1515,20 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
         // de ele estar aberto por outro caminho quando a tela trava).
         // O painel de INFOS TÉCNICAS tem composable próprio ([TechInfoPanel]),
         // como o de COR ([ColorFilterPanel]) — não cabe na lista de ações.
-        if (sourcePanelOpen && !locked && panelKind == "info") {
+        if (sourcePanelOpen && !locked && panelKind == "eq") {
+            EqualizerPanel(
+                enabled = eqEnabled,
+                preset = eqPreset,
+                bands = eqBands,
+                equalizer = equalizer,
+                onToggle = { onEqToggle(it) },
+                onPreset = { onEqSave(it, eqBandsCsv) },
+                onBand = { i, db -> onEqBand(i, db) },
+                onReset = { onEqReset() },
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "info") {
             // Stats do torrent ao vivo (Lote 5 item 2): enquanto o painel de
             // infos está aberto, re-lê seeds/peers/velocidade/buffer a cada
             // 2 s. Fora do painel não há polling — o status só existe p/ mostrar.
@@ -1629,6 +1693,11 @@ class PlayerSession(
     // Pular trechos (v1.8.1): segmentos IntroDB/SkipDB/Anime-Skip do título atual.
     var skipSegments by run { mutableStateOf(com.aotv.app.data.remote.SkipSegments()) }
     val skipSegmentsService = com.aotv.app.data.remote.SkipSegmentsService()
+    /** Última posição vista pelo poll (p/ detectar entrada natural no segmento). */
+    private var lastSkipCheckPos by run { mutableLongStateOf(0L) }
+    /** Episódio em que o auto-skip já pulou + alvo (1x por segmento por episódio). */
+    private var autoSkippedEp by run { mutableIntStateOf(-1) }
+    private var autoSkippedTarget by run { mutableLongStateOf(-1L) }
     // Troca automática de fonte (v1.8.1): toggle + tempo do watchdog (segundos).
     var autoSwitchEnabled by run { mutableStateOf(true) }
     var sourceTimeoutSec by run { mutableIntStateOf(12) }
@@ -1664,6 +1733,42 @@ class PlayerSession(
             return SkipTarget("Pular abertura", mark.second, learnedMark = true)
         }
         return null
+    }
+    /**
+     * Pular abertura/encerramento automático (Lote 9 item 2): com o toggle
+     * ligado, pula sozinho ao ENTRAR no segmento de intro ou de
+     * encerramento durante a reprodução normal. Só dispara quando a posição
+     * avançou andando (menos de 2 s desde o último poll): pulo manual p/
+     * dentro da abertura não dispara, e voltar a abertura à mão não é
+     * desfeito. 1x por segmento por episódio. O encerramento vai p/ o início
+     * da cena pós-créditos quando ela existe (mesma regra do botão manual).
+     */
+    fun maybeAutoSkip() {
+        if (!autoSkipEnabled || !isPlaying) return
+        val pos = position
+        val prev = lastSkipCheckPos
+        lastSkipCheckPos = pos
+        if (pos - prev !in 0..2_000) return
+        val segs = skipSegments
+        val intro = segs.intro
+        val outro = segs.outro
+        val target: Long
+        val label: String
+        when {
+            intro != null && prev <= intro.start && pos >= intro.start && pos < intro.end -> {
+                target = intro.end; label = "Abertura pulada automaticamente"
+            }
+            outro != null && prev <= outro.start && pos >= outro.start && pos < outro.end -> {
+                target = segs.postCredits?.start ?: outro.end; label = "Encerramento pulado automaticamente"
+            }
+            else -> return
+        }
+        if (autoSkippedEp == curEpisode && autoSkippedTarget == target) return
+        autoSkippedEp = curEpisode
+        autoSkippedTarget = target
+        currentPlayer().seekTo(target)
+        position = target
+        toastMsg = label
     }
     var toastMsg by run { mutableStateOf("") }          // aviso curto (ex "Abertura marcada")
     // Trocando de episódio/temporada: mostra o loading NA HORA, sem ficar preso na cena anterior.
@@ -1734,7 +1839,7 @@ class PlayerSession(
     var techInfo by run { mutableStateOf<TechInfo?>(null) }
     /** Re-lê os dados do stream atual p/ o painel de infos técnicas. Não trava o player. */
     fun refreshTechInfo() {
-        techInfo = runCatching { collectTechInfo(exoPlayer) }.getOrNull()
+        techInfo = runCatching { collectTechInfo(exoPlayer, context, casting) }.getOrNull()
     }
     // Stats do torrent P2P (Lote 5 item 2, v1.14.0): seeds, conexões,
     // velocidade e buffer do ExoPlayer p/ a seção TORRENT do painel de
@@ -1829,6 +1934,23 @@ class PlayerSession(
     var autoNextEnabled by run { mutableStateOf(true) }
     /** Contagem do "A seguir" em segundos (pref `playerAutoNextDelay`). */
     var autoNextDelaySec by run { mutableIntStateOf(10) }
+    // ── Lote 9 — Player parte 3 (v1.19.0) ───────────────────────────────
+    /** Sincronização automática da legenda ligada (pref `pref_player_autosync`). */
+    var autoSyncEnabled by run { mutableStateOf(false) }
+    /** Pular abertura/encerramento automático ligado (pref `pref_player_auto_skip`). */
+    var autoSkipEnabled by run { mutableStateOf(false) }
+    /** Cartão "A seguir" no fim do episódio (pref `pref_player_up_next`). */
+    var upNextEnabled by run { mutableStateOf(true) }
+    /** Equalizador ligado (pref `pref_player_equalizer`). */
+    var eqEnabled by run { mutableStateOf(false) }
+    /** Preset do equalizador (pref `pref_player_eq_preset`; "flat" = tudo em 0 dB). */
+    var eqPreset by run { mutableStateOf(EQ_PRESET_FLAT) }
+    /** Bandas do equalizador em CSV (pref `pref_player_eq_bands`). */
+    var eqBandsCsv by run { mutableStateOf("") }
+    /** A tela liga ao PlayerPrefsViewModel (salva preset e bandas do equalizador). */
+    var onEqSave: (String, String) -> Unit = { _, _ -> }
+    /** A tela liga ao PlayerPrefsViewModel (liga/desliga o equalizador). */
+    var onEqToggle: (Boolean) -> Unit = {}
     /** true entre minimizar e expandir/fechar: o dispose da tela NÃO libera o player. */
     var minimizedByUser by run { mutableStateOf(false) }
     /** playId da rota que abriu esta sessão (p/ o mini player reabrir a mesma). */
@@ -2048,6 +2170,63 @@ class PlayerSession(
         progressVm.subtitleOn = subWanted
     }
 
+    // ── Sincronização automática da legenda (Lote 9 item 1) ─────────────
+    /** Estado da medição (a tela mostra "Medindo…" na ação). */
+    var autoSyncState by run { mutableStateOf(AutoSyncState.IDLE) }
+    private var autoSyncJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Mede o atraso da legenda externa contra a embutida (ver
+     * PlayerAutoSync.kt) e aplica o ajuste medido. Nada é inventado: sem
+     * legenda externa carregada, sem faixa embutida, sem vídeo tocando ou
+     * sem casamento suficiente, NADA muda e o ajuste manual continua
+     * valendo. A faixa embutida é ligada só durante a medição e devolvida
+     * ao estado anterior depois (e o `subPicked` é restaurado, p/ o
+     * automático não trocar a legenda no meio da medição).
+     */
+    fun runAutoSync() {
+        if (autoSyncJob != null) return
+        if (selectedSubUrl == null || externalCues.isEmpty()) {
+            toastMsg = "Escolha uma legenda externa para sincronizar"
+            return
+        }
+        if (textGroups.isEmpty()) {
+            toastMsg = "Este vídeo não tem legenda embutida para comparar"
+            return
+        }
+        if (!isPlaying) {
+            toastMsg = "Dê play no vídeo para medir a sincronização"
+            return
+        }
+        autoSyncJob = scope.launch {
+            autoSyncState = AutoSyncState.MEASURING
+            toastMsg = "Medindo a sincronização — deixe o vídeo tocar"
+            val wasEmbeddedOn = subtitleOn
+            val wasSubPicked = subPicked
+            subPicked = true
+            val group = textGroups.sortedBy { SubLangs.rank(it.getTrackFormat(0).language, subLang) }.firstOrNull()
+            if (group != null) enableTextGroup(group)
+            subtitleOn = true
+            val embedded = sampleEmbeddedCues(exoPlayer)
+            if (!wasEmbeddedOn) {
+                disableText()
+                subtitleOn = false
+            }
+            subPicked = wasSubPicked
+            val est = estimateSubDelay(embedded, externalCues)
+            autoSyncState = AutoSyncState.IDLE
+            autoSyncJob = null
+            when {
+                est == null -> toastMsg = "Não deu para medir — as falas não bateram. O ajuste manual continua valendo."
+                kotlin.math.abs(est.adjustmentSec) < 0.5 -> toastMsg = "A legenda já está sincronizada (diferença medida de ${est.medianOffsetMs} ms em ${est.matchedCues} falas)"
+                else -> {
+                    subDelay = est.adjustmentSec
+                    toastMsg = "Legenda sincronizada: ${subDelayLabel(est.adjustmentSec)} (medido em ${est.matchedCues} falas)"
+                }
+            }
+        }
+    }
+
     // ── Som de outra fonte ──
     fun saveExt() {
         val src = currentSources.firstOrNull { it.url == extUrl }
@@ -2121,6 +2300,49 @@ class PlayerSession(
     }
     fun togglePlay() { currentPlayer().let { it.playWhenReady = !it.playWhenReady }; controlsVisible = true }
 
+    // ── Sleep timer (Lote 9 item 4) ──────────────────────────────────────
+    // Job com delay no escopo da sessão (sem work-runtime): morre junto
+    // com o player. Escolha por sessão, sem pref persistente.
+    /** Minutos do timer atual (null = desligado). */
+    var sleepMinutes by run { mutableStateOf<Int?>(null) }
+    /** true = pausar no fim do episódio (sem timer de minutos). */
+    var sleepAtEpisodeEnd by run { mutableStateOf(false) }
+    /** Quando o timer dispara (ms desde epoch). 0 = desligado. */
+    var sleepDeadlineMs by run { mutableLongStateOf(0L) }
+    private var sleepJob: kotlinx.coroutines.Job? = null
+
+    /** Liga o timer p/ pausar em [minutes] min. */
+    fun startSleepTimer(minutes: Int) {
+        cancelSleepTimer()
+        sleepMinutes = minutes
+        sleepAtEpisodeEnd = false
+        sleepDeadlineMs = System.currentTimeMillis() + minutes * 60_000L
+        sleepJob = scope.launch {
+            delay(minutes * 60_000L)
+            sleepMinutes = null
+            sleepDeadlineMs = 0L
+            currentPlayer().playWhenReady = false
+            toastMsg = "Sleep timer: reprodução pausada"
+        }
+        toastMsg = "Sleep timer: pausa em $minutes min"
+    }
+
+    /** Liga o "pausar no fim do episódio" (o fim não avança nem volta). */
+    fun startSleepAtEpisodeEnd() {
+        cancelSleepTimer()
+        sleepAtEpisodeEnd = true
+        toastMsg = "Sleep timer: pausa no fim do episódio"
+    }
+
+    /** Desliga o timer (qualquer modo). */
+    fun cancelSleepTimer() {
+        sleepJob?.cancel()
+        sleepJob = null
+        sleepMinutes = null
+        sleepAtEpisodeEnd = false
+        sleepDeadlineMs = 0L
+    }
+
     // Picture-in-Picture: mini tela pra continuar assistindo em outros apps (API 26+).
     fun enterPip() {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
@@ -2169,12 +2391,67 @@ class PlayerSession(
         loudnessEnhancer = null
     }
 
+    // ── Equalizador (Lote 9 item 3) ──────────────────────────────────────
+    // Mesmo gancho do Volume Boost: o efeito vive na sessão de áudio do
+    // ExoPlayer e é (re)criado quando ela fica pronta
+    // (onAudioSessionIdChanged) ou quando a pref muda (LaunchedEffect na
+    // tela). Ao fechar o player, releaseEqualizer() libera o efeito.
+    var equalizer: PlayerEqualizer? by run { mutableStateOf<PlayerEqualizer?>(null) }
+    /** O aparelho não aceitou o Equalizer (aviso 1x, ver [applyEqualizer]). */
+    var eqUnavailable by run { mutableStateOf(false) }
+
+    /** Bandas atuais em dB (da pref, ou tudo em 0 quando a pref está vazia/inválida). */
+    val eqBands: List<Int> get() {
+        val n = equalizer?.bandCount?.takeIf { it > 0 } ?: EQ_BANDS
+        return parseEqBandsCsv(eqBandsCsv, n) ?: List(n) { 0 }
+    }
+
+    /** (Re)aplica o equalizador na sessão de áudio atual. */
+    fun applyEqualizer() {
+        val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
+        if (!eqEnabled || id == 0) {
+            runCatching { equalizer?.release() }
+            equalizer = null
+            return
+        }
+        val eq = equalizer ?: runCatching { PlayerEqualizer(id) }.getOrNull()
+        if (eq == null || !eq.supported) {
+            if (!eqUnavailable) {
+                eqUnavailable = true
+                toastMsg = "Equalizador não suportado neste aparelho"
+            }
+            return
+        }
+        equalizer = eq
+        if (eqPreset != EQ_PRESET_FLAT && eq.applyPreset(eqPreset)) return
+        eq.applyBands(eqBands)
+    }
+
+    /** Libera o Equalizer (ao fechar o player). */
+    fun releaseEqualizer() {
+        runCatching { equalizer?.release() }
+        equalizer = null
+    }
+
+    /** Muda uma banda e salva (sai do preset: vira "flat" customizado). */
+    fun onEqBand(index: Int, db: Int) {
+        val cur = eqBands.toMutableList()
+        if (index !in cur.indices) return
+        cur[index] = db.coerceIn(-15, 15)
+        onEqSave(EQ_PRESET_FLAT, eqBandsCsv(cur))
+    }
+
+    /** Volta tudo em 0 dB e salva. */
+    fun onEqReset() { onEqSave(EQ_PRESET_FLAT, eqBandsCsv(List(eqBands.size) { 0 })) }
+
     /** Libera tudo do player (ExoPlayer, sessão de mídia, boost, proxy, torrent).
      * O dispose da tela chama isso, EXCETO ao minimizar (ver [minimizedByUser]);
      * o fechar do mini player chama direto. */
     fun releaseAll() {
         extSync?.release()
         releaseVolBoost()
+        releaseEqualizer()
+        cancelSleepTimer()
         exoPlayer.release()
         mediaSession.release()
         ScrubThumbnailer.release()
@@ -2205,6 +2482,11 @@ class PlayerSession(
         curEpisode = targetEp
         prefetchedEp = -1                   // libera o prefetch do sucessor deste episódio
         triedUrls.clear(); failedAddons.clear(); wrongUrls.clear(); upgradeDone = false
+        // Auto-skip (Lote 9 item 2): episódio novo, medição nova — o pulo
+        // de 1x por segmento vale p/ cada episódio.
+        lastSkipCheckPos = 0L
+        autoSkippedEp = -1
+        autoSkippedTarget = -1L
         // Episódio novo desliga o som de outra fonte e a sincronia da legenda. O som salvo
         // volta sozinho quando a mesma fonte aparecer no episódio novo.
         dropExt(); extRestored = false; subDelay = 0.0
@@ -2410,6 +2692,15 @@ class PlayerSession(
             val onlyExt = if (selectedSubUrl == null) "  ·  vale para legenda externa" else ""
             add(TvPlayerAction("Atrasar 0,5 s", false, false, sub = subDelayLabel(subDelay) + onlyExt, keepOpen = true) { subDelay = addDelay(subDelay, 0.5) })
             add(TvPlayerAction("Adiantar 0,5 s", false, false, sub = "Use quando a legenda aparece depois da fala", keepOpen = true) { subDelay = addDelay(subDelay, -0.5) })
+            // Sincronização automática (Lote 9 item 1): mede o atraso da
+            // legenda externa contra a embutida (ver runAutoSync). Só com a
+            // pref ligada e uma legenda externa carregada; sem medição
+            // possível, nada muda e o ajuste manual continua valendo.
+            if (autoSyncEnabled && selectedSubUrl != null && externalCues.isNotEmpty()) {
+                add(TvPlayerAction("Sincronizar automaticamente", false, false,
+                    sub = if (autoSyncState == AutoSyncState.MEASURING) "Medindo — deixe o vídeo tocar…"
+                    else "Mede o atraso contra a legenda do vídeo", keepOpen = true) { runAutoSync() })
+            }
             // Baixa de novo a legenda externa selecionada pelo mesmo caminho do carregamento
             // inicial (episodeVm.subtitleCues). Só aparece com legenda externa selecionada:
             // o LaunchedEffect de selectedSubUrl só dispara quando a URL muda, então o
@@ -2517,12 +2808,26 @@ class PlayerSession(
         }
     }
 
+    /** Ações do painel "Sleep timer" (escolha por sessão). */
+    val sleepActions: List<TvPlayerAction> get() = buildList {
+        add(TvPlayerAction("Desligado", false, sleepMinutes == null && !sleepAtEpisodeEnd,
+            sub = "Sem timer") { cancelSleepTimer() })
+        SLEEP_TIMER_MINUTES.forEach { m ->
+            add(TvPlayerAction("$m min", false, sleepMinutes == m,
+                sub = if (sleepMinutes == m) sleepRemainingLabel(sleepDeadlineMs) ?: "Pausa em $m minutos"
+                else "Pausa em $m minutos", keepOpen = true) { startSleepTimer(m) })
+        }
+        add(TvPlayerAction("No fim do episódio", false, sleepAtEpisodeEnd,
+            sub = "Pausa quando o episódio terminar") { startSleepAtEpisodeEnd() })
+    }
+
     val panelActions get() = when (panelKind) {
         "subs" -> subActions
         "audio" -> audioActions
         "speed" -> speedActions
         "screen" -> screenActions
         "episodes" -> episodeActions
+        "sleep" -> sleepActions
         else -> sourceActions
     }
     val panelTitle get() = when (panelKind) {
@@ -2533,6 +2838,8 @@ class PlayerSession(
         "episodes" -> "Episódios"
         "color" -> "Cor do vídeo"
         "info" -> "Informações de reprodução"
+        "eq" -> "Equalizador"
+        "sleep" -> "Sleep timer"
         else -> "Fontes"
     }
 
@@ -2578,6 +2885,13 @@ class PlayerSession(
         // "color" — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado
         // nas Configurações (é um painel de diagnóstico, não um botão configurável).
         add(PlayerChipItem(Icons.Default.Info, "Infos técnicas", id = "info") { openDpadPanel("info") })
+        // Equalizador (Lote 9 item 3, v1.19.0): mesmo padrão dos chips
+        // "color"/"info" — id fora do catálogo, vai p/ o fim e NÃO pode ser
+        // desligado nas Configurações (o liga/desliga dele é a pref).
+        add(PlayerChipItem(Icons.Default.Equalizer, "Equalizador", active = eqEnabled, id = "eq") { openDpadPanel("eq") })
+        // Sleep timer (Lote 9 item 4, v1.19.0): mesmo padrão — id fora do
+        // catálogo, vai p/ o fim. Escolha por sessão, sem pref persistente.
+        add(PlayerChipItem(Icons.Default.Bedtime, "Sleep timer", active = sleepMinutes != null || sleepAtEpisodeEnd, id = "sleep") { openDpadPanel("sleep") })
         // Modo privado (Lote 2, item 7 — v1.10.0): mesmo padrão do chip "color"
         // — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado nas
         // Configurações (é um estado, não um botão configurável). Ligado, o

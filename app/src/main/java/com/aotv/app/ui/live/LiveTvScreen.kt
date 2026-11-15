@@ -46,6 +46,10 @@ fun LiveTvScreen(
     onSources: () -> Unit,
     /** Rota de catch-up pronta (ver [livePlayerCatchupRoute]); sem ele, passado com catch-up cai no ao vivo. */
     onPlayCatchup: ((String) -> Unit)? = null,
+    /** Abre a Biblioteca, onde vive o calendário que já existe (Lote 9, hub). */
+    onOpenCalendar: () -> Unit = {},
+    /** Abre o On Demand (rota "live_ondemand", Frente 2 do Lote 9). */
+    onOpenVod: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel(),
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
@@ -62,6 +66,11 @@ fun LiveTvScreen(
     val sportsHideScores by prefs.sportsHideScoresFlow.collectAsStateWithLifecycle()
     val sportsScoreDelaySec by prefs.sportsScoreDelaySecFlow.collectAsStateWithLifecycle()
     val sportsLiveScores by prefs.sportsLiveScoresFlow.collectAsStateWithLifecycle()
+    // Lote 9 (v1.19.0): hub da Live TV — só no celular. Na TV (LocalIsTv,
+    // ligado pelo ProvideTvMode da navegação) mantém a renderização atual,
+    // para não quebrar o D-pad. Grupos favoritos do hub (a estrela no cartão).
+    val isTv = com.aotv.app.ui.common.LocalIsTv.current
+    val groupFavorites by prefs.liveGroupFavoritesFlow.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -90,6 +99,20 @@ fun LiveTvScreen(
                 )
             }
             com.aotv.app.ui.common.GlassCircleButton(Icons.Default.Settings, onSources, contentDescription = "Fontes de canais")
+        }
+
+        // Lote 9 (v1.19.0): barra superior do hub (só no celular). Na TV a
+        // tela segue como antes, sem esta barra.
+        if (!isTv) {
+            LiveHubTopBar(
+                guide = guide,
+                onSearch = { searching = !searching; if (!searching) viewModel.setQuery("") },
+                onGuide = { guide = !guide },
+                onCalendar = onOpenCalendar,
+                onVod = onOpenVod,
+                onSports = { guide = false },
+                onSettings = onSources,
+            )
         }
 
         if (!v.hasSources) {
@@ -173,6 +196,22 @@ fun LiveTvScreen(
             LiveGuideScreen(onPlay = onPlay, onPlayCatchup = onPlayCatchup)
             return@Column
         }
+        // Lote 9 (v1.19.0): no celular e na vista padrão (sem filtro nem
+        // busca), os canais vêm em cartões por grupo (o hub); na TV, com
+        // filtro ou com busca, segue a grade plana de antes.
+        if (!isTv && !guide && v.filter == LiveTvViewModel.ALL && v.query.isBlank()) {
+            LiveGroupCards(
+                groupedRows = v.groupedRows,
+                favorites = groupFavorites,
+                now = v.now,
+                onPlay = onPlay,
+                onFavoriteChannel = { viewModel.toggleFavorite(it) },
+                onToggleGroupFavorite = { prefs.toggleLiveGroupFavorite(it) },
+                showLogos = v.showLogos, showNames = v.showNames,
+                showNumbers = v.showNumbers, cleanGroups = v.cleanGroupNames,
+            )
+            return@Column
+        }
         // Celular em uma coluna, tela larga em mais de uma.
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 340.dp),
@@ -192,7 +231,7 @@ fun LiveTvScreen(
 }
 
 @Composable
-private fun ChannelRow(
+internal fun ChannelRow(
     row: LiveRow, now: Long, onClick: () -> Unit, onFavorite: () -> Unit,
     // Lote 8 (v1.18.0): exibição de canais, por perfil (ver LiveTvViewModel.View).
     showLogos: Boolean = true, showNames: Boolean = true, showNumbers: Boolean = false, cleanGroups: Boolean = false,

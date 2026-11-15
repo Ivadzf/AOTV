@@ -86,7 +86,7 @@ private interface MdbApi {
         @Query("y") year: Int?,
         @Query("apikey") key: String,
         @Query("m") mediaType: String = "movie"
-    ): List<MdbRatingResult>
+    ): MdbRatingResult?
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -161,7 +161,10 @@ class MDBListService @Inject constructor(
     ): Result<Map<String, Double?>> = runCatching {
         require(isConnected) { "Chave MDBList não configurada" }
         val type = if (isMovie) "movie" else "show"
-        val result = api.searchRatings(title, year, apiKey, type).firstOrNull()
+        // Lote 9 (v1.19.0): a API devolve UM objeto, não uma lista (o tipo
+        // List<> quebrava com "Expected BEGIN_ARRAY but was BEGIN_OBJECT").
+        // Título não encontrado → ratings nulo → mapa vazio e a seção some.
+        val result = api.searchRatings(title, year, apiKey, type)
         val ratings = result?.ratings ?: return@runCatching emptyMap()
         val enabled = getEnabledSources()
         buildMap {

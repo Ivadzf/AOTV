@@ -100,6 +100,10 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_engine", "pref_player_decoder",
     // Lote 5 — buffer do player (v1.14.0): perfil de buffer do ExoPlayer.
     "pref_player_buffer",
+    // Lote 9 — Player parte 3 (v1.19.0): AutoSync de legendas, pular abertura
+    // automático, cartão "A seguir" e equalizador (liga, preset, bandas em dB).
+    "pref_player_autosync", "pref_player_auto_skip", "pref_player_up_next",
+    "pref_player_equalizer", "pref_player_eq_preset", "pref_player_eq_bands",
     // Lote 3 — Página de detalhes: título em idioma original (v1.11.0).
     "pref_detail_original_title",
     // Lote 8 — Tela de detalhe (v1.18.0): toggles das seções novas.
@@ -132,11 +136,13 @@ internal val SCOPED_KEYS = listOf(
     // (tudo por perfil). O formato do stream Xtream é GLOBAL ("live_xtream_format")
     // e NÃO entra aqui. A última faixa de áudio por canal ("live_audio_v1")
     // segue o mapa JSON de "last_source_v1".
+    // Lote 9 — Hub da Live TV (v1.19.0): grupos favoritos do hub
+    // ("live_group_favorites_v1", lista de nomes de grupo, por perfil).
     "live_guide_days_ahead", "live_guide_hours_back",
     "live_refresh_lists_hours", "live_refresh_epg_hours",
     "live_show_logos", "live_show_names", "live_show_numbers", "live_clean_group_names",
     "live_backup_channel", "live_in_continue", "live_remember_audio", "live_catchup_hls",
-    "live_audio_v1",
+    "live_audio_v1", "live_group_favorites_v1",
 )
 
 /**
@@ -565,6 +571,32 @@ class PlatformPrefs @Inject constructor(
             }
             prefs.edit().putString(sk("live_audio_v1"), o.toString()).apply()
         }
+
+    // ── Lote 9 — Hub da Live TV (v1.19.0) ───────────────────────────────────
+    // Grupos de canais favoritos do hub (a estrela no cartão do grupo).
+    // Lista de NOMES DE GRUPO como aparecem na tela (com a limpeza de
+    // prefixo aplicada, igual a LiveTvViewModel.groups) — se a limpeza
+    // ligar/desligar, o nome muda e o favorito pode não casar; é só
+    // exibição, o grupo em si não muda. Guardada no mesmo formato de
+    // lista JSON das outras prefs de lista (readStringList/writeStringList,
+    // como "pref_stream_pinned"). Por perfil (SCOPED_KEYS). Vazio = nenhum
+    // favorito. Grupos favoritos sobem p/ o topo do hub e a estrela fica
+    // preenchida (ver LiveTvHub.kt).
+
+    private val _liveGroupFavorites = MutableStateFlow(readStringList("live_group_favorites_v1"))
+    /** Nomes dos grupos de canais favoritos no hub da Live TV, que avisam quem observa. */
+    val liveGroupFavoritesFlow: StateFlow<List<String>> = _liveGroupFavorites.asStateFlow()
+    /** Nomes dos grupos de canais favoritos no hub da Live TV. Vazio = nenhum favorito. */
+    var liveGroupFavorites: List<String>
+        get() = _liveGroupFavorites.value
+        set(value) { writeStringList("live_group_favorites_v1", value); _liveGroupFavorites.value = value }
+
+    /** Liga/desliga o favorito de um grupo de canais no hub da Live TV. */
+    fun toggleLiveGroupFavorite(group: String) {
+        val clean = group.trim()
+        if (clean.isBlank()) return
+        liveGroupFavorites = if (clean in liveGroupFavorites) liveGroupFavorites - clean else liveGroupFavorites + clean
+    }
 
     // ── MDBList / AniList / TheTVDB (v1.17.0) ───────────────────────────────
     // Mesmo padrão do Trakt: chave de conta é DO APARELHO (a chave de API
@@ -1406,6 +1438,56 @@ class PlatformPrefs @Inject constructor(
             prefs.edit().putString(sk("pref_player_buffer"), clean).apply(); _playerBuffer.value = clean
         }
 
+    // ── Player parte 3 (Lote 9, v1.19.0) — por perfil ───────────────────
+    // AutoSync: mede o atraso da legenda externa contra a embutida (ver
+    // PlayerAutoSync.kt) — nunca inventa atraso. Pular abertura automático:
+    // pula intro/encerramento sozinho ao entrar no segmento (ver
+    // PlayerSession.maybeAutoSkip). "A seguir": o cartão no fim do episódio.
+    // Equalizador: liga, preset do aparelho ("flat" = tudo em 0 dB) e bandas
+    // em dB inteiros separadas por vírgula ("0,3,-2,0,0").
+
+    private val _playerAutoSync = MutableStateFlow(prefs.getBoolean(sk("pref_player_autosync"), false))
+    /** Sincronização automática da legenda ligada (botão no painel de Legendas mede o atraso). */
+    val playerAutoSyncFlow: StateFlow<Boolean> = _playerAutoSync.asStateFlow()
+    var playerAutoSync: Boolean
+        get() = _playerAutoSync.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_autosync"), value).apply(); _playerAutoSync.value = value }
+
+    private val _playerAutoSkip = MutableStateFlow(prefs.getBoolean(sk("pref_player_auto_skip"), false))
+    /** Pular abertura/encerramento automaticamente ao entrar no segmento. */
+    val playerAutoSkipFlow: StateFlow<Boolean> = _playerAutoSkip.asStateFlow()
+    var playerAutoSkip: Boolean
+        get() = _playerAutoSkip.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_auto_skip"), value).apply(); _playerAutoSkip.value = value }
+
+    private val _playerUpNext = MutableStateFlow(prefs.getBoolean(sk("pref_player_up_next"), true))
+    /** Cartão "A seguir" no fim do episódio (o avanço automático continua sendo `pref_player_auto_next`). */
+    val playerUpNextFlow: StateFlow<Boolean> = _playerUpNext.asStateFlow()
+    var playerUpNext: Boolean
+        get() = _playerUpNext.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_up_next"), value).apply(); _playerUpNext.value = value }
+
+    private val _playerEqualizer = MutableStateFlow(prefs.getBoolean(sk("pref_player_equalizer"), false))
+    /** Equalizador ligado (só vale com o player aberto; ao fechar, desliga junto). */
+    val playerEqualizerFlow: StateFlow<Boolean> = _playerEqualizer.asStateFlow()
+    var playerEqualizer: Boolean
+        get() = _playerEqualizer.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_equalizer"), value).apply(); _playerEqualizer.value = value }
+
+    private val _playerEqPreset = MutableStateFlow(prefs.getString(sk("pref_player_eq_preset"), "flat") ?: "flat")
+    /** Preset do equalizador (nome do preset do aparelho; "flat" = tudo em 0 dB). */
+    val playerEqPresetFlow: StateFlow<String> = _playerEqPreset.asStateFlow()
+    var playerEqPreset: String
+        get() = _playerEqPreset.value
+        set(value) { prefs.edit().putString(sk("pref_player_eq_preset"), value).apply(); _playerEqPreset.value = value }
+
+    private val _playerEqBands = MutableStateFlow(prefs.getString(sk("pref_player_eq_bands"), "") ?: "")
+    /** Bandas do equalizador em dB inteiros, separadas por vírgula ("0,3,-2,0,0"). "" = tudo em 0 dB. */
+    val playerEqBandsFlow: StateFlow<String> = _playerEqBands.asStateFlow()
+    var playerEqBands: String
+        get() = _playerEqBands.value
+        set(value) { prefs.edit().putString(sk("pref_player_eq_bands"), value).apply(); _playerEqBands.value = value }
+
     private val _playerVolBoost = MutableStateFlow(prefs.getBoolean(sk("pref_player_vol_boost"), false))
     /** Volume Boost: deixa o volume passar de 100% (via LoudnessEnhancer). */
     val playerVolBoostFlow: StateFlow<Boolean> = _playerVolBoost.asStateFlow()
@@ -2152,6 +2234,12 @@ class PlatformPrefs @Inject constructor(
         _playerEngine.value = prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer"
         _playerDecoder.value = prefs.getString(sk("pref_player_decoder"), "hw") ?: "hw"
         _playerBuffer.value = prefs.getString(sk("pref_player_buffer"), "normal") ?: "normal"
+        _playerAutoSync.value = prefs.getBoolean(sk("pref_player_autosync"), false)
+        _playerAutoSkip.value = prefs.getBoolean(sk("pref_player_auto_skip"), false)
+        _playerUpNext.value = prefs.getBoolean(sk("pref_player_up_next"), true)
+        _playerEqualizer.value = prefs.getBoolean(sk("pref_player_equalizer"), false)
+        _playerEqPreset.value = prefs.getString(sk("pref_player_eq_preset"), "flat") ?: "flat"
+        _playerEqBands.value = prefs.getString(sk("pref_player_eq_bands"), "") ?: ""
         _subColor.value = prefs.getInt(sk("sub_color"), -1)
         _subBgOpacity.value = prefs.getFloat(sk("sub_bg_opacity"), 0.78f)
         _subOutline.value = prefs.getBoolean(sk("sub_outline"), true)
@@ -2186,6 +2274,8 @@ class PlatformPrefs @Inject constructor(
         _liveInContinue.value = prefs.getBoolean(sk("live_in_continue"), true)
         _liveRememberAudio.value = prefs.getBoolean(sk("live_remember_audio"), true)
         _liveCatchupHls.value = prefs.getBoolean(sk("live_catchup_hls"), false)
+        // Lote 9 — Hub da Live TV (v1.19.0): grupos favoritos, por perfil.
+        _liveGroupFavorites.value = readStringList("live_group_favorites_v1")
     }
 
     private fun computeLayout(): List<HomeRowPref> {

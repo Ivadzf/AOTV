@@ -97,6 +97,8 @@ private sealed class MoviesRoute(val route: String) {
     object Accounts : MoviesRoute("movies_accounts")
     object Live : MoviesRoute("movies_live")
     object LiveSources : MoviesRoute("movies_live_sources")
+    // On Demand Xtream (Lote 9, v1.19.0) — o hub da Live TV (Frente 3) linka esta rota.
+    object LiveOnDemand : MoviesRoute("live_ondemand")
     object LivePlayer : MoviesRoute("movies_live_player/{id}?start={start}&stop={stop}") {
         fun create(id: String) = "movies_live_player/" + android.net.Uri.encode(id)
         // Catch-up (v1.17.0): [start]/[stop] em epoch segundos; 0 = ao vivo normal.
@@ -166,6 +168,7 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.Debrid.route ||
         currentRoute == MoviesRoute.Accounts.route ||
         currentRoute == MoviesRoute.LiveSources.route ||
+        currentRoute == MoviesRoute.LiveOnDemand.route ||
         currentRoute?.startsWith("movies_live_player") == true
     val showTabletRail = deviceLayout == DeviceLayout.TABLET && !isFullscreen
 
@@ -570,10 +573,37 @@ fun MoviesNavigation(
                     onPlay = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
                     onSources = { navController.navigate(MoviesRoute.LiveSources.route) },
                     onPlayCatchup = { route -> navController.navigate(route) },
+                    // Lote 9 (v1.19.0): hub da Live TV — o Calendário vive na
+                    // Biblioteca (MinhaListaScreen, que já existe); o
+                    // On Demand é a rota "live_ondemand" (Frente 2): sem ela
+                    // no grafo, o toque não faz nada (runCatching) em vez de
+                    // quebrar a navegação.
+                    onOpenCalendar = { navController.navigate(MoviesRoute.MinhaLista.route) },
+                    onOpenVod = { runCatching { navController.navigate(com.aotv.app.ui.live.LIVE_ON_DEMAND_ROUTE) } },
                 )
             }
             composable(MoviesRoute.LiveSources.route) {
                 tvScale(isTV) { com.aotv.app.ui.live.LiveSourcesScreen(onBack = { navController.popBackStack() }) }
+            }
+            // On Demand Xtream (Lote 9, v1.19.0): filmes e séries da conta já
+            // configurada; toca pelo player existente (mesmo caminho do detalhe).
+            composable(MoviesRoute.LiveOnDemand.route) {
+                tvScale(isTV) {
+                    com.aotv.app.ui.live.OnDemandScreen(
+                        onBack = { navController.popBackStack() },
+                        onSources = { navController.navigate(MoviesRoute.LiveSources.route) },
+                        onPlayMovie = { url, title ->
+                            navigateToPlayer(url, title, type = "MOVIE")
+                        },
+                        onPlayEpisode = { url, title, season, episode ->
+                            navigateToPlayer(
+                                url, title, type = "SERIES",
+                                lastEpisode = "T$season:E$episode",
+                                season = season, episode = episode,
+                            )
+                        },
+                    )
+                }
             }
             composable(
                 MoviesRoute.LivePlayer.route,
@@ -691,6 +721,7 @@ fun MoviesNavigation(
         MoviesRoute.MinhaLista.route, MoviesRoute.Addons.route, MoviesRoute.Profiles.route,
         MoviesRoute.Settings.route,
         MoviesRoute.Live.route,
+        MoviesRoute.LiveOnDemand.route,
     )
     val showTvMenu = isTV && currentRoute in tvMenuRoutes
     val profVm: com.aotv.app.ui.settings.ProfilesViewModel = androidx.hilt.navigation.compose.hiltViewModel()

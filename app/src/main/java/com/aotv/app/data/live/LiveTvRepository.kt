@@ -466,6 +466,71 @@ class LiveTvRepository @Inject constructor(
         }
     }
 
+    // ── On Demand Xtream (Lote 9, v1.19.0) ───────────────────────────────────
+
+    /** Contas Xtream ativas. O On Demand usa SÓ elas — nenhuma outra forma de login. */
+    fun xtreamSources(): List<LiveSource> =
+        _state.value.sources.filter { it.enabled && it.type == LiveSourceType.XTREAM }
+
+    /** Base do player_api.php de uma fonte Xtream. */
+    private fun xtreamApi(s: LiveSource) =
+        "${s.server}/player_api.php?username=${enc(s.user)}&password=${enc(s.pass)}"
+
+    /**
+     * Extensão do VOD: a que a API declara (container_extension) quando vem;
+     * sem ela, a do formato Xtream configurado ([xtreamExt]).
+     */
+    private fun vodExt(acc: XtreamAccount?, sourceName: String, containerExt: String): String {
+        val ext = containerExt.trim().lowercase()
+        if (ext.isNotBlank()) return ext
+        return xtreamExt(acc, sourceName)
+    }
+
+    /** URL do filme Xtream: /movie/usuario/senha/id.ext (mesmo padrão do ao vivo). */
+    fun vodStreamUrl(source: LiveSource, item: VodItem): String {
+        val base = source.server.trimEnd('/')
+        val ext = vodExt(_state.value.accounts[source.id], source.name, item.containerExtension)
+        return "$base/movie/${enc(source.user)}/${enc(source.pass)}/${item.id}.$ext"
+    }
+
+    /** URL do episódio Xtream: /series/usuario/senha/idEpisodio.ext. */
+    fun episodeStreamUrl(source: LiveSource, episode: VodEpisode): String {
+        val base = source.server.trimEnd('/')
+        val ext = vodExt(_state.value.accounts[source.id], source.name, episode.containerExtension)
+        return "$base/series/${enc(source.user)}/${enc(source.pass)}/${episode.id}.$ext"
+    }
+
+    /**
+     * On Demand de uma conta Xtream: categorias + filmes (get_vod_streams) ou
+     * séries (get_series). Devolve null quando a LISTA não veio (rede/servidor
+     * falhou) — lista vazia é honesta (a conta não tem nada ali), não erro.
+     */
+    suspend fun fetchOnDemand(source: LiveSource, series: Boolean): Pair<List<VodCategory>, List<VodItem>>? = withContext(Dispatchers.IO) {
+        val base = xtreamApi(source)
+        val catAction = if (series) "get_series_categories" else "get_vod_categories"
+        val listAction = if (series) "get_series" else "get_vod_streams"
+        val catText = getText("$base&action=$catAction")
+        val groups = catText?.let(XtreamParser::categories).orEmpty()
+        val cats = catText?.let(XtreamParser::categoryList).orEmpty()
+        val listText = getText("$base&action=$listAction") ?: return@withContext null
+        cats.ifEmpty { groups.entries.map { VodCategory(it.key, it.value) } } to
+            XtreamParser.vod(listText, source, groups, series)
+    }
+
+    /** Detalhe de uma série (get_series_info): info + episódios por temporada. */
+    suspend fun fetchSeriesDetail(source: LiveSource, seriesId: String): VodSeriesDetail? = withContext(Dispatchers.IO) {
+        val base = xtreamApi(source)
+        getText("$base&action=get_series_info&series_id=${enc(seriesId)}")
+            ?.let { XtreamParser.seriesInfo(it, seriesId, source) }
+    }
+
+    /** Detalhe de um filme (get_vod_info): preenche os campos que a lista não trouxe. */
+    suspend fun fetchVodInfo(source: LiveSource, item: VodItem): VodItem = withContext(Dispatchers.IO) {
+        val base = xtreamApi(source)
+        getText("$base&action=get_vod_info&vod_id=${enc(item.id)}")
+            ?.let { XtreamParser.vodInfo(it, item) } ?: item
+    }
+
     private fun refreshEpg(channels: List<LiveChannel>, urls: List<String>, force: Boolean) {
         if (urls.isEmpty() || channels.isEmpty()) return
         // Lote 8 (v1.18.0): a janela do guia vem das prefs (dias à frente e

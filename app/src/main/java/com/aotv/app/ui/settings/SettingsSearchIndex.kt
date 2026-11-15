@@ -60,6 +60,7 @@ object SettingsAnchors {
     const val PLAY_PLAYER = "reproducao-player"
     const val PLAY_ENGINE = "reproducao-motor"
     const val PLAY_SKIP = "reproducao-pular"
+    const val PLAY_EQ = "reproducao-equalizador"
     // Downloads
     const val DL_DATA = "downloads-dados"
     const val DL_LIMIT = "downloads-limite"
@@ -602,6 +603,25 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.INTEGR_LIVE,
         kidsHidden = true,
     ),
+    // ── Hub da Live TV (Lote 9, v1.19.0) ────────────────────────────────
+    // Caem na seção "TV ao vivo" de Integrações, como as outras entradas de
+    // Live TV. O On Demand é a tela da Frente 2 (rota "live_ondemand").
+    SettingOptionEntry(
+        title = "Hub da Live TV",
+        sub = "Busca, Guia, Calendário, On Demand, Esportes e Configurações; grupos de canais em cartões",
+        keywords = listOf("live tv", "hub", "ao vivo", "grupos", "cartões", "busca", "guia", "calendário", "esportes"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "On Demand",
+        sub = "Filmes e séries sob demanda da conta Xtream, no hub da Live TV",
+        keywords = listOf("on demand", "sob demanda", "vod", "filmes", "séries", "xtream"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE,
+        kidsHidden = true,
+    ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Trocar de perfil",
@@ -871,6 +891,53 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("anime-skip", "pular", "abertura", "encerramento", "intro", "skip", "client id"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_SKIP,
+    ),
+    // ── Lote 9 — Player parte 3 (v1.19.0) ─────────────────────────────────
+    SettingOptionEntry(
+        title = "Sincronização automática da legenda",
+        sub = "Mede o atraso da legenda externa contra a embutida",
+        keywords = listOf("autosync", "sincronização", "sincronizar", "atraso", "legenda", "automática"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SUBS,
+    ),
+    SettingOptionEntry(
+        title = "Pular abertura automaticamente",
+        sub = "Pula a abertura e o encerramento sozinho (1x por episódio)",
+        keywords = listOf("pular", "abertura", "encerramento", "automático", "skip", "intro"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SKIP,
+    ),
+    SettingOptionEntry(
+        title = "Mostrar cartão \"A seguir\"",
+        sub = "Cartão do próximo episódio no fim do episódio",
+        keywords = listOf("a seguir", "próximo episódio", "cartão", "up next", "fim do episódio"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Equalizador",
+        sub = "Presets do aparelho e 5 bandas em dB (só com o player aberto)",
+        keywords = listOf("equalizador", "eq", "preset", "bandas", "graves", "agudos", "som"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_EQ,
+    ),
+    // ── Player parte 3 (Lote 9, v1.19.0) — sem âncora ─────────────────────
+    // Sleep timer e Saída de áudio não são configurações: vivem no painel
+    // do player (sessão e infos técnicas) e por isso abrem a página
+    // Reprodução no topo. As outras 4 opções do player (sincronização da
+    // legenda, pular abertura, cartão "A seguir", Equalizador) têm entradas
+    // COM âncora logo acima (PLAY_SUBS / PLAY_SKIP / PLAY_PLAYER / PLAY_EQ).
+    SettingOptionEntry(
+        title = "Sleep timer",
+        sub = "Para a reprodução depois de um tempo ou no fim do episódio",
+        keywords = listOf("sleep timer", "dormir", "desligar", "tempo", "fim do episódio", "timer"),
+        pageId = SettingsPageIds.Reproducao,
+    ),
+    SettingOptionEntry(
+        title = "Saída de áudio",
+        sub = "Alto-falante, fone, Bluetooth ou Cast nas infos técnicas do player",
+        keywords = listOf("saída de áudio", "alto-falante", "fone", "bluetooth", "cast", "infos técnicas"),
+        pageId = SettingsPageIds.Reproducao,
     ),
     // ── Downloads ────────────────────────────────────────────────────────
     SettingOptionEntry(

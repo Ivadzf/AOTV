@@ -128,6 +128,102 @@ object XtreamParser {
         (0 until a.length()).mapNotNull { a.optJSONObject(it) }.associate { it.optString("category_id") to it.optString("category_name") }
     }.getOrDefault(emptyMap())
 
+    /** Categorias do On Demand, na ordem da API (o mapa acima perde a ordem). */
+    fun categoryList(json: String): List<VodCategory> = runCatching {
+        val a = JSONArray(json)
+        (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("category_id").ifBlank { return@mapNotNull null }
+            VodCategory(id, o.optString("category_name").ifBlank { "Categoria $id" })
+        }
+    }.getOrDefault(emptyList())
+
+    /**
+     * Filmes (get_vod_streams) ou séries (get_series). [isSeries] marca o tipo.
+     * Só o que a API devolver — campo ausente vira vazio, nunca inventado.
+     */
+    fun vod(json: String, source: LiveSource, groups: Map<String, String>, isSeries: Boolean): List<VodItem> = runCatching {
+        val a = JSONArray(json)
+        (0 until a.length()).mapNotNull { i ->
+            val o = a.optJSONObject(i) ?: return@mapNotNull null
+            val sid = o.optString("stream_id").ifBlank { return@mapNotNull null }
+            VodItem(
+                id = sid,
+                sourceId = source.id,
+                title = o.optString("name").ifBlank { if (isSeries) "Série $sid" else "Filme $sid" },
+                cover = o.optString("stream_icon").ifBlank { o.optString("cover") },
+                plot = o.optString("plot"),
+                categoryId = o.optString("category_id"),
+                category = groups[o.optString("category_id")].orEmpty(),
+                containerExtension = o.optString("container_extension"),
+                year = o.optString("year"),
+                rating = o.optString("rating"),
+                isSeries = isSeries,
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    /**
+     * Detalhe de uma série (get_series_info): info + episódios por temporada.
+     * O "episodes" da API é um objeto temporada → lista; a ordem das temporadas
+     * segue a ordem das chaves. Episódio sem id é ignorado.
+     */
+    fun seriesInfo(json: String, seriesId: String, source: LiveSource, groups: Map<String, String> = emptyMap()): VodSeriesDetail? = runCatching {
+        val root = JSONObject(json)
+        val info = root.optJSONObject("info") ?: return null
+        val series = VodItem(
+            id = seriesId,
+            sourceId = source.id,
+            title = info.optString("name").ifBlank { "Série $seriesId" },
+            cover = info.optString("cover").ifBlank { info.optString("stream_icon") },
+            plot = info.optString("plot"),
+            categoryId = info.optString("category_id"),
+            category = groups[info.optString("category_id")].orEmpty(),
+            year = info.optString("year"),
+            rating = info.optString("rating"),
+            isSeries = true,
+        )
+        val eps = ArrayList<VodEpisode>()
+        val seasons = root.optJSONObject("episodes")
+        seasons?.keys()?.asSequence()?.toList()?.sortedBy { it.toIntOrNull() ?: Int.MAX_VALUE }?.forEach { key ->
+            val arr = seasons.optJSONArray(key) ?: return@forEach
+            (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i) }.forEach { ep ->
+                val eid = ep.optString("id").ifBlank { return@forEach }
+                val epInfo = ep.optJSONObject("info")
+                eps += VodEpisode(
+                    id = eid,
+                    title = ep.optString("title").ifBlank { "Episódio ${ep.optString("episode_num")}" },
+                    season = key.toIntOrNull() ?: ep.optInt("season", 0),
+                    episode = ep.optInt("episode_num", 0),
+                    containerExtension = ep.optString("container_extension"),
+                    plot = ep.optString("plot").ifBlank { epInfo?.optString("plot").orEmpty() },
+                    cover = ep.optString("movie_image").ifBlank { epInfo?.optString("movie_image").orEmpty() },
+                    duration = ep.optString("duration").ifBlank { epInfo?.optString("duration").orEmpty() },
+                )
+            }
+        }
+        VodSeriesDetail(series, eps)
+    }.getOrNull()
+
+    /**
+     * Detalhe de um filme (get_vod_info): {"info": {...}, "movie_data": {...}}.
+     * Preenche SÓ os campos vazios do [item] — a lista já traz quase tudo.
+     */
+    fun vodInfo(json: String, item: VodItem): VodItem = runCatching {
+        val root = JSONObject(json)
+        val info = root.optJSONObject("info") ?: return item
+        val data = root.optJSONObject("movie_data")
+        item.copy(
+            title = item.title.ifBlank { info.optString("name") },
+            cover = item.cover.ifBlank { info.optString("cover").ifBlank { info.optString("movie_image") } },
+            plot = item.plot.ifBlank { info.optString("plot") },
+            categoryId = item.categoryId.ifBlank { info.optString("category_id") },
+            containerExtension = item.containerExtension.ifBlank { data?.optString("container_extension").orEmpty() },
+            year = item.year.ifBlank { info.optString("year") },
+            rating = item.rating.ifBlank { info.optString("rating") },
+        )
+    }.getOrDefault(item)
+
     /** Canais ao vivo. [ext] é "m3u8" quando a conta deixa, senão "ts". */
     fun live(json: String, source: LiveSource, groups: Map<String, String>, ext: String): List<LiveChannel> = runCatching {
         val a = JSONArray(json)

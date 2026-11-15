@@ -6,7 +6,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.live.LiveChannel
 import com.aotv.app.data.live.LiveProgram
+import com.aotv.app.data.live.LiveSourceType
 import com.aotv.app.data.live.LiveTvRepository
+import com.aotv.app.data.live.VodCategory
+import com.aotv.app.data.live.VodEpisode
+import com.aotv.app.data.live.VodItem
+import com.aotv.app.data.live.VodSeriesDetail
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +38,8 @@ class LiveTvViewModel @Inject constructor(
         val rows: List<LiveRow> = emptyList(),
         /** Grupos com a contagem, na ordem em que aparecem na lista. */
         val groups: List<Pair<String, Int>> = emptyList(),
+        /** Canais por grupo (a lista INTEIRA, sem filtro nem busca), p/ os cartões do hub da Live TV (Lote 9, v1.19.0). Um canal em 2 grupos aparece nos 2, igual à contagem de [groups]. */
+        val groupedRows: Map<String, List<LiveRow>> = emptyMap(),
         val favoriteCount: Int = 0,
         val recentCount: Int = 0,
         val total: Int = 0,
@@ -73,6 +80,19 @@ class LiveTvViewModel @Inject constructor(
         val counts = LinkedHashMap<String, Int>()
         st.channels.forEach { c -> groupNames(c, clean).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
         val groups = counts.toList()
+        // Lote 9 (v1.19.0): canais por grupo p/ os cartões do hub — a lista
+        // inteira, sem o filtro nem a busca (o hub só aparece sem filtro e
+        // sem busca; com filtro/busca a tela segue com a grade plana).
+        val allRows = st.channels.map { c ->
+            val (n, nx) = nowNext(st.epg[c.id], now)
+            LiveRow(c, n, nx, c.id in favs)
+        }
+        val groupedRows = LinkedHashMap<String, MutableList<LiveRow>>()
+        allRows.forEach { row ->
+            groupNames(row.channel, clean).forEach { g ->
+                groupedRows.getOrPut(g) { mutableListOf() }.add(row)
+            }
+        }
         View(
             hasSources = st.hasSources,
             rows = list.map { c ->
@@ -80,6 +100,7 @@ class LiveTvViewModel @Inject constructor(
                 LiveRow(c, n, nx, c.id in favs)
             },
             groups = groups,
+            groupedRows = groupedRows,
             favoriteCount = st.channels.count { it.id in favs },
             recentCount = st.recents.count { it in byId },
             total = st.channels.size,
@@ -330,4 +351,157 @@ class LiveSourcesViewModel @Inject constructor(private val repo: LiveTvRepositor
     fun remove(id: String) = repo.remove(id)
     fun setShowInBar(on: Boolean) = repo.setShowInBar(on)
     fun clearMessage() = _ui.update { it.copy(message = null, error = null) }
+}
+
+/** On Demand Xtream (Lote 9, v1.19.0): filmes e séries da conta já configurada. */
+@HiltViewModel
+class OnDemandViewModel @Inject constructor(
+    private val repo: LiveTvRepository,
+) : ViewModel() {
+
+    /** Detalhe aberto (filme ou série); [loading] enquanto o detalhe carrega. */
+    data class Detail(val movie: VodItem? = null, val series: VodSeriesDetail? = null, val loading: Boolean = false)
+
+    private data class Data(
+        val vodCats: List<VodCategory> = emptyList(),
+        val vodItems: List<VodItem> = emptyList(),
+        val seriesCats: List<VodCategory> = emptyList(),
+        val seriesItems: List<VodItem> = emptyList(),
+        val loaded: Set<String> = emptySet(),
+        val loading: Boolean = false,
+        val error: String? = null,
+    )
+
+    data class View(
+        val hasXtream: Boolean = false,
+        val sourceName: String = "",
+        val tab: String = MOVIES,
+        /** Categorias com item, na ordem da API. */
+        val categories: List<VodCategory> = emptyList(),
+        /** Contagem por id de categoria. */
+        val categoryCounts: Map<String, Int> = emptyMap(),
+        /** Id da categoria filtrada; "" = todas. */
+        val category: String = "",
+        val items: List<VodItem> = emptyList(),
+        /** Itens da aba, sem filtro nem busca (p/ o estado vazio honesto). */
+        val total: Int = 0,
+        val query: String = "",
+        val loading: Boolean = false,
+        val error: String? = null,
+        val detail: Detail = Detail(),
+    )
+
+    private val tab = MutableStateFlow(MOVIES)
+    private val category = MutableStateFlow("")
+    private val query = MutableStateFlow("")
+    private val detail = MutableStateFlow(Detail())
+    private val data = MutableStateFlow(Data())
+
+    // combine de 6 flows SÓ compila na forma vararg (build #235): os valores
+    // vêm do array, na ordem, com cast.
+    val view: StateFlow<View> = combine(repo.state, tab, category, query, detail, data) { arr ->
+        val st = arr[0] as LiveTvRepository.State
+        val t = arr[1] as String
+        val cat = arr[2] as String
+        val q = arr[3] as String
+        val det = arr[4] as Detail
+        val d = arr[5] as Data
+        val source = st.sources.firstOrNull { it.enabled && it.type == LiveSourceType.XTREAM }
+        val cats = if (t == SERIES) d.seriesCats else d.vodCats
+        val all = if (t == SERIES) d.seriesItems else d.vodItems
+        val counts = LinkedHashMap<String, Int>()
+        all.forEach { counts[it.categoryId] = (counts[it.categoryId] ?: 0) + 1 }
+        val needle = q.trim().lowercase()
+        val list = all.filter {
+            (cat.isBlank() || it.categoryId == cat) &&
+                (needle.isEmpty() || it.title.lowercase().contains(needle))
+        }
+        View(
+            hasXtream = source != null,
+            sourceName = source?.name.orEmpty(),
+            tab = t,
+            categories = cats.filter { (counts[it.id] ?: 0) > 0 },
+            categoryCounts = counts,
+            category = cat,
+            items = list,
+            total = all.size,
+            query = q,
+            loading = d.loading,
+            error = d.error,
+            detail = det,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), View())
+
+    init { load() }
+
+    fun setTab(t: String) {
+        if (tab.value == t) return
+        tab.value = t
+        category.value = ""
+        load()
+    }
+
+    fun setCategory(c: String) { category.value = c }
+    fun setQuery(q: String) { query.value = q }
+    fun refresh() { load(force = true) }
+
+    private fun load(force: Boolean = false) {
+        val source = repo.xtreamSources().firstOrNull() ?: return
+        val t = tab.value
+        if (!force && t in data.value.loaded) return
+        data.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            val res = repo.fetchOnDemand(source, t == SERIES)
+            if (res == null) {
+                data.update {
+                    it.copy(
+                        loading = false,
+                        error = "Não deu para carregar o On Demand de ${source.name}. Confira a conexão e tente de novo.",
+                    )
+                }
+                return@launch
+            }
+            val (cats, items) = res
+            data.update {
+                val next = it.copy(loading = false, error = null, loaded = it.loaded + t)
+                if (t == SERIES) next.copy(seriesCats = cats, seriesItems = items)
+                else next.copy(vodCats = cats, vodItems = items)
+            }
+        }
+    }
+
+    /** Abre o detalhe do filme (enriquece com get_vod_info se a lista veio rala). */
+    fun openMovie(item: VodItem) {
+        detail.value = Detail(movie = item, loading = true)
+        viewModelScope.launch {
+            val source = repo.xtreamSources().firstOrNull()
+            val full = if (source == null) item else repo.fetchVodInfo(source, item)
+            if (detail.value.movie?.id == item.id) detail.value = Detail(movie = full)
+        }
+    }
+
+    /** Abre o detalhe da série (get_series_info: info + episódios por temporada). */
+    fun openSeries(item: VodItem) {
+        detail.value = Detail(loading = true)
+        viewModelScope.launch {
+            val source = repo.xtreamSources().firstOrNull()
+            val det = source?.let { repo.fetchSeriesDetail(it, item.id) }
+            if (detail.value.loading) detail.value = Detail(series = det ?: VodSeriesDetail(item))
+        }
+    }
+
+    fun closeDetail() { detail.value = Detail() }
+
+    /** URL do filme no padrão Xtream (mesmo do ao vivo, com container_extension). */
+    fun streamUrl(item: VodItem): String? =
+        repo.xtreamSources().firstOrNull()?.let { repo.vodStreamUrl(it, item) }
+
+    /** URL do episódio no padrão Xtream (/series/...). */
+    fun episodeUrl(episode: VodEpisode): String? =
+        repo.xtreamSources().firstOrNull()?.let { repo.episodeStreamUrl(it, episode) }
+
+    companion object {
+        const val MOVIES = "movies"
+        const val SERIES = "series"
+    }
 }

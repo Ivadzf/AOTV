@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.ViewModule
@@ -1688,6 +1689,12 @@ private fun ReproducaoPage(
     val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
     // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
     val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
+    // Lote 9 — Player parte 3 (v1.19.0): AutoSync, pular abertura automático,
+    // cartão "A seguir" e equalizador.
+    val autoSync by playerPrefs.autoSync.collectAsStateWithLifecycle()
+    val autoSkip by playerPrefs.autoSkip.collectAsStateWithLifecycle()
+    val upNext by playerPrefs.upNext.collectAsStateWithLifecycle()
+    val eqEnabled by playerPrefs.equalizer.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack, highlightAnchor = highlightAnchor) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
@@ -1733,6 +1740,19 @@ private fun ReproducaoPage(
                 title = "Idioma do áudio",
                 sub = SubLangs.label(audioLang) + ". O player escolhe a faixa de áudio nesse idioma quando o título tiver",
                 onClick = { pickAudioLang = true },
+                grouped = true,
+                divider = true,
+            )
+            // Sincronização automática da legenda (Lote 9 item 1, v1.19.0):
+            // mede o atraso da legenda externa contra a embutida (nunca
+            // inventa atraso); o botão fica no painel de Legendas do player.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Sync,
+                title = "Sincronização automática da legenda",
+                sub = if (autoSync) "O botão \"Sincronizar automaticamente\" aparece no painel de Legendas do player"
+                    else "Desligada. O ajuste manual ± do player continua valendo",
+                trailing = { Switch(checked = autoSync, onCheckedChange = { playerPrefs.setAutoSync(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoSync(!autoSync) },
                 grouped = true,
                 divider = true,
             )
@@ -1864,6 +1884,20 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Cartão "A seguir" (Lote 9 item 2, v1.19.0): o cartão no fim do
+            // episódio. Desligado, o episódio termina parado no último quadro
+            // (o chip "Próximo" continua valendo); o avanço automático é o
+            // "'A seguir' automático" acima.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.SkipNext,
+                title = "Mostrar cartão \"A seguir\"",
+                sub = if (upNext) "No fim do episódio, mostra o cartão do próximo episódio"
+                    else "No fim do episódio, não mostra o cartão — fica parado no último quadro",
+                trailing = { Switch(checked = upNext, onCheckedChange = { playerPrefs.setUpNext(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setUpNext(!upNext) },
+                grouped = true,
+                divider = true,
+            )
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Refresh,
                 title = "Troca automática de fonte",
@@ -1973,11 +2007,44 @@ private fun ReproducaoPage(
             "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
+        // Equalizador (Lote 9 item 3, v1.19.0): presets do aparelho e 5
+        // bandas em dB. Os presets e as bandas ficam no painel do player
+        // (chip "Equalizador") — aqui só o liga/desliga, porque os presets
+        // precisam da sessão de áudio do vídeo tocando p/ existir.
+        SettingsSection("Equalizador", anchor = SettingsAnchors.PLAY_EQ)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Tune,
+                title = "Equalizador",
+                sub = if (eqEnabled) "Ligado — presets e bandas no painel do player (chip \"Equalizador\")"
+                    else "Desligado. O som volta ao original",
+                trailing = { Switch(checked = eqEnabled, onCheckedChange = { playerPrefs.setEqualizer(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setEqualizer(!eqEnabled) },
+                grouped = true,
+            )
+        }
+        Text(
+            "O equalizador usa os presets do próprio aparelho (Normal, Pop, Rock, Jazz, Clássico…) e 5 bandas em dB. Só vale com o player aberto — ao fechar, desliga junto. Não vale para Cast nem player externo.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
         SettingsSection("Pular trechos", anchor = SettingsAnchors.PLAY_SKIP)
         Text(
             "O player busca os trechos (resumo, abertura, encerramento e pós-créditos) no IntroDB e no SkipDB, sem chave. O Anime-Skip (só séries) precisa de um client ID seu — vazio, ele fica desligado.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
+        // Pular abertura automático (Lote 9 item 2, v1.19.0): pula a abertura
+        // e o encerramento sozinho ao entrar no segmento (1x por episódio).
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.SkipNext,
+                title = "Pular abertura automaticamente",
+                sub = if (autoSkip) "Ao entrar na abertura ou no encerramento, pula sozinho (1x por episódio)"
+                    else "Desligado. O botão \"Pular abertura\" continua aparecendo na hora",
+                trailing = { Switch(checked = autoSkip, onCheckedChange = { playerPrefs.setAutoSkip(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoSkip(!autoSkip) },
+                grouped = true,
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
                 OutlinedTextField(

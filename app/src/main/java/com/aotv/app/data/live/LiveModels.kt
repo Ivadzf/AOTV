@@ -53,3 +53,42 @@ data class M3uResult(val channels: List<LiveChannel>, val epgUrls: List<String>)
 
 /** Conta Xtream. [expiresAt] em epoch ms, 0 sem data (conta vitalícia ou não informada). */
 data class XtreamAccount(val status: String, val expiresAt: Long, val maxConnections: Int, val formats: List<String>)
+
+/** Categoria do On Demand Xtream (get_vod_categories / get_series_categories). */
+data class VodCategory(val id: String, val name: String)
+
+/**
+ * Item do On Demand Xtream (filme de get_vod_streams ou série de get_series).
+ * [id] é o stream_id da conta. Só o que a API devolver — sem dado, sem seção.
+ */
+data class VodItem(
+    val id: String,
+    val sourceId: String,
+    val title: String,
+    val cover: String = "",
+    val plot: String = "",
+    val categoryId: String = "",
+    val category: String = "",
+    val containerExtension: String = "",
+    val year: String = "",
+    val rating: String = "",
+    val isSeries: Boolean = false,
+)
+
+/** Episódio de uma série do Xtream (get_series_info). [id] é o id do episódio. */
+data class VodEpisode(
+    val id: String,
+    val title: String = "",
+    val season: Int = 0,
+    val episode: Int = 0,
+    val containerExtension: String = "",
+    val plot: String = "",
+    val cover: String = "",
+    val duration: String = "",
+)
+
+/** Detalhe de uma série: a série + os episódios por temporada, na ordem da API. */
+data class VodSeriesDetail(
+    val series: VodItem,
+    val episodes: List<VodEpisode> = emptyList(),
+)

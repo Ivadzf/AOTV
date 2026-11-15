@@ -239,4 +239,33 @@ class PlayerPrefsViewModel @Inject constructor(
      */
     val buffer: StateFlow<String> = prefs.playerBufferFlow
     fun setBuffer(v: String) { prefs.playerBuffer = v }
+
+    // ── Lote 9 — Player parte 3 (v1.19.0) ───────────────────────────────────
+    // AutoSync (mede o atraso contra a legenda embutida, nunca inventa),
+    // pular abertura automático, cartão "A seguir" e equalizador. Ver
+    // PlayerAutoSync.kt e PlayerEqualizer.kt.
+
+    /** Sincronização automática da legenda (padrão desligada; o botão no painel de Legendas mede o atraso). */
+    val autoSync: StateFlow<Boolean> = prefs.playerAutoSyncFlow
+    fun setAutoSync(v: Boolean) { prefs.playerAutoSync = v }
+
+    /** Pular abertura/encerramento automaticamente ao entrar no segmento (padrão desligado). */
+    val autoSkip: StateFlow<Boolean> = prefs.playerAutoSkipFlow
+    fun setAutoSkip(v: Boolean) { prefs.playerAutoSkip = v }
+
+    /** Cartão "A seguir" no fim do episódio (padrão ligado; o avanço automático é outra pref). */
+    val upNext: StateFlow<Boolean> = prefs.playerUpNextFlow
+    fun setUpNext(v: Boolean) { prefs.playerUpNext = v }
+
+    /** Equalizador ligado (padrão desligado; só vale com o player aberto). */
+    val equalizer: StateFlow<Boolean> = prefs.playerEqualizerFlow
+    fun setEqualizer(v: Boolean) { prefs.playerEqualizer = v }
+
+    /** Preset do equalizador (nome do preset do aparelho; "flat" = tudo em 0 dB). */
+    val eqPreset: StateFlow<String> = prefs.playerEqPresetFlow
+    fun setEqPreset(v: String) { prefs.playerEqPreset = v }
+
+    /** Bandas do equalizador em dB inteiros, CSV ("0,3,-2,0,0"); "" = tudo em 0 dB. */
+    val eqBands: StateFlow<String> = prefs.playerEqBandsFlow
+    fun setEqBands(v: String) { prefs.playerEqBands = v }
 }
