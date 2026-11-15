@@ -116,9 +116,18 @@ android {
     // Nativo do torrent comprimido no APK (sem isso o APK cresce uns 27 MB).
     // META-INF/INDEX.LIST: as libs do Google Drive (v1.20.0) trazem o arquivo
     // em 2 jars com conteúdo diferente — o merge aborta sem esta exclusão.
+    // DEPENDENCIES/NOTICE/LICENSE: httpclient-4.5.14 e httpcore-4.4.16
+    // (transitivas do Google API client) trazem os 3 com conteúdo diferente.
     packaging {
         jniLibs { useLegacyPackaging = true }
-        resources { excludes += "META-INF/INDEX.LIST" }
+        resources {
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE"
+            excludes += "META-INF/LICENSE.txt"
+            excludes += "META-INF/NOTICE"
+            excludes += "META-INF/NOTICE.txt"
+        }
     }
 }
 
