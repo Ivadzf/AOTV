@@ -86,23 +86,6 @@ internal fun rememberDetailPrimary(
         else -> "Assistir"
     }
 
-    fun play() { playInternal(locked = false) }
-
-    /** Mesmo play, mas a fonte sai travada (o player não auto-troca por duração). */
-    fun playLocked() { playInternal(locked = true) }
-
-    /**
-     * URL que o botão principal tocaria num filme (retomada ou melhor fonte).
-     * Null p/ séries (a guarda de duração não vale p/ episódios, como a
-     * checagem de outro filme) ou sem fonte. A tela usa p/ perguntar ANTES
-     * de tocar, quando a duração do arquivo destoa da do título.
-     */
-    fun pendingMovieUrl(): String? {
-        if (isSeries || !enabled) return null
-        if (canResume) return state.resumeSourceUrl
-        return playerSources.getOrNull(viewModel.bestSourceIndex())?.url
-    }
-
     fun playInternal(locked: Boolean) {
         if (!enabled) return
         // Fonte travada: o player abre com userLockedSource (não auto-troca
@@ -138,6 +121,23 @@ internal fun rememberDetailPrimary(
         }
         val first = playerSources.getOrNull(viewModel.bestSourceIndex()) ?: return
         direct(first.url, 0, "", playerSources, 0, 0, 0)
+    }
+
+    fun play() { playInternal(locked = false) }
+
+    /** Mesmo play, mas a fonte sai travada (o player não auto-troca por duração). */
+    fun playLocked() { playInternal(locked = true) }
+
+    /**
+     * URL que o botão principal tocaria num filme (retomada ou melhor fonte).
+     * Null p/ séries (a guarda de duração não vale p/ episódios, como a
+     * checagem de outro filme) ou sem fonte. A tela usa p/ perguntar ANTES
+     * de tocar, quando a duração do arquivo destoa da do título.
+     */
+    fun pendingMovieUrl(): String? {
+        if (isSeries || !enabled) return null
+        if (canResume) return state.resumeSourceUrl
+        return playerSources.getOrNull(viewModel.bestSourceIndex())?.url
     }
 
     return DetailPrimary(

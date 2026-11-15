@@ -289,6 +289,7 @@ fun MoviePlayerScreen(
             forceTv = forceTv, kodiDiag = kodiDiag,
             decoderMode = DecoderMode.fromId(playerDecoder),
             bufferProfile = BufferProfile.fromId(playerBuffer),
+            startLocked = startLocked,
         )
     }
     // A sessão voltou para a tela cheia: ela passa a ser da tela de novo e o
@@ -1611,6 +1612,8 @@ class PlayerSession(
     /** Perfil de buffer do ExoPlayer (pref `pref_player_buffer`, Lote 5 item 1 — v1.14.0).
      *  Como o decoder, só vale na criação do player: o LoadControl entra no Builder. */
     val bufferProfile: BufferProfile = BufferProfile.NORMAL,
+    /** Fonte travada ao abrir (guarda de duração confirmada, v1.21.0). */
+    val startLocked: Boolean = false,
 ) {
     /** Volta para a tela anterior. Atualizado a cada composição. */
     var onBack: () -> Unit = {}

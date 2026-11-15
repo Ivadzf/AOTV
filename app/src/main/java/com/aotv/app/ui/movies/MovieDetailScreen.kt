@@ -163,7 +163,7 @@ fun MovieDetailScreen(
         if (runtime <= 0) return null
         val sec = state.probes[url]?.sec ?: return null
         if (!durationGuardMismatch(runtime, sec)) return null
-        return runtime to roundToInt(sec / 60)
+        return runtime to (sec / 60).roundToInt()
     }
     /** Botão principal com a guarda: pergunta antes de tocar, quando a duração destoa. */
     fun tryPrimaryPlay() {

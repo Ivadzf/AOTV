@@ -76,7 +76,7 @@ class FrameTimeSampler {
     private val intervals = ArrayDeque<Long>()
     private var lastNanos = 0L
     private var running = false
-    private val callback = Choreographer.FrameCallback { t ->
+    private val callback: Choreographer.FrameCallback = Choreographer.FrameCallback { t ->
         if (lastNanos != 0L) {
             val dt = (t - lastNanos) / 1_000_000
             if (dt in 1..1000) {
