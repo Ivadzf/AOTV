@@ -54,7 +54,10 @@ fun LiveTvScreen(
     // Lote 7: lista de canais ou grade do guia (mesma ViewModel, mesmos filtros).
     var guide by remember { mutableStateOf(false) }
     // Lote 8 (v1.18.0): prefs de esportes (Frente 2) p/ a seção ao vivo.
-    val prefs = remember { PlatformPrefs(LocalContext.current) }
+    // LocalContext.current NÃO pode ir dentro do remember { } (não é contexto
+    // @Composable — build #234): lê fora e passa como chave.
+    val context = LocalContext.current
+    val prefs = remember(context) { PlatformPrefs(context) }
     val sportsShow by prefs.sportsShowFlow.collectAsStateWithLifecycle()
     val sportsHideScores by prefs.sportsHideScoresFlow.collectAsStateWithLifecycle()
     val sportsScoreDelaySec by prefs.sportsScoreDelaySecFlow.collectAsStateWithLifecycle()

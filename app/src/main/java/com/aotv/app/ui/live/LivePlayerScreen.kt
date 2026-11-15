@@ -159,7 +159,7 @@ fun LivePlayerScreen(
         val group = foundGroup ?: return
         if (foundTrack < 0) return
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setOverrideForType(TrackSelectionOverride(group.trackGroup, foundTrack))
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, foundTrack))
             .build()
     }
 

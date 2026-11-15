@@ -595,7 +595,9 @@ class MoviesHomeViewModel @Inject constructor(
             kotlinx.coroutines.flow.combine(
                 prefs.sportsShowFlow, prefs.calendarHideSpoilersFlow, prefs.sportsHideScoresFlow,
                 prefs.sportsScoreDelaySecFlow, prefs.sportsLiveScoresFlow, prefs.sportsGameAlertsFlow,
-            ) { show, hideSpoilers, hideScores, delaySec, liveScores, alerts ->
+            ) { show: Boolean, hideSpoilers: Boolean, hideScores: Boolean, delaySec: Int, liveScores: Boolean, alerts: Boolean ->
+                // Tipos explícitos: o combine de 6 flows não infere os parâmetros
+                // sozinho (build #234) — o de 5 flows infere, o de 6 não.
                 _uiState.update {
                     it.copy(
                         sportsShow = show, calendarHideSpoilers = hideSpoilers,
