@@ -429,7 +429,7 @@ internal class AllDebridApi(private val http: DebridHttp) {
         }
         var keep = false
         try {
-            var ready = first.optBoolean("ready", false)
+            var ready = first?.optBoolean("ready", false) ?: false
             var tries = 0
             while (!ready && tries < 12) {
                 Thread.sleep(if (tries == 0) 800L else 2500L)

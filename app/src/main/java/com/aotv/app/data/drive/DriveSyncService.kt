@@ -7,7 +7,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
-import com.google.api.client.extensions.android.http.AndroidHttp
+import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.client.http.ByteArrayContent
@@ -117,7 +117,7 @@ class DriveSyncService @Inject constructor(
     private fun driveClient(account: GoogleSignInAccount): Drive {
         val credential = GoogleAccountCredential.usingOAuth2(context, listOf(DriveScopes.DRIVE_FILE))
         credential.selectedAccount = account.account
-        return Drive.Builder(AndroidHttp.newCompatibleTransport(), GsonFactory.getDefaultInstance(), credential)
+        return Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
             .setApplicationName("AOTV")
             .build()
     }
@@ -151,7 +151,7 @@ class DriveSyncService @Inject constructor(
             id = file.id,
             name = file.name ?: FILE_NAME,
             modifiedTimeMs = file.modifiedTime?.value ?: 0L,
-            sizeBytes = file.size ?: 0L,
+            sizeBytes = file.size?.toLong() ?: 0L,
         )
     }
 
