@@ -464,6 +464,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
                 }
                 if (state.isLoadingSections) item(key = "more") { TvSpinner() }
             }
+            // On Demand do Xtream (acréscimo v1.26.0): as fileiras VOD não
+            // aparecem na TV — mesmo padrão das fileiras de TV dos addons.
+            SystemRow.VOD_MOVIES -> {}
+            SystemRow.VOD_SERIES -> {}
             null -> if (row.collectionId != null) {
                 collections.firstOrNull { it.id == row.collectionId }?.takeIf { it.folders.isNotEmpty() }?.let { col ->
                     item(key = row.key) {

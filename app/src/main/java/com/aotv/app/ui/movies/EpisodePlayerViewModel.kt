@@ -57,7 +57,7 @@ class EpisodePlayerViewModel @Inject constructor(
         val base = subtitleService.subtitles(imdb, type, season, episode)
         // Lote 16 item 3 — SubDL como 2ª fonte (só com a chave grátis do
         // usuário nas Configurações; sem chave, desligado e sem chamada).
-        val key = (prefs.rawPref(SUBDL_API_KEY_PREF) as? String).orEmpty()
+        val key = (prefs.rawPref(SubDlService.SUBDL_API_KEY_PREF) as? String).orEmpty()
         if (key.isBlank()) return base
         val extra = runCatching { subDl.search(key, imdb, type, season, episode) }.getOrDefault(emptyList())
             .map { it.toExternalSub() }

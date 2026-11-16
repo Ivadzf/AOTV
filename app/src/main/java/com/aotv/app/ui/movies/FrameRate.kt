@@ -131,7 +131,7 @@ class FpsMeter {
     private val frameTimes = ArrayDeque<Long>()
     private var running = false
 
-    private val callback = Choreographer.FrameCallback { nowNs ->
+    private val callback: Choreographer.FrameCallback = Choreographer.FrameCallback { nowNs ->
         if (!running) return@FrameCallback
         frameTimes.addLast(nowNs)
         while (frameTimes.size > 30) frameTimes.removeFirst()
@@ -211,8 +211,10 @@ fun deviceSupportsDolbyVisionProfile(profile: Int): Boolean {
     val constant = dvProfileConstant(profile) ?: return false
     return runCatching {
         MediaCodecSelector.DEFAULT.getDecoderInfos("video/dolby-vision", false, false).any { info ->
-            val levels = info.getCapabilitiesForType("video/dolby-vision")?.profileLevels.orEmpty()
-            levels.any { it.profile == constant }
+            // Media3 1.6.0: MediaCodecInfo NÃO tem getCapabilitiesForType — os
+            // níveis do perfil vêm de getProfileLevels() (já é do mime type
+            // da consulta, "video/dolby-vision"; vazio sem capabilities).
+            info.getProfileLevels().any { it.profile == constant }
         }
     }.getOrDefault(false)
 }

@@ -354,24 +354,24 @@ private fun ColorFilterPanelBody(
         LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Eyebrow("Ajustes", Modifier.padding(top = 10.dp, start = 4.dp)) }
             item {
-                ColorSliderRow("Brilho", fmt2(state.brightness), state.brightness, -1f..1f, focused = focusIdx == 0, onFinished = onSliderFinished) {
-                    onStateChange(state.copy(brightness = it, preset = COLOR_PRESET_CUSTOM))
-                }
+                ColorSliderRow("Brilho", fmt2(state.brightness), state.brightness, -1f..1f, focused = focusIdx == 0,
+                    onChange = { onStateChange(state.copy(brightness = it, preset = COLOR_PRESET_CUSTOM)) },
+                    onFinished = onSliderFinished)
             }
             item {
-                ColorSliderRow("Contraste", fmt2(state.contrast), state.contrast, 0f..2f, focused = focusIdx == 1, onFinished = onSliderFinished) {
-                    onStateChange(state.copy(contrast = it, preset = COLOR_PRESET_CUSTOM))
-                }
+                ColorSliderRow("Contraste", fmt2(state.contrast), state.contrast, 0f..2f, focused = focusIdx == 1,
+                    onChange = { onStateChange(state.copy(contrast = it, preset = COLOR_PRESET_CUSTOM)) },
+                    onFinished = onSliderFinished)
             }
             item {
-                ColorSliderRow("Saturação", fmt2(state.saturation), state.saturation, 0f..2f, focused = focusIdx == 2, onFinished = onSliderFinished) {
-                    onStateChange(state.copy(saturation = it, preset = COLOR_PRESET_CUSTOM))
-                }
+                ColorSliderRow("Saturação", fmt2(state.saturation), state.saturation, 0f..2f, focused = focusIdx == 2,
+                    onChange = { onStateChange(state.copy(saturation = it, preset = COLOR_PRESET_CUSTOM)) },
+                    onFinished = onSliderFinished)
             }
             item {
-                ColorSliderRow("Matiz", fmtHue(state.hueDegrees), state.hueDegrees, -180f..180f, focused = focusIdx == 3, onFinished = onSliderFinished) {
-                    onStateChange(state.copy(hueDegrees = it, preset = COLOR_PRESET_CUSTOM))
-                }
+                ColorSliderRow("Matiz", fmtHue(state.hueDegrees), state.hueDegrees, -180f..180f, focused = focusIdx == 3,
+                    onChange = { onStateChange(state.copy(hueDegrees = it, preset = COLOR_PRESET_CUSTOM)) },
+                    onFinished = onSliderFinished)
             }
             item {
                 ColorActionRow("Redefinir", "Volta brilho, contraste, saturação, matiz e daltonismo ao padrão",

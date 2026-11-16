@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -142,6 +143,8 @@ fun MoviesHomeScreen(
                 onFolderClick = onFolderClick,
                 onPlayEpisode = onPlayEpisode,
                 onPlayLive = onPlayLive,
+                onVodClick = onVodClick,
+                onOpenOnDemand = onOpenOnDemand,
                 randomVm = randomVm,
             )
         }
@@ -468,6 +471,10 @@ private fun HomeSectionsTab(
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     /** Ao vivo (Lote 8): jogo da fileira "Próximos" abre o player do canal. */
     onPlayLive: (String) -> Unit = {},
+    /** On Demand do Xtream (acréscimo v1.26.0): pôster da fileira abre o detalhe no On Demand. */
+    onVodClick: (com.aotv.app.data.live.VodItem, Boolean) -> Unit = { _, _ -> },
+    /** "Ver tudo" da fileira On Demand: abre a tela On Demand na aba certa. */
+    onOpenOnDemand: (Boolean) -> Unit = {},
     randomVm: RandomEpisodeViewModel,
 ) {
     val listState = rememberLazyListState()
@@ -1205,7 +1212,6 @@ private fun GenresChipsRow(
     }
 }
 
-@Composable
 /** Fileira de canais de TV dos addons (Lote 16 item 10): tocar no canal abre
  * o player ao vivo — não o detalhe, como filme/série. Logo do canal (ou as
  * 2 primeiras letras) + nome, no mesmo desenho da lista do player ao vivo. */
@@ -1248,6 +1254,7 @@ private fun TvAddonChannelRow(
     }
 }
 
+@Composable
 private fun SectionRow(
     title: String,
     items: List<MovieItem>,

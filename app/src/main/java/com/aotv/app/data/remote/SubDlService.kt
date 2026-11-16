@@ -145,7 +145,7 @@ class SubDlService @Inject constructor() {
         }
 
         private fun absUrl(raw: String?): String? {
-            val u = raw?.trim().takeIf { it.isNotEmpty() } ?: return null
+            val u = raw?.trim().orEmpty().takeIf { it.isNotEmpty() } ?: return null
             return if (u.startsWith("http")) u else DL_BASE + u
         }
 
