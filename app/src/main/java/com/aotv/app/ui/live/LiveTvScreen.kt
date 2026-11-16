@@ -101,9 +101,21 @@ fun LiveTvScreen(
             pendingUnlockGroup = channel.group
             pendingUnlockRemovesLock = false
             pendingPlayChannel = channel.id
+        } else if (com.aotv.app.data.remote.AddonTvCatalogs.isAddonTvChannelId(channel.id)) {
+            // Canal de TV de addon (Lote 15, Bloco 2): resolve o stream
+            // (/stream/tv/{id}.json) antes de abrir o player; sem stream, o
+            // erro real aparece na tela e não navega.
+            viewModel.playAddonChannel(channel.id) { onPlay(it) }
         } else {
             onPlay(channel.id)
         }
+    }
+
+    /** Tocar pelo id (cartões do hub e volta do PIN): acha o canal na lista e usa [playChannel]. */
+    fun playChannelById(id: String) {
+        val channel = v.rows.firstOrNull { it.channel.id == id }?.channel
+            ?: v.groupedRows.values.flatten().firstOrNull { it.channel.id == id }?.channel
+        if (channel != null) playChannel(channel) else onPlay(id)
     }
 
     pendingUnlockGroup?.let { group ->
@@ -113,7 +125,7 @@ fun LiveTvScreen(
                 if (prefs.checkParentalPin(pin)) {
                     if (pendingUnlockRemovesLock) prefs.unlockLiveGroup(group)
                     else unlockedGroups = unlockedGroups + group
-                    pendingPlayChannel?.let { onPlay(it) }
+                    pendingPlayChannel?.let { playChannelById(it) }
                     pendingPlayChannel = null
                     pendingUnlockGroup = null
                     true
@@ -147,7 +159,7 @@ fun LiveTvScreen(
                 "Ao vivo", Modifier.weight(1f),
                 sub = when {
                     !v.hasSources -> "Listas M3U e contas Xtream"
-                    v.loading && v.total == 0 -> "Carregando canais…"
+                    (v.loading || v.addonLoading) && v.total == 0 -> "Carregando canais…"
                     v.epgLoading -> "${v.total} canais · carregando o guia…"
                     else -> "${v.total} canais"
                 },
@@ -250,7 +262,29 @@ fun LiveTvScreen(
             }
         }
 
+        // Lote 15 (v1.25.0, Bloco 2): resolvendo o stream do canal de addon.
+        if (v.addonResolvingId != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(BackgroundCard2).padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                Text("Resolvendo o stream do canal…", color = TextSecondary, fontSize = 13.sp)
+            }
+        }
+
         v.error?.let {
+            Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
+        }
+
+        // Lote 15 (v1.25.0, Bloco 2): erro ao ler os addons ou ao resolver o
+        // stream do canal de addon.
+        v.addonError?.let {
+            Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
+        }
+        v.addonResolveError?.let {
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }
 
@@ -273,7 +307,10 @@ fun LiveTvScreen(
                 groupedRows = v.groupedRows,
                 favorites = groupFavorites,
                 now = v.now,
-                onPlay = onPlay,
+                // Lote 15 (v1.25.0, Bloco 2): o toque no cartão passa por
+                // playChannelById, que resolve o stream do canal de addon
+                // antes de abrir o player (o onPlay cru não resolveria).
+                onPlay = { id -> playChannelById(id) },
                 onFavoriteChannel = { viewModel.toggleFavorite(it) },
                 onToggleGroupFavorite = { prefs.toggleLiveGroupFavorite(it) },
                 showLogos = v.showLogos, showNames = v.showNames,
@@ -357,7 +394,10 @@ internal fun ChannelRow(
             } else if (c.group.isNotBlank()) {
                 // Limpeza de prefixo ("BR | ") só na exibição, quando ligada.
                 val groupText = if (cleanGroups) LiveTvViewModel.groupNames(c, true).joinToString(" · ") else LiveTvViewModel.groupLabel(c)
-                Text(groupText, color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Lote 15 (v1.25.0, Bloco 2): canal de addon não tem EPG —
+                // mostra o estado honesto, sem inventar programa.
+                val suffix = if (com.aotv.app.data.remote.AddonTvCatalogs.isAddonTvChannelId(c.id)) " · Sem guia" else ""
+                Text(groupText + suffix, color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             row.next?.let { nx ->
                 Text("A seguir ${hhmm(nx.start)} ${nx.title}", color = TextTertiary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

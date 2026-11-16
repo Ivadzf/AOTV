@@ -12,6 +12,12 @@ import com.aotv.app.data.live.VodCategory
 import com.aotv.app.data.live.VodEpisode
 import com.aotv.app.data.live.VodItem
 import com.aotv.app.data.live.VodSeriesDetail
+import com.aotv.app.data.remote.AddonTvCatalogLoader
+import com.aotv.app.data.remote.AddonTvCatalogs
+import com.aotv.app.data.remote.AddonTvChannel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +37,7 @@ data class LiveRow(val channel: LiveChannel, val now: LiveProgram?, val next: Li
 class LiveTvViewModel @Inject constructor(
     private val repo: LiveTvRepository,
     private val prefs: com.aotv.app.data.local.PlatformPrefs,
+    private val tvCatalogs: AddonTvCatalogLoader,
 ) : ViewModel() {
 
     data class View(
@@ -60,19 +67,47 @@ class LiveTvViewModel @Inject constructor(
         val showNames: Boolean = true,
         val showNumbers: Boolean = false,
         val cleanGroupNames: Boolean = false,
+        // Lote 15 (v1.25.0, Bloco 2): canais de TV dos addons ligados.
+        /** Carregando os catálogos de TV dos addons. */
+        val addonLoading: Boolean = false,
+        /** Falha ao ler TODOS os addons (nenhum respondeu); null = ok ou sem addon de TV. */
+        val addonError: String? = null,
+        /** Canal de addon resolvendo o stream (/stream/tv/{id}.json). */
+        val addonResolvingId: String? = null,
+        /** Falha ao resolver o stream do canal de addon. */
+        val addonResolveError: String? = null,
     )
+
+    /**
+     * Canais de TV dos addons ligados (Lote 15, Bloco 2, v1.25.0). Fora do
+     * repo: sem EPG, sem catch-up, sem gravação — só o stream, resolvido no
+     * toque. O repo continua sendo a única fonte de M3U/Xtream.
+     */
+    private data class AddonTvData(
+        val channels: List<LiveChannel> = emptyList(),
+        val loading: Boolean = false,
+        val error: String? = null,
+        val resolvingId: String? = null,
+        val resolveError: String? = null,
+    )
+
+    private val addonTv = MutableStateFlow(AddonTvData())
 
     private val filter = MutableStateFlow(ALL)
     private val query = MutableStateFlow("")
     private val clock = MutableStateFlow(System.currentTimeMillis())
 
-    val view: StateFlow<View> = combine(repo.state, filter, query, clock) { st, f, q, now ->
+    val view: StateFlow<View> = combine(repo.state, filter, query, clock, addonTv) { st, f, q, now, atv ->
         val favs = st.favorites
         // Lote 12 (v1.22.0): canais de exibição — ocultos fora, nome/número/
         // grupo/logo próprios aplicados e na ordem do usuário. O guia já vem
         // com Assign EPG + time shift (ver repo.epgForChannel). Tudo abaixo
         // usa ESTA lista e ESTE guia, nunca a lista crua do estado.
-        val display = repo.displayChannels(st.channels)
+        // Lote 15 (v1.25.0, Bloco 2): os canais de TV dos addons entram no
+        // FIM da lista, como grupo/fonte ao lado de M3U e Xtream (mesmos
+        // filtros, busca, favoritos e cartões do hub). Sem EPG, o guia deles
+        // vem vazio (repo.epgForChannel devolve vazio p/ id desconhecido).
+        val display = repo.displayChannels(st.channels) + atv.channels
         val epgById = display.associate { it.id to repo.epgForChannel(it.id) }
         val byId = display.associateBy { it.id }
         val clean = prefs.liveCleanGroupNames
@@ -102,7 +137,10 @@ class LiveTvViewModel @Inject constructor(
             }
         }
         View(
-            hasSources = st.hasSources,
+            // Lote 15 (v1.25.0, Bloco 2): addon de TV conta como fonte — com
+            // canais de addon e sem M3U/Xtream, a aba mostra os canais em vez
+            // do estado vazio; carregando, mostra "Carregando canais…".
+            hasSources = st.hasSources || atv.channels.isNotEmpty() || atv.loading,
             rows = list.map { c ->
                 val (n, nx) = nowNext(epgById[c.id], now)
                 LiveRow(c, n, nx, c.id in favs)
@@ -121,16 +159,104 @@ class LiveTvViewModel @Inject constructor(
             showNames = prefs.liveShowNames,
             showNumbers = prefs.liveShowNumbers,
             cleanGroupNames = clean,
+            addonLoading = atv.loading,
+            addonError = atv.error,
+            addonResolvingId = atv.resolvingId,
+            addonResolveError = atv.resolveError,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), View())
 
     init {
         viewModelScope.launch { repo.refreshIfStale() }
+        loadAddonTv()
         // O "agora" do guia anda sozinho.
         viewModelScope.launch { while (true) { delay(30_000); clock.value = System.currentTimeMillis() } }
     }
 
-    fun reload() { viewModelScope.launch { repo.refresh(true) } }
+    fun reload() {
+        viewModelScope.launch { repo.refresh(true) }
+        loadAddonTv()
+    }
+
+    /**
+     * Lê os catálogos de TV dos addons ligados e a 1ª página de cada um
+     * (Lote 15, Bloco 2, v1.25.0). Sem addon ligado, não faz nada e a aba
+     * fica exatamente como hoje. O erro só aparece quando NENHUM addon
+     * respondeu; catálogo vazio ou sem catálogo de TV é silêncio, não erro.
+     */
+    private fun loadAddonTv() {
+        if (addonTv.value.loading) return
+        if (prefs.addons.value.none { it.enabled }) {
+            // Sem addon ligado não há catálogo de TV — a aba some se não
+            // houver M3U/Xtream (o cache não fica mentindo).
+            repo.setAddonTvAvailable(false)
+            return
+        }
+        addonTv.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            val result = tvCatalogs.loadCatalogs()
+            val channels = coroutineScope {
+                result.catalogs.map { catalog ->
+                    async {
+                        val metas = tvCatalogs.loadChannels(catalog).orEmpty()
+                        metas.take(MAX_ADDON_TV_CHANNELS_PER_CATALOG).mapNotNull { meta ->
+                            if (meta.id.isBlank() || meta.name.isBlank()) null
+                            else AddonTvChannel(
+                                catalog, meta.id, meta.name,
+                                meta.poster.ifBlank { meta.background },
+                            ).toLiveChannel()
+                        }
+                    }
+                }.awaitAll().flatten()
+            }.distinctBy { it.id }
+            addonTv.update {
+                it.copy(
+                    channels = channels,
+                    loading = false,
+                    error = if (result.catalogs.isEmpty() && !result.anyResponded)
+                        "Não deu para ler os addons — os canais de TV deles não apareceram. Confira a conexão e toque em Atualizar."
+                    else null,
+                )
+            }
+            // Follow-up do Bloco 2: guarda se há catálogo de TV p/ a aba
+            // aparecer mesmo sem M3U/Xtream; sem resposta de nenhum addon,
+            // mantém o cache (a rede pode ter falhado — uma falha
+            // transitória não esconde a aba).
+            if (result.anyResponded) repo.setAddonTvAvailable(result.catalogs.isNotEmpty())
+        }
+    }
+
+    /**
+     * Resolve o stream do canal de addon (/stream/tv/{id}.json) e, achando um
+     * stream direto, registra o canal resolvido no repo (só em memória, com
+     * a URL) e chama [onReady] com o id p/ tocar — o player encontra o
+     * canal pelo id "addon-tv:..." (follow-up do Bloco 2). Sem stream, ou
+     * se o canal saiu da lista, mostra o erro real e NÃO navega — o player
+     * não teria o que tocar.
+     *
+     * O id é autocontido (base + catálogo + meta, ver [AddonTvCatalogs]).
+     */
+    fun playAddonChannel(channelId: String, onReady: (String) -> Unit) {
+        val ref = AddonTvCatalogs.parseChannelId(channelId) ?: return
+        if (addonTv.value.resolvingId != null) return
+        addonTv.update { it.copy(resolvingId = channelId, resolveError = null) }
+        viewModelScope.launch {
+            val url = tvCatalogs.resolveStreamUrl(ref.base, ref.metaId)
+            val channel = addonTv.value.channels.firstOrNull { it.id == channelId }
+            if (url != null && channel != null) {
+                repo.registerAddonChannel(channel.copy(url = url))
+                addonTv.update { it.copy(resolvingId = null) }
+                onReady(channelId)
+            } else {
+                addonTv.update {
+                    it.copy(
+                        resolvingId = null,
+                        resolveError = "Esse canal não trouxe um stream para tocar agora. Tente de novo mais tarde.",
+                    )
+                }
+            }
+        }
+    }
     /** Guia instantâneo (Lote 12, v1.22.0): atualiza o EPG em 2º plano quando passou o intervalo — a grade já abriu com o salvo. */
     fun refreshEpgIfStale() { viewModelScope.launch { repo.refreshEpgIfStale() } }
     fun setFilter(f: String) { filter.value = f }
@@ -142,6 +268,8 @@ class LiveTvViewModel @Inject constructor(
         const val FAV = "fav"
         const val RECENT = "recent"
         const val NO_GROUP = "Sem grupo"
+        /** Teto de segurança por catálogo de TV de addon (a 1ª página já vem limitada pelo addon). */
+        const val MAX_ADDON_TV_CHANNELS_PER_CATALOG = 200
 
         /** Categorias do canal. Listas como a do iptv-org juntam várias com ";" no mesmo grupo. */
         fun groupsOf(c: LiveChannel): List<String> =
@@ -169,13 +297,49 @@ class LiveTvViewModel @Inject constructor(
     }
 }
 
-/** Só diz se a aba "Ao vivo" aparece na barra. Barato, a navegação observa o tempo todo. */
+/**
+ * Só diz se a aba "Ao vivo" aparece na barra. Barato, a navegação observa o tempo todo.
+ *
+ * Lote 15 (v1.25.0, Bloco 2 follow-up): a aba aparece também p/ quem só tem
+ * addons de TV (sem M3U/Xtream) — o [LiveTvRepository.hasAddonTv] guarda se
+ * algum addon ligado tem catálogo de TV. A checagem roda aqui porque a aba
+ * precisa existir ANTES de abrir a tela Ao vivo (o LiveTvViewModel, que lê
+ * os catálogos, só nasce com a tela): quando não há fonte M3U/Xtream e a
+ * lista de addons ligados mudou desde a última checagem, lê os manifests
+ * (só eles — sem pedir as páginas de canais) e guarda o resultado no repo.
+ * Sem resposta de nenhum addon, o cache fica como está e a checagem tenta
+ * de novo no próximo cold start; nesta sessão, uma vez por assinatura.
+ */
 @HiltViewModel
-class LiveBarViewModel @Inject constructor(repo: LiveTvRepository, prefs: com.aotv.app.data.local.PlatformPrefs) : ViewModel() {
+class LiveBarViewModel @Inject constructor(
+    private val repo: LiveTvRepository,
+    prefs: com.aotv.app.data.local.PlatformPrefs,
+    private val tvCatalogs: AddonTvCatalogLoader,
+) : ViewModel() {
     // Lista de IPTV pode ter canal adulto, então o perfil infantil não vê a aba.
     private val kids = prefs.isKids
-    val show: StateFlow<Boolean> = repo.state.map { !kids && it.hasSources && it.showInBar }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, repo.state.value.let { !kids && it.hasSources && it.showInBar })
+    val show: StateFlow<Boolean> = repo.state.map { !kids && (it.hasSources || it.hasAddonTv) && it.showInBar }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, repo.state.value.let { !kids && (it.hasSources || it.hasAddonTv) && it.showInBar })
+
+    /** Assinatura dos addons ligados já conferida nesta sessão (não repete a rede). */
+    private var attemptedSig: String? = null
+
+    init {
+        viewModelScope.launch {
+            combine(repo.state, prefs.addons) { st, _ -> st }.collect { st ->
+                if (st.sources.isNotEmpty()) return@collect
+                val sig = repo.addonTvSig()
+                if (sig == repo.addonTvCheckedSig() || sig == attemptedSig) return@collect
+                attemptedSig = sig
+                if (sig.isBlank()) {
+                    repo.setAddonTvAvailable(false)
+                    return@collect
+                }
+                val result = runCatching { tvCatalogs.loadCatalogs() }.getOrNull() ?: return@collect
+                if (result.anyResponded) repo.setAddonTvAvailable(result.catalogs.isNotEmpty())
+            }
+        }
+    }
 }
 
 @HiltViewModel
@@ -187,8 +351,13 @@ class LivePlayerViewModel @Inject constructor(
     // Lote 12 (v1.22.0): o player vê os canais de exibição (ocultos fora,
     // nome/logo próprios aplicados) — a lista lateral e o próximo/anterior
     // respeitam o gerenciar canais. O estado cru do repo não é exposto.
+    // Lote 15 (v1.25.0, Bloco 2 follow-up): os canais de addon resolvidos
+    // entram DEPOIS (mesmo padrão do LiveTvViewModel: display + addon) —
+    // o player encontra o canal "addon-tv:..." pelo id e a lista lateral
+    // mostra os canais de addon do mesmo grupo.
     val state: StateFlow<LiveTvRepository.State> = repo.state
         .map { st -> st.copy(channels = repo.displayChannels(st.channels)) }
+        .map { st -> st.copy(channels = st.channels + repo.addonChannels()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repo.state.value.copy(channels = repo.displayChannels()))
     fun channel(id: String) = repo.channel(id)
     fun watched(id: String) = repo.markWatched(id)
@@ -222,6 +391,11 @@ class LivePlayerViewModel @Inject constructor(
      * é gravado).
      */
     fun recordLiveContinue(channel: LiveChannel, program: LiveProgram?) {
+        // Canal de addon de TV (Bloco 2 follow-up): sem EPG não há programa
+        // nem janela p/ retomar — o card do Continuar não conseguiria voltar
+        // ao player (o embedId "live|<canal>|" não desmonta) — então o canal
+        // nem entra no Continuar. Tocar de novo é pela aba Ao vivo.
+        if (AddonTvCatalogs.isAddonTvChannelId(channel.id)) return
         if (!prefs.liveInContinue || prefs.privateMode) return
         viewModelScope.launch {
             runCatching {

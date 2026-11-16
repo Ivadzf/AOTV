@@ -7,8 +7,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -28,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aotv.app.ui.common.FilterChipPill
 import com.aotv.app.ui.common.QualityBox
 import com.aotv.app.ui.common.SidePanel
 import com.aotv.app.ui.common.qualityTier
@@ -60,7 +64,20 @@ data class TvPlayerAction(
     val onSeasonPick: ((Int) -> Unit)? = null,
     val stream: com.aotv.app.data.remote.StremioStream? = null,
     val providers: List<String> = emptyList(),
+    /**
+     * Selo de contagem (Lote 15 item 8): quantas opções reais existem nesse
+     * idioma (ex.: 8 legendas em inglês). 0 = sem selo. Só conta o que existe
+     * de fato — nunca inventado.
+     */
+    val count: Int = 0,
     val onRun: () -> Unit,
+)
+
+/** Chip de filtro no topo de um painel (Lote 15 item 2 — folha de Fontes estilo Nuvio). */
+data class SourceFilterChip(
+    val label: String,
+    val selected: Boolean,
+    val onClick: () -> Unit,
 )
 
 /** Painel aberto com a lista do tipo pedido. [focusIdx] é o item com foco do D-pad. */
@@ -77,9 +94,11 @@ internal fun PlayerActionPanel(
     television: Boolean = false,
     /** Vidro fosco (Lote 4): painel translúcido com o toggle `pref_panel_blur` ligado. */
     frosted: Boolean = false,
+    /** Chips de filtro no topo do painel (Lote 15 item 2 — folha de Fontes). Vazio = sem chips. */
+    filterChips: List<SourceFilterChip> = emptyList(),
 ) {
-    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true, frosted) }
-    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false, frosted)
+    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true, frosted, filterChips) }
+    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false, frosted, filterChips)
 }
 
 @Composable
@@ -94,6 +113,7 @@ private fun PlayerActionPanelBody(
     onDismiss: () -> Unit,
     television: Boolean,
     frosted: Boolean = false,
+    filterChips: List<SourceFilterChip> = emptyList(),
 ) {
     val sourceCount = actions.count { it.isSource }
     val shortWindow = !television && androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
@@ -129,7 +149,20 @@ private fun PlayerActionPanelBody(
         LaunchedEffect(focusIdx, actions.size) {
             if (actions.isNotEmpty()) listState.animateScrollToItem(focusIdx.coerceIn(0, actions.lastIndex))
         }
-        LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Chips de filtro (Lote 15 item 2): Todos + um por provider presente na
+        // lista atual. Só no celular — na TV o D-pad é dono do painel e a fileira
+        // de chips ficaria fora da navegação (o call site só manda chips fora da TV).
+        if (filterChips.isNotEmpty()) {
+            LazyRow(
+                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(filterChips, key = { it.label }) { chip ->
+                    FilterChipPill(chip.label, chip.selected, onClick = chip.onClick)
+                }
+            }
+        }
+        LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             itemsIndexed(actions) { i, act ->
                 SourcePanelRow(act, focused = i == focusIdx, movieTitle = movieTitle, onClick = { onPick(act) })
             }
@@ -187,6 +220,22 @@ private fun SourcePanelRow(action: TvPlayerAction, focused: Boolean, movieTitle:
             (config.screenWidthDp < 600 ||
                 androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.3f)
         val trailing: @Composable () -> Unit = {
+            // Selo de contagem (Lote 15 item 8): círculo branco com o número,
+            // como o seletor do Nuvio. Na linha com foco (fundo branco), o
+            // selo vira escuro p/ continuar legível.
+            if (action.count > 0) {
+                Text(
+                    action.count.toString(),
+                    color = if (focused) Color.White else TextOnLight,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = ManropeFontFamily,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (focused) Color(0xFF222222) else Color.White)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
             Icon(when { action.active -> Icons.Default.Check; action.keepOpen -> Icons.Default.Tune; else -> Icons.Default.SkipNext },
                 null, tint = if (focused) TextOnLight else if (action.active) Accent else TextTertiary, modifier = Modifier.size(20.dp))
         }

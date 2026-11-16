@@ -82,6 +82,7 @@ internal val SCOPED_KEYS = listOf(
     "trakt_access_token_v1", "trakt_refresh_token_v1", "trakt_expires_at_v1",
     "trakt_enabled_v1", "trakt_user_v1",
     "home_layout_v1", "home_hero_v1", "pref_subtitle_on", "pref_sub_lang", "collections_v1",
+    "pref_hero_on", "pref_hero_type_suffix", "pref_hide_unreleased", "home_hero_catalogs_v1",
     "pref_poster_size", "pref_poster_radius", "pref_home_density", "pref_poster_badges",
     "pref_poster_quality_badges",
     "pref_hero_style", "pref_dynamic_bg", "pref_section_underline",
@@ -133,6 +134,9 @@ internal val SCOPED_KEYS = listOf(
     // jogo/rede/time → canal (mapa JSON, por perfil, no padrão de
     // "live_audio_v1"). Só ids de canal das listas do usuário.
     "sports_fix_channel_v1",
+    // Lote 15 — Aba de Esportes (v1.25.0, Bloco 1): ligas ligadas no seletor
+    // da aba, ligas seguidas e times seguidos (listas de ids/nomes, por perfil).
+    "sports_tab_leagues_v1", "sports_followed_leagues_v1", "sports_followed_teams_v1",
     "record_start_early_min", "record_run_late_min", "record_keep_episodes",
     "record_low_space_mb", "record_notifications",
     "calendar_hide_spoilers",
@@ -1275,6 +1279,59 @@ class PlatformPrefs @Inject constructor(
     fun removeChannelFix(mapKey: String) {
         if (mapKey.isBlank()) return
         sportsChannelFixes = sportsChannelFixes - mapKey
+    }
+
+    // ── Lote 15 — Aba de Esportes (v1.25.0, Bloco 1) ─────────────────────
+    // Ligas ligadas no seletor da aba ("sports_tab_leagues_v1", lista de ids
+    // de SPORTS_LEAGUES): null (chave ausente) = TODAS ligadas; lista vazia
+    // = nenhuma ligada. Ligas/times seguidos ("sports_followed_*"): vazio
+    // = nada seguido — "Meus esportes" começa vazio, com empty state
+    // honesto; nenhum default inventado (nada de "futebol BR + NHL").
+    // Listas de nomes/ids do usuário — nada embutido, nada de fora.
+    var sportsTabEnabledLeagues: List<String>?
+        get() = if (prefs.contains(sk("sports_tab_leagues_v1"))) readStringList("sports_tab_leagues_v1") else null
+        set(value) {
+            if (value == null) prefs.edit().remove(sk("sports_tab_leagues_v1")).apply()
+            else writeStringList("sports_tab_leagues_v1", value.distinct())
+        }
+
+    /** Ids das ligas ligadas no seletor (só as que o app conhece). */
+    fun sportsEnabledLeagueIds(allIds: List<String>): List<String> {
+        val enabled = sportsTabEnabledLeagues ?: return allIds
+        return enabled.filter { it in allIds }
+    }
+
+    /** Liga/desliga uma liga no seletor (volta a null = todas quando completa). */
+    fun setSportsLeagueEnabled(leagueId: String, enabled: Boolean, allIds: List<String>) {
+        if (leagueId.isBlank()) return
+        val current = sportsEnabledLeagueIds(allIds).toMutableSet()
+        if (enabled) current += leagueId else current -= leagueId
+        sportsTabEnabledLeagues = if (current.size == allIds.size) null else current.toList()
+    }
+
+    /** Ligas seguidas (ids de SPORTS_LEAGUES). Vazio = nenhuma seguida. */
+    var sportsFollowedLeagues: List<String>
+        get() = readStringList("sports_followed_leagues_v1")
+        set(value) { writeStringList("sports_followed_leagues_v1", value.distinct()) }
+
+    /** Times seguidos (nomes como a ESPN traz). Vazio = nenhum seguido. */
+    var sportsFollowedTeams: List<String>
+        get() = readStringList("sports_followed_teams_v1")
+        set(value) { writeStringList("sports_followed_teams_v1", value.distinct()) }
+
+    /** Seguir/deixar de seguir uma liga. */
+    fun toggleSportsFollowedLeague(leagueId: String) {
+        if (leagueId.isBlank()) return
+        val cur = sportsFollowedLeagues
+        sportsFollowedLeagues = if (leagueId in cur) cur - leagueId else cur + leagueId
+    }
+
+    /** Seguir/deixar de seguir um time. */
+    fun toggleSportsFollowedTeam(team: String) {
+        val clean = team.trim()
+        if (clean.isBlank()) return
+        val cur = sportsFollowedTeams
+        sportsFollowedTeams = if (clean in cur) cur - clean else cur + clean
     }
 
     private val _recordStartEarlyMin = MutableStateFlow(prefs.getInt(sk("record_start_early_min"), 2))
@@ -2671,6 +2728,50 @@ class PlatformPrefs @Inject constructor(
         get() = _heroSource.value
         set(value) { prefs.edit().putString(sk("home_hero_v1"), value).apply(); _heroSource.value = value }
 
+    // ── Layout da Página Inicial (Bloco 3, Lote 15, v1.25.0) ────────────────
+    // Por perfil, como o resto do Personalizar Início. Defaults = comportamento
+    // atual: destaque ligado, sem sufixo de tipo, sem ocultar não lançados e
+    // catálogos do destaque no automático (null). Quem nunca abrir a tela não
+    // percebe diferença.
+    /** Carrossel do destaque no topo da Início (e Destaques da busca, mesma fonte). */
+    private val _heroOn = MutableStateFlow(prefs.getBoolean(sk("pref_hero_on"), true))
+    val heroOnFlow: StateFlow<Boolean> = _heroOn.asStateFlow()
+    var heroOn: Boolean
+        get() = _heroOn.value
+        set(value) { prefs.edit().putBoolean(sk("pref_hero_on"), value).apply(); _heroOn.value = value }
+
+    /** Sufixo de tipo (" · Filme" / " · Série") no título das fileiras de addon na Início. */
+    private val _heroTypeSuffix = MutableStateFlow(prefs.getBoolean(sk("pref_hero_type_suffix"), false))
+    val heroTypeSuffixFlow: StateFlow<Boolean> = _heroTypeSuffix.asStateFlow()
+    var heroTypeSuffix: Boolean
+        get() = _heroTypeSuffix.value
+        set(value) { prefs.edit().putBoolean(sk("pref_hero_type_suffix"), value).apply(); _heroTypeSuffix.value = value }
+
+    /** Ocultar conteúdo não lançado (estreia depois de hoje) nas fileiras e no destaque. */
+    private val _hideUnreleased = MutableStateFlow(prefs.getBoolean(sk("pref_hide_unreleased"), false))
+    val hideUnreleasedFlow: StateFlow<Boolean> = _hideUnreleased.asStateFlow()
+    var hideUnreleased: Boolean
+        get() = _hideUnreleased.value
+        set(value) { prefs.edit().putBoolean(sk("pref_hide_unreleased"), value).apply(); _hideUnreleased.value = value }
+
+    /**
+     * Catálogos que alimentam o destaque no automático (chaves das fileiras).
+     * null = padrão (o automático de sempre); vazio = nenhum catálogo no destaque.
+     * A escolha é por chave estável da fileira, não por posição — a ordem muda.
+     */
+    private fun readHeroCatalogs(): Set<String>? = prefs.getStringSet(sk("home_hero_catalogs_v1"), null)?.toSet()
+    private val _heroCatalogs = MutableStateFlow(readHeroCatalogs())
+    val heroCatalogsFlow: StateFlow<Set<String>?> = _heroCatalogs.asStateFlow()
+    var heroCatalogs: Set<String>?
+        get() = _heroCatalogs.value
+        set(value) {
+            val ed = prefs.edit()
+            if (value == null) ed.remove(sk("home_hero_catalogs_v1"))
+            else ed.putStringSet(sk("home_hero_catalogs_v1"), value.toSet())
+            ed.apply()
+            _heroCatalogs.value = value
+        }
+
     // ── Coleções (formato do Nuvio), por perfil. Antes do layout, que conta com elas. ──
     private fun readCollections(): List<com.aotv.app.data.collections.MediaCollection> =
         prefs.getString(sk("collections_v1"), null)
@@ -2718,6 +2819,10 @@ class PlatformPrefs @Inject constructor(
     fun resetHomeLayout() {
         saveLayout(HomeLayout.reset(homeLayout))
         heroSource = ""
+        // O destaque volta ao padrão: automático e ligado. Sufixo de tipo e
+        // ocultar não lançados são prefs de exibição e ficam como estão.
+        heroOn = true
+        heroCatalogs = null
     }
 
     private fun saveLayout(list: List<HomeRowPref>) {
@@ -2733,6 +2838,10 @@ class PlatformPrefs @Inject constructor(
         _collections.value = readCollections()
         _homeLayout.value = computeLayout()
         _heroSource.value = prefs.getString(sk("home_hero_v1"), "").orEmpty()
+        _heroOn.value = prefs.getBoolean(sk("pref_hero_on"), true)
+        _heroTypeSuffix.value = prefs.getBoolean(sk("pref_hero_type_suffix"), false)
+        _hideUnreleased.value = prefs.getBoolean(sk("pref_hide_unreleased"), false)
+        _heroCatalogs.value = readHeroCatalogs()
         _homeDisplay.value = readHomeDisplay()
         _detailCinematic.value = prefs.getBoolean(sk("pref_detail_cinematic"), false)
         _detailPosterTransition.value = prefs.getBoolean(sk("pref_detail_poster_transition"), true)

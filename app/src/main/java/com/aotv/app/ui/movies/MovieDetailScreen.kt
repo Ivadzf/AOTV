@@ -442,6 +442,12 @@ fun MovieDetailScreen(
 
                     // Bottom fade vertical to Background. Fora no modo cinematográfico:
                     // o conteúdo abaixo precisa continuar vendo a arte desfocada.
+                    // Lote 15 item 3 — o fade terminava em 0.99, colado na fronteira
+                    // cabeçalho/conteúdo: a rampa (arte ainda visível sob o fundo
+                    // semi-transparente) virava uma banda que parecia uma sombra
+                    // logo abaixo da sinopse. Agora o fade completa em 0.62 — o
+                    // terço final do cabeçalho já é Background sólido, igual ao
+                    // conteúdo abaixo, e a fronteira some.
                     if (!cinematicBg) Box(
                         Modifier
                             .fillMaxSize()
@@ -449,8 +455,8 @@ fun MovieDetailScreen(
                                 Brush.verticalGradient(
                                     colorStops = arrayOf(
                                         0.0f to Color.Transparent,
-                                        0.48f to Background.copy(.45f),
-                                        0.99f to Background,
+                                        0.30f to Background.copy(.45f),
+                                        0.62f to Background,
                                     ),
                                 ),
                             ),

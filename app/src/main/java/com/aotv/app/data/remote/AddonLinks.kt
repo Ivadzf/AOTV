@@ -175,6 +175,30 @@ object AddonLinks {
     }
 
     /**
+     * Catálogos de TV ao vivo do manifest (Lote 15, Bloco 2, v1.25.0): a
+     * causa raiz dos catálogos de TV não reconhecidos — [homeCatalogs] só
+     * aceita filme e série, então "Canais ao Vivo" do BestCine, "Canais" do
+     * Veyra/Tvvivo e os catálogos de TV do Bsweb nem eram lidos. Mesma regra
+     * de [homeCatalogs] (sem filtro obrigatório), só muda o tipo: "tv".
+     * A Início e o Descobrir continuam só com filme e série ([homeCatalogs]
+     * e [discoverCatalogs] não mudam); os catálogos daqui só alimentam a
+     * aba Ao vivo ([com.aotv.app.data.remote.AddonTvCatalogLoader]).
+     */
+    fun tvCatalogs(manifest: JsonObject): List<AddonCatalog> {
+        val arr = manifest.arr("catalogs") ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val c = el.obj() ?: return@mapNotNull null
+            val type = c.str("type")
+            val id = c.str("id")
+            if (id.isBlank() || type != "tv") return@mapNotNull null
+            if ((c.arr("extraRequired")?.size() ?: 0) > 0) return@mapNotNull null
+            val extraReq = c.arr("extra")?.any { e -> e.obj()?.get("isRequired")?.let { it.isJsonPrimitive && it.asBoolean } == true } == true
+            if (extraReq) return@mapNotNull null
+            AddonCatalog(type, id, c.str("name").ifBlank { id })
+        }
+    }
+
+    /**
      * Catálogos de filme e série que podem ser fonte de coleção. Diferente de [homeCatalogs],
      * aceita catálogo que exige gênero (a pasta guarda o gênero escolhido). Catálogo que exige
      * outro filtro, como busca, fica de fora.

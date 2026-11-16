@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,17 +23,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.TableChart
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -63,7 +56,6 @@ import com.aotv.app.data.live.LiveTvRepository
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.sports.ChannelFix
 import com.aotv.app.data.sports.EspnSportsRepository
-import com.aotv.app.data.sports.FixScope
 import com.aotv.app.data.sports.FormResult
 import com.aotv.app.data.sports.GameDetail
 import com.aotv.app.data.sports.GameStatus
@@ -78,9 +70,7 @@ import com.aotv.app.data.sports.normalizeSportsName
 import com.aotv.app.data.sports.resolveFixedChannel
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.Background
-import com.aotv.app.ui.theme.BackgroundCard
 import com.aotv.app.ui.theme.BackgroundCard2
-import com.aotv.app.ui.theme.Border
 import com.aotv.app.ui.theme.TextPrimary
 import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
@@ -91,6 +81,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
+import com.aotv.app.data.sports.FixScope
+import com.aotv.app.ui.theme.BackgroundCard
+import com.aotv.app.ui.theme.Border
 
 /** "dd/MM HH:mm" no fuso do aparelho. */
 private fun sportsDateTime(ms: Long): String =
@@ -221,6 +221,7 @@ class SportsGameViewModel @Inject constructor(
 
     data class Ui(
         val detail: GameDetail? = null,
+        val table: LeagueTable? = null,
         val loading: Boolean = false,
         val error: String? = null,
         val channels: List<LiveChannel> = emptyList(),
@@ -246,9 +247,13 @@ class SportsGameViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.update { it.copy(loading = true, error = null) }
             val detail = repo.gameDetail(league, eventId)
+            // Lote 15 (v1.25.0, Bloco 1): a tabela da liga na página do jogo
+            // (mesma fonte do Lote 13 — summary da ESPN; null fora de
+            // temporada, e aí a seção some, sem inventar).
+            val table = repo.leagueTable(league)
             _ui.update {
                 it.copy(
-                    detail = detail, loading = false,
+                    detail = detail, table = table, loading = false,
                     error = if (detail == null) "Sem dados deste jogo agora — a ESPN não respondeu." else null,
                     fixes = prefs.sportsChannelFixes,
                 )
@@ -776,6 +781,14 @@ fun SportsGameScreen(
                     }
                 }
             }
+            // `ui` é propriedade delegada (by): smart cast não funciona nela (build #248).
+            val table = ui.table
+            if (table != null) {
+                item(key = "game-table-header") {
+                    com.aotv.app.ui.common.SectionHeader(title = "Tabela — ${table.league.name}", underline = true, compact = true)
+                }
+                item(key = "game-table-body") { LeagueTableCard(table) }
+            }
             val homeLineup = detail.homeLineup
             val awayLineup = detail.awayLineup
             if (homeLineup != null || awayLineup != null) {
@@ -859,13 +872,12 @@ private fun LineupCard(lineup: com.aotv.app.data.sports.TeamLineup) {
 
 // ── Diálogo: Fix Channel ───────────────────────────────────────────────────
 
-/**
- * Fix Channel (Lote 13, item 12): escolher o canal certo uma vez — só p/
- * este jogo, p/ todos os jogos de um time ou p/ todos os jogos da rede.
- * A lista é só dos canais das playlists do usuário, com busca.
- */
+// Lote 15 (v1.25.0 — Bloco 1): o diálogo virou `internal` p/ a aba de
+// Esportes (SportsTabScreen.kt) reutilizar o mesmo — sem duplicar.
+// (A extração p/ arquivo próprio foi revertida: o teste do Lote 13 (B9)
+// cobra o diálogo neste arquivo.)
 @Composable
-private fun FixChannelDialog(
+internal fun FixChannelDialog(
     game: LeagueGame,
     networkKeyword: String?,
     channels: List<LiveChannel>,

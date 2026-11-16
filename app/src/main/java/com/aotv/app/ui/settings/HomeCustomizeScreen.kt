@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +39,8 @@ import com.aotv.app.ui.theme.*
 /**
  * Personalizar Início. Liga e desliga cada fileira (do AOTV, do progresso e dos addons),
  * muda a ordem, troca o nome e escolhe de onde vem o destaque. Aplica na hora.
+ * O Layout da Página Inicial (Bloco 3, Lote 15) fica na mesma tela: destaque
+ * liga/desliga, sufixo de tipo, ocultar não lançados e catálogos do destaque.
  */
 @Composable
 fun HomeCustomizeScreen(
@@ -74,7 +77,14 @@ fun HomeCustomizeScreen(
                 Spacer(Modifier.height(10.dp))
                 com.aotv.app.ui.common.SummaryRow("Fileiras ligadas", "${st.enabledCount} de ${st.total}")
                 com.aotv.app.ui.common.SummaryRow(
-                    "Destaque", st.heroOptions.firstOrNull { it.key == st.heroSource }?.label ?: "Automático",
+                    "Destaque",
+                    if (!st.heroOn) "Desligado"
+                    else st.heroOptions.firstOrNull { it.key == st.heroSource }?.label ?: "Automático",
+                )
+                com.aotv.app.ui.common.SummaryRow(
+                    "Catálogos do destaque",
+                    if (st.heroCatalogs == null) "Automático"
+                    else "${st.heroCatalogOptions.count { it.selected }} de ${st.heroCatalogOptions.size}",
                 )
                 com.aotv.app.ui.common.SummaryRow(
                     "Catálogo AOTV", if (st.catalogOn) "Ligado" else "Desligado", if (st.catalogOn) Ok else DangerText,
@@ -153,6 +163,84 @@ fun HomeCustomizeScreen(
                     }
                 }
 
+                // ── Layout da Página Inicial (Bloco 3, Lote 15) ────────────────
+                item { com.aotv.app.ui.common.SettingsSection("Layout da Página Inicial") }
+                item {
+                    CardBox {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Destaque no topo", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "O carrossel com os títulos em alta. Desligado, a Início abre direto nas fileiras e a busca não mostra Destaques.",
+                                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                                )
+                            }
+                            Switch(checked = st.heroOn, onCheckedChange = { viewModel.setHeroOn(it) }, colors = switchColors())
+                        }
+                    }
+                }
+                item {
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.Movie,
+                        title = "Sufixo de tipo de catálogo",
+                        sub = "Mostra “· Filme” ou “· Série” no título das fileiras de addon na Início",
+                        trailing = { Switch(checked = st.typeSuffix, onCheckedChange = { viewModel.setTypeSuffix(it) }, colors = switchColors()) },
+                        onClick = { viewModel.setTypeSuffix(!st.typeSuffix) },
+                    )
+                }
+                item {
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.VisibilityOff,
+                        title = "Ocultar conteúdo não lançado",
+                        sub = "Títulos com estreia depois de hoje somem das fileiras e do destaque",
+                        trailing = { Switch(checked = st.hideUnreleased, onCheckedChange = { viewModel.setHideUnreleased(it) }, colors = switchColors()) },
+                        onClick = { viewModel.setHideUnreleased(!st.hideUnreleased) },
+                    )
+                }
+                item { com.aotv.app.ui.common.SettingsSection("Catálogos do destaque") }
+                item {
+                    CardBox {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Catálogos do destaque", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "No automático, o destaque junta os títulos destes catálogos. Desligar um tira ele do destaque — a fileira continua na Início. A ordem é a da lista de fileiras.",
+                                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                                )
+                            }
+                            Text(
+                                "${st.heroCatalogOptions.count { it.selected }} de ${st.heroCatalogOptions.size}",
+                                color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1,
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        st.heroCatalogOptions.forEach { o ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    o.label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                                )
+                                IconButton(onClick = { viewModel.moveHeroCatalog(o.key, -1) }, enabled = o.canUp, modifier = Modifier.size(40.dp)) {
+                                    Icon(Icons.Default.ArrowUpward, "Subir ${o.label}", tint = if (o.canUp) TextSecondary else TextTertiary.copy(alpha = .35f), modifier = Modifier.size(19.dp))
+                                }
+                                IconButton(onClick = { viewModel.moveHeroCatalog(o.key, 1) }, enabled = o.canDown, modifier = Modifier.size(40.dp)) {
+                                    Icon(Icons.Default.ArrowDownward, "Descer ${o.label}", tint = if (o.canDown) TextSecondary else TextTertiary.copy(alpha = .35f), modifier = Modifier.size(19.dp))
+                                }
+                                Switch(checked = o.selected, onCheckedChange = { viewModel.setHeroCatalog(o.key, it) }, colors = switchColors())
+                            }
+                        }
+                        if (st.heroCatalogOptions.isEmpty()) {
+                            Text(
+                                "Nenhum catálogo pode alimentar o destaque agora.",
+                                color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                        }
+                        TextButton(onClick = { viewModel.resetHeroCatalogs() }) {
+                            Text("Redefinir para Padrão", color = Accent, fontWeight = FontWeight.ExtraBold)
+                        }
+                    }
+                }
+
                 item {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -200,7 +288,7 @@ fun HomeCustomizeScreen(
             title = { Text("Restaurar o padrão?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
             text = {
                 Text(
-                    "Volta a ordem original, liga as fileiras do AOTV e do progresso e tira os nomes trocados. As fileiras de addon ficam como estão.",
+                    "Volta a ordem original, liga as fileiras do AOTV e do progresso e tira os nomes trocados. O destaque volta a ser automático e ligado. As fileiras de addon ficam como estão.",
                     color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
                 )
             },

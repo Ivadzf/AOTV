@@ -168,6 +168,14 @@ class MoviesHomeViewModel @Inject constructor(
         val catalogOn: Boolean = true,
         /** Chave da fileira que alimenta o destaque. Vazio = automático. */
         val heroSource: String = "",
+        /** Destaque ligado (Bloco 3, Lote 15). Desligado, nem a Início nem a busca mostram o carrossel. */
+        val heroOn: Boolean = true,
+        /** Catálogos que alimentam o destaque no automático. null = padrão. */
+        val heroCatalogs: Set<String>? = null,
+        /** Ocultar conteúdo não lançado nas fileiras e no destaque. */
+        val hideUnreleased: Boolean = false,
+        /** Sufixo de tipo (Filme/Série) nos títulos das fileiras de addon. */
+        val typeSuffix: Boolean = false,
         val releasesYear: Int = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR),
     )
 
@@ -596,6 +604,21 @@ class MoviesHomeViewModel @Inject constructor(
                 .collect { applyLayout(it) }
         }
         _uiState.update { it.copy(heroTrailer = prefs.heroTrailer, display = prefs.homeDisplay) }
+        // Layout da Página Inicial (Bloco 3, Lote 15, v1.25.0): destaque
+        // liga/desliga, catálogos do destaque, ocultar não lançados e sufixo
+        // de tipo. A Início — e a busca, que lê o mesmo UiState — reage na hora.
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                prefs.heroOnFlow, prefs.heroCatalogsFlow, prefs.hideUnreleasedFlow, prefs.heroTypeSuffixFlow,
+            ) { heroOn, heroCatalogs, hideUnreleased, typeSuffix ->
+                _uiState.update {
+                    it.copy(
+                        heroOn = heroOn, heroCatalogs = heroCatalogs,
+                        hideUnreleased = hideUnreleased, typeSuffix = typeSuffix,
+                    )
+                }
+            }.collect()
+        }
         // A Início aplica a exibição na hora: mudou na página Layout, a fileira recompõe.
         viewModelScope.launch {
             prefs.homeDisplayFlow.collect { d -> _uiState.update { it.copy(display = d) } }

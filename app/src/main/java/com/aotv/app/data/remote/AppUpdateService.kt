@@ -183,6 +183,11 @@ class AppUpdateService @Inject constructor(
     /**
      * Baixa o APK da release p/ o cache do app. Só aceita o asset oficial
      * ([isApkAssetUrl]); qualquer outra URL é recusada antes de baixar.
+     * Confere o tamanho baixado contra o informado pela release (Lote 15,
+     * v1.25.0 — Bloco 4, item 7): tamanho diferente = download incompleto
+     * (o parcial é apagado e o erro volta, sem instalar nada). Sem tamanho
+     * informado (0), só vale o "não vazio" de antes. SHA-256 não é
+     * conferido: a release não traz arquivo de checksums.
      */
     suspend fun downloadApk(context: Context, release: AppRelease): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
@@ -198,6 +203,11 @@ class AppUpdateService @Inject constructor(
                 outFile.outputStream().use { out -> body.byteStream().copyTo(out) }
             }
             if (!outFile.exists() || outFile.length() <= 0) error("Download falhou: arquivo vazio")
+            val downloadedBytes = outFile.length()
+            if (release.sizeBytes > 0 && downloadedBytes != release.sizeBytes) {
+                outFile.delete()
+                error("Download incompleto: $downloadedBytes de ${release.sizeBytes} bytes")
+            }
             outFile
         }
     }

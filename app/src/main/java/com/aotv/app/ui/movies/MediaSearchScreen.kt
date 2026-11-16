@@ -5,17 +5,22 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
@@ -23,9 +28,12 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.LocalMovies
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +44,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -47,6 +56,7 @@ import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.toMovieItem
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
+import com.aotv.app.ui.common.FilterChipPill
 import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.AotvEmptyState
 import com.aotv.app.ui.common.MediaPosterCard
@@ -153,6 +163,13 @@ fun MediaSearchScreen(
     onItemClick: (MovieItem) -> Unit,
     onBack: () -> Unit,
     viewModel: MediaSearchViewModel = hiltViewModel(),
+    // Lote 15 item 1 — Destaques da busca: a MESMA fonte do destaque da Início
+    // (o ViewModel da Início + heroCandidates, só leitura). Segunda instância
+    // do ViewModel (a busca é outro destino do nav): carrega as fileiras de
+    // novo ao abrir a busca — ver caveat no relatório do lote.
+    homeVm: MoviesHomeViewModel = hiltViewModel(),
+    // Lote 15 item 1 — Descobrir embutido na busca (mesmo ViewModel da tela Descobrir).
+    discoverVm: DiscoverViewModel = hiltViewModel(),
     // Lote 12 (v1.22.0 — Frente 1): query pronta (ex.: título de um
     // programa do guia, "Buscar nos addons") — busca na hora, sem digitar.
     initialQuery: String = "",
@@ -166,6 +183,26 @@ fun MediaSearchScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val recents by viewModel.recents.collectAsStateWithLifecycle()
     val tv = com.aotv.app.ui.common.LocalIsTv.current
+
+    // ── Destaques da busca (Lote 15 item 1) ──────────────────────────────
+    // O mesmo cálculo da Início (MoviesHomeScreen.kt:561-581): a fileira
+    // escolhida no Personalizar Início, ou o automático (em alta). Só leitura.
+    val homeState by homeVm.uiState.collectAsStateWithLifecycle()
+    val heroSource = heroCandidates(homeState)
+    LaunchedEffect(heroSource.map { it.tmdbId }) {
+        heroSource.take(10).forEach {
+            val series = it.type == MediaType.SERIES
+            if (it.backdropUrl.isBlank()) homeVm.ensureHeroBackdrop(it.tmdbId, series)
+            homeVm.ensureHeroLogo(it.tmdbId, series)
+        }
+    }
+    val heroItems = remember(heroSource, homeState.heroBackdrops) {
+        heroSource.mapNotNull { item ->
+            val bd = item.backdropUrl.ifBlank { homeState.heroBackdrops[item.tmdbId].orEmpty() }
+            if (bd.isBlank()) null else item.copy(backdropUrl = bd)
+        }.take(8)
+    }
+    val discoverState by discoverVm.uiState.collectAsStateWithLifecycle()
 
     // TV. Teclado do controle à esquerda e resultados à direita, como o search.js do webOS.
     if (tv) {
@@ -182,7 +219,8 @@ fun MediaSearchScreen(
                 )
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                SearchBody(query, results, isLoading, recents, viewModel, onItemClick)
+                SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
+                    heroItems, homeState.heroLogos, discoverState, discoverVm)
             }
         }
         return
@@ -226,7 +264,8 @@ fun MediaSearchScreen(
                 voiceListening = voiceSearch.listening,
             )
         }
-        SearchBody(query, results, isLoading, recents, viewModel, onItemClick)
+        SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
+            heroItems, homeState.heroLogos, discoverState, discoverVm)
     }
 }
 
@@ -239,6 +278,10 @@ private fun ColumnScope.SearchBody(
     recents: List<String>,
     viewModel: MediaSearchViewModel,
     onItemClick: (MovieItem) -> Unit,
+    heroItems: List<MovieItem>,
+    heroLogos: Map<Int, String>,
+    discoverState: DiscoverViewModel.UiState,
+    discoverVm: DiscoverViewModel,
 ) {
         // Barra fina de progresso: mantém o grid na tela enquanto rebusca (antes o spinner
         // de tela cheia apagava os resultados a cada tecla digitada).
@@ -260,11 +303,18 @@ private fun ColumnScope.SearchBody(
             }
 
             query.isBlank() -> {
-                RecentSearches(
+                // Lote 15 item 1 — com o campo vazio, a busca vira a aba do Nuvio:
+                // recentes (só com histórico) + Destaques + Descobrir, em vez
+                // do estado vazio de antes.
+                SearchEmptyState(
                     recents = recents,
-                    onPick = viewModel::onQueryChange,
-                    onRemove = viewModel::removeRecent,
-                    onClearAll = viewModel::clearRecents,
+                    viewModel = viewModel,
+                    noTmdbKey = noTmdbKey,
+                    heroItems = heroItems,
+                    heroLogos = heroLogos,
+                    discoverState = discoverState,
+                    discoverVm = discoverVm,
+                    onItemClick = onItemClick,
                 )
             }
 
@@ -334,6 +384,439 @@ private fun ColumnScope.SearchBody(
                 }
             }
         }
+}
+
+// ── ESTADO SEM CONSULTA: Destaques + Descobrir (Lote 15 item 1) ─────────────
+
+/**
+ * O que aparece quando o campo está vazio, no formato da aba de Busca do Nuvio:
+ * buscas recentes (só com histórico) + carrossel de Destaques (a mesma fonte do
+ * destaque da Início) + Descobrir com filtros compactos e grade de pôsteres
+ * (mesmo ViewModel da tela Descobrir, com scroll infinito).
+ */
+@Composable
+private fun SearchEmptyState(
+    recents: List<String>,
+    viewModel: MediaSearchViewModel,
+    noTmdbKey: Boolean,
+    heroItems: List<MovieItem>,
+    heroLogos: Map<Int, String>,
+    discoverState: DiscoverViewModel.UiState,
+    discoverVm: DiscoverViewModel,
+    onItemClick: (MovieItem) -> Unit,
+) {
+    val gridState = rememberLazyGridState()
+    // Scroll infinito do Descobrir, igual ao da tela Descobrir.
+    val nearEnd by remember {
+        derivedStateOf {
+            val li = gridState.layoutInfo
+            val total = li.totalItemsCount
+            val last = li.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total > 0 && last >= total - 6
+        }
+    }
+    LaunchedEffect(nearEnd) { if (nearEnd) discoverVm.loadMore() }
+    var genrePickerOpen by rememberSaveable { mutableStateOf(false) }
+    var confirmClear by rememberSaveable { mutableStateOf(false) }
+    if (genrePickerOpen) GenrePickerDialog(discoverState, discoverVm) { genrePickerOpen = false }
+    if (confirmClear) AlertDialog(
+        onDismissRequest = { confirmClear = false },
+        containerColor = BackgroundCard,
+        title = { Text("Limpar buscas recentes?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = { Text("O histórico de buscas será apagado.", color = TextSecondary) },
+        confirmButton = {
+            TextButton(onClick = { viewModel.clearRecents(); confirmClear = false }) { Text("Limpar", color = DangerText) }
+        },
+        dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
+    )
+
+    Column(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidth()),
+            state = gridState,
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = 2.dp,
+                bottom = 24.dp,
+            ),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (recents.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SearchRecentsCompact(
+                        recents = recents,
+                        onPick = viewModel::onQueryChange,
+                        onRemove = viewModel::removeRecent,
+                        onClearRequest = { confirmClear = true },
+                    )
+                }
+            }
+            if (heroItems.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SearchHeroSection(heroItems, heroLogos, onItemClick)
+                }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                SearchDiscoverHeader(discoverState, discoverVm, onGenreClick = { genrePickerOpen = true })
+            }
+            when {
+                discoverState.loading -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Accent, strokeWidth = 3.dp)
+                    }
+                }
+                discoverState.items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
+                    Box(Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                        when {
+                            noTmdbKey -> AotvEmptyState(
+                                icon = Icons.Outlined.LocalMovies,
+                                title = "Sem chave TMDB",
+                                message = "Adicione sua chave TMDB em Configurações → TMDB para ver o Descobrir.",
+                            )
+                            discoverState.connectionError -> AotvEmptyState(
+                                icon = Icons.Outlined.LocalMovies,
+                                title = "Catálogo vazio",
+                                message = "Confira a conexão ou escolha outro catálogo",
+                            )
+                            discoverState.emptyCatalog -> AotvEmptyState(
+                                icon = Icons.Outlined.LocalMovies,
+                                title = "Catálogo vazio",
+                                message = "Esse catálogo não trouxe títulos com o filtro escolhido. Tente outro filtro ou outro catálogo.",
+                            )
+                            discoverState.noTmdbMatch -> AotvEmptyState(
+                                icon = Icons.Outlined.LocalMovies,
+                                title = "Sem par no TMDB",
+                                message = "Os títulos desse catálogo não existem no TMDB, o que é comum em catálogo de anime",
+                            )
+                            else -> AotvEmptyState(
+                                icon = Icons.Outlined.LocalMovies,
+                                title = "Nada com esses filtros",
+                                message = "Tire alguma condição e tente de novo. Gênero somado a nota alta e ano fechado costuma zerar a lista.",
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    items(discoverState.items, key = { it.tmdbId }) { item ->
+                        com.aotv.app.ui.common.PosterCard(item = item, onClick = { onItemClick(item) })
+                    }
+                    if (discoverState.loadingMore) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(26.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Recentes compactos no topo da busca vazia: título + Limpar + chips (sem o estado vazio). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchRecentsCompact(
+    recents: List<String>,
+    onPick: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onClearRequest: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Icon(
+                    Icons.Default.History,
+                    contentDescription = null,
+                    tint = Accent,
+                    modifier = Modifier.size(15.dp),
+                )
+                Text(
+                    "BUSCAS RECENTES",
+                    color = Accent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = ManropeFontFamily,
+                    letterSpacing = 1.2.sp,
+                )
+            }
+            Text(
+                "Limpar",
+                color = TextTertiary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = ManropeFontFamily,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable(onClick = onClearRequest)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            recents.forEach { term -> RecentChip(term, onPick = { onPick(term) }, onRemove = { onRemove(term) }) }
+        }
+    }
+}
+
+/** Seção de Destaques: eyebrow + carrossel (a mesma fonte do herói da Início). */
+@Composable
+private fun SearchHeroSection(
+    items: List<MovieItem>,
+    logos: Map<Int, String>,
+    onItemClick: (MovieItem) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "DESTAQUES",
+            color = Accent,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold,
+            fontFamily = ManropeFontFamily,
+            letterSpacing = 1.2.sp,
+        )
+        SearchHeroCarousel(items, logos, onItemClick)
+    }
+}
+
+/** Título do destaque (texto; o logo-art entra quando há). */
+@Composable
+private fun SearchHeroTitle(title: String) {
+    Text(
+        title, color = TextPrimary, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold,
+        fontFamily = SoraFontFamily, maxLines = 2, lineHeight = 29.sp, letterSpacing = (-0.5).sp,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * Carrossel de Destaques, versão compacta do herói da Início (mesma arte, mesmo
+ * gradiente, sem trailer e sem os botões — a busca só apresenta o título; o
+ * toque abre o detalhe). Avança sozinho a cada 6 s.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun SearchHeroCarousel(
+    items: List<MovieItem>,
+    logos: Map<Int, String>,
+    onItemClick: (MovieItem) -> Unit,
+) {
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { items.size })
+    LaunchedEffect(pagerState.settledPage, items.size) {
+        if (items.size <= 1) return@LaunchedEffect
+        kotlinx.coroutines.delay(6000)
+        runCatching { pagerState.animateScrollToPage((pagerState.settledPage + 1) % items.size) }
+    }
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    // Mais baixo que o herói da Início: na busca o carrossel é uma seção, não a tela.
+    val heroHeight = (com.aotv.app.ui.common.homeHeroHeight(config.screenWidthDp, config.screenHeightDp, config.fontScale) * 0.72f).dp
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(heroHeight)
+            .clip(RoundedCornerShape(20.dp)),
+    ) {
+        androidx.compose.foundation.pager.HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
+            val item = items[index]
+            Box(Modifier.fillMaxSize().clickable { onItemClick(item) }) {
+                coil.compose.AsyncImage(
+                    model = item.backdropUrl.ifBlank { item.posterUrl },
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                )
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.45f to Color.Transparent,
+                            0.72f to Background.copy(alpha = 0.78f),
+                            1f to Background,
+                        ),
+                    ),
+                )
+                Column(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val logo = logos[item.tmdbId].orEmpty()
+                    if (logo.isNotBlank()) {
+                        coil.compose.SubcomposeAsyncImage(
+                            model = logo,
+                            contentDescription = item.title,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            alignment = Alignment.BottomStart,
+                            modifier = Modifier.fillMaxWidth(0.72f).heightIn(max = 64.dp),
+                            error = { SearchHeroTitle(item.title) },
+                            loading = { SearchHeroTitle(item.title) },
+                        )
+                    } else {
+                        SearchHeroTitle(item.title)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (item.rating > 0) Text(
+                            "★ ${"%.1f".format(item.rating)}", color = Gold, fontSize = 14.sp,
+                            fontWeight = FontWeight.ExtraBold, fontFamily = ManropeFontFamily,
+                        )
+                        if (item.year.isNotBlank()) Text(
+                            item.year, color = TextSecondary, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, fontFamily = ManropeFontFamily,
+                        )
+                        Text(
+                            if (item.type == MediaType.SERIES) "Série" else "Filme",
+                            color = TextSecondary, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, fontFamily = ManropeFontFamily,
+                        )
+                    }
+                }
+            }
+        }
+        // Bolinhas da página atual.
+        if (items.size > 1) Row(
+            Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            items.forEachIndexed { i, _ ->
+                Box(
+                    Modifier
+                        .size(if (i == pagerState.currentPage) 16.dp else 6.dp, 6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(if (i == pagerState.currentPage) Color.White else Color.White.copy(alpha = 0.45f)),
+                )
+            }
+        }
+    }
+}
+
+/** Título "Descobrir" + os 3 filtros compactos do Nuvio (tipo / ordem / gênero). */
+@Composable
+private fun SearchDiscoverHeader(
+    state: DiscoverViewModel.UiState,
+    vm: DiscoverViewModel,
+    onGenreClick: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                "Descobrir",
+                color = TextPrimary, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
+                fontFamily = SoraFontFamily, letterSpacing = (-0.4).sp,
+            )
+            if (state.totalResults > 0) {
+                Text(
+                    "%,d títulos".format(state.totalResults).replace(',', '.'),
+                    color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily,
+                )
+            }
+        }
+        // Catálogo de addon selecionado: o rótulo honesto no lugar dos filtros do TMDB.
+        if (state.selectedCatalog != null) {
+            Text(
+                state.catalogLabel,
+                color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val isMovie = state.kind == DiscoverViewModel.Kind.MOVIE
+            FilterChipPill(
+                if (isMovie) "Filmes" else "Séries", false,
+                onClick = { vm.setKind(if (isMovie) DiscoverViewModel.Kind.SERIES else DiscoverViewModel.Kind.MOVIE) },
+                icon = Icons.Default.ArrowDropDown,
+            )
+            if (state.selectedCatalog == null) {
+                FilterChipPill(
+                    discoverSortLabel(state), false,
+                    onClick = { vm.setSort(discoverNextSort(state)) },
+                    icon = Icons.Default.ArrowDropDown,
+                )
+                val genreLabel = when {
+                    state.selectedGenres.isEmpty() -> "Todos os Gêneros"
+                    state.selectedGenres.size == 1 ->
+                        state.genres.firstOrNull { it.id in state.selectedGenres }?.name ?: "1 gênero"
+                    else -> "${state.selectedGenres.size} gêneros"
+                }
+                FilterChipPill(
+                    genreLabel, state.selectedGenres.isNotEmpty(),
+                    onClick = onGenreClick,
+                    icon = Icons.Default.ArrowDropDown,
+                )
+            }
+        }
+    }
+}
+
+/** Rótulo do chip de ordem no Descobrir embutido. */
+private fun discoverSortLabel(state: DiscoverViewModel.UiState): String = when (state.sort) {
+    DiscoverViewModel.SORT_TOP_RATED -> "Melhor nota"
+    DiscoverViewModel.SORT_RELEASE_MOVIE, DiscoverViewModel.SORT_RELEASE_TV -> "Lançamentos"
+    DiscoverViewModel.SORT_TITLE -> "Título A-Z"
+    else -> "Popular"
+}
+
+/** Próxima ordem do chip (Popular → Melhor nota → Lançamentos → Título A-Z). */
+private fun discoverNextSort(state: DiscoverViewModel.UiState): String {
+    val release = if (state.kind == DiscoverViewModel.Kind.MOVIE) DiscoverViewModel.SORT_RELEASE_MOVIE
+        else DiscoverViewModel.SORT_RELEASE_TV
+    val order = listOf(
+        DiscoverViewModel.SORT_POPULAR, DiscoverViewModel.SORT_TOP_RATED, release, DiscoverViewModel.SORT_TITLE,
+    )
+    val idx = order.indexOf(state.sort).takeIf { it >= 0 } ?: 0
+    return order[(idx + 1) % order.size]
+}
+
+/** Diálogo de gêneros do Descobrir embutido (multi-seleção, igual ao painel da tela Descobrir). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GenrePickerDialog(
+    state: DiscoverViewModel.UiState,
+    vm: DiscoverViewModel,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BackgroundCard,
+        title = { Text("Gêneros", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = {
+            if (state.genres.isEmpty()) {
+                Text("Carregando gêneros…", color = TextSecondary, fontSize = 14.sp, fontFamily = ManropeFontFamily)
+            } else {
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.genres.forEach { g ->
+                        FilterChipPill(g.name, g.id in state.selectedGenres, onClick = { vm.toggleGenre(g.id) })
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Pronto", color = Accent) }
+        },
+        dismissButton = if (state.selectedGenres.isNotEmpty()) {
+            { TextButton(onClick = { vm.clearFilters() }) { Text("Limpar", color = TextSecondary) } }
+        } else null,
+    )
 }
 
 // ── Helpers visuais privados desta tela ──────────────────────────────────────
@@ -496,93 +979,6 @@ private fun RatingBadge(rating: Double) {
             fontFamily = ManropeFontFamily,
             letterSpacing = 0.3.sp,
         )
-    }
-}
-
-// ── ESTADO SEM CONSULTA: buscas recentes ──────────────────────────────────────
-
-/**
- * O que aparece quando o campo está vazio. Com histórico, mostra as últimas buscas em
- * chips (tocar repete a busca, X remove). Sem histórico, cai no AotvEmptyState centrado.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun RecentSearches(
-    recents: List<String>,
-    onPick: (String) -> Unit,
-    onRemove: (String) -> Unit,
-    onClearAll: () -> Unit,
-) {
-    if (recents.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            AotvEmptyState(
-                icon = Icons.Default.Search,
-                title = "Busque filmes e séries",
-                message = "Digite o nome de um título para descobrir onde assistir.",
-            )
-        }
-        return
-    }
-
-    Column(Modifier.fillMaxSize()) {
-        // Confirmar antes de limpar o histórico (v1.13.0).
-        var confirmClear by remember { mutableStateOf(false) }
-        if (confirmClear) AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            containerColor = BackgroundCard,
-            title = { Text("Limpar buscas recentes?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
-            text = { Text("O histórico de buscas será apagado.", color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { onClearAll(); confirmClear = false }) { Text("Limpar", color = DangerText) }
-            },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(top = 10.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                Icon(
-                    Icons.Default.History,
-                    contentDescription = null,
-                    tint = Accent,
-                    modifier = Modifier.size(15.dp),
-                )
-                Text(
-                    "BUSCAS RECENTES",
-                    color = Accent,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontFamily = ManropeFontFamily,
-                    letterSpacing = 1.2.sp,
-                )
-            }
-            Text(
-                "Limpar",
-                color = TextTertiary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = ManropeFontFamily,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .clickable(onClick = { confirmClear = true })
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-            )
-        }
-
-        FlowRow(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            recents.forEach { term -> RecentChip(term, onPick = { onPick(term) }, onRemove = { onRemove(term) }) }
-        }
     }
 }
 

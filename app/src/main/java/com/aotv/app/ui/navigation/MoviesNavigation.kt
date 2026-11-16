@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.*
@@ -119,6 +120,10 @@ private sealed class MoviesRoute(val route: String) {
         fun create(league: String, eventId: String) =
             "live_sports_game/" + android.net.Uri.encode(league) + "/" + android.net.Uri.encode(eventId)
     }
+    // Aba de Esportes (Lote 15, v1.25.0 — Bloco 1): 6ª aba da pílula, SÓ no
+    // celular. Na TV, esportes ficam dentro do hub do Ao vivo, como hoje
+    // (a rota não entra no menu da TV).
+    object SportsTab : MoviesRoute("movies_sports_tab")
     // Busca com query pronta (Lote 12, v1.22.0 — Frente 1): o painel do
     // programa no guia abre a busca com o título ("Buscar nos addons").
     object SearchWithQuery : MoviesRoute("movies_search_query/{query}") {
@@ -684,6 +689,16 @@ fun MoviesNavigation(
                     )
                 }
             }
+            // Aba de Esportes (Lote 15, v1.25.0 — Bloco 1): 6ª aba da pílula
+            // no celular. NÃO é fullscreen (a pílula fica visível) e não
+            // entra no menu da TV. O jogo abre a página dele; "Assistir"
+            // abre o player do canal resolvido.
+            composable(MoviesRoute.SportsTab.route) {
+                com.aotv.app.ui.sports.SportsTabScreen(
+                    onOpenGame = { league, eventId -> navController.navigate(MoviesRoute.SportsGame.create(league, eventId)) },
+                    onPlayChannel = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                )
+            }
             composable(MoviesRoute.LiveSources.route) {
                 tvScale(isTV) {
                     com.aotv.app.ui.live.LiveSourcesScreen(
@@ -888,6 +903,9 @@ fun MoviesNavigation(
     ) else emptyList()) + listOf(
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Search.route, "Busca", Icons.Default.Search) { navTab(MoviesRoute.Search.route) },
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.MinhaLista.route, "Biblioteca", Icons.Default.BookmarkBorder) { navTab(MoviesRoute.MinhaLista.route) },
+        // Lote 15 (v1.25.0 — Bloco 1): aba Esportes, 6ª da pílula, SÓ no
+        // celular (a pílula só existe no celular — na TV o hideBar a esconde).
+        com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.SportsTab.route, "Esportes", Icons.Default.SportsSoccer) { navTab(MoviesRoute.SportsTab.route) },
     )
 
     // IMPORTANTE: o NavHost precisa ficar SEMPRE no mesmo slot de composição. Se ele
@@ -912,6 +930,86 @@ fun MoviesNavigation(
     // "Gota" do Davi = esta pílula flutuante de navegação (formato de
     // pílula/gota, embaixo da tela) + o mini player acima dela.
     val panelBlurOn by androidx.hilt.navigation.compose.hiltViewModel<com.aotv.app.ui.movies.DetailPrefsViewModel>().panelBlur.collectAsStateWithLifecycle()
+
+    // ── Lote 15 (v1.25.0 — Bloco 4, itens 6 e 7) ──────────────────────────
+    // Atualizador estilo Nuvio (item 7): checa na abertura do app (cold
+    // start, no máx. 1x/dia — o gate de 24 h vive em
+    // SettingsViewModel.maybeAutoCheckForUpdates()) e mostra o banner no
+    // topo quando há versão nova. A checagem manual da página Aparência
+    // continua como está. A flag da sessão evita um 2º check se a
+    // navegação recompor (o gate de 24 h já barraria, mas a flag deixa
+    // explícito que é 1x por abertura — nunca a cada recomposição).
+    val settingsVm: com.aotv.app.ui.settings.SettingsViewModel =
+        androidx.hilt.navigation.compose.hiltViewModel()
+    val updateState by settingsVm.updateState.collectAsStateWithLifecycle()
+    val updateDownloading by settingsVm.updateDownloading.collectAsStateWithLifecycle()
+    val updateDownloadError by settingsVm.updateDownloadError.collectAsStateWithLifecycle()
+    val updateNeedsPermission by settingsVm.updateNeedsPermission.collectAsStateWithLifecycle()
+    var updateCheckedThisSession by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!updateCheckedThisSession) {
+            updateCheckedThisSession = true
+            settingsVm.maybeAutoCheckForUpdates()
+        }
+    }
+    var updateBannerDismissed by remember { mutableStateOf(false) }
+    val updateAvailable =
+        updateState as? com.aotv.app.data.remote.UpdateCheckResult.Available
+
+    // Mini cartão "Continuar assistindo" (item 6): mesmo dado da fileira
+    // Continuar assistindo — MinhaListaViewModel.recentlyPlayed() lê
+    // LibraryRepository.recentlyPlayed() (histórico Room, com o oculto por
+    // perfil filtrado, igual à fileira) — e a arte vem de recentArtwork.
+    // Só no cold start: o estado vive em remember (não rememberSaveable),
+    // então voltar do segundo plano não reexibe; reabrir o app, sim.
+    // Não mostra sem nada p/ continuar nem no modo privado.
+    val continueVm: com.aotv.app.ui.movies.MinhaListaViewModel =
+        androidx.hilt.navigation.compose.hiltViewModel()
+    val recentPlayed by continueVm.recentlyPlayed.collectAsStateWithLifecycle()
+    val recentArtwork by continueVm.recentArtwork.collectAsStateWithLifecycle()
+    val resumePrivateMode by androidx.hilt.navigation.compose.hiltViewModel<com.aotv.app.ui.movies.PlayerPrefsViewModel>().privateMode.collectAsStateWithLifecycle()
+    var resumeVisible by remember { mutableStateOf(true) }
+    // Terminado (90%+) some, igual à fileira (MoviesHomeViewModel): p/
+    // série terminada a fileira avança p/ o próximo episódio (precisa do
+    // TMDB) — o cartão pula p/ o próximo item inacabado em vez disso.
+    val resumeCandidate = remember(recentPlayed) {
+        recentPlayed.firstOrNull { !isResumeFinished(it) }
+    }
+    val showResumeCard = !resumePrivateMode && resumeVisible && resumeCandidate != null
+    LaunchedEffect(resumeCandidate) {
+        if (resumeCandidate != null && resumeVisible) {
+            kotlinx.coroutines.delay(5000)
+            resumeVisible = false
+        }
+    }
+    // Retomar: mesmo caminho do "Continuar" do detalhe (DetailPrimary) —
+    // a última fonte salva toca da posição salva; sem fonte salva, o
+    // player busca as fontes (embedUrl vazio). Ao vivo volta ao player
+    // do canal, como o toque no card da fileira.
+    fun resumeContinue(h: com.aotv.app.data.local.entity.MovieHistoryEntity) {
+        resumeVisible = false
+        if (h.type == com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE) {
+            val live = com.aotv.app.ui.live.LivePlayerViewModel.parseLiveEmbed(
+                "live|" + h.lastSourceUrl + "|" + h.lastAddon
+            )
+            if (live != null) {
+                val (channelId, startSec, stopSec) = live
+                if (stopSec > 0 && System.currentTimeMillis() / 1000 >= stopSec) {
+                    navController.navigate(MoviesRoute.LivePlayer.create(channelId, startSec, stopSec))
+                } else {
+                    navController.navigate(MoviesRoute.LivePlayer.create(channelId))
+                }
+                return
+            }
+        }
+        val ep = parseResumeEpisode(h.lastEpisode)
+        navigateToPlayer(
+            h.lastSourceUrl, h.title, tmdbId = h.tmdbId, type = h.type,
+            posterUrl = h.posterUrl, lastEpisode = h.lastEpisode,
+            startPositionMs = h.positionMs,
+            season = ep?.first ?: 0, episode = ep?.second ?: 0,
+        )
+    }
 
     // Foco da TV. Cada tela nova recebe o foco no conteúdo e Voltar na Início vai ao menu e
     // depois pergunta se quer sair, igual ao back() do webOS.
@@ -974,12 +1072,13 @@ fun MoviesNavigation(
                 false
             } else Modifier),
     ) {
-        // Reserva p/ a pílula: altura dela (~98dp: item 70 + margens) + inset da
-        // navigation bar do sistema, para a última linha do grid não ficar escondida
-        // atrás da pílula. Com o mini player ativo (Fase C), soma a altura da
-        // barra compacta (~64dp) que fica acima da pílula.
+        // Reserva p/ a pílula (Lote 15, v1.25.0 — menor: item 46 + paddings,
+        // ~66dp no total) + inset da navigation bar do sistema, para a
+        // última linha do grid não ficar escondida atrás da pílula. Com o
+        // mini player ativo (Fase C), soma a altura da barra compacta
+        // (~64dp) que fica acima da pílula.
         val miniActive = com.aotv.app.ui.movies.MiniPlayerState.minimized.value
-        val barReserve = (104.dp + if (miniActive) 64.dp else 0.dp) + WindowInsets.navigationBars.asPaddingValues()
+        val barReserve = (84.dp + if (miniActive) 64.dp else 0.dp) + WindowInsets.navigationBars.asPaddingValues()
             .calculateBottomPadding()
         // Na TV a barra vira o menu lateral próprio (TvSideMenu).
         val hideBar = isFullscreen || isTV || showTabletRail
@@ -1060,11 +1159,37 @@ fun MoviesNavigation(
                 },
             )
         }
+        // Toque fora dispensa o mini cartão (Lote 15, item 6): scrim
+        // transparente por cima do conteúdo (a pílula e o cartão ficam por
+        // cima dele, na Column abaixo, e continuam tocáveis). Só existe
+        // enquanto o cartão está visível (no máx. 5 s).
+        if (!hideBar && showResumeCard) {
+            Box(
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                ) { resumeVisible = false },
+            )
+        }
         if (!hideBar) {
             // Mini player (Fase C) acima da pílula: título + play/pause +
             // expandir + fechar. Só no celular (hideBar cobre TV/tablet) e só
             // fora da rota do player (lá o player cheio está na tela).
             Column(Modifier.align(Alignment.BottomCenter)) {
+                // Mini cartão "Continuar assistindo" (Lote 15, item 6):
+                // flutua acima da pílula (e do mini player, quando ativo),
+                // some sozinho em ~5 s, e o toque retoma a reprodução.
+                val resumeItem = resumeCandidate
+                if (showResumeCard && resumeItem != null) {
+                    ResumeContinueCard(
+                        item = resumeItem,
+                        artwork = recentArtwork[resumeArtworkKey(resumeItem)],
+                        onResume = { resumeContinue(resumeItem) },
+                        onDismiss = { resumeVisible = false },
+                        frosted = panelBlurOn,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
                 if (miniActive) {
                     com.aotv.app.ui.movies.MiniPlayerBar(
                         onExpand = {
@@ -1092,6 +1217,44 @@ fun MoviesNavigation(
                 settingsRoute = MoviesRoute.Settings.route,
                 profile = profile,
                 onProfile = { navController.navigate(MoviesRoute.Profiles.route) },
+            )
+        }
+        // Banner de atualização estilo Nuvio (Lote 15, item 7): no topo,
+        // só no celular fora de tela cheia (hideBar cobre TV/tablet/
+        // player/detalhe). O X dispensa nesta sessão; "Atualizar" baixa o
+        // APK da release oficial e pede p/ instalar (fluxo existente).
+        val availableUpdate = updateAvailable
+        if (!hideBar && availableUpdate != null && !updateBannerDismissed) {
+            Box(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                    .statusBarsPadding().padding(top = 8.dp),
+            ) {
+                AppUpdateBanner(
+                    tag = availableUpdate.release.tag,
+                    sizeBytes = availableUpdate.release.sizeBytes,
+                    downloading = updateDownloading,
+                    downloadError = updateDownloadError,
+                    onUpdate = { settingsVm.downloadAndInstallUpdate() },
+                    onDismiss = { updateBannerDismissed = true },
+                    frosted = panelBlurOn,
+                )
+            }
+        }
+        // Sem permissão p/ instalar apps desconhecidos: mesmo diálogo da
+        // página Aparência (o banner só baixa; a permissão é do sistema).
+        if (updateNeedsPermission) {
+            AlertDialog(
+                onDismissRequest = { settingsVm.dismissUpdatePermission() },
+                title = { Text("Permitir instalação") },
+                text = { Text("O Android ainda não permite que o AOTV instale apps. Ative \"Instalar apps desconhecidos\" p/ o AOTV nas configurações do sistema e tente de novo.") },
+                confirmButton = {
+                    TextButton(onClick = { settingsVm.dismissUpdatePermission(); settingsVm.openUnknownSourcesSettings() }) {
+                        Text("Abrir configurações")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { settingsVm.dismissUpdatePermission() }) { Text("Agora não") }
+                },
             )
         }
     }
@@ -1144,7 +1307,15 @@ private fun TouchRailItem(
 /** Pílula flutuante da Fase A: 4 abas (Início, Busca, Biblioteca, Perfil) + Ao vivo
  *  condicional. A aba selecionada leva o fundo na cor de acento (turquesa) com
  *  ícone e rótulo escuros; Perfil usa o avatar do perfil em uso. Sem "Mais":
- *  Configurações sai pela aba Perfil. */
+ *  Configurações sai pela aba Perfil.
+ *
+ *  Lote 15 (v1.25.0 — Bloco 4, item 4): pílula menor, estilo Nuvio — mais
+ *  estreita (margens laterais de 20dp), itens de 46dp, ícones de 20dp,
+ *  paddings menores. O vidro é o mesmo tratamento de antes ([GlassBg]
+ *  translúcido + borda sutil, com o toggle `pref_panel_blur`); blur real
+ *  de fundo não existe aqui (o RenderEffect desfoca o próprio conteúdo,
+ *  não o que está atrás da barra). A lista de itens continua sendo
+ *  parâmetro ([items]), p/ a aba Esportes entrar depois sem reescrever. */
 @Composable
 private fun MoviesBottomBar(
     currentRoute: String?,
@@ -1164,11 +1335,11 @@ private fun MoviesBottomBar(
     // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
     // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
     // próprio conteúdo (ícones inclusos), não o que está atrás da barra.
-    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
-        .shadow(16.dp, MaterialTheme.shapes.extraLarge)
+    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 6.dp)
+        .shadow(10.dp, MaterialTheme.shapes.extraLarge)
         .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.62f) else com.aotv.app.ui.theme.GlassBg)
         .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
-        .padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        .padding(4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
         items.forEach { item ->
             MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
         }
@@ -1188,17 +1359,17 @@ private fun MoviesBottomBarItem(
     modifier: Modifier = Modifier,
     profile: com.aotv.app.data.local.Profile? = null,
 ) {
-    Column(modifier.heightIn(min = 56.dp).clip(MaterialTheme.shapes.large)
+    Column(modifier.heightIn(min = 46.dp).clip(MaterialTheme.shapes.large)
         .background(if (selected) com.aotv.app.ui.theme.Accent else androidx.compose.ui.graphics.Color.Transparent)
         .semantics { this.selected = selected }
         .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
-        .padding(horizontal = 4.dp, vertical = 7.dp),
+        .padding(horizontal = 2.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         val fg = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary
-        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 22.dp)
-        else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(22.dp))
+        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 20.dp)
+        else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(20.dp))
         Text(label, color = fg,
-            fontSize = 10.sp, lineHeight = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            fontSize = 9.sp, lineHeight = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
             fontFamily = com.aotv.app.ui.theme.Inter, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }

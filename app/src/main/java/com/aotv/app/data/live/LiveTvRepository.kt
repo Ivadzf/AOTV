@@ -46,6 +46,12 @@ class LiveTvRepository @Inject constructor(
         val accounts: Map<String, XtreamAccount> = emptyMap(),
         /** Aba "Ao vivo" na barra de baixo. */
         val showInBar: Boolean = true,
+        /**
+         * Algum addon ligado tem catálogo de TV (Lote 15, Bloco 2 follow-up,
+         * v1.25.0): a aba aparece mesmo sem M3U/Xtream. Só um cache (prefs
+         * "aotv_live"), atualizado quando os catálogos carregam.
+         */
+        val hasAddonTv: Boolean = false,
     ) {
         val hasSources get() = sources.isNotEmpty()
     }
@@ -82,9 +88,48 @@ class LiveTvRepository @Inject constructor(
             favorites = prefs.getStringSet("favorites", emptySet()).orEmpty(),
             recents = prefs.getString("recents", "").orEmpty().split('\n').filter { it.isNotBlank() },
             showInBar = prefs.getBoolean("show_in_bar", true),
+            hasAddonTv = prefs.getBoolean("has_addon_tv", false),
         )
     )
     val state: StateFlow<State> = _state.asStateFlow()
+
+    // Lote 15 (v1.25.0, Bloco 2 follow-up): canais de addon de TV com o
+    // stream já resolvido no toque — SÓ em memória (a URL costuma trazer
+    // token de validade curta e não pode ir p/ o disco); o player os
+    // encontra pelo id "addon-tv:..." (ver [channel] e o estado do
+    // LivePlayerViewModel). Acesso pela Main (ViewModels) — o synchronized
+    // cobre leituras de outras threads.
+    private val addonChannels = LinkedHashMap<String, LiveChannel>()
+
+    /** Guarda o canal de addon com o stream resolvido (só em memória). */
+    fun registerAddonChannel(channel: LiveChannel) {
+        synchronized(addonChannels) { addonChannels[channel.id] = channel }
+    }
+
+    /** Canais de addon registrados (com o stream resolvido). */
+    fun addonChannels(): List<LiveChannel> =
+        synchronized(addonChannels) { addonChannels.values.toList() }
+
+    /**
+     * Assinatura dos addons ligados (URLs ordenadas): diz se a checagem de
+     * catálogo de TV está desatualizada (addon instalado, ligado ou
+     * desligado depois da última checagem).
+     */
+    fun addonTvSig(): String =
+        platformPrefs.addons.value.filter { it.enabled }.map { it.url }.sorted().joinToString("\n")
+
+    /** Assinatura da última checagem de catálogo de TV guardada. */
+    fun addonTvCheckedSig(): String = prefs.getString("addon_tv_sig", "").orEmpty()
+
+    /**
+     * Guarda se algum addon ligado tem catálogo de TV (cache p/ a aba Ao
+     * vivo aparecer sem M3U/Xtream) + a assinatura conferida. Só a aba lê
+     * isto ([hasAddonTv] no [State]).
+     */
+    fun setAddonTvAvailable(has: Boolean) {
+        prefs.edit().putBoolean("has_addon_tv", has).putString("addon_tv_sig", addonTvSig()).apply()
+        _state.update { it.copy(hasAddonTv = has) }
+    }
 
     init {
         // Abre com o que estava em arquivo. A atualização pela rede vem quando a tela pede.
@@ -576,7 +621,13 @@ class LiveTvRepository @Inject constructor(
         _state.update { it.copy(epg = if (merged.isNotEmpty()) merged else cached?.first ?: it.epg, epgLoading = false) }
     }
 
-    fun channel(id: String): LiveChannel? = _state.value.channels.firstOrNull { it.id == id }
+    /**
+     * Canal pelo id — o de addon resolvido vem primeiro (só em memória, ver
+     * [registerAddonChannel]); sem ele, o da lista M3U/Xtream.
+     */
+    fun channel(id: String): LiveChannel? =
+        synchronized(addonChannels) { addonChannels[id] }
+            ?: _state.value.channels.firstOrNull { it.id == id }
 
     // ── Lote 12 (v1.22.0) — Gerenciar canais + Assign EPG + time shift ──
     // As personalizações do usuário (por perfil, em PlatformPrefs) valem em

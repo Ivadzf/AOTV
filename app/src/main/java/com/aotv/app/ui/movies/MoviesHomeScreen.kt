@@ -578,6 +578,17 @@ private fun HomeSectionsTab(
     }
 
     val display = state.display
+    // Ocultar conteúdo não lançado (Bloco 3, Lote 15): vale p/ as fileiras do
+    // catálogo e de addon. Continuar, Novos episódios e Próximos são do
+    // progresso/calendário — não filtram.
+    val today = remember(state.hideUnreleased) { todayIso() }
+    fun vis(list: List<MovieItem>): List<MovieItem> =
+        if (state.hideUnreleased) list.filterNot { isUnreleased(it, today) } else list
+    val recommended = vis(state.recommended)
+    val trendingMovies = vis(state.trendingMovies)
+    val trendingTv = vis(state.trendingTv)
+    val nowPlaying = vis(state.nowPlaying)
+    val releases = vis(state.releases2026)
     // Fundo dinâmico (opt-in, desligado por padrão): gradiente com a matiz do
     // pôster do destaque. Sem matiz ainda, o fundo sólido aparece no lugar.
     val heroHue = if (display.dynamicBackground && heroItems.isNotEmpty()) {
@@ -649,28 +660,28 @@ private fun HomeSectionsTab(
                         onLongClick = { pendingNotToday = it },
                     )
                 }
-                SystemRow.RECOMMENDED -> if (state.recommended.isNotEmpty()) item(key = row.key) {
-                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, state.recommended, onItemClick, display = display)
+                SystemRow.RECOMMENDED -> if (recommended.isNotEmpty()) item(key = row.key) {
+                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, recommended, onItemClick, display = display)
                 }
                 SystemRow.TRAILERS -> if (state.trailersLoading || state.latestTrailers.isNotEmpty()) item(key = row.key) {
                     LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle, display = display)
                 }
-                SystemRow.TRENDING_MOVIES -> if (state.trendingMovies.isNotEmpty()) item(key = row.key) {
+                SystemRow.TRENDING_MOVIES -> if (trendingMovies.isNotEmpty()) item(key = row.key) {
                     val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.TRENDING)) } }
-                    SectionRow(row.displayTitle, state.trendingMovies, onItemClick, display = display, onSeeMore = more)
+                    SectionRow(row.displayTitle, trendingMovies, onItemClick, display = display, onSeeMore = more)
                 }
-                SystemRow.TRENDING_TV -> if (state.trendingTv.isNotEmpty()) item(key = row.key) {
+                SystemRow.TRENDING_TV -> if (trendingTv.isNotEmpty()) item(key = row.key) {
                     val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.SERIES, MoviesHomeViewModel.CatalogEndpoint.TRENDING)) } }
-                    SectionRow(row.displayTitle, state.trendingTv, onItemClick, display = display, onSeeMore = more)
+                    SectionRow(row.displayTitle, trendingTv, onItemClick, display = display, onSeeMore = more)
                 }
-                SystemRow.NOW_PLAYING -> if (state.nowPlaying.isNotEmpty()) item(key = row.key) {
+                SystemRow.NOW_PLAYING -> if (nowPlaying.isNotEmpty()) item(key = row.key) {
                     val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.NOW_PLAYING)) } }
-                    SectionRow(row.displayTitle, state.nowPlaying, onItemClick, display = display, onSeeMore = more)
+                    SectionRow(row.displayTitle, nowPlaying, onItemClick, display = display, onSeeMore = more)
                 }
-                SystemRow.RELEASES -> if (state.releases2026.isNotEmpty()) item(key = row.key) {
+                SystemRow.RELEASES -> if (releases.isNotEmpty()) item(key = row.key) {
                     val t = custom.ifBlank { "Lançamentos ${state.releasesYear}" }
                     val more = remember(row.key, t, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(t, MoviesHomeViewModel.CatalogType.MOVIE, genreId = null, sort = MoviesHomeViewModel.SORT_RELEASE_MOVIE, year = state.releasesYear)) } }
-                    SectionRow(t, state.releases2026, onItemClick, display = display, onSeeMore = more)
+                    SectionRow(t, releases, onItemClick, display = display, onSeeMore = more)
                 }
                 // Gêneros é UMA fileira ligada: 1 fileira de chips (filmes + séries),
                 // sem expandir em seções. Antes 1 fileira virava até ~70 seções
@@ -683,7 +694,7 @@ private fun HomeSectionsTab(
                     item(key = row.key) {
                         com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null) { f -> onFolderClick(col.id, f.id) }
                     }
-                } else state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || it.items.isNotEmpty() }?.let { ar ->
+                } else state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || vis(it.items).isNotEmpty() }?.let { ar ->
                     item(key = "addon:" + ar.ref.key) {
                         // Carrega ao aparecer na tela (a LazyColumn só compõe o
                         // visível): antes todas as fileiras de addon disparavam
@@ -691,9 +702,11 @@ private fun HomeSectionsTab(
                         LaunchedEffect(ar.ref.key) {
                             if (ar.items.isEmpty() && ar.loading) viewModel.loadAddonRow(ar.ref.key)
                         }
+                        val shownItems = vis(ar.items)
                         if (ar.items.isEmpty()) com.aotv.app.ui.common.SkeletonRail()
-                        else SectionRow(
-                            ar.title, ar.items, onItemClick,
+                        // Tudo não lançado e o filtro ligado: a fileira some em vez de ficar vazia.
+                        else if (shownItems.isNotEmpty()) SectionRow(
+                            addonRowTitle(ar, state.typeSuffix), shownItems, onItemClick,
                             display = display,
                             onNearEnd = if (ar.more) remember(ar.ref.key) { { viewModel.loadAddonRow(ar.ref.key) } } else null,
                         )
@@ -756,6 +769,28 @@ private fun HomeSectionsTab(
                 onRoll = { randomVm.roll() },
             )
         }
+        // Personalizar Início (Bloco 3, Lote 15): entrada visível no fim da
+        // Início, no mesmo formato dos cartões Descobrir e Surpreenda-me.
+        item(key = "customize_home") {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(BackgroundCard)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCustomize)
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Icon(Icons.Default.Settings, null, tint = TextPrimary, modifier = Modifier.size(24.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Personalizar Início", color = TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold)
+                    Text("Fileiras, ordem, nomes e destaque", color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                }
+                Icon(Icons.Default.ChevronRight, "Abrir Personalizar Início", tint = TextTertiary, modifier = Modifier.size(22.dp))
+            }
+        }
         if (heroItems.isEmpty() && state.layout.isEmpty()) item(key = "empty") {
             com.aotv.app.ui.common.AotvEmptyState(
                 Icons.Default.MovieFilter, "Sua Início está vazia",
@@ -770,16 +805,53 @@ private fun HomeSectionsTab(
 internal fun heroLabel(s: MoviesHomeViewModel.UiState): String {
     val chosen = s.layout.firstOrNull { it.key == s.heroSource && s.heroSource.isNotBlank() }
     if (chosen != null) return if (chosen.system == SystemRow.RECOMMENDED && chosen.title.isBlank()) "Para você" else chosen.displayTitle
+    val heroCatalogs = s.heroCatalogs
+    if (heroCatalogs != null && heroCatalogs.isNotEmpty()) {
+        return s.layout.firstOrNull { it.key in heroCatalogs }?.displayTitle ?: ""
+    }
     if (s.catalogOn && (s.trendingMovies.isNotEmpty() || s.trendingTv.isNotEmpty())) return ""
     return s.addonRows.firstOrNull { it.items.isNotEmpty() }?.title
         ?: s.layout.firstOrNull { it.system == SystemRow.CONTINUE }?.displayTitle ?: ""
 }
 
+/** Data de hoje (yyyy-MM-dd), p/ "Ocultar conteúdo não lançado". */
+internal fun todayIso(): String {
+    val c = java.util.Calendar.getInstance()
+    return "%04d-%02d-%02d".format(
+        java.util.Locale.US,
+        c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
+    )
+}
+
+/**
+ * Conteúdo não lançado (Bloco 3, Lote 15): data de lançamento depois de hoje.
+ * Sem data (item de addon sem releaseDate, item do progresso), fica — nunca
+ * some por falta de dado. Só o ano, sem dia, compara só o ano.
+ */
+internal fun isUnreleased(item: MovieItem, today: String = todayIso()): Boolean {
+    val d = item.releaseDate.ifBlank { item.year }
+    if (d.isBlank()) return false
+    return if (d.length >= 10) d.take(10) > today else (d.toIntOrNull() ?: return false) > today.take(4).toInt()
+}
+
+/**
+ * Título da fileira de addon na Início. Com o sufixo de tipo ligado (Bloco 3,
+ * Lote 15), o nome ganha " · Filme" ou " · Série".
+ */
+internal fun addonRowTitle(row: MoviesHomeViewModel.AddonRow, typeSuffix: Boolean): String {
+    if (!typeSuffix) return row.title
+    return row.title + if (row.ref.type == "series") " · Série" else " · Filme"
+}
+
 /**
  * De onde vêm os títulos do destaque. Fileira escolhida no Personalizar Início, ou no
- * automático o que está em alta no AOTV, senão a primeira fileira de addon, senão o progresso.
+ * automático os catálogos escolhidos lá, senão o que está em alta no AOTV, senão a
+ * primeira fileira de addon, senão o progresso. Destaque desligado (ou sem catálogo
+ * escolhido) = lista vazia — a busca lê esta mesma função e some com os Destaques.
  */
 internal fun heroCandidates(s: MoviesHomeViewModel.UiState): List<MovieItem> {
+    // Destaque desligado no Personalizar Início: nem a Início nem a busca mostram o carrossel.
+    if (!s.heroOn) return emptyList()
     fun itemsOf(key: String): List<MovieItem> = when (SystemRow.of(key)) {
         SystemRow.CONTINUE -> s.continueWatching
         SystemRow.RECOMMENDED -> s.recommended
@@ -789,12 +861,17 @@ internal fun heroCandidates(s: MoviesHomeViewModel.UiState): List<MovieItem> {
         SystemRow.RELEASES -> s.releases2026
         else -> s.addonRows.firstOrNull { it.ref.key == key }?.items.orEmpty()
     }
+    val heroCatalogs = s.heroCatalogs
     val chosen = s.heroSource.takeIf { k -> k.isNotBlank() && s.layout.any { it.key == k } }
-    return when {
+    val raw = when {
         chosen != null -> itemsOf(chosen)
+        // Catálogos do destaque escolhidos: o automático junta só os escolhidos,
+        // na ordem das fileiras. Lista vazia = nenhum catálogo no destaque.
+        heroCatalogs != null -> s.layout.filter { it.key in heroCatalogs }.flatMap { itemsOf(it.key) }
         s.catalogOn && (s.trendingMovies.isNotEmpty() || s.trendingTv.isNotEmpty()) -> s.trendingMovies + s.trendingTv
         else -> s.addonRows.firstOrNull { it.items.isNotEmpty() }?.items ?: s.continueWatching
     }.take(12)
+    return if (s.hideUnreleased) raw.filterNot { isUnreleased(it) } else raw
 }
 
 @Composable

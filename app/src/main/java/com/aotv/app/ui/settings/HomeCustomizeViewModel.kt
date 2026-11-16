@@ -32,6 +32,15 @@ class HomeCustomizeViewModel @Inject constructor(
 
     data class HeroOption(val key: String, val label: String)
 
+    /** Um catálogo na lista "Catálogos do destaque" (Bloco 3, Lote 15). */
+    data class HeroCatalogOption(
+        val key: String,
+        val label: String,
+        val selected: Boolean,
+        val canUp: Boolean,
+        val canDown: Boolean,
+    )
+
     data class UiState(
         val rows: List<Row> = emptyList(),
         val total: Int = 0,
@@ -43,12 +52,44 @@ class HomeCustomizeViewModel @Inject constructor(
         val onlyOn: Boolean = false,
         val addonsWithCatalogs: Int = 0,
         val kids: Boolean = false,
+        /** Layout da Página Inicial (Bloco 3, Lote 15). */
+        val heroOn: Boolean = true,
+        val typeSuffix: Boolean = false,
+        val hideUnreleased: Boolean = false,
+        /** null = catálogos do destaque no automático. */
+        val heroCatalogs: Set<String>? = null,
+        val heroCatalogOptions: List<HeroCatalogOption> = emptyList(),
     )
+
+    /** Prefs do Layout da Página Inicial, juntas p/ um combine só. */
+    private data class LayoutPrefs(
+        val heroOn: Boolean,
+        val heroCatalogs: Set<String>?,
+        val hideUnreleased: Boolean,
+        val typeSuffix: Boolean,
+    )
+
+    private val layoutPrefsFlow: StateFlow<LayoutPrefs> = combine(
+        prefs.heroOnFlow, prefs.heroCatalogsFlow, prefs.hideUnreleasedFlow, prefs.heroTypeSuffixFlow,
+    ) { heroOn, heroCatalogs, hideUnreleased, typeSuffix ->
+        LayoutPrefs(heroOn, heroCatalogs, hideUnreleased, typeSuffix)
+    }.stateIn(
+        viewModelScope, SharingStarted.Eagerly,
+        LayoutPrefs(prefs.heroOn, prefs.heroCatalogs, prefs.hideUnreleased, prefs.heroTypeSuffix),
+    )
+
+    /**
+     * Destaque pode vir de qualquer fileira com pôster grande. Trailers, Gêneros, Novos
+     * episódios e coleções (cartões de pasta, não de título) não servem.
+     */
+    private fun isHeroable(r: HomeRowPref): Boolean =
+        r.enabled && r.key != SystemRow.TRAILERS.key && r.key != SystemRow.GENRES.key &&
+            r.key != SystemRow.NEW_EPISODES.key && r.collectionId == null
 
     private val onlyOn = MutableStateFlow(false)
     private val heroTrailer = MutableStateFlow(prefs.heroTrailer)
 
-    val state: StateFlow<UiState> = combine(
+    private val baseState: StateFlow<UiState> = combine(
         combine(prefs.homeLayoutFlow, prefs.catalogOnFlow, prefs.heroSourceFlow, ::Triple),
         prefs.addons, onlyOn, heroTrailer,
     ) { (layout, catalogOn, hero), addons, only, trailer ->
@@ -84,12 +125,7 @@ class HomeCustomizeViewModel @Inject constructor(
                 canDown = r.key !in pinned && HomeLayout.canMove(layout, r.key, 1, movable),
             )
         }
-        // Destaque pode vir de qualquer fileira com pôster grande. Trailers, Gêneros e coleções
-        // (cartões de pasta, não de título) não servem.
-        val heroable = layout.filter {
-            it.enabled && it.key != SystemRow.TRAILERS.key && it.key != SystemRow.GENRES.key && it.key != SystemRow.NEW_EPISODES.key &&
-                it.collectionId == null
-        }
+        val heroable = layout.filter { isHeroable(it) }
         UiState(
             rows = rows,
             total = layout.size,
@@ -101,6 +137,31 @@ class HomeCustomizeViewModel @Inject constructor(
             onlyOn = only,
             addonsWithCatalogs = layout.mapNotNull { it.ref?.base }.distinct().size,
             kids = prefs.isKids,
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, UiState())
+
+    /** Estado final: o base + as prefs do Layout da Página Inicial. */
+    val state: StateFlow<UiState> = combine(baseState, layoutPrefsFlow) { base, lp ->
+        // Catálogos do destaque, na ordem das fileiras (a mesma do seletor de
+        // fonte do destaque). Sem escolha explícita (null), todos os que servem
+        // p/ o destaque estão dentro. Subir/descer aqui move a fileira na Início
+        // — a ordem do destaque É a ordem das fileiras.
+        val opts = base.heroOptions.drop(1)
+        val heroCatalogOptions = opts.mapIndexed { i, o ->
+            HeroCatalogOption(
+                key = o.key,
+                label = o.label,
+                selected = lp.heroCatalogs?.contains(o.key) ?: true,
+                canUp = i > 0,
+                canDown = i < opts.size - 1,
+            )
+        }
+        base.copy(
+            heroOn = lp.heroOn,
+            typeSuffix = lp.typeSuffix,
+            hideUnreleased = lp.hideUnreleased,
+            heroCatalogs = lp.heroCatalogs,
+            heroCatalogOptions = heroCatalogOptions,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, UiState())
 
@@ -129,6 +190,35 @@ class HomeCustomizeViewModel @Inject constructor(
     fun setHeroSource(key: String) { prefs.heroSource = key }
 
     fun setHeroTrailer(on: Boolean) { prefs.heroTrailer = on; heroTrailer.value = on }
+
+    /** Layout da Página Inicial (Bloco 3, Lote 15). */
+    fun setHeroOn(on: Boolean) { prefs.heroOn = on }
+
+    fun setTypeSuffix(on: Boolean) { prefs.heroTypeSuffix = on }
+
+    fun setHideUnreleased(on: Boolean) { prefs.hideUnreleased = on }
+
+    /**
+     * Liga/desliga um catálogo no destaque. Na primeira mudança, a escolha
+     * explícita parte de todos os que servem p/ o destaque (o padrão).
+     */
+    fun setHeroCatalog(key: String, on: Boolean) {
+        val heroable = prefs.homeLayout.filter { isHeroable(it) }.map { it.key }
+        val current = prefs.heroCatalogs ?: heroable.toSet()
+        prefs.heroCatalogs = if (on) current + key else current - key
+    }
+
+    /** Catálogos do destaque de volta ao automático. */
+    fun resetHeroCatalogs() { prefs.heroCatalogs = null }
+
+    /**
+     * Sobe/desce um catálogo do destaque. Move a fileira na Início — a ordem do
+     * destaque é a ordem das fileiras, e só troca com outro catálogo do destaque.
+     */
+    fun moveHeroCatalog(key: String, delta: Int) {
+        val heroable = prefs.homeLayout.filter { isHeroable(it) }.map { it.key }.toSet()
+        prefs.moveHomeRow(key, delta) { it.key in heroable }
+    }
 
     fun setOnlyOn(on: Boolean) { onlyOn.value = on }
 }

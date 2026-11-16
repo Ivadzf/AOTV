@@ -1622,6 +1622,18 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 television = isTv,
                 // Lote 4: painel de fontes (e demais painéis) em vidro fosco.
                 frosted = panelBlurOn,
+                // Lote 15 item 2 — chips de provider no topo da folha de Fontes
+                // (Todos + um por addon presente). Só no celular: na TV o D-pad
+                // é dono do painel e a fileira ficaria fora da navegação.
+                filterChips = if (panelKind == "sources" && !isTv) {
+                    listOf(SourceFilterChip("Todos", sourceProviderFilter.isBlank()) {
+                        sourceProviderFilter = ""; sourcePanelIdx = 0
+                    }) + sourceProviders.map { provider ->
+                        SourceFilterChip(provider, sourceProviderFilter.equals(provider, ignoreCase = true)) {
+                            sourceProviderFilter = provider; sourcePanelIdx = 0
+                        }
+                    }
+                } else emptyList(),
             )
         }
     }
@@ -2068,6 +2080,12 @@ class PlayerSession(
     var sourceSettledOrder by run { mutableStateOf<List<String>?>(null) }
     /** URLs que o usuário tocou/focou na folha — nunca mudam de lugar sozinhas. */
     var sourceTouchedUrls by run { mutableStateOf<Set<String>>(emptySet()) }
+    /**
+     * Filtro de provider da folha de fontes (Lote 15 item 2 — v1.25.0, estilo Nuvio):
+     * "" = Todos; senão o nome do addon. Por sessão; trocar de episódio zera (ver
+     * [noteSourcesArrived]). O filtro só ESCONDE — a ordem continua a congelada.
+     */
+    var sourceProviderFilter by run { mutableStateOf("") }
     /** Salva a vista da folha no perfil (ligado pela tela a [PlayerPrefsViewModel.setSourcesRanked]). */
     var onSourcesRankedChange: (Boolean) -> Unit = {}
     /** Repo da TV ao vivo p/ o On Demand da folha (ligado pela tela; null = sem repo). */
@@ -2781,6 +2799,8 @@ class PlayerSession(
             sourcesSettled = false
             sourceSettledOrder = null
             sourceTouchedUrls = emptySet()
+            // Lote 15 item 2: trocar de episódio zera o filtro de provider junto.
+            sourceProviderFilter = ""
             return
         }
         val known = sourceSheetOrder.toSet()
@@ -2974,9 +2994,25 @@ class PlayerSession(
     // Episódio anterior (séries)
     fun playPrevEpisode() { if (type == "SERIES" && curEpisode > 1) goToEpisode(curEpisode - 1) }
 
+    /**
+     * Providers (addons) presentes na folha, na ordem em que apareceram — alimenta os
+     * chips de filtro (Lote 15 item 2). Sem addon (fonte própria), fora da lista.
+     */
+    val sourceProviders: List<String> get() =
+        stableSourceOrder().mapNotNull { currentSources.getOrNull(it)?.addon?.takeIf { a -> a.isNotBlank() } }.distinct()
+
+    /** "T2 E3" p/ os cards da folha quando for série (Lote 15 item 2). "" em filme. */
+    private val episodeCode: String get() =
+        if (type == "SERIES" && curSeason > 0 && curEpisode > 0) "T$curSeason E$curEpisode" else ""
+
     // Painel D-pad separado por tipo: "sources" (fontes+episódios), "subs" (legendas), "audio".
     val sourceActions: List<TvPlayerAction> get() {
         val playing = currentSources.getOrNull(currentSourceIdx)?.url
+        // Lote 15 item 2 — filtro de provider (chips "Todos + addon"): só esconde o
+        // que não é do provider; a ordem continua a congelada ([stableSourceOrder]).
+        val providerFilter = sourceProviderFilter
+        fun matchesFilter(addon: String): Boolean =
+            providerFilter.isBlank() || addon.equals(providerFilter, ignoreCase = true)
         // Lote 14 item 4: os grupos seguem a ordem congelada da folha (ver
         // [stableSourceOrder]) — a ordem de chegada dos addons não reordena
         // nada. O `sortedByDescending` abaixo só move o grupo da fonte que
@@ -3003,14 +3039,23 @@ class PlayerSession(
                 // detalhe; a que está tocando segue marcada como ativa.
                 // Lote 14 item 4: a ordem é a estável ([stableSourceOrder]) —
                 // o ranking vale uma única vez, no assentamento da busca.
-                val order = stableSourceOrder()
+                // Lote 15 item 2: o filtro de provider esconde o resto; o
+                // ranking (#1, #2…) vale DENTRO do que está visível.
+                val order = stableSourceOrder().filter { idx ->
+                    matchesFilter(currentSources.getOrNull(idx)?.addon.orEmpty())
+                }
                 order.take(sourceLimit).forEachIndexed { rank, idx ->
                     val src = currentSources.getOrNull(idx) ?: return@forEachIndexed
                     val stream = src.stream ?: com.aotv.app.data.remote.StremioStream(src.label, src.url, src.addon,
                         qualityRank = com.aotv.app.data.remote.qualityRankOf(src.label))
-                    val best = rank == 0
+                    // "Melhor fonte" só na vista sem filtro: filtrado, o #1 é
+                    // o melhor DAQUELE provider, não o melhor da folha.
+                    val best = rank == 0 && providerFilter.isBlank()
+                    // O card já mostra o addon no título — o sub não repete.
+                    // T/E entra no card quando for série (Lote 15 item 2).
                     add(TvPlayerAction(src.label, true, src.url == playing, addon = src.addon, stream = stream,
-                        sub = "#${rank + 1}" + (if (best) " · Melhor fonte" else "") + " · " + src.addon,
+                        sub = "#${rank + 1}" + (if (best) " · Melhor fonte" else "") +
+                            (if (episodeCode.isNotBlank()) " · $episodeCode" else ""),
                         header = if (rank == 0) "Ranking da melhor para a pior" else "") {
                         markSourceTouched(src.url)
                         if (src.url != playing) applyMovieSource(idx, manual = true)
@@ -3019,17 +3064,21 @@ class PlayerSession(
                 if (order.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
                     sub = "${order.size - sourceLimit} fontes", keepOpen = true) { sourceLimit += 30 })
             } else {
-                groups.take(sourceLimit).forEach { group ->
+                // Lote 15 item 2: filtrado, só os grupos com alguma fonte do provider.
+                val shownGroups = if (providerFilter.isBlank()) groups
+                    else groups.filter { g -> g.members.any { matchesFilter(it.addon) } }
+                shownGroups.take(sourceLimit).forEach { group ->
                     val active = group.members.any { it.url == playing }
                     val src = group.members.firstOrNull { it.url == playing } ?: group.lead
                     add(TvPlayerAction(src.label, true, active, addon = src.addon, stream = src,
+                        sub = episodeCode,
                         providers = group.members.map { it.addon }.distinct()) {
                         markSourceTouched(src.url)
                         if (!active) applyMovieSource(currentSources.indexOfFirst { it.url == src.url }, manual = true)
                     })
                 }
-                if (groups.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
-                    sub = "${groups.size - sourceLimit} versões", keepOpen = true) { sourceLimit += 30 })
+                if (shownGroups.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
+                    sub = "${shownGroups.size - sourceLimit} versões", keepOpen = true) { sourceLimit += 30 })
             }
             // ── On Demand Xtream na folha (Lote 12 — Frente 2) ─────────
             // Mesma conta Xtream já configurada; sem conta ou sem resultado,
@@ -3064,14 +3113,31 @@ class PlayerSession(
     val subActions: List<TvPlayerAction> get() = buildList {
         if (textGroups.isNotEmpty() || externalSubs.isNotEmpty()) {
             add(TvPlayerAction("Desativada", false, selectedSubUrl == null && !subtitleOn) { pickSub(null, null) })
-            // Cada faixa do vídeo com o nome do idioma, a do idioma do perfil primeiro.
-            textGroups.sortedBy { SubLangs.rank(it.getTrackFormat(0).language, subLang) }.forEachIndexed { i, g ->
+            // Lote 15 item 8 — uma linha por idioma, com o selo de contagem real
+            // (como o seletor do Nuvio: "Inglês 8"). Agrupa por idioma; tocar
+            // escolhe a 1ª opção do grupo (a melhor no ranking, que já vem
+            // ordenado pelo idioma do perfil). A contagem só conta o que
+            // existe de fato. Caveat: a 2ª opção do mesmo idioma (ex.: 2º
+            // arquivo externo do addon) não tem mais linha própria.
+            val embeddedByLang = textGroups
+                .sortedBy { SubLangs.rank(it.getTrackFormat(0).language, subLang) }
+                .groupBy { SubLangs.of(it.getTrackFormat(0).language)?.key ?: it.getTrackFormat(0).language.orEmpty() }
+            embeddedByLang.values.forEachIndexed { i, group ->
+                val g = group.first()
                 val f = g.getTrackFormat(0)
                 val name = f.label?.takeIf { it.isNotBlank() } ?: SubLangs.label(f.language)
-                add(TvPlayerAction(name, false, subtitleOn && g.isSelected, header = if (i == 0) "No vídeo" else "") { pickSub(g, null) })
+                add(TvPlayerAction(name, false, subtitleOn && group.any { it.isSelected },
+                    header = if (i == 0) "No vídeo" else "", count = group.size) { pickSub(g, null) })
             }
-            externalSubs.forEachIndexed { i, sub ->
-                add(TvPlayerAction(sub.label, false, selectedSubUrl == sub.url, header = if (i == 0) "Legendas externas" else "") { pickSub(null, sub) })
+            val externalByLang = externalSubs
+                .groupBy { SubLangs.of(it.lang)?.key ?: it.lang }
+            externalByLang.values.forEachIndexed { i, group ->
+                val sub = group.first()
+                // Nome do idioma, sem o sufixo do addon (vira o sub: a fonte da 1ª opção).
+                val source = sub.label.substringAfter(" · ", "").ifBlank { "OpenSubtitles" }
+                add(TvPlayerAction(SubLangs.label(sub.lang), false, group.any { it.url == selectedSubUrl },
+                    header = if (i == 0) "Legendas externas" else "", count = group.size,
+                    sub = source) { pickSub(null, sub) })
             }
             // Ajustes no fim da lista, sempre na mesma ordem, para nada pular de lugar ao tocar.
             add(TvPlayerAction("Tamanho", false, false, sub = subSizeLabel(subSize), header = "Ajustes", keepOpen = true) {
