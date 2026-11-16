@@ -15,9 +15,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Catálogos de TV ao vivo dos addons ligados (Lote 15, Bloco 2, v1.25.0).
+ * Catálogos de TV ao vivo dos addons ligados (Lote 15, Bloco 2, v1.25.0;
+ * Lote 16, v1.26.0: type "tv" ou "channel").
  * [addonId]/[addonName] vêm do manifest; [base] é a base do addon (sem
- * /manifest.json), para pedir as páginas do catálogo e o stream.
+ * /manifest.json), para pedir as páginas do catálogo e o stream. [type] é o
+ * type declarado no manifest ("tv" ou "channel") e decide as URLs
+ * (/catalog/{type}/{id}.json e /stream/{type}/{id}.json) — "tv" continua
+ * funcionando exatamente como antes.
  */
 data class AddonTvCatalog(
     val addonId: String,
@@ -25,6 +29,7 @@ data class AddonTvCatalog(
     val base: String,
     val id: String,
     val name: String,
+    val type: String = "tv",
 ) {
     /** Rótulo do catálogo: "Bsweb TV — Canais Abertos". */
     val label: String get() = "$addonName — $name"
@@ -39,12 +44,12 @@ data class AddonTvChannel(
     val name: String,
     val poster: String,
 ) {
-    /** Id estável e autocontido (base + catálogo + meta), p/ resolver o stream no toque. */
-    val channelId: String get() = AddonTvCatalogs.channelId(catalog.base, catalog.id, metaId)
+    /** Id estável e autocontido (base + catálogo + meta + type), p/ resolver o stream no toque. */
+    val channelId: String get() = AddonTvCatalogs.channelId(catalog.base, catalog.id, metaId, catalog.type)
 
     /**
      * Vira [LiveChannel] p/ entrar na lista da aba Ao vivo. Sem EPG e sem
-     * URL: o stream só é resolvido no toque ({base}/stream/tv/{metaId}.json),
+     * URL: o stream só é resolvido no toque ({base}/stream/{type}/{metaId}.json),
      * porque a URL do stream costuma trazer token de validade curta e iria
      * expirar se fosse resolvida na carga da lista.
      */
@@ -62,10 +67,28 @@ data class AddonTvChannel(
 data class AddonTvCatalogsResult(
     val catalogs: List<AddonTvCatalog> = emptyList(),
     val anyResponded: Boolean = false,
+    /**
+     * Addons que RESPONDERAM mas não renderam catálogo de TV (Lote 16,
+     * v1.26.0): o que cada um DECLARA (ex.: ["movie", "series", "channel"]).
+     * Vazio = todo addon que respondeu trouxe catálogo de TV, ou nenhum
+     * respondeu (aí vale o erro "Não deu para ler os addons...").
+     */
+    val diagnostics: List<AddonTvDiag> = emptyList(),
 )
 
-/** Id de canal de addon desmontado: base do addon + catálogo + id da meta. */
-data class AddonTvRef(val base: String, val catalogId: String, val metaId: String)
+/**
+ * Um addon ligado que respondeu mas não tem catálogo de TV: [declaredTypes]
+ * é o que os catálogos dele declaram no manifest. P/ o diagnóstico do app
+ * ("BestCine respondeu, mas só declara Filmes e Séries") em vez do silêncio.
+ */
+data class AddonTvDiag(
+    val addonName: String,
+    val addonBase: String,
+    val declaredTypes: List<String>,
+)
+
+/** Id de canal de addon desmontado: base do addon + catálogo + id da meta + type. */
+data class AddonTvRef(val base: String, val catalogId: String, val metaId: String, val type: String = "tv")
 
 /**
  * Id de canal de addon de TV ("addon-tv:...") — o formato que a aba Ao vivo
@@ -79,32 +102,41 @@ object AddonTvCatalogs {
     /**
      * Monta o id: cada parte vai com encodeURIComponent, então ":" separa sem
      * ambiguidade (a base tem "https://", a meta pode ter ":" — tudo vira %XX).
+     * O [type] vai como 4ª parte (Lote 16, v1.26.0): sem ele o resolve do
+     * stream não saberia se pede /stream/tv/... ou /stream/channel/....
+     * "tv" continua o padrão — id antigo de 3 partes ainda desmonta.
      */
-    fun channelId(base: String, catalogId: String, metaId: String): String =
+    fun channelId(base: String, catalogId: String, metaId: String, type: String = "tv"): String =
         PREFIX + AddonLinks.encodeURIComponent(base) + ":" +
             AddonLinks.encodeURIComponent(catalogId) + ":" +
-            AddonLinks.encodeURIComponent(metaId)
+            AddonLinks.encodeURIComponent(metaId) + ":" +
+            AddonLinks.encodeURIComponent(type.ifBlank { "tv" })
 
     /**
      * Desmonta o id, ou null se não for um id de canal de addon. O decode usa
      * URLDecoder, que é seguro aqui porque o encodeURIComponent escapa "+"
      * (vira %2B) — nenhum "+" literal sobrevive p/ virar espaço no decode.
+     * Aceita o formato antigo de 3 partes (type = "tv") e o novo de 4.
      */
     fun parseChannelId(id: String): AddonTvRef? {
         if (!isAddonTvChannelId(id)) return null
         val parts = id.removePrefix(PREFIX).split(":")
-        if (parts.size != 3) return null
+        if (parts.size != 3 && parts.size != 4) return null
         val decoded = parts.map { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() ?: return null }
         if (decoded.any { it.isBlank() }) return null
-        return AddonTvRef(decoded[0], decoded[1], decoded[2])
+        val type = if (parts.size == 4) decoded[3].ifBlank { "tv" } else "tv"
+        if (type != "tv" && type != "channel") return null
+        return AddonTvRef(decoded[0], decoded[1], decoded[2], type)
     }
 }
 
 /**
- * Loader dos catálogos de TV dos addons ligados (Lote 15, Bloco 2, v1.25.0).
+ * Loader dos catálogos de TV dos addons ligados (Lote 15, Bloco 2, v1.25.0;
+ * Lote 16, v1.26.0: type "tv" ou "channel").
  * Lê o manifest de cada addon ligado ([AddonLinks.tvCatalogs]), pede a 1ª
- * página de cada catálogo de TV ([StremioAddonService.catalogMetas] com tipo
- * "tv") e resolve o stream do canal no toque (/stream/tv/{id}.json).
+ * página de cada catálogo de TV ([StremioAddonService.catalogMetas] com o
+ * type do catálogo) e resolve o stream do canal no toque
+ * (/stream/{type}/{id}.json).
  * Um addon morto/lento não segura os outros (paralelo + timeout curto, sem
  * repetição). Canais de addon NÃO entram no guia/EPG — só o stream.
  */
@@ -126,29 +158,45 @@ class AddonTvCatalogLoader @Inject constructor(
         val perAddon = enabled.map { e ->
             async { runCatching { catalogsOf(e.url) }.getOrNull() }
         }.awaitAll()
+        // Diagnóstico (Lote 16, v1.26.0): addon que respondeu mas não rendeu
+        // catálogo de TV — guarda o que ele DECLARA, em vez do silêncio.
+        val diagnostics = perAddon.filterNotNull().filter { it.catalogs.isEmpty() }.map { r ->
+            AddonTvDiag(r.addonName, r.base, r.declaredTypes)
+        }
         AddonTvCatalogsResult(
-            catalogs = perAddon.filterNotNull().flatten(),
+            catalogs = perAddon.filterNotNull().flatMap { it.catalogs },
             anyResponded = perAddon.any { it != null },
+            diagnostics = diagnostics,
         )
     }
 
     /** Uma página de canais do catálogo (null = o addon não respondeu). */
     suspend fun loadChannels(catalog: AddonTvCatalog, skip: Int = 0): List<AddonMeta>? =
-        runCatching { stremio.catalogMetas(catalog.base, "tv", catalog.id, skip) }.getOrNull()
+        runCatching { stremio.catalogMetas(catalog.base, catalog.type, catalog.id, skip) }.getOrNull()
 
     /**
-     * Primeira URL http do stream do canal ({base}/stream/tv/{metaId}.json),
+     * Primeira URL http do stream do canal ({base}/stream/{type}/{metaId}.json),
      * ou null quando o addon não trouxe stream direto. Magnet/torrent não
-     * conta: canal ao vivo toca por http (.m3u8) no player.
+     * conta: canal ao vivo toca por http (.m3u8) no player. [type] é o type
+     * do catálogo ("tv" ou "channel"); o padrão "tv" mantém o comportamento
+     * antigo de quem chama sem ele.
      */
-    suspend fun resolveStreamUrl(base: String, metaId: String): String? {
+    suspend fun resolveStreamUrl(base: String, metaId: String, type: String = "tv"): String? {
         if (base.isBlank() || metaId.isBlank()) return null
-        val streams = runCatching { stremio.getStreams(base, "tv", metaId) }.getOrDefault(emptyList())
+        val streams = runCatching { stremio.getStreams(base, type.ifBlank { "tv" }, metaId) }.getOrDefault(emptyList())
         return streams.firstOrNull { it.url.startsWith("http", true) }?.url
     }
 
+    /** O que a leitura do manifest de um addon rendeu (null = não respondeu ou não é manifest). */
+    private data class CatalogsOfResult(
+        val catalogs: List<AddonTvCatalog>,
+        val addonName: String,
+        val base: String,
+        val declaredTypes: List<String>,
+    )
+
     /** Catálogos de TV do manifest de um addon (null = não respondeu ou não é manifest). */
-    private suspend fun catalogsOf(manifestUrl: String): List<AddonTvCatalog>? = withContext(Dispatchers.IO) {
+    private suspend fun catalogsOf(manifestUrl: String): CatalogsOfResult? = withContext(Dispatchers.IO) {
         val url = AddonLinks.normalizeManifestUrl(manifestUrl)
         if (url.isBlank()) return@withContext null
         val body = runCatching {
@@ -166,9 +214,15 @@ class AddonTvCatalogLoader @Inject constructor(
             val addonId = json.get("id")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
             if (addonId.isBlank()) return@runCatching null
             val addonName = json.get("name")?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty().ifBlank { addonId }
-            AddonLinks.tvCatalogs(json).map { c ->
-                AddonTvCatalog(addonId, addonName, AddonLinks.baseOf(url), c.id, c.name)
-            }
+            val base = AddonLinks.baseOf(url)
+            CatalogsOfResult(
+                catalogs = AddonLinks.tvCatalogs(json).map { c ->
+                    AddonTvCatalog(addonId, addonName, base, c.id, c.name, c.type)
+                },
+                addonName = addonName,
+                base = base,
+                declaredTypes = AddonLinks.declaredCatalogTypes(json),
+            )
         }.getOrNull()
     }
 }

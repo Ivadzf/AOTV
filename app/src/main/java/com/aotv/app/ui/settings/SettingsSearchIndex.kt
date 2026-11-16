@@ -899,6 +899,28 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_SUBS,
     ),
+    // Lote 16 item 3 (v1.26.0): legendas nível 2.
+    SettingOptionEntry(
+        title = "Só legendas em língua estrangeira",
+        sub = "A legenda só abre sozinha quando o áudio não é do seu idioma",
+        keywords = listOf("legenda", "estrangeira", "foreign", "idioma", "áudio"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SUBS,
+    ),
+    SettingOptionEntry(
+        title = "Ocultar legendas SDH",
+        sub = "Faixas para surdos não entram na escolha automática",
+        keywords = listOf("legenda", "sdh", "surdos", "cc", "closed caption"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SUBS,
+    ),
+    SettingOptionEntry(
+        title = "Chave do SubDL",
+        sub = "2ª fonte de legendas (chave grátis do usuário)",
+        keywords = listOf("legenda", "subdl", "chave", "fonte"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SUBS,
+    ),
     SettingOptionEntry(
         title = "Botões do player",
         sub = "Ordem e liga/desliga dos botões do player",
@@ -931,6 +953,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Volume Boost",
         sub = "Deixa o volume passar de 100%",
         keywords = listOf("volume", "boost", "alto", "som"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    // Lote 16 item 4 (v1.26.0): taxa de quadros.
+    SettingOptionEntry(
+        title = "Sincronizar taxa de quadros",
+        sub = "A tela acompanha o fps do vídeo (24/25/30 fps sem engasgo)",
+        keywords = listOf("taxa", "quadros", "fps", "frame rate", "tela", "hz"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),

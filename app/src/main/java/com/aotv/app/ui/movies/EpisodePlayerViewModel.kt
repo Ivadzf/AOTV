@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.remote.StremioAddonService
+import com.aotv.app.data.remote.SubDlService
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.bestLogoUrl
 import com.aotv.app.data.remote.dto.toDomain
@@ -24,6 +25,7 @@ class EpisodePlayerViewModel @Inject constructor(
     private val tmdb: TmdbApiService,
     private val prefs: PlatformPrefs,
     private val subtitleService: com.aotv.app.data.remote.SubtitleService,
+    private val subDl: SubDlService,
     private val prober: com.aotv.app.data.remote.SourceProber,
     private val debrid: com.aotv.app.data.debrid.DebridService,
 ) : ViewModel() {
@@ -49,10 +51,19 @@ class EpisodePlayerViewModel @Inject constructor(
         return runCatching { tmdb.getMovieDetail(tmdbId, apiKey = apiKey).runtime }.getOrNull() ?: 0
     }
 
-    /** Legendas externas (OpenSubtitles) do filme/episódio. Vazio se sem imdb. */
+    /** Legendas externas (OpenSubtitles + SubDL) do filme/episódio. Vazio se sem imdb. */
     suspend fun subtitlesFor(tmdbId: Int, type: String, season: Int, episode: Int): List<com.aotv.app.data.remote.ExternalSub> {
         val imdb = imdbId(tmdbId, type) ?: return emptyList()
-        return subtitleService.subtitles(imdb, type, season, episode)
+        val base = subtitleService.subtitles(imdb, type, season, episode)
+        // Lote 16 item 3 — SubDL como 2ª fonte (só com a chave grátis do
+        // usuário nas Configurações; sem chave, desligado e sem chamada).
+        val key = (prefs.rawPref(SUBDL_API_KEY_PREF) as? String).orEmpty()
+        if (key.isBlank()) return base
+        val extra = runCatching { subDl.search(key, imdb, type, season, episode) }.getOrDefault(emptyList())
+            .map { it.toExternalSub() }
+        if (extra.isEmpty()) return base
+        val seen = base.map { it.url }.toSet()
+        return base + extra.filter { it.url !in seen }
     }
 
     /** Falas de uma legenda externa (SRT ou VTT). Vazio se não baixou. */

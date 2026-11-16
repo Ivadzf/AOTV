@@ -46,6 +46,8 @@ data class TechInfo(
     val videoCodec: String? = null,
     val videoResolution: String? = null,
     val videoFps: String? = null,
+    /** Linha combinada stream + tela (Lote 16 item 4): "24 fps · tela 60 Hz". */
+    val displayFps: String? = null,
     val videoDecoder: String? = null,
     /** true = hardware, false = software, null = não deu p/ saber. */
     val videoDecoderHw: Boolean? = null,
@@ -260,7 +262,10 @@ private fun TechInfoPanelBody(
             listOfNotNull(
                 info?.videoCodec?.let { "Codec" to it },
                 info?.videoResolution?.let { "Resolução" to it },
-                info?.videoFps?.let { "Frame Rate" to "$it fps" },
+                // Lote 16 item 4: taxa do stream + da tela ("24 fps · tela 60 Hz");
+                // sem medição da tela ainda, cai na linha antiga (só o stream).
+                info?.displayFps?.let { "Taxa de quadros" to it }
+                    ?: info?.videoFps?.let { "Frame Rate" to "$it fps" },
                 info?.videoDecoder?.let { "Decoder" to it },
                 info?.videoDecoderHw?.let { "Decoder de hardware" to if (it) "hardware" else "software" },
                 info?.videoDynamicRange?.let { "Faixa dinâmica" to it },

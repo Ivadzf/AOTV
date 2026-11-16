@@ -46,11 +46,19 @@ fun OnDemandScreen(
     onPlayMovie: (String, String) -> Unit,
     onPlayEpisode: (String, String, Int, Int) -> Unit,
     viewModel: OnDemandViewModel = hiltViewModel(),
+    /** Deep link da Início (acréscimo v1.26.0): abre a aba e o detalhe do item. */
+    initialTab: String = "",
+    initialItemId: String = "",
 ) {
     val v by viewModel.view.collectAsStateWithLifecycle()
     val pad = com.aotv.app.ui.common.pagePadding()
     var searching by remember { mutableStateOf(false) }
     val hasDetail = v.detail.movie != null || v.detail.series != null
+
+    // Deep link: 1x por entrada na tela; o ViewModel consome e não reabre.
+    LaunchedEffect(initialTab, initialItemId) {
+        if (initialItemId.isNotBlank()) viewModel.openById(initialTab, initialItemId)
+    }
 
     // Voltar com detalhe aberto fecha o detalhe; sem detalhe, sai da tela.
     BackHandler(enabled = hasDetail) { viewModel.closeDetail() }

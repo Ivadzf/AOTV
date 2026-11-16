@@ -2066,6 +2066,12 @@ private fun ReproducaoPage(
     val upNext by playerPrefs.upNext.collectAsStateWithLifecycle()
     val eqEnabled by playerPrefs.equalizer.collectAsStateWithLifecycle()
     var animeSkipDraft by remember(animeSkipId) { mutableStateOf(animeSkipId) }
+    // Lote 16 — Player parte 4 (v1.26.0): taxa de quadros, legendas nível 2 e SubDL.
+    val frameRate by playerPrefs.frameRate.collectAsStateWithLifecycle()
+    val subForeignOnly by playerPrefs.subForeignOnly.collectAsStateWithLifecycle()
+    val subHideSdh by playerPrefs.subHideSdh.collectAsStateWithLifecycle()
+    val subDlKey by playerPrefs.subDlApiKey.collectAsStateWithLifecycle()
+    var subDlDraft by remember(subDlKey) { mutableStateOf(subDlKey) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack, highlightAnchor = highlightAnchor) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
         SettingsSection("Reprodução", anchor = SettingsAnchors.PLAY_MAIN)
@@ -2152,6 +2158,71 @@ private fun ReproducaoPage(
                 grouped = true,
             )
         }
+        // Legendas nível 2 (Lote 16 item 3, v1.26.0): só mostrar a legenda
+        // quando o áudio é estrangeiro, esconder as faixas SDH/CC e o SubDL
+        // como 2ª fonte (chave grátis do usuário — nunca embutida).
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Translate,
+                title = "Só legendas em língua estrangeira",
+                sub = if (subForeignOnly) "A legenda só abre sozinha quando o áudio não é do seu idioma"
+                    else "A legenda abre sozinha sempre que o título tiver, no seu idioma",
+                trailing = { Switch(checked = subForeignOnly, onCheckedChange = { playerPrefs.setSubForeignOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSubForeignOnly(!subForeignOnly) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.ClosedCaption,
+                title = "Ocultar legendas SDH",
+                sub = if (subHideSdh) "Faixas para surdos (com [sons] e [música]) não entram na escolha automática"
+                    else "Faixas SDH/CC aparecem normalmente na escolha automática",
+                trailing = { Switch(checked = subHideSdh, onCheckedChange = { playerPrefs.setSubHideSdh(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSubHideSdh(!subHideSdh) },
+                grouped = true,
+            )
+        }
+        Text(
+            "SubDL é uma 2ª fonte de legendas (além do OpenSubtitles). A chave é grátis no site subdl.com — sem ela, o SubDL fica desligado.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                OutlinedTextField(
+                    value = subDlDraft,
+                    onValueChange = { subDlDraft = it },
+                    label = { Text("Chave do SubDL (opcional)") },
+                    placeholder = { Text("Cole sua chave aqui", color = TextTertiary) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = gate,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Border,
+                        focusedContainerColor = Surface2,
+                        unfocusedContainerColor = Surface2,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedLabelColor = Accent,
+                        unfocusedLabelColor = TextTertiary,
+                        cursorColor = Accent,
+                    ),
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            com.aotv.app.ui.common.AotvButton(
+                "Salvar chave", onClick = { playerPrefs.setSubDlApiKey(subDlDraft) },
+                enabled = subDlDraft.trim() != subDlKey,
+                compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+            )
+            if (subDlKey.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                "Desligar SubDL", onClick = { playerPrefs.setSubDlApiKey(""); subDlDraft = "" },
+                compact = true,
+            )
+        }
 
         // Botões do player (Fase C). Sobe e desce reordena, o switch tira da
         // barra. Desligado, o botão some do player mas continua aqui p/ religar.
@@ -2231,6 +2302,19 @@ private fun ReproducaoPage(
                     else "Volume máximo é 100%",
                 trailing = { Switch(checked = volBoost, onCheckedChange = { playerPrefs.setVolBoost(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setVolBoost(!volBoost) },
+                grouped = true,
+                divider = true,
+            )
+            // Taxa de quadros (Lote 16 item 4, v1.26.0): sincroniza a taxa de
+            // atualização da tela com o fps do stream (24/25/30 fps sem
+            // judder). Na TV vale o matchFrameRate; no celular, a janela.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Speed,
+                title = "Sincronizar taxa de quadros",
+                sub = if (frameRate) "A tela acompanha o fps do vídeo (24/25/30 fps sem engasgo)"
+                    else "Desligado. A tela fica na taxa padrão do aparelho",
+                trailing = { Switch(checked = frameRate, onCheckedChange = { playerPrefs.setFrameRate(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setFrameRate(!frameRate) },
                 grouped = true,
                 divider = true,
             )

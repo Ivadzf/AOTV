@@ -43,6 +43,8 @@ internal fun TvPlayerControls(
     onSeekTo: (Long) -> Unit,
     actions: List<PlayerChipItem>,
     focusedIndex: Int,
+    /** Divisões da barra (Lote 16 item 5): intro/recap/créditos da IntroDB. */
+    markers: List<ProgressMarker> = emptyList(),
 ) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
         0f to Color.Black.copy(alpha = .45f), .23f to Color.Transparent,
@@ -67,7 +69,7 @@ internal fun TvPlayerControls(
             if (info.isNotBlank()) Text(info, color = TextSecondary, fontSize = 1.05.rs,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth(.85f).padding(top = .75.r))
-            TvPlayerTimeline(position, duration, buffered, onSeekTo, Modifier.padding(top = 1.1.r))
+            TvPlayerTimeline(position, duration, buffered, onSeekTo, Modifier.padding(top = 1.1.r), markers = markers)
             Row(Modifier.fillMaxWidth().padding(top = .55.r), verticalAlignment = Alignment.CenterVertically) {
                 val row = rememberLazyListState()
                 LaunchedEffect(focusedIndex, actions.size) {
@@ -125,7 +127,7 @@ private fun TvPlayerActionChip(action: PlayerChipItem, focused: Boolean) {
 }
 
 @Composable
-private fun TvPlayerTimeline(position: Long, duration: Long, buffered: Long, onSeekTo: (Long) -> Unit, modifier: Modifier) {
+private fun TvPlayerTimeline(position: Long, duration: Long, buffered: Long, onSeekTo: (Long) -> Unit, modifier: Modifier, markers: List<ProgressMarker> = emptyList()) {
     val frac = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val buffer = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
     var width by remember { mutableFloatStateOf(1f) }
@@ -137,6 +139,19 @@ private fun TvPlayerTimeline(position: Long, duration: Long, buffered: Long, onS
         Box(Modifier.fillMaxWidth(frac).height(.32.r).background(Color.White, CircleShape))
         Box(Modifier.fillMaxWidth(frac), contentAlignment = Alignment.CenterEnd) {
             Box(Modifier.requiredSize(.75.r).background(Color.White, CircleShape))
+        }
+        // Lote 16 item 5: ticks de intro/recap/créditos (início e fim do trecho).
+        markers.forEach { m ->
+            if (duration > 0) {
+                val sFrac = (m.startMs.toFloat() / duration).coerceIn(0f, 1f)
+                val eFrac = (m.endMs.toFloat() / duration).coerceIn(0f, 1f)
+                Box(Modifier.fillMaxWidth(sFrac), contentAlignment = Alignment.CenterEnd) {
+                    Box(Modifier.requiredWidth(.14.r).height(.9.r).background(Accent))
+                }
+                Box(Modifier.fillMaxWidth(eFrac), contentAlignment = Alignment.CenterEnd) {
+                    Box(Modifier.requiredWidth(.14.r).height(.9.r).background(Accent))
+                }
+            }
         }
     }
 }

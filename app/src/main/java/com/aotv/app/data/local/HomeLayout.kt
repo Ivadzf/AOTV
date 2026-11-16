@@ -15,13 +15,21 @@ enum class SystemRow(val key: String, val label: String, val catalog: Boolean) {
     TRENDING_TV("sys:trending_tv", "Tops do Momento Séries de TV", true),
     NOW_PLAYING("sys:now_playing", "Filmes nos cinemas", true),
     RELEASES("sys:releases", "Lançamentos do ano", true),
-    GENRES("sys:genres", "Gêneros", true);
+    GENRES("sys:genres", "Gêneros", true),
+    /**
+     * On Demand do Xtream (acréscimo v1.26.0): filmes e séries do painel
+     * Xtream do usuário como conteúdo. [catalog] = false: não somem quando
+     * o catálogo AOTV desliga (o conteúdo vem do painel, não do TMDB) e o
+     * perfil infantil não as vê (o carregamento barra em [MoviesHomeViewModel.loadVodRows]).
+     */
+    VOD_MOVIES("sys:vod_movies", "Filmes On Demand", false),
+    VOD_SERIES("sys:vod_series", "Séries On Demand", false);
 
     companion object {
         fun of(key: String): SystemRow? = entries.firstOrNull { it.key == key }
         /** Antes das fileiras de addon, igual à Início de antes da personalização. */
         val HEAD = listOf(CONTINUE, NEW_EPISODES)
-        val TAIL = listOf(RECOMMENDED, TRAILERS, TRENDING_MOVIES, TRENDING_TV, NOW_PLAYING, RELEASES, GENRES)
+        val TAIL = listOf(VOD_MOVIES, VOD_SERIES, RECOMMENDED, TRAILERS, TRENDING_MOVIES, TRENDING_TV, NOW_PLAYING, RELEASES, GENRES)
     }
 }
 

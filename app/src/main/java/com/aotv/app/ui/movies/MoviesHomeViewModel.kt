@@ -46,6 +46,8 @@ class MoviesHomeViewModel @Inject constructor(
     private val continueArt: com.aotv.app.data.repository.ContinueArtworkRepository,
     /** Guia ao vivo (Lote 8, v1.18.0): os jogos da fileira "Próximos" vêm do EPG. */
     private val liveTv: com.aotv.app.data.live.LiveTvRepository,
+    /** Catálogos de TV dos addons (Lote 16, v1.26.0): as fileiras de TV da Início. */
+    private val tvCatalogs: com.aotv.app.data.remote.AddonTvCatalogLoader,
     /** Séries acompanhadas nos trackers, p/ o auto-add do calendário (Lote 13, v1.23.0). */
     private val trackerShows: com.aotv.app.data.remote.TrackerShowsCache,
 ) : ViewModel() {
@@ -92,6 +94,8 @@ class MoviesHomeViewModel @Inject constructor(
         private const val TOP_RATED_MIN_VOTES = 200
         /** Itens lidos por página do catálogo de addon (igual ao webOS). */
         private const val ADDON_PAGE = 40
+        /** Itens por fileira On Demand na Início (o resto vive na tela On Demand). */
+        private const val VOD_ROW_MAX = 20
     }
 
     data class UiState(
@@ -147,6 +151,28 @@ class MoviesHomeViewModel @Inject constructor(
         val recommendedBecause: String = "",
         // ── Fileiras de catálogo de addon, marcadas em Addons > Na Início ──
         val addonRows: List<AddonRow> = emptyList(),
+        /**
+         * Fileiras de TV dos addons (Lote 16, v1.26.0): catálogos type "tv" ou
+         * "channel" marcados em Personalizar Início. Os canais são
+         * [com.aotv.app.data.live.LiveChannel] (não MovieItem): o toque abre
+         * o ao vivo, não o detalhe — por isso NÃO entram em [addonRows]
+         * (o resolver de lá descarta meta sem id IMDb/TMDB e a tela de detalhe
+         * não toca canal). A renderização na Início ainda não existe (ver
+         * GAP no relatório do Lote 16): os dados já estão aqui.
+         */
+        val tvAddonRows: List<TvAddonRow> = emptyList(),
+        /**
+         * On Demand do Xtream (acréscimo v1.26.0): filmes e séries do painel
+         * como conteúdo, nas fileiras [SystemRow.VOD_MOVIES]/[SystemRow.VOD_SERIES].
+         * 1ª fonte Xtream ligada que devolve VOD (a mesma do On Demand);
+         * fonte só-M3U não tem VOD e não gera fileira. [vodChecked] = já
+         * verificou (mesmo que vazio — sem conta, sem rede ou sem VOD, a
+         * fileira some em silêncio e não tenta de novo na sessão).
+         */
+        val vodMovies: List<com.aotv.app.data.live.VodItem> = emptyList(),
+        val vodSeries: List<com.aotv.app.data.live.VodItem> = emptyList(),
+        val vodLoading: Boolean = false,
+        val vodChecked: Boolean = false,
         // ── Novos episódios das séries do histórico e da Minha Lista ──
         val newEpisodes: List<NewEpisode> = emptyList(),
         // ── Fileira "Próximos" (Lote 8, v1.18.0): episódios + jogos de esporte ──
@@ -185,6 +211,15 @@ class MoviesHomeViewModel @Inject constructor(
         val items: List<MovieItem> = emptyList(),
         val skip: Int = 0,
         val more: Boolean = true,
+        val loading: Boolean = true,
+        /** Nome na Início (o que a pessoa escolheu ou o do catálogo). */
+        val title: String = ref.name,
+    )
+
+    /** Fileira de um catálogo de TV de addon (Lote 16, v1.26.0). 1ª página só; sem paginação. */
+    data class TvAddonRow(
+        val ref: com.aotv.app.data.local.HomeCatalogRef,
+        val channels: List<com.aotv.app.data.live.LiveChannel> = emptyList(),
         val loading: Boolean = true,
         /** Nome na Início (o que a pessoa escolheu ou o do catálogo). */
         val title: String = ref.name,
@@ -471,6 +506,10 @@ class MoviesHomeViewModel @Inject constructor(
     /** Lê a próxima página da fileira. Chamado ao montar e quando o fim da fileira aparece. */
     fun loadAddonRow(key: String) {
         val row = _uiState.value.addonRows.firstOrNull { it.ref.key == key } ?: return
+        // Fileira de TV não passa pelo resolver de filme/série (o meta do
+        // canal não tem id IMDb/TMDB e seria descartado): carrega por
+        // [loadTvAddonRow] e vive em [UiState.tvAddonRows].
+        if (row.ref.type == "tv" || row.ref.type == "channel") return
         if (!row.more || !addonRowsInFlight.add(key)) return
         viewModelScope.launch {
             val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, row.skip)
@@ -494,6 +533,83 @@ class MoviesHomeViewModel @Inject constructor(
 
     private suspend fun resolveAddonMetas(metas: List<com.aotv.app.data.remote.AddonMeta>, series: Boolean): List<MovieItem> =
         addonMetas.resolve(metas, series)
+
+    // ── Fileiras de TV dos addons na Início (Lote 16, v1.26.0) ───────────────
+    private val tvAddonRowsInFlight = HashSet<String>()
+
+    /**
+     * Lê a 1ª página de canais da fileira de TV. O catálogo vem do layout
+     * (Personalizar Início); o type ("tv" ou "channel") decide as URLs, via
+     * [com.aotv.app.data.remote.AddonTvCatalogLoader]. Sem paginação: a
+     * fileira mostra a 1ª página (até 40 canais).
+     */
+    fun loadTvAddonRow(key: String) {
+        val row = _uiState.value.tvAddonRows.firstOrNull { it.ref.key == key } ?: return
+        if (!tvAddonRowsInFlight.add(key)) return
+        viewModelScope.launch {
+            val catalog = com.aotv.app.data.remote.AddonTvCatalog(
+                // HomeCatalogRef não guarda o id do manifest, só o nome do
+                // addon — o nome serve de addonId aqui (só alimenta o
+                // sourceId "addon-tv:<addon>" do canal, p/ distinguir a fonte).
+                addonId = row.ref.addon,
+                addonName = row.ref.addon,
+                base = row.ref.base,
+                id = row.ref.id,
+                name = row.ref.name,
+                type = row.ref.type,
+            )
+            val metas = tvCatalogs.loadChannels(catalog).orEmpty()
+            val channels = metas.take(ADDON_PAGE).mapNotNull { meta ->
+                if (meta.id.isBlank() || meta.name.isBlank()) null
+                else com.aotv.app.data.remote.AddonTvChannel(
+                    catalog, meta.id, meta.name,
+                    meta.poster.ifBlank { meta.background },
+                ).toLiveChannel()
+            }.distinctBy { it.id }
+            tvAddonRowsInFlight.remove(key)
+            _uiState.update { st ->
+                st.copy(tvAddonRows = st.tvAddonRows.map { r ->
+                    if (r.ref.key != key) r else r.copy(channels = channels, loading = false)
+                })
+            }
+        }
+    }
+
+    // ── Fileiras On Demand do Xtream na Início (acréscimo v1.26.0) ────────────
+    private var vodRowsInFlight = false
+
+    /**
+     * Lê filmes e séries On Demand da 1ª fonte Xtream ligada (a mesma do
+     * On Demand da aba Ao vivo), 1x por sessão. Sem fonte Xtream, sem VOD
+     * ou com falha de rede: silêncio — as fileiras somem (a tela não mostra
+     * seção vazia nem erro; o On Demand continua alcançável pelo hub do
+     * Ao vivo, onde há botão de atualizar). Perfil infantil não carrega:
+     * o conteúdo do painel não tem filtro de idade.
+     */
+    fun loadVodRows() {
+        if (_uiState.value.vodChecked || vodRowsInFlight || kids) return
+        vodRowsInFlight = true
+        _uiState.update { it.copy(vodLoading = true) }
+        viewModelScope.launch {
+            val source = liveTv.xtreamSources().firstOrNull()
+            if (source == null) {
+                vodRowsInFlight = false
+                _uiState.update { it.copy(vodLoading = false, vodChecked = true) }
+                return@launch
+            }
+            val movies = runCatching { liveTv.fetchOnDemand(source, false)?.second }.getOrNull().orEmpty()
+            val series = runCatching { liveTv.fetchOnDemand(source, true)?.second }.getOrNull().orEmpty()
+            vodRowsInFlight = false
+            _uiState.update {
+                it.copy(
+                    vodMovies = movies.take(VOD_ROW_MAX),
+                    vodSeries = series.take(VOD_ROW_MAX),
+                    vodLoading = false,
+                    vodChecked = true,
+                )
+            }
+        }
+    }
 
     /** Último histórico visto, para refazer a recomendação quando o catálogo AOTV volta. */
     private var lastHistory: List<com.aotv.app.data.local.entity.MovieHistoryEntity> = emptyList()
@@ -546,13 +662,23 @@ class MoviesHomeViewModel @Inject constructor(
             }
         }
         val refs = visible.mapNotNull { r -> r.ref?.let { it to r.displayTitle } }
+        // Lote 16 (v1.26.0): fileira de TV ("tv"/"channel") NÃO vai para
+        // [addonRows] — o resolver de lá descarta a meta do canal e a tela
+        // de detalhe não toca canal. Vai para [UiState.tvAddonRows], com os
+        // canais carregados por [loadTvAddonRow].
+        val (tvRefs, movieRefs) = refs.partition { (ref, _) -> ref.type == "tv" || ref.type == "channel" }
         val old = _uiState.value.addonRows.associateBy { it.ref.key }
+        val oldTv = _uiState.value.tvAddonRows.associateBy { it.ref.key }
         _uiState.update { st ->
             st.copy(
                 layout = visible, catalogOn = i.catalogOn, heroSource = i.hero,
-                addonRows = refs.map { (ref, title) -> old[ref.key]?.copy(title = title) ?: AddonRow(ref, title = title) },
+                addonRows = movieRefs.map { (ref, title) -> old[ref.key]?.copy(title = title) ?: AddonRow(ref, title = title) },
+                tvAddonRows = tvRefs.map { (ref, title) -> oldTv[ref.key]?.copy(title = title) ?: TvAddonRow(ref, title = title) },
             )
         }
+        // Fileira de TV nova começa a carregar (a de filme/série carrega ao
+        // aparecer na tela, como antes).
+        tvRefs.filter { oldTv[it.first.key] == null }.forEach { loadTvAddonRow(it.first.key) }
         // Fileiras de addon carregam quando APARECEM na tela (LaunchedEffect
         // no item da LazyColumn), não todas juntas na abertura: cada uma são
         // 40 metas + resolve no TMDB por item + 1 emissão de UiState — com

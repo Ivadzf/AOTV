@@ -17,25 +17,49 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Tabelas de ligas + League Networks + páginas de jogo (Lote 13, v1.23.0).
+ * Tabelas de ligas + League Networks + páginas de jogo (Lote 13, v1.23.0;
+ * outros esportes no Lote 16, v1.26.0).
  *
- * FONTE — ESPN pública, SEM chave (verificado por curl em 2026-11-15):
- * - Placar do dia: `site.api.espn.com/apis/site/v2/sports/soccer/{liga}/scoreboard`
- *   (+ `?dates=YYYYMMDD`) → HTTP 200 (bra.1, eng.1, esp.1, ita.1, ger.1,
- *   fra.1, por.1, ned.1, uefa.champions). Jogos com placar, relógio e o
- *   campo `form` ("DWLWL") do time — os últimos 5 vêm DA FONTE, sem
- *   chamada extra.
+ * FONTE — ESPN pública, SEM chave (verificado por curl em 2026-11-15/16):
+ * - Placar do dia: `site.api.espn.com/apis/site/v2/sports/{esporte}/{liga}/scoreboard`
+ *   (+ `?dates=YYYYMMDD`) → HTTP 200. Futebol: `soccer/{bra.1, eng.1,
+ *   esp.1, ita.1, ger.1, fra.1, por.1, ned.1}`. Americanos (Lote 16):
+ *   `football/nfl` (14 eventos), `basketball/nba` (8), `hockey/nhl` (2),
+ *   `baseball/mlb` (1), `soccer/usa.1` (MLS, 2) — contagens do scoreboard
+ *   sem `dates` em 2026-11-16. Jogos com placar, relógio e (só futebol)
+ *   o campo `form` ("DWLWL") do time — os últimos 5 vêm DA FONTE.
  * - Página do jogo: `.../summary?event={id}` → HTTP 200. Traz placar,
  *   gols por minuto (`details[]` com `scoringPlay`), estatísticas do jogo
  *   (`boxscore.teams[].statistics`), escalações (`rosters[]` com
  *   `formation` + `roster[]` com `position`/`jersey`), a TABELA COMPLETA
  *   (`standings.groups[0].standings.entries[]`, 20 times) e os últimos 5
- *   de cada time (`lastFiveGames[]` com `gameResult`).
+ *   de cada time (`lastFiveGames[]` com `gameResult`) — TUDO ISSO SÓ P/
+ *   O FUTEBOL.
  * - A tabela NÃO vem de endpoint próprio: `.../standings` dá **404**
  *   ("Event ID 'null' not found") p/ futebol. Por isso a tabela é lida do
  *   `summary` de um jogo qualquer da liga (o placar do dia dá o id).
  * - A Core API (`sports.core.api.espn.com/.../standings`) devolve só um
  *   `$ref` e, seguido, 0 itens — NÃO usada.
+ *
+ * TABELAS SÓ P/ O FUTEBOL (verificado ao vivo em 2026-11-16): o summary
+ * das 5 ligas americanas NÃO traz tabela de verdade — traz só o fragmento
+ * da divisão/conferência dos 2 times do jogo (NFL: 1 grupo de 4; NBA:
+ * 2 grupos de 5; NHL: 2 grupos de 8; MLB: 2 grupos de 5; MLS: SEM
+ * `standings`), e sem as estatísticas que a tabela usa (`points` e
+ * `gamesPlayed` faltam em NBA/MLB; `goalsFor`/`goalsAgainst` em todas).
+ * Uma "tabela" de 4 times com 0 pontos seria dado enganoso. Por isso
+ * [SportsLeague.hasTable] = false nessas ligas e
+ * [EspnSportsRepository.leagueTable] volta null p/ elas — a tela mostra
+ * "sem dados", sem inventar tabela.
+ *
+ * RELÓGIO POR ESPORTE (Lote 16): o relógio é mostrado como a ESPN traz,
+ * sem converter. Futebol: `displayClock` ("45'"). Americanos: o
+ * `type.detail` ("Q3 8:12", "Top 5th") — o `displayClock` traz só o tempo
+ * ("8:12") ou "0:00" (MLB não tem relógio). A barra de progresso
+ * (minuto/90) só existe p/ o futebol; fora dele, sem barra.
+ * STATUS: jogos americanos terminados vêm como `STATUS_FINAL` (não
+ * `STATUS_FULL_TIME`) — mapeado p/ FULL_TIME; `STATUS_END_PERIOD`
+ * (fim de quarto/período) é jogo ao vivo.
  *
  * TheSportsDB v1 NÃO é fonte de tabela aqui (verificado em 2026-11-15):
  * a chave "3" está **morta (403 permanente)** e a chave de teste "123"
@@ -81,6 +105,10 @@ enum class TableZone { CONTINENTAL, RELEGATION }
  * Brasil, p/ a League Networks (casamento com as playlists do usuário).
  * Só ligas de pontos corridos (tabela única) — mata-mata e fase de grupos
  * (Champions, Libertadores) ficam p/ outra frente (tabela por grupo).
+ * [espnSport] = segmento do esporte na ESPN (`soccer`, `football`,
+ * `basketball`, `hockey`, `baseball`); [sportLabel] = nome do esporte em
+ * PT-BR p/ o filtro da aba; [hasTable] = false quando o summary da ESPN
+ * não traz tabela de verdade (ligas americanas, Lote 16).
  */
 data class SportsLeague(
     val id: String,
@@ -91,6 +119,9 @@ data class SportsLeague(
     val relegationSpots: Int,
     val relegationLabel: String = "Rebaixamento",
     val networkKeywords: List<String>,
+    val espnSport: String = "soccer",
+    val sportLabel: String = "Futebol",
+    val hasTable: Boolean = true,
 )
 
 /** Ligas com tabela (8, todas de pontos corridos; slugs ESPN confirmados). */
@@ -126,6 +157,37 @@ val SPORTS_LEAGUES = listOf(
     SportsLeague(
         "ned1", "Eredivisie", "ned.1", 2, "Champions League", 2,
         networkKeywords = listOf("espn", "ziggo"),
+    ),
+    // ── Outros esportes (Lote 16, v1.26.0): scoreboard SEM chave, verificado
+    // ao vivo em 2026-11-16 (NFL 14, NBA 8, NHL 2, MLB 1, MLS 2 eventos).
+    // Sem tabela: o summary só traz o fragmento da divisão (ver o doc no
+    // topo do arquivo) — hasTable = false; sem rebaixamento nem vagas
+    // continentais (topSpots/relegationSpots = 0, sem uso). Sem college
+    // sports nem WNBA (fora de escopo do lote).
+    SportsLeague(
+        "nfl", "NFL", "nfl", 0, "", 0,
+        networkKeywords = listOf("espn", "disney", "sportv", "redetv", "nfl network"),
+        espnSport = "football", sportLabel = "Futebol Americano", hasTable = false,
+    ),
+    SportsLeague(
+        "nba", "NBA", "nba", 0, "", 0,
+        networkKeywords = listOf("espn", "disney", "sportv", "prime video", "amazon"),
+        espnSport = "basketball", sportLabel = "Basquete", hasTable = false,
+    ),
+    SportsLeague(
+        "nhl", "NHL", "nhl", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        espnSport = "hockey", sportLabel = "Hóquei", hasTable = false,
+    ),
+    SportsLeague(
+        "mlb", "MLB", "mlb", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        espnSport = "baseball", sportLabel = "Beisebol", hasTable = false,
+    ),
+    SportsLeague(
+        "mls", "MLS", "usa.1", 0, "", 0,
+        networkKeywords = listOf("espn", "disney", "apple tv"),
+        espnSport = "soccer", sportLabel = "Futebol", hasTable = false,
     ),
 )
 
@@ -237,13 +299,13 @@ fun leagueChannels(league: SportsLeague, channels: List<LiveChannel>): List<Live
 
 /** Construtores de URL + parsers puros da ESPN (sem rede — testáveis por marcadores). */
 object EspnSportsApi {
-    const val BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+    private const val API_ROOT = "https://site.api.espn.com/apis/site/v2/sports"
 
-    fun scoreboardUrl(slug: String, dateYmd: String): String =
-        "$BASE/$slug/scoreboard?dates=$dateYmd"
+    fun scoreboardUrl(sport: String, slug: String, dateYmd: String): String =
+        "$API_ROOT/$sport/$slug/scoreboard?dates=$dateYmd"
 
-    fun summaryUrl(slug: String, eventId: String): String =
-        "$BASE/$slug/summary?event=$eventId"
+    fun summaryUrl(sport: String, slug: String, eventId: String): String =
+        "$API_ROOT/$sport/$slug/summary?event=$eventId"
 
     /** "yyyyMMdd" em UTC (a ESPN trabalha em UTC). */
     fun ymd(ms: Long): String {
@@ -266,11 +328,30 @@ object EspnSportsApi {
 
     private fun statusOf(typeName: String): GameStatus = when (typeName) {
         "STATUS_SCHEDULED" -> GameStatus.SCHEDULED
-        "STATUS_IN_PROGRESS" -> GameStatus.LIVE
+        "STATUS_IN_PROGRESS", "STATUS_END_PERIOD" -> GameStatus.LIVE
         "STATUS_HALFTIME" -> GameStatus.HALFTIME
-        "STATUS_FULL_TIME" -> GameStatus.FULL_TIME
-        "STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_SUSPENDED" -> GameStatus.POSTPONED
+        // Americanos: jogo terminado é STATUS_FINAL (verificado ao vivo:
+        // 13 jogos da NFL e 1 da MLB com esse nome em 2026-11-16).
+        "STATUS_FULL_TIME", "STATUS_FINAL" -> GameStatus.FULL_TIME
+        "STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_SUSPENDED", "STATUS_DELAYED" -> GameStatus.POSTPONED
         else -> GameStatus.OTHER
+    }
+
+    /**
+     * Relógio a mostrar, como a ESPN traz — sem converter nem inventar.
+     * Futebol: `displayClock` ("45'"). Demais esportes: o `type.detail`
+     * ("Q3 8:12", "Top 5th") — o `displayClock` traz só o tempo restante
+     * ("8:12") ou "0:00" (MLB não tem relógio). Jogo agendado/final não
+     * usa o relógio (a tela mostra data/hora ou "Fim de jogo").
+     */
+    private fun clockOf(statusObj: JSONObject?, type: JSONObject?, sport: String): String {
+        val detail = type?.optString("detail").orEmpty()
+        val display = statusObj?.optString("displayClock").orEmpty()
+        return if (sport == "soccer") {
+            display.takeIf { it.isNotBlank() } ?: detail
+        } else {
+            detail.takeIf { it.isNotBlank() } ?: display
+        }
     }
 
     private fun logoOf(team: JSONObject): String {
@@ -288,7 +369,7 @@ object EspnSportsApi {
      * Jogos do placar (`scoreboard`): um [LeagueGame] por evento. Evento sem
      * os dois times é descartado (nunca meio jogo inventado).
      */
-    fun parseScoreboard(json: String, leagueId: String): List<LeagueGame> {
+    fun parseScoreboard(json: String, leagueId: String, sport: String = "soccer"): List<LeagueGame> {
         val out = ArrayList<LeagueGame>()
         val root = runCatching { JSONObject(json) }.getOrNull() ?: return out
         val events = root.optJSONArray("events") ?: return out
@@ -300,8 +381,7 @@ object EspnSportsApi {
             val statusObj = e.optJSONObject("status")
             val type = statusObj?.optJSONObject("type")
             val status = statusOf(type?.optString("name").orEmpty())
-            val clock = statusObj?.optString("displayClock")?.takeIf { it.isNotBlank() }
-                ?: type?.optString("detail").orEmpty()
+            val clock = clockOf(statusObj, type, sport)
             val comp = e.optJSONArray("competitions")?.optJSONObject(0) ?: continue
             val venue = e.optJSONObject("venue")?.optString("fullName").orEmpty()
                 .ifBlank { comp.optJSONObject("venue")?.optString("fullName").orEmpty() }
@@ -501,7 +581,7 @@ object EspnSportsApi {
      * só existem quando a fonte traz — jogo futuro volta com as seções
      * vazias, nunca com dado chutado.
      */
-    fun parseGameDetail(json: String, leagueId: String): GameDetail? {
+    fun parseGameDetail(json: String, leagueId: String, sport: String = "soccer"): GameDetail? {
         val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
         val header = root.optJSONObject("header") ?: return null
         val comp = header.optJSONArray("competitions")?.optJSONObject(0) ?: return null
@@ -510,8 +590,7 @@ object EspnSportsApi {
         val statusObj = comp.optJSONObject("status")
         val type = statusObj?.optJSONObject("type")
         val status = statusOf(type?.optString("name").orEmpty())
-        val clock = statusObj?.optString("displayClock")?.takeIf { it.isNotBlank() }
-            ?: type?.optString("detail").orEmpty()
+        val clock = clockOf(statusObj, type, sport)
         val competitors = comp.optJSONArray("competitors") ?: return null
         var home: JSONObject? = null
         var away: JSONObject? = null
@@ -650,20 +729,20 @@ class EspnSportsRepository @Inject constructor(
         cacheFile(name).writeText(text)
     }
 
-    private suspend fun fetchScoreboard(slug: String, dateYmd: String, today: Boolean): String? =
+    private suspend fun fetchScoreboard(league: SportsLeague, dateYmd: String, today: Boolean): String? =
         withContext(Dispatchers.IO) {
-            val name = "scoreboard_${slug}_$dateYmd.json"
+            val name = "scoreboard_${league.espnSport}_${league.espnSlug}_$dateYmd.json"
             val ttl = if (today) todayTtlMs else tableTtlMs
             readCache(name, ttl)?.first
-                ?: get(EspnSportsApi.scoreboardUrl(slug, dateYmd))?.also { writeCache(name, it) }
+                ?: get(EspnSportsApi.scoreboardUrl(league.espnSport, league.espnSlug, dateYmd))?.also { writeCache(name, it) }
                 ?: readCacheStale(name)?.first
         }
 
-    private suspend fun fetchSummary(slug: String, eventId: String): String? =
+    private suspend fun fetchSummary(league: SportsLeague, eventId: String): String? =
         withContext(Dispatchers.IO) {
             val name = "detail_$eventId.json"
             readCache(name, detailTtlMs)?.first
-                ?: get(EspnSportsApi.summaryUrl(slug, eventId))?.also { writeCache(name, it) }
+                ?: get(EspnSportsApi.summaryUrl(league.espnSport, league.espnSlug, eventId))?.also { writeCache(name, it) }
                 ?: readCacheStale(name)?.first
         }
 
@@ -674,8 +753,8 @@ class EspnSportsRepository @Inject constructor(
     suspend fun gamesOn(league: SportsLeague, dateMs: Long): List<LeagueGame> {
         val ymd = EspnSportsApi.ymd(dateMs)
         val today = ymd == EspnSportsApi.ymd(System.currentTimeMillis())
-        val json = fetchScoreboard(league.espnSlug, ymd, today) ?: return emptyList()
-        return EspnSportsApi.parseScoreboard(json, league.id)
+        val json = fetchScoreboard(league, ymd, today) ?: return emptyList()
+        return EspnSportsApi.parseScoreboard(json, league.id, league.espnSport)
     }
 
     /**
@@ -683,8 +762,12 @@ class EspnSportsRepository @Inject constructor(
      * anteriores) e lê a tabela do summary dele. Os últimos 5 vêm dos
      * placares recentes (campo `form` da fonte) até cobrir os times da
      * tabela (no máximo 7 dias). Fora de temporada, null.
+     * Ligas sem tabela de verdade no summary ([SportsLeague.hasTable] =
+     * false — as 5 americanas, Lote 16) voltam null direto: a tela mostra
+     * "sem dados", sem inventar tabela de fragmento de divisão.
      */
     suspend fun leagueTable(league: SportsLeague): LeagueTable? {
+        if (!league.hasTable) return null
         val cached = readCache("table_${league.espnSlug}.json", tableTtlMs)
         if (cached != null) {
             val table = parseCachedTable(cached.first, league, cached.second)
@@ -697,7 +780,7 @@ class EspnSportsRepository @Inject constructor(
             val dayMs = now - back * 24L * 60 * 60 * 1000
             val games = gamesOn(league, dayMs)
             val first = games.firstOrNull() ?: continue
-            val summary = fetchSummary(league.espnSlug, first.eventId) ?: continue
+            val summary = fetchSummary(league, first.eventId) ?: continue
             eventId = first.eventId
             summaryJson = summary
             break
@@ -717,7 +800,7 @@ class EspnSportsRepository @Inject constructor(
             val dayMs = now - back * 24L * 60 * 60 * 1000
             val ymd = EspnSportsApi.ymd(dayMs)
             val today = back == 0
-            val raw = fetchScoreboard(league.espnSlug, ymd, today) ?: continue
+            val raw = fetchScoreboard(league, ymd, today) ?: continue
             EspnSportsApi.parseFormMap(raw).forEach { (team, results) -> form.putIfAbsent(team, results) }
         }
         val table = EspnSportsApi.parseTable(summaryJson, league, form, now) ?: return null
@@ -737,7 +820,7 @@ class EspnSportsRepository @Inject constructor(
     /** Página de um jogo (placar, gols, estatísticas, escalações). */
     suspend fun gameDetail(league: SportsLeague, eventId: String): GameDetail? {
         if (eventId.isBlank()) return null
-        val json = fetchSummary(league.espnSlug, eventId) ?: return null
-        return EspnSportsApi.parseGameDetail(json, league.id)
+        val json = fetchSummary(league, eventId) ?: return null
+        return EspnSportsApi.parseGameDetail(json, league.id, league.espnSport)
     }
 }

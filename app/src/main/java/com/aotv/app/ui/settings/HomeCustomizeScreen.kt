@@ -241,6 +241,53 @@ fun HomeCustomizeScreen(
                     }
                 }
 
+                item { com.aotv.app.ui.common.SettingsSection("Canais de TV dos addons") }
+                item {
+                    CardBox {
+                        Text("Canais de TV dos addons", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Os catálogos de TV dos addons ligados também aparecem na aba Ao vivo. Ligar um aqui adiciona ele como fileira na Início — depois dá p/ reordenar e renomear na lista de fileiras abaixo.",
+                            color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                            modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+                        )
+                        if (st.tvCatalogsLoading) {
+                            Text("Lendo os catálogos de TV…", color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+                        }
+                        st.tvCatalogOptions.forEach { o ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        o.label, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        if (o.type == "channel") "Canais" else "TV",
+                                        color = TextTertiary, fontSize = 12.sp, maxLines = 1,
+                                    )
+                                }
+                                Switch(
+                                    checked = o.inHome,
+                                    onCheckedChange = { viewModel.setTvCatalogInHome(o.key, it) },
+                                    colors = switchColors(),
+                                )
+                            }
+                        }
+                        if (!st.tvCatalogsLoading && st.tvCatalogOptions.isEmpty()) {
+                            Text(
+                                "Nenhum addon ligado trouxe catálogo de TV.",
+                                color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                        }
+                        st.tvDiag.forEach { d ->
+                            Text(
+                                "${d.addonName} respondeu, mas só declara ${d.declaredTypes.joinToString(", ") { tvTypeLabel(it) }} — sem catálogo de TV.",
+                                color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                    }
+                }
+
                 item {
                     Row(
                         Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -410,6 +457,15 @@ private fun SourcePill(text: String, color: Color) {
         text, color = color, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.3.sp, maxLines = 1,
         modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(color.copy(alpha = 0.14f)).padding(horizontal = 9.dp, vertical = 3.dp),
     )
+}
+
+/** Rótulo curto de um type declarado no manifest (p/ o diagnóstico de TV). */
+private fun tvTypeLabel(type: String): String = when (type) {
+    "movie" -> "Filmes"
+    "series" -> "Séries"
+    "tv" -> "TV"
+    "channel" -> "Canais"
+    else -> type
 }
 
 @Composable

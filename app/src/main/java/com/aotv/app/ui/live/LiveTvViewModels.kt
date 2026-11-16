@@ -15,6 +15,7 @@ import com.aotv.app.data.live.VodSeriesDetail
 import com.aotv.app.data.remote.AddonTvCatalogLoader
 import com.aotv.app.data.remote.AddonTvCatalogs
 import com.aotv.app.data.remote.AddonTvChannel
+import com.aotv.app.data.remote.AddonTvDiag
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -72,6 +73,14 @@ class LiveTvViewModel @Inject constructor(
         val addonLoading: Boolean = false,
         /** Falha ao ler TODOS os addons (nenhum respondeu); null = ok ou sem addon de TV. */
         val addonError: String? = null,
+        /**
+         * Diagnóstico (Lote 16, v1.26.0): addons que RESPONDERAM mas não
+         * renderam catálogo de TV, com os types que cada um declara
+         * (ex.: ["movie", "series", "channel"]). Vazio = nada a diagnosticar.
+         * Não some com o [addonError]: quando NENHUM addon respondeu, o erro
+         * continua sendo o de cima e este fica vazio.
+         */
+        val addonDiag: List<AddonTvDiag> = emptyList(),
         /** Canal de addon resolvendo o stream (/stream/tv/{id}.json). */
         val addonResolvingId: String? = null,
         /** Falha ao resolver o stream do canal de addon. */
@@ -87,6 +96,7 @@ class LiveTvViewModel @Inject constructor(
         val channels: List<LiveChannel> = emptyList(),
         val loading: Boolean = false,
         val error: String? = null,
+        val diag: List<AddonTvDiag> = emptyList(),
         val resolvingId: String? = null,
         val resolveError: String? = null,
     )
@@ -161,6 +171,7 @@ class LiveTvViewModel @Inject constructor(
             cleanGroupNames = clean,
             addonLoading = atv.loading,
             addonError = atv.error,
+            addonDiag = atv.diag,
             addonResolvingId = atv.resolvingId,
             addonResolveError = atv.resolveError,
         )
@@ -192,7 +203,7 @@ class LiveTvViewModel @Inject constructor(
             repo.setAddonTvAvailable(false)
             return
         }
-        addonTv.update { it.copy(loading = true, error = null) }
+        addonTv.update { it.copy(loading = true, error = null, diag = emptyList()) }
         viewModelScope.launch {
             val result = tvCatalogs.loadCatalogs()
             val channels = coroutineScope {
@@ -216,6 +227,7 @@ class LiveTvViewModel @Inject constructor(
                     error = if (result.catalogs.isEmpty() && !result.anyResponded)
                         "Não deu para ler os addons — os canais de TV deles não apareceram. Confira a conexão e toque em Atualizar."
                     else null,
+                    diag = result.diagnostics,
                 )
             }
             // Follow-up do Bloco 2: guarda se há catálogo de TV p/ a aba
@@ -227,21 +239,22 @@ class LiveTvViewModel @Inject constructor(
     }
 
     /**
-     * Resolve o stream do canal de addon (/stream/tv/{id}.json) e, achando um
+     * Resolve o stream do canal de addon (/stream/{type}/{id}.json — o type
+     * vem do id do canal, "tv" ou "channel") e, achando um
      * stream direto, registra o canal resolvido no repo (só em memória, com
      * a URL) e chama [onReady] com o id p/ tocar — o player encontra o
      * canal pelo id "addon-tv:..." (follow-up do Bloco 2). Sem stream, ou
      * se o canal saiu da lista, mostra o erro real e NÃO navega — o player
      * não teria o que tocar.
      *
-     * O id é autocontido (base + catálogo + meta, ver [AddonTvCatalogs]).
+     * O id é autocontido (base + catálogo + meta + type, ver [AddonTvCatalogs]).
      */
     fun playAddonChannel(channelId: String, onReady: (String) -> Unit) {
         val ref = AddonTvCatalogs.parseChannelId(channelId) ?: return
         if (addonTv.value.resolvingId != null) return
         addonTv.update { it.copy(resolvingId = channelId, resolveError = null) }
         viewModelScope.launch {
-            val url = tvCatalogs.resolveStreamUrl(ref.base, ref.metaId)
+            val url = tvCatalogs.resolveStreamUrl(ref.base, ref.metaId, ref.type)
             val channel = addonTv.value.channels.firstOrNull { it.id == channelId }
             if (url != null && channel != null) {
                 repo.registerAddonChannel(channel.copy(url = url))
@@ -659,6 +672,9 @@ class OnDemandViewModel @Inject constructor(
     private val detail = MutableStateFlow(Detail())
     private val data = MutableStateFlow(Data())
 
+    /** Deep link da Início (acréscimo v1.26.0): (aba, id) a abrir quando a lista chegar. */
+    private var pendingOpen: Pair<String, String>? = null
+
     // combine de 6 flows SÓ compila na forma vararg (build #235): os valores
     // vêm do array, na ordem, com cast.
     val view: StateFlow<View> = combine(repo.state, tab, category, query, detail, data) { arr ->
@@ -715,6 +731,7 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
             val res = repo.fetchOnDemand(source, t == SERIES)
             if (res == null) {
+                pendingOpen = null
                 data.update {
                     it.copy(
                         loading = false,
@@ -729,6 +746,7 @@ class OnDemandViewModel @Inject constructor(
                 if (t == SERIES) next.copy(seriesCats = cats, seriesItems = items)
                 else next.copy(vodCats = cats, vodItems = items)
             }
+            openPending()
         }
     }
 
@@ -753,6 +771,33 @@ class OnDemandViewModel @Inject constructor(
     }
 
     fun closeDetail() { detail.value = Detail() }
+
+    /**
+     * Abre o detalhe que chegou pendente (deep link da Início): consome 1x.
+     * Item fora da lista some em silêncio — abre só a aba, sem inventar detalhe.
+     */
+    private fun openPending() {
+        val (t, id) = pendingOpen ?: return
+        pendingOpen = null
+        val all = if (t == SERIES) data.value.seriesItems else data.value.vodItems
+        val item = all.firstOrNull { it.id == id } ?: return
+        if (t == SERIES) openSeries(item) else openMovie(item)
+    }
+
+    /**
+     * Deep link da Início (acréscimo v1.26.0): abre o On Demand na aba do
+     * item e o detalhe dele quando a lista chegar (ou na hora, se já
+     * carregada). Chamada 1x por entrada na tela; repetir não reabre.
+     */
+    fun openById(tab: String, itemId: String) {
+        if (itemId.isBlank() || pendingOpen != null) return
+        val t = if (tab == SERIES) SERIES else MOVIES
+        pendingOpen = t to itemId
+        if (t != this.tab.value) {
+            setTab(t)
+            if (t in data.value.loaded) openPending()
+        } else if (t in data.value.loaded) openPending() else load()
+    }
 
     /** URL do filme no padrão Xtream (mesmo do ao vivo, com container_extension). */
     fun streamUrl(item: VodItem): String? =

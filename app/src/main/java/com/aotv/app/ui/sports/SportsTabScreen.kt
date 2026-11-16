@@ -86,18 +86,22 @@ import java.util.Locale
 import javax.inject.Inject
 
 /**
- * Aba de Esportes (Lote 15, v1.25.0 — Bloco 1): 6ª aba da pílula, SÓ no
- * celular. Na TV, esportes ficam dentro do hub do Ao vivo, como hoje.
+ * Aba de Esportes (Lote 15, v1.25.0 — Bloco 1; outros esportes no Lote 16,
+ * v1.26.0): 6ª aba da pílula, SÓ no celular. Na TV, esportes ficam dentro
+ * do hub do Ao vivo, como hoje.
  *
- * COBERTURA HONESTA: o app só conhece as 8 ligas de futebol da ESPN
- * ([SPORTS_LEAGUES], slugs confirmados no Lote 13) — sem prometer
- * centenas de ligas que o app não conhece.
- * O seletor mostra "N de 8 ligas ligadas" e o total disponível é 8. Todos
- * os jogos vêm do scoreboard da ESPN ([EspnSportsRepository.gamesOn]);
- * sem resposta da fonte, estado vazio — nunca placar, período, liga ou
- * canal inventado. O filtro por esporte é montado a partir dos dados: hoje
- * só existe "Futebol" (as 8 ligas são de futebol); outros esportes entram
- * quando houver fonte p/ eles.
+ * COBERTURA HONESTA: o app conhece 13 ligas da ESPN ([SPORTS_LEAGUES]) —
+ * 8 de futebol + NFL, NBA, NHL, MLB e MLS (Lote 16; slugs confirmados ao
+ * vivo em 2026-11-16). Sem prometer centenas de ligas que o app não
+ * conhece. O seletor mostra "N de 13 ligas ligadas" e o total disponível
+ * é 13. Todos os jogos vêm do scoreboard da ESPN
+ * ([EspnSportsRepository.gamesOn]); sem resposta da fonte, estado vazio —
+ * nunca placar, período, liga ou canal inventado. O filtro por esporte é
+ * montado a partir dos dados ([SportsLeague.sportLabel]): Futebol,
+ * Futebol Americano, Basquete, Hóquei e Beisebol.
+ * Tabelas SÓ p/ o futebol: o summary das ligas americanas não traz tabela
+ * de verdade (só fragmento de divisão; MLS sem `standings`) — ver
+ * [EspnSportsRepository.leagueTable].
  *
  * "Meus esportes" = SÓ ligas/times seguidos; começa vazio (nenhum default).
  * "Seguindo" alimenta os alertas do WorkManager ([GameScoreWorker]) na
@@ -120,23 +124,25 @@ fun sportsTabDateLabel(offset: Int, nowMs: Long = System.currentTimeMillis()): S
     return SimpleDateFormat("EEE d", Locale("pt", "BR")).format(Date(nowMs + offset * SPORTS_TAB_DAY_MS))
 }
 
-/** Minuto do relógio da ESPN ("45'", "45'+2'", "90+3'") — null sem minuto ("Intervalo", "FT"). */
+/** Minuto do relógio da ESPN ("45'", "45'+2'", "90+3'") — null sem minuto ("Intervalo", "FT"). SÓ p/ o relógio do futebol; fora dele, sem uso. */
 fun sportsClockMinute(clock: String): Int? {
     val m = Regex("""^(\d{1,3})""").find(clock.trim()) ?: return null
     return m.groupValues[1].toIntOrNull()
 }
 
 /**
- * Progresso estimado do jogo ao vivo (minuto/90, só futebol — a ESPN não
+ * Progresso estimado do jogo ao vivo (minuto/90, SÓ futebol — a ESPN não
  * informa o total). null sem minuto no relógio (a barra some, sem chutar).
+ * NÃO se aplica a NFL/NBA/NHL/MLB (períodos, não minutos): quem chama
+ * filtra por [SportsLeague.espnSport] == "soccer" antes.
  */
 fun sportsLiveProgress(clock: String): Float? {
     val minute = sportsClockMinute(clock) ?: return null
     return (minute / 90f).coerceIn(0f, 1f)
 }
 
-/** Esporte de um jogo da ESPN — hoje tudo é futebol (8 ligas de futebol). */
-fun sportsGameSport(@Suppress("UNUSED_PARAMETER") game: LeagueGame): String = "Futebol"
+/** Esporte de um jogo da ESPN — o rótulo em PT-BR da liga dele. */
+fun sportsGameSport(league: SportsLeague): String = league.sportLabel
 
 /** O jogo passa no filtro de busca (time, liga ou estádio, sem acento). */
 fun sportsGameMatches(game: LeagueGame, league: SportsLeague, query: String): Boolean {
@@ -175,7 +181,7 @@ class SportsTabViewModel @Inject constructor(
     private val _ui = MutableStateFlow(Ui())
     val ui: StateFlow<Ui> = _ui.asStateFlow()
 
-    /** Ligas ligadas no seletor (só as que o app conhece — 8). */
+    /** Ligas ligadas no seletor (só as que o app conhece — 13). */
     fun enabledLeagues(): List<SportsLeague> {
         val ids = prefs.sportsEnabledLeagueIds(SPORTS_LEAGUES.map { it.id })
         return SPORTS_LEAGUES.filter { it.id in ids }
@@ -325,11 +331,11 @@ fun SportsTabScreen(
         }
     }
     val sportsPresent = remember(allGames) {
-        allGames.map { sportsGameSport(it.second) }.distinct()
+        allGames.map { sportsGameSport(it.first) }.distinct()
     }
     val sportFiltered = remember(allGames, ui.sport) {
         if (ui.sport == "Todos") allGames
-        else allGames.filter { sportsGameSport(it.second) == ui.sport }
+        else allGames.filter { sportsGameSport(it.first) == ui.sport }
     }
     val liveGames = remember(sportFiltered) {
         sportFiltered.filter { it.second.isLive }.sortedBy { it.second.dateMs }
@@ -419,7 +425,8 @@ fun SportsTabScreen(
                 )
             }
         }
-        // Filtro por esporte (montado a partir dos dados — hoje só Futebol)
+        // Filtro por esporte (montado a partir dos dados — Futebol,
+        // Futebol Americano, Basquete, Hóquei, Beisebol, conforme os jogos do dia)
         if (sportsPresent.isNotEmpty()) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
@@ -682,8 +689,10 @@ private fun SportsTabGameCard(
             followed = game.awayTeam in followedTeams,
             onToggleFollow = { viewModel.toggleFollowTeam(game.awayTeam) },
         )
-        // Barra de progresso: minuto do relógio / 90. Sem minuto, sem barra.
-        val progress = if (game.isLive) sportsLiveProgress(game.clock) else null
+        // Barra de progresso: minuto do relógio / 90 — SÓ futebol. NFL/NBA/
+        // NHL/MLB têm períodos, não minuto: sem barra (o relógio da ESPN,
+        // "Q3 8:12" etc., já aparece como texto acima).
+        val progress = if (game.isLive && league.espnSport == "soccer") sportsLiveProgress(game.clock) else null
         if (progress != null) {
             com.aotv.app.ui.common.ProgressBar(progress, Modifier.fillMaxWidth(), height = 4.dp, fillColor = Accent)
         }
@@ -877,7 +886,7 @@ private fun SportsTabNetworkRow(channel: LiveChannel, onPlay: () -> Unit) {
 // ── Seletor de ligas ───────────────────────────────────────────────────────
 
 /**
- * "Escolher ligas": as ligas que o app REALMENTE conhece (8, da ESPN), com
+ * "Escolher ligas": as ligas que o app REALMENTE conhece (13, da ESPN), com
  * busca dentro do seletor e ligar/desligar em massa. Persistido em
  * PlatformPrefs (`sports_tab_leagues_v1` — null = todas ligadas).
  */

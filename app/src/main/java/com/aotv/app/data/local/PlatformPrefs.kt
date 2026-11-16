@@ -112,6 +112,9 @@ internal val SCOPED_KEYS = listOf(
     // automático, cartão "A seguir" e equalizador (liga, preset, bandas em dB).
     "pref_player_autosync", "pref_player_auto_skip", "pref_player_up_next",
     "pref_player_equalizer", "pref_player_eq_preset", "pref_player_eq_bands",
+    // Lote 16 — Player parte 4 (v1.26.0): taxa de quadros, legendas nível 2
+    // (foreign-only, ocultar SDH) e chave grátis do SubDL (2ª fonte).
+    "pref_player_frame_rate", "sub_foreign_only", "sub_hide_sdh", "subdl_api_key",
     // Lote 12 — Frente 2 (Player e fontes, v1.22.0): modo de tela padrão,
     // vista em ranking da folha de fontes e gravações marcadas como vistas.
     "pref_player_screen_mode", "pref_player_sources_ranked", "recordings_seen_v1",
@@ -1856,6 +1859,27 @@ class PlatformPrefs @Inject constructor(
         get() = _playerTapSeek.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_tap_seek"), value).apply(); _playerTapSeek.value = value }
 
+    private val _playerFrameRate = MutableStateFlow(prefs.getBoolean(sk("pref_player_frame_rate"), true))
+    /** Sincronizar a taxa de atualização da tela com o fps do stream (Lote 16 item 4). */
+    val playerFrameRateFlow: StateFlow<Boolean> = _playerFrameRate.asStateFlow()
+    var playerFrameRate: Boolean
+        get() = _playerFrameRate.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_frame_rate"), value).apply(); _playerFrameRate.value = value }
+
+    private val _subForeignOnly = MutableStateFlow(prefs.getBoolean(sk("sub_foreign_only"), false))
+    /** "Foreign audio only" (Lote 16 item 3): a legenda só abre sozinha quando o áudio é estrangeiro p/ o idioma do perfil. */
+    val subForeignOnlyFlow: StateFlow<Boolean> = _subForeignOnly.asStateFlow()
+    var subForeignOnly: Boolean
+        get() = _subForeignOnly.value
+        set(value) { prefs.edit().putBoolean(sk("sub_foreign_only"), value).apply(); _subForeignOnly.value = value }
+
+    private val _subHideSdh = MutableStateFlow(prefs.getBoolean(sk("sub_hide_sdh"), false))
+    /** Ocultar legendas SDH/CC (Lote 16 item 3) na escolha automática da legenda. */
+    val subHideSdhFlow: StateFlow<Boolean> = _subHideSdh.asStateFlow()
+    var subHideSdh: Boolean
+        get() = _subHideSdh.value
+        set(value) { prefs.edit().putBoolean(sk("sub_hide_sdh"), value).apply(); _subHideSdh.value = value }
+
     private val _playerSwipeSeek = MutableStateFlow(prefs.getBoolean(sk("pref_player_swipe_seek"), true))
     /** Deslizar horizontalmente sobre o vídeo avança/retrocede 10s (Lote 1, v1.9.0). */
     val playerSwipeSeekFlow: StateFlow<Boolean> = _playerSwipeSeek.asStateFlow()
@@ -2101,6 +2125,13 @@ class PlatformPrefs @Inject constructor(
     var playerAnimeSkipClientId: String
         get() = _playerAnimeSkipClientId.value
         set(value) { prefs.edit().putString(sk("pref_player_animeskip_client_id"), value).apply(); _playerAnimeSkipClientId.value = value }
+
+    private val _subDlApiKey = MutableStateFlow(prefs.getString(sk("subdl_api_key"), "") ?: "")
+    /** Chave grátis do SubDL (Lote 16 item 3), digitada pelo usuário em Configurações. "" = SubDL desligado. NUNCA embutir uma chave no código. */
+    val subDlApiKeyFlow: StateFlow<String> = _subDlApiKey.asStateFlow()
+    var subDlApiKey: String
+        get() = _subDlApiKey.value
+        set(value) { prefs.edit().putString(sk("subdl_api_key"), value).apply(); _subDlApiKey.value = value }
 
     // ── Idiomas preferidos de áudio/legenda do player (Lote 4 item 7, v1.12.0) ──
     // Áudio: código do OpenSubtitles (ver [SubLangs], mesma lista da legenda) — o
@@ -2864,6 +2895,9 @@ class PlatformPrefs @Inject constructor(
         _playerButtons.value = readStringList("pref_player_buttons")
         _playerTopActions.value = readStringList("pref_player_top_actions")
         _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)
+        _playerFrameRate.value = prefs.getBoolean(sk("pref_player_frame_rate"), true)
+        _subForeignOnly.value = prefs.getBoolean(sk("sub_foreign_only"), false)
+        _subHideSdh.value = prefs.getBoolean(sk("sub_hide_sdh"), false)
         _playerSwipeSeek.value = prefs.getBoolean(sk("pref_player_swipe_seek"), true)
         _playerSpeed.value = prefs.getFloat(sk("pref_player_speed"), 1f)
         _playerColorBrightness.value = prefs.getFloat(sk("pref_player_color_brightness"), 0f)
@@ -2898,6 +2932,7 @@ class PlatformPrefs @Inject constructor(
         _durationGuard.value = prefs.getBoolean(sk("pref_duration_guard"), true)
         _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
         _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
+        _subDlApiKey.value = prefs.getString(sk("subdl_api_key"), "") ?: ""
         _playerAudioLang.value =
             prefs.getString(sk("pref_player_audio_lang"), null)?.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
         _playerReuseLastSource.value = prefs.getBoolean(sk("pref_player_reuse_last_source"), true)

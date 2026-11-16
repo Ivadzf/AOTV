@@ -284,6 +284,8 @@ fun MoviePlayerScreen(
     val playerEqEnabled by playerPrefsVm.equalizer.collectAsState()
     val playerEqPreset by playerPrefsVm.eqPreset.collectAsState()
     val playerEqBands by playerPrefsVm.eqBands.collectAsState()
+    // Lote 16 item 4: sincronizar a taxa de quadros (pref, ligada por padrão).
+    val playerFrameRate by playerPrefsVm.frameRate.collectAsState()
     // Estado e regra do player moram na sessão. A função de tela ficou pequena e o Android volta
     // a compilar o código (antes passava do limite de instruções e rodava interpretado).
     val forceTv = television
@@ -388,6 +390,8 @@ fun MoviePlayerScreen(
     // Volume Boost faz o mesmo p/ o LoudnessEnhancer; a 1ª aplicação é no
     // onAudioSessionIdChanged, quando a sessão de áudio fica pronta).
     LaunchedEffect(playerEqEnabled, playerEqPreset, playerEqBands) { s.applyEqualizer() }
+    // Lote 16 item 4: taxa de quadros (pref; desligar volta a taxa padrão da tela).
+    LaunchedEffect(playerFrameRate) { s.frameRateEnabled = playerFrameRate; s.applyFrameRate() }
     // v1.8.1: troca automática de fonte (toggle + tempo) e client ID do Anime-Skip.
     s.autoSwitchEnabled = playerAutoSwitch
     s.sourceTimeoutSec = playerSourceTimeout
@@ -412,6 +416,19 @@ fun MoviePlayerScreen(
         playerPrefsVm.setColorPreset(ns.preset)
         playerPrefsVm.setColorDaltonism(ns.daltonism.id)
     }
+    // Modo noturno + Clear Dialogue (Lote 16 item 1): estado por título,
+    // carregado ao abrir e ao trocar de episódio; a sessão aplica no
+    // ExoPlayer quando a sessão de áudio fica pronta ou o estado muda.
+    val nightPrefs = remember { com.aotv.app.data.local.PlatformPrefs(context) }
+    LaunchedEffect(tmdbId, type, s.curSeason, s.curEpisode) {
+        val key = if (type == "SERIES") nightModeTitleKeyEpisode(tmdbId.toLong(), s.curSeason, s.curEpisode)
+        else nightModeTitleKeyMovie(tmdbId.toLong())
+        s.nightModeTitleKey = key
+        s.nightModeState = loadNightModeState(nightPrefs, key)
+        s.applyNightMode()
+    }
+    LaunchedEffect(s.nightModeState) { s.applyNightMode() }
+    DisposableEffect(s) { onDispose { s.nightController.release(); s.fpsMeter.stop() } }
     // Modo privado (Lote 2, item 7 — v1.10.0): a tela lê o fluxo e entrega à
     // sessão; o chip salva de volta por onPrivateModeToggle. Mudar no Perfil
     // aplica na hora, mesmo com o player aberto.
@@ -501,9 +518,18 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         skipSegments = com.aotv.app.data.remote.SkipSegments()
         val imdb = runCatching { episodeVm.imdbId(tmdbId, type) }.getOrNull() ?: return@LaunchedEffect
         val durSec = exoPlayer.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0
-        skipSegments = runCatching {
-            skipSegmentsService.get(imdb, title, type == "SERIES", curSeason, curEpisode, durSec, animeSkipClientId)
-        }.getOrDefault(com.aotv.app.data.remote.SkipSegments())
+        // Lote 16 item 2: a IntroDB filtrada (confiança ≥ 0,5, ≥ 1 envio) é a
+        // fonte principal — UM caminho por título (evita buscar 2x). O
+        // serviço antigo (IntroDB sem filtro + SkipDB + Anime-Skip) só entra
+        // quando a IntroDB não conhece o título (sem segmentos E sem no_*).
+        val introDb = s.loadIntroDb(imdb, type == "SERIES", curSeason, curEpisode)
+        if (introDb != null && (introDb.hasAny() || introDb.noIntro || introDb.noRecap || introDb.noOutro)) {
+            skipSegments = s.introDbToSkipSegments(introDb)
+        } else {
+            skipSegments = runCatching {
+                skipSegmentsService.get(imdb, title, type == "SERIES", curSeason, curEpisode, durSec, animeSkipClientId)
+            }.getOrDefault(com.aotv.app.data.remote.SkipSegments())
+        }
     }
 
     // Resume de SÉRIE: as fontes recebidas vêm do estado de FILME (vazias p/ série). Carrega
@@ -550,6 +576,15 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(tmdbId, type, curSeason, curEpisode) {
         selectedSubUrl = null
         subPicked = false
+        // Lote 16 item 3: a 2ª legenda vale p/ o vídeo atual — trocar de
+        // episódio/título desliga.
+        secondarySubUrl = null
+        secondaryCues = emptyList()
+        dualSubState = DualSubState()
+        // Lote 16 item 6: o estado de "voltar" do sleep timer vale 1x p/ a
+        // pausa do timer — trocar de episódio/título zera.
+        sleepWakeState = null
+        sleepPaused = false
         // Idioma de áudio (Lote 4 item 7): episódio novo devolve a faixa para o
         // automático, como a legenda — a escolha à mão valia p/ o vídeo anterior.
         audioPicked = false
@@ -561,6 +596,13 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         val u = selectedSubUrl ?: return@LaunchedEffect
         externalCues = episodeVm.subtitleCues(u)
         if (externalCues.isEmpty() && selectedSubUrl == u) toastMsg = "Não deu para carregar essa legenda"
+    }
+    // 2ª legenda (Lote 16 item 3): mesmo caminho da 1ª externa.
+    LaunchedEffect(secondarySubUrl) {
+        secondaryCues = emptyList()
+        val u = secondarySubUrl ?: return@LaunchedEffect
+        secondaryCues = episodeVm.subtitleCues(u)
+        if (secondaryCues.isEmpty() && secondarySubUrl == u) toastMsg = "Não deu para carregar a 2ª legenda"
     }
     // Legenda externa é desenhada pelo próprio player (ver externalCues), então trocar de
     // legenda não recarrega o vídeo.
@@ -631,6 +673,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                     readyUrl = streamUrl
                     switching = false // novo episódio no ar, tira o loading da troca
                     refreshTechInfo()
+                    // Frame-rate matching (Lote 16 item 4) + medidor de FPS.
+                    applyFrameRate()
+                    fpsMeter.start()
+                    maybeHdr10Fallback()
                 }
                 if (state == Player.STATE_ENDED) playbackEnded = true
             }
@@ -644,6 +690,9 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 // Faixas novas (episódio ou fonte trocados). Com a legenda ligada no perfil, liga a
                 // do idioma escolhido. Escolha à mão no vídeo atual não é desfeita.
                 pickAutoSub()
+                // Lote 16 item 3: com a legenda desligada e o áudio estrangeiro,
+                // mostra a faixa forced (falas em outra língua dentro do filme).
+                maybeShowForcedSub()
                 // Áudio no idioma preferido do perfil (Lote 4 item 7) + infos
                 // técnicas do stream novo (Lote 4 item 4).
                 pickAutoAudio()
@@ -656,9 +705,12 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 videoWidth = size.width
                 videoHeight = size.height
                 refreshTechInfo()
+                // Frame-rate matching (Lote 16 item 4): a resolução mudou,
+                // o fps do stream pode ter mudado junto.
+                applyFrameRate()
             }
             // Sessão de áudio (re)criada: (re)aplica o Volume Boost nela.
-            override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost(); applyEqualizer() }
+            override fun onAudioSessionIdChanged(audioSessionId: Int) { applyVolBoost(); applyEqualizer(); applyNightMode() }
         }
         exoPlayer.addListener(l); onDispose { exoPlayer.removeListener(l) }
     }
@@ -668,11 +720,15 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     // pronta (onAudioSessionIdChanged, no listener acima).
     LaunchedEffect(volBoostEnabled, volBoostLevel) { applyVolBoost() }
 
-    // Correção de cor (v1.9.0): reaplica ao vivo quando um slider, o preset
-    // ou o modo de daltonismo muda — sem reiniciar o vídeo. O runCatching
-    // (em applyColorEffects) protege a reprodução se o renderer não aceitar
-    // os efeitos.
-    LaunchedEffect(colorBrightness, colorContrast, colorSaturation, colorHue, colorDaltonism) { applyColorEffects() }
+    // Correção de cor (v1.9.0 + Lote 16 item 8): o debounce segura os ticks
+    // do slider (200 ms) e preset/daltonismo aplicam na hora — sem reiniciar
+    // o vídeo. O runCatching (em applyColorEffects) protege a reprodução se
+    // o renderer não aceitar os efeitos.
+    var prevColorState by remember { mutableStateOf(colorState) }
+    LaunchedEffect(colorBrightness, colorContrast, colorSaturation, colorHue, colorDaltonism) {
+        onColorStateChanged(colorState, prevColorState)
+        prevColorState = colorState
+    }
 
     DisposableEffect(castPlayer, streamUrl) {
         val cp = castPlayer ?: return@DisposableEffect onDispose {}
@@ -786,6 +842,8 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // quando o toggle está ligado e a reprodução entrou no segmento
             // andando (não por pulo manual — ver maybeAutoSkip).
             maybeAutoSkip()
+            // Lote 16 item 2: aviso de pós-créditos (1x por episódio).
+            maybePostCreditsNotice()
             // VISTO ao passar de 90% da duração (série) — 1x por episódio.
             if (type == "SERIES" && curEpisode > 0 && duration > 0 &&
                 position >= duration * 0.9 && markedWatchedEp != curEpisode
@@ -1213,6 +1271,13 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                             else -> true
                         }
                     }
+                    // Painel de LEGENDAS (Lote 16 item 3): ←→ ajusta o atraso da
+                    // 1ª legenda ao vivo (passo fino 0,1 s); ↑↓/OK continuam
+                    // navegando a lista de ações (guarda genérica abaixo).
+                    if (panelKind == "subs" && (kc == KeyEvent.KEYCODE_DPAD_LEFT || kc == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                        adjustSubDelay(if (kc == KeyEvent.KEYCODE_DPAD_RIGHT) DELAY_STEP_FINE_MS else -DELAY_STEP_FINE_MS)
+                        return@onKeyEvent true
+                    }
                     // Painel de INFOS TÉCNICAS (Lote 4 item 4): só mostra dados — ↑↓/OK
                     // não executam nada e ←/Back fecha. Sem esta guarda, o OK
                     // executaria uma ação de fonte (o panelActions cai em sourceActions).
@@ -1226,6 +1291,14 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                     // com foco próprio — ←→ ajusta o slider com foco, o resto
                     // passa p/ o composável (não navega a lista de ações).
                     if (panelKind == "eq") {
+                        return@onKeyEvent when (kc) {
+                            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
+                            else -> false
+                        }
+                    }
+                    // Painel do MODO NOTURNO (Lote 16 item 1): mesmo padrão do
+                    // equalizador — o painel tem foco próprio (linhas clicáveis).
+                    if (panelKind == "night") {
                         return@onKeyEvent when (kc) {
                             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
                             else -> false
@@ -1337,6 +1410,8 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         }
                     },
                     update = {
+                        setPlayerViewRef(it)
+                        applyFrameRate()
                         it.resizeMode = effectiveResizeMode(it.width, it.height)
                         it.scaleX = if (screenModeIdx == 3) 1.33f else 1f
                         it.scaleY = if (screenModeIdx == 3) 1.33f else 1f
@@ -1358,6 +1433,11 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 // Legenda externa desenhada aqui, com o atraso escolhido.
                 if (selectedSubUrl != null && externalCues.isNotEmpty()) {
                     ExternalSubtitle(externalCues, exoPlayer, (subDelay * 1000).toLong(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
+                }
+                // Segunda legenda no topo (Lote 16 item 3): só vale com arquivo
+                // externo (o ExoPlayer renderiza 1 faixa embutida por vez).
+                if (secondarySubUrl != null && secondaryCues.isNotEmpty()) {
+                    SecondarySubtitle(secondaryCues, exoPlayer, secondaryDelayMs(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
                 }
 
                 // Transmitindo p/ Chromecast: a mídia roda na TV; celular vira controle.
@@ -1381,6 +1461,9 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                                 currentPlayer().seekTo(t.targetMs)
                                 position = t.targetMs
                                 if (t.learnedMark) introSkippedEp = curEpisode
+                                // Lote 16 item 2: pulo manual da ABERTURA de série
+                                // conta p/ o auto-skip aprendido (3 pulos = oferta opt-in).
+                                if (t.label == "Pular abertura") noteManualIntroSkip()
                             }
                         }
                     }
@@ -1493,6 +1576,8 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                         buffered = currentPlayer().bufferedPosition,
                         tapSeek = tapSeekEnabled,
                         panelBlur = panelBlurOn,
+                        // Lote 16 item 5: divisões da barra (intro/recap/créditos da IntroDB).
+                        markers = progressMarkers,
                     )
                 }
 
@@ -1606,6 +1691,19 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 state = colorState,
                 focusIdx = colorFocusIdx,
                 onStateChange = ::applyColorState,
+                onSliderFinished = { applyColorNow() },
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "night") {
+            NightModePanel(
+                state = nightModeState,
+                drcEngine = nightController.drcEngine,
+                drcSupported = nightController.drcSupported,
+                clearSupported = nightController.clearSupported,
+                onNightToggle = ::setNightOn,
+                onClearToggle = ::setClearDialogue,
+                onIntensity = ::setNightIntensity,
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
             )
@@ -1915,6 +2013,7 @@ class PlayerSession(
     /** Re-lê os dados do stream atual p/ o painel de infos técnicas. Não trava o player. */
     fun refreshTechInfo() {
         techInfo = runCatching { collectTechInfo(exoPlayer, context, casting) }.getOrNull()
+            ?.copy(displayFps = displayFpsLine())
     }
     // Stats do torrent P2P (Lote 5 item 2, v1.14.0): seeds, conexões,
     // velocidade e buffer do ExoPlayer p/ a seção TORRENT do painel de
@@ -2152,6 +2251,135 @@ class PlayerSession(
         runCatching { exoPlayer.setVideoEffects(buildColorEffects(colorState)) }
     }
 
+    // ── Debounce dos sliders de cor (Lote 16 item 8 — fix do Lote 1) ────────
+    // Antes cada tick do slider chamava setVideoEffects e travava o vídeo;
+    // agora o slider espera 200 ms parado e preset/daltonismo aplicam na hora.
+    private val colorDebouncer = ColorFilterDebouncer(scope) { applyColorEffects() }
+    fun onColorStateChanged(newState: ColorFilterState, oldState: ColorFilterState) =
+        colorDebouncer.onStateChanged(newState, oldState)
+    fun applyColorNow() = colorDebouncer.applyNow()
+
+    // ── Modo noturno + Clear Dialogue (Lote 16 item 1) ─────────────────────
+    // Controller criado com as prefs do app; o estado é carregado por título
+    // na tela (LaunchedEffect) e a sessão só aplica no ExoPlayer. O app não
+    // tem passthrough hoje (a flag nasce desligada; ver NightModeAudio.kt).
+    val nightController: NightModeController by lazy {
+        NightModeController(com.aotv.app.data.local.PlatformPrefs(context))
+    }
+    var nightModeState by run { mutableStateOf(NightModeState()) }
+    var nightModeTitleKey by run { mutableStateOf("") }
+    /** (Re)aplica o modo noturno/Clear Dialogue na sessão de áudio atual. */
+    fun applyNightMode() {
+        val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
+        val ch = runCatching { exoPlayer.audioFormat?.channelCount }.getOrNull() ?: 2
+        nightController.apply(id, ch, nightModeState)
+    }
+    /** Salva o estado do título atual (chamado ao trocar um toggle). */
+    fun saveNightMode() {
+        saveNightModeState(com.aotv.app.data.local.PlatformPrefs(context), nightModeTitleKey, nightModeState)
+    }
+    fun setNightOn(v: Boolean) { nightModeState = nightModeState.copy(nightOn = v); applyNightMode(); saveNightMode() }
+    fun setClearDialogue(v: Boolean) { nightModeState = nightModeState.copy(clearDialogueOn = v); applyNightMode(); saveNightMode() }
+    fun setNightIntensity(v: Int) { nightModeState = nightModeState.copy(intensity = v); applyNightMode(); saveNightMode() }
+
+    // ── Frame-rate matching (Lote 16 item 4) ───────────────────────────────
+    // A taxa do stream vai p/ a Surface do PlayerView (só troca sem corte)
+    // e p/ a janela; o medidor é da TELA (Choreographer), não do vídeo.
+    val fpsMeter = FpsMeter()
+    private var playerViewRef: PlayerView? = null
+    private var lastAppliedFps: Float = 0f
+    /** Sincronizar a taxa de atualização com o fps do stream (pref, ligada por padrão). */
+    var frameRateEnabled by run { mutableStateOf(true) }
+    /** Guarda a Surface do player (o update do AndroidView chama a cada recomposição). */
+    fun setPlayerViewRef(pv: PlayerView?) {
+        if (pv !== playerViewRef) { playerViewRef = pv; lastAppliedFps = 0f }
+    }
+    fun applyFrameRate() {
+        if (!frameRateEnabled) return
+        val fps = suggestedFrameRate(exoPlayer) ?: return
+        if (fps == lastAppliedFps) return
+        lastAppliedFps = fps
+        playerViewRef?.let { applyFrameRateToPlayerView(it, fps) }
+        runCatching { applyWindowRefreshRate(activity, fps) }
+    }
+    /** DV perfil 7 sem suporte no aparelho: tenta a faixa HDR10 (1x por fonte). */
+    private var dvFallbackTriedFor: String? = null
+    fun maybeHdr10Fallback() {
+        val url = streamUrl ?: return
+        if (dvFallbackTriedFor == url) return
+        dvFallbackTriedFor = url
+        if (dvProfile7NeedsHdr10Fallback(exoPlayer)) {
+            if (applyHdr10Fallback(exoPlayer)) toastMsg = "Dolby Vision sem suporte neste aparelho — usando HDR10"
+        }
+    }
+    /** Linha do medidor p/ as infos técnicas (null = sem dado ainda). */
+    fun displayFpsLine(): String? = fpsDisplayLine(
+        runCatching { exoPlayer.videoFormat?.frameRate }.getOrNull(),
+        fpsMeter.currentFps,
+    )
+
+    // ── Pular trechos via IntroDB filtrada (Lote 16 item 2) ─────────────────
+    // Segmentos filtrados por confiança do título atual (o modelo antigo
+    // `skipSegments` continua alimentando o botão e o auto-skip de sempre).
+    var introDbSegments by run { mutableStateOf<com.aotv.app.data.remote.IntroDbSegments?>(null) }
+    private val introDbService = com.aotv.app.data.remote.IntroDbService()
+    /** Marcadores da barra de progresso (intro + créditos + capítulos — sem capítulos ainda). */
+    val progressMarkers: List<ProgressMarker>
+        get() = introDbSegments?.let { buildProgressMarkers(it, emptyList(), duration) } ?: emptyList()
+    /** Aviso de pós-créditos mostrado 1x por episódio (evita repetir o toast a cada poll). */
+    private var postCreditsNoticedEp by run { mutableIntStateOf(-1) }
+    fun maybePostCreditsNotice() {
+        val segs = introDbSegments ?: return
+        if (type != "SERIES" || postCreditsNoticedEp == curEpisode) return
+        postCreditsNotice(segs, position)?.let {
+            toastMsg = it
+            postCreditsNoticedEp = curEpisode
+        }
+    }
+    /** Busca a IntroDB filtrada (fonte principal, 1x por título) e guarda o resultado. */
+    suspend fun loadIntroDb(imdb: String, isSeries: Boolean, season: Int, episode: Int): com.aotv.app.data.remote.IntroDbSegments? {
+        postCreditsNoticedEp = -1
+        val segs = runCatching { introDbService.get(imdb, isSeries, season, episode) }.getOrNull()
+        introDbSegments = segs
+        return segs
+    }
+    /** Mapeia os segmentos filtrados p/ o modelo antigo (botão + auto-skip). */
+    fun introDbToSkipSegments(segs: com.aotv.app.data.remote.IntroDbSegments): com.aotv.app.data.remote.SkipSegments =
+        com.aotv.app.data.remote.SkipSegments(
+            recap = segs.recap?.let { com.aotv.app.data.remote.SkipSegment(it.startMs, it.endMs) },
+            intro = segs.intro?.let { com.aotv.app.data.remote.SkipSegment(it.startMs, it.endMs) },
+            outro = segs.outro?.let { com.aotv.app.data.remote.SkipSegment(it.startMs, it.endMs) },
+            postCredits = segs.postCredits?.let { com.aotv.app.data.remote.SkipSegment(it.startMs, it.endMs) },
+        )
+    /** Pulo manual de abertura de série (p/ o auto-skip aprendido, 3 pulos = oferta opt-in). */
+    fun noteManualIntroSkip() {
+        if (type != "SERIES") return
+        val store = LearnedAutoSkipStore.fromContext(context)
+        store.noteManualSkip(learnedSkipKey(type, tmdbId))
+        if (store.shouldOfferAutoSkip(learnedSkipKey(type, tmdbId))) {
+            toastMsg = "Você pula a abertura sempre — quer pular automático? (Configurações → Player)"
+        }
+    }
+
+    // ── Legendas nível 2 (Lote 16 item 3) ────────────────────────────────────
+    /** 2ª legenda (topo): URL externa + falas + faixa. Null = sem 2ª legenda. */
+    var secondarySubUrl by run { mutableStateOf<String?>(null) }
+    var secondaryCues by run { mutableStateOf<List<SubCue>>(emptyList()) }
+    var dualSubState by run { mutableStateOf(DualSubState()) }
+    /** Chave do título p/ lembrar faixa exata e delay por faixa. */
+    val subTitleKey: String get() = subTrackTitleKey(type, tmdbId)
+    /** Delay (ms) da 2ª legenda, persistido por faixa. */
+    fun secondaryDelayMs(): Long {
+        val track = dualSubState.secondary ?: return 0L
+        return delayFor(dualSubState, track)
+    }
+
+    // ── Sleep timer inteligente (Lote 16 item 6) ─────────────────────────────
+    /** Estado das legendas capturado ao pausar pelo timer (p/ reativar ao voltar). */
+    var sleepWakeState: SleepWakeState? = null
+    /** true = a pausa atual veio do sleep timer (o Voltar comum não restaura legenda). */
+    var sleepPaused by run { mutableStateOf(false) }
+
     val exoPlayer = run {
         // Foco de áudio do sistema: pausa sozinho numa ligação ou quando outro app toca som, e
         // para ao tirar o fone (sem isso o filme seguia tocando mudo pro alto-falante).
@@ -2298,26 +2526,116 @@ class PlayerSession(
     // Legenda que liga sozinha quando o perfil deixou a legenda ligada. A ordem está em
     // SubLangs.choose (faixa do vídeo e externa no idioma do perfil, depois o idioma vizinho).
     // Escolha à mão no vídeo atual manda, e idioma que a pessoa não escolheu não liga.
+    /** Id da faixa embutida p/ memória/delay (Lote 16 item 3). */
+    fun embeddedTrackId(g: androidx.media3.common.Tracks.Group): SubTrackId {
+        val f = g.getTrackFormat(0)
+        return SubTrackId(SubSourceKind.EMBEDDED, f.language.orEmpty(), f.label.orEmpty(), f.label?.takeIf { it.isNotBlank() } ?: SubLangs.label(f.language))
+    }
+    /** Id da faixa externa p/ memória/delay (Lote 16 item 3). */
+    fun externalTrackId(e: com.aotv.app.data.remote.ExternalSub): SubTrackId =
+        SubTrackId(SubSourceKind.EXTERNAL, e.lang, e.label.substringAfter(" · ", "").ifBlank { "OpenSubtitles" }, SubLangs.label(e.lang))
+    /** Devolve o atraso salvo da 1ª legenda (Lote 16 item 3). */
+    fun restorePrimaryDelay() {
+        val t = dualSubState.primary ?: return
+        subDelay = SubDelayStore.fromContext(context).delayFor(t) / 1000.0
+    }
+    /** Salva o atraso da 1ª legenda por faixa (Lote 16 item 3). */
+    fun persistPrimaryDelay() {
+        val t = dualSubState.primary ?: return
+        val ms = (subDelay * 1000).toLong()
+        dualSubState = withDelay(dualSubState, t, ms)
+        SubDelayStore.fromContext(context).setDelay(t, ms)
+    }
+    /** Ajuste fino do atraso da 1ª legenda ao vivo (Lote 16 item 3 — D-pad ←→ no painel de legendas). */
+    fun adjustSubDelay(stepMs: Long) {
+        subDelay = addDelay(subDelay, stepMs / 1000.0)
+        persistPrimaryDelay()
+    }
+    /** Forced subs (Lote 16 item 3): com a legenda desligada e o áudio
+     * estrangeiro, mostra a faixa forced (falas em outra língua dentro do
+     * filme). A escolha explícita do usuário (subPicked) nunca é desfeita. */
+    fun maybeShowForcedSub() {
+        if (subtitleOn || selectedSubUrl != null || subPicked) return
+        val audioLang = audioGroups.firstOrNull { it.isSelected }?.getTrackFormat(0)?.language
+        if (!isForeignAudio(audioLang, subLang)) return
+        val forced = pickForcedTrack(textGroups.map { it.getTrackFormat(0) }, subLang, audioLang) ?: return
+        val g = textGroups.firstOrNull { it.getTrackFormat(0) == forced } ?: return
+        enableTextGroup(g)
+        subtitleOn = true
+    }
+
     fun pickAutoSub() {
         if (!subWanted || subPicked) return
-        val pick = SubLangs.choose(textGroups.map { it.getTrackFormat(0).language }, externalSubs.map { it.lang }, subLang) ?: return
+        val prefs = com.aotv.app.data.local.PlatformPrefs(context)
+        // Lote 16 item 3 — "Foreign audio only": com a pref ligada, a legenda
+        // só abre sozinha quando o áudio é estrangeiro p/ o idioma do perfil.
+        val audioLang = audioGroups.firstOrNull { it.isSelected }?.getTrackFormat(0)?.language
+        if (prefs.rawPref("sub_foreign_only") == true && !isForeignAudio(audioLang, subLang)) return
+        // Lote 16 item 3 — a faixa exata lembrada deste título vale antes do automático.
+        val memory = SubTrackMemory.fromContext(context)
+        val available = textGroups.map { embeddedTrackId(it) } + externalSubs.map { externalTrackId(it) }
+        memory.resolve(subTitleKey, available)?.let { wanted ->
+            when (wanted.kind) {
+                SubSourceKind.EMBEDDED -> {
+                    val g = textGroups.firstOrNull { SubLangs.match(it.getTrackFormat(0).language, wanted.lang) == 2 }
+                    if (g != null) {
+                        selectedSubUrl = null; enableTextGroup(g); subtitleOn = true
+                        dualSubState = dualSubState.copy(primary = wanted)
+                        restorePrimaryDelay()
+                        return
+                    }
+                }
+                SubSourceKind.EXTERNAL -> {
+                    val ext = externalSubs.firstOrNull { it.lang == wanted.lang }
+                    if (ext != null) {
+                        if (subtitleOn) disableText(); subtitleOn = false; selectedSubUrl = ext.url
+                        dualSubState = dualSubState.copy(primary = wanted)
+                        restorePrimaryDelay()
+                        return
+                    }
+                }
+            }
+        }
+        // Lote 16 item 3 — ocultar SDH: tira as faixas de surdos da escolha automática.
+        val embGroups = if (prefs.rawPref("sub_hide_sdh") == true) textGroups.filter { !isSdhTrack(it.getTrackFormat(0)) } else textGroups
+        val pick = SubLangs.choose(embGroups.map { it.getTrackFormat(0).language }, externalSubs.map { it.lang }, subLang) ?: return
         if (pick.embedded) {
             selectedSubUrl = null
-            enableTextGroup(textGroups[pick.index])
+            val g = embGroups[pick.index]
+            enableTextGroup(g)
             subtitleOn = true
+            dualSubState = dualSubState.copy(primary = embeddedTrackId(g))
+            restorePrimaryDelay()
         } else {
             if (subtitleOn) disableText()
             subtitleOn = false
-            selectedSubUrl = externalSubs[pick.index].url
+            val ext = externalSubs[pick.index]
+            selectedSubUrl = ext.url
+            dualSubState = dualSubState.copy(primary = externalTrackId(ext))
+            restorePrimaryDelay()
         }
     }
     // Escolha à mão. Vale para o vídeo atual e vira a preferência do perfil (ligada ou não), para
     // o próximo episódio e a próxima sessão abrirem do mesmo jeito.
     fun pickSub(g: androidx.media3.common.Tracks.Group?, ext: com.aotv.app.data.remote.ExternalSub?) {
         subPicked = true
+        // Lote 16 item 3: lembrar a faixa exata deste título (vale no próximo episódio/sessão).
+        val memory = SubTrackMemory.fromContext(context)
         when {
-            g != null -> { selectedSubUrl = null; enableTextGroup(g); subtitleOn = true }
-            ext != null -> { if (subtitleOn) disableText(); subtitleOn = false; selectedSubUrl = ext.url }
+            g != null -> {
+                selectedSubUrl = null; enableTextGroup(g); subtitleOn = true
+                val track = embeddedTrackId(g)
+                memory.remember(subTitleKey, track)
+                dualSubState = dualSubState.copy(primary = track)
+                restorePrimaryDelay()
+            }
+            ext != null -> {
+                if (subtitleOn) disableText(); subtitleOn = false; selectedSubUrl = ext.url
+                val track = externalTrackId(ext)
+                memory.remember(subTitleKey, track)
+                dualSubState = dualSubState.copy(primary = track)
+                restorePrimaryDelay()
+            }
             else -> { disableText(); subtitleOn = false; selectedSubUrl = null }
         }
         subWanted = g != null || ext != null
@@ -2465,7 +2783,25 @@ class PlayerSession(
         seekBy(if (forward) 10_000 else -10_000, showControls = false)
         seekHud = if (forward) "+10s" else "−10s"
     }
-    fun togglePlay() { currentPlayer().let { it.playWhenReady = !it.playWhenReady }; controlsVisible = true }
+    fun togglePlay() {
+        currentPlayer().let { it.playWhenReady = !it.playWhenReady }
+        controlsVisible = true
+        // Sleep timer (Lote 16 item 6): ao voltar a tocar depois da pausa do
+        // timer, reativa a legenda como estava (1x — o pause/resume normal
+        // não restaura nada).
+        if (sleepPaused && currentPlayer().playWhenReady) {
+            sleepPaused = false
+            val wake = sleepWakeState
+            sleepWakeState = null
+            if (sleepShouldRestoreSubtitles(wake)) {
+                if (wake?.externalSubUrl != null) {
+                    selectedSubUrl = wake.externalSubUrl
+                } else {
+                    pickAutoSub()
+                }
+            }
+        }
+    }
 
     // ── Sleep timer (Lote 9 item 4) ──────────────────────────────────────
     // Job com delay no escopo da sessão (sem work-runtime): morre junto
@@ -2488,6 +2824,10 @@ class PlayerSession(
             delay(minutes * 60_000L)
             sleepMinutes = null
             sleepDeadlineMs = 0L
+            // Lote 16 item 6: guarda o estado da legenda p/ reativar quando o
+            // usuário voltar a tocar (só vale 1x, p/ a pausa do timer).
+            sleepWakeState = captureSleepWakeState(subtitleOn, selectedSubUrl)
+            sleepPaused = true
             currentPlayer().playWhenReady = false
             toastMsg = "Sleep timer: reprodução pausada"
         }
@@ -3162,8 +3502,8 @@ class PlayerSession(
                 subOutline = !subOutline; progressVm.subOutline = subOutline
             })
             val onlyExt = if (selectedSubUrl == null) "  ·  vale para legenda externa" else ""
-            add(TvPlayerAction("Atrasar 0,5 s", false, false, sub = subDelayLabel(subDelay) + onlyExt, keepOpen = true) { subDelay = addDelay(subDelay, 0.5) })
-            add(TvPlayerAction("Adiantar 0,5 s", false, false, sub = "Use quando a legenda aparece depois da fala", keepOpen = true) { subDelay = addDelay(subDelay, -0.5) })
+            add(TvPlayerAction("Atrasar 0,5 s", false, false, sub = subDelayLabel(subDelay) + onlyExt, keepOpen = true) { subDelay = addDelay(subDelay, 0.5); persistPrimaryDelay() })
+            add(TvPlayerAction("Adiantar 0,5 s", false, false, sub = "Use quando a legenda aparece depois da fala", keepOpen = true) { subDelay = addDelay(subDelay, -0.5); persistPrimaryDelay() })
             // Sincronização automática (Lote 9 item 1): mede o atraso da
             // legenda externa contra a embutida (ver runAutoSync). Só com a
             // pref ligada e uma legenda externa carregada; sem medição
@@ -3186,6 +3526,43 @@ class PlayerSession(
                     else toastMsg = "Não deu para recarregar essa legenda"
                 }
             })
+            // Segunda legenda no topo (Lote 16 item 3): outra externa (o
+            // ExoPlayer renderiza 1 faixa embutida por vez). A 1ª não pode
+            // ser a 2ª; o atraso é próprio da faixa (passo fino 0,1 s) e
+            // fica salvo por faixa.
+            if (externalSubs.isNotEmpty()) {
+                add(TvPlayerAction("Sem 2ª legenda", false, secondarySubUrl == null, header = "Segunda legenda (topo)") {
+                    secondarySubUrl = null
+                    secondaryCues = emptyList()
+                    dualSubState = dualSubState.copy(secondary = null)
+                })
+                externalSubs.forEach { sub ->
+                    if (sub.url == selectedSubUrl) return@forEach
+                    val track = externalTrackId(sub)
+                    add(TvPlayerAction(SubLangs.label(sub.lang), false, sub.url == secondarySubUrl,
+                        sub = sub.label.substringAfter(" · ", "").ifBlank { "OpenSubtitles" }) {
+                        secondarySubUrl = sub.url
+                        val store = SubDelayStore.fromContext(context)
+                        dualSubState = withDelay(dualSubState.copy(secondary = track), track, store.delayFor(track))
+                    })
+                }
+                if (secondarySubUrl != null) {
+                    add(TvPlayerAction("Atrasar 2ª legenda 0,1 s", false, false, sub = "Atraso atual: ${secondaryDelayMs()} ms", keepOpen = true) {
+                        dualSubState.secondary?.let { t ->
+                            val next = adjustDelayMs(secondaryDelayMs(), DELAY_STEP_FINE_MS)
+                            dualSubState = withDelay(dualSubState, t, next)
+                            SubDelayStore.fromContext(context).setDelay(t, next)
+                        }
+                    })
+                    add(TvPlayerAction("Adiantar 2ª legenda 0,1 s", false, false, sub = "Atraso próprio desta faixa", keepOpen = true) {
+                        dualSubState.secondary?.let { t ->
+                            val next = adjustDelayMs(secondaryDelayMs(), -DELAY_STEP_FINE_MS)
+                            dualSubState = withDelay(dualSubState, t, next)
+                            SubDelayStore.fromContext(context).setDelay(t, next)
+                        }
+                    })
+                }
+            }
         }
     }
     // Faixas da fonte atual e, abaixo, o som de outra fonte. Serve para ver a imagem boa de uma
@@ -3320,6 +3697,7 @@ class PlayerSession(
         "color" -> "Cor do vídeo"
         "info" -> "Informações de reprodução"
         "eq" -> "Equalizador"
+        "night" -> "Modo noturno"
         "sleep" -> "Sleep timer"
         else -> "Fontes"
     }
@@ -3374,6 +3752,10 @@ class PlayerSession(
         // "color"/"info" — id fora do catálogo, vai p/ o fim e NÃO pode ser
         // desligado nas Configurações (o liga/desliga dele é a pref).
         add(PlayerChipItem(Icons.Default.Equalizer, "Equalizador", active = eqEnabled, id = "eq") { openDpadPanel("eq") })
+        // Modo noturno + Clear Dialogue (Lote 16 item 1): mesmo padrão dos
+        // chips "color"/"eq" — id fora do catálogo, vai p/ o fim e NÃO pode
+        // ser desligado nas Configurações (a escolha é por título, no painel).
+        add(PlayerChipItem(Icons.Default.DarkMode, "Modo noturno", active = nightModeState.nightOn || nightModeState.clearDialogueOn, id = "night") { openDpadPanel("night") })
         // Sleep timer (Lote 9 item 4, v1.19.0): mesmo padrão — id fora do
         // catálogo, vai p/ o fim. Escolha por sessão, sem pref persistente.
         add(PlayerChipItem(Icons.Default.Bedtime, "Sleep timer", active = sleepMinutes != null || sleepAtEpisodeEnd, id = "sleep") { openDpadPanel("sleep") })

@@ -284,6 +284,18 @@ fun LiveTvScreen(
         v.addonError?.let {
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }
+        // Lote 16 (v1.26.0): diagnóstico dos catálogos de TV — quando um addon
+        // ligado responde mas não rende catálogo de TV, mostra os types que
+        // ele declara (p/ entender por que o canal não aparece). Vazio =
+        // nenhum addon respondeu (o erro acima já cobre).
+        if (v.addonDiag.isNotEmpty()) {
+            Text(
+                v.addonDiag.joinToString(" · ") { d ->
+                    "${d.addonName}: ${if (d.declaredTypes.isEmpty()) "sem catálogo" else d.declaredTypes.joinToString(", ")}"
+                },
+                color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp),
+            )
+        }
         v.addonResolveError?.let {
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }

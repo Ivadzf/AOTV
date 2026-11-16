@@ -106,6 +106,18 @@ class PlayerPrefsViewModel @Inject constructor(
     val tapSeek: StateFlow<Boolean> = prefs.playerTapSeekFlow
     fun setTapSeek(v: Boolean) { prefs.playerTapSeek = v }
 
+    /** Sincronizar a taxa de atualização da tela com o fps do stream (Lote 16 item 4). */
+    val frameRate: StateFlow<Boolean> = prefs.playerFrameRateFlow
+    fun setFrameRate(v: Boolean) { prefs.playerFrameRate = v }
+
+    /** "Foreign audio only" (Lote 16 item 3): a legenda só abre sozinha quando o áudio é estrangeiro. */
+    val subForeignOnly: StateFlow<Boolean> = prefs.subForeignOnlyFlow
+    fun setSubForeignOnly(v: Boolean) { prefs.subForeignOnly = v }
+
+    /** Ocultar legendas SDH/CC na escolha automática (Lote 16 item 3). */
+    val subHideSdh: StateFlow<Boolean> = prefs.subHideSdhFlow
+    fun setSubHideSdh(v: Boolean) { prefs.subHideSdh = v }
+
     val swipeSeek: StateFlow<Boolean> = prefs.playerSwipeSeekFlow
     fun setSwipeSeek(v: Boolean) { prefs.playerSwipeSeek = v }
 
@@ -141,6 +153,10 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Client ID do Anime-Skip, digitado pelo usuário ("" = desligado). */
     val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
     fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }
+
+    /** Chave grátis do SubDL, digitada pelo usuário ("" = SubDL desligado, Lote 16 item 3). */
+    val subDlApiKey: StateFlow<String> = prefs.subDlApiKeyFlow
+    fun setSubDlApiKey(v: String) { prefs.subDlApiKey = v.trim() }
 
     // ── Lote 4 — Player parte 2 (v1.12.0) ────────────────────────────────────
     // Idiomas preferidos de áudio/legenda + reutilizar a última fonte do título.

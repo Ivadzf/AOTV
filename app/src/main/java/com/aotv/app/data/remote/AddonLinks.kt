@@ -175,14 +175,14 @@ object AddonLinks {
     }
 
     /**
-     * Catálogos de TV ao vivo do manifest (Lote 15, Bloco 2, v1.25.0): a
-     * causa raiz dos catálogos de TV não reconhecidos — [homeCatalogs] só
-     * aceita filme e série, então "Canais ao Vivo" do BestCine, "Canais" do
-     * Veyra/Tvvivo e os catálogos de TV do Bsweb nem eram lidos. Mesma regra
-     * de [homeCatalogs] (sem filtro obrigatório), só muda o tipo: "tv".
-     * A Início e o Descobrir continuam só com filme e série ([homeCatalogs]
-     * e [discoverCatalogs] não mudam); os catálogos daqui só alimentam a
-     * aba Ao vivo ([com.aotv.app.data.remote.AddonTvCatalogLoader]).
+     * Catálogos de TV ao vivo do manifest (Lote 15, Bloco 2, v1.25.0; Lote 16,
+     * v1.26.0: aceita "tv" E "channel"). O próprio AOTV distingue os dois
+     * (AddonStoreScreen: "tv"→TV, "channel"→Canais) e há addons que declaram
+     * os canais como "channel" — com só "tv" eles respondiam mas não rendiam
+     * catálogo nenhum, em silêncio. Mesma regra de [homeCatalogs] (sem filtro
+     * obrigatório), só muda o tipo. A Início e o Descobrir continuam só com
+     * filme e série ([homeCatalogs] e [discoverCatalogs] não mudam); os
+     * catálogos daqui só alimentam a aba Ao vivo e as fileiras de TV.
      */
     fun tvCatalogs(manifest: JsonObject): List<AddonCatalog> {
         val arr = manifest.arr("catalogs") ?: return emptyList()
@@ -190,12 +190,28 @@ object AddonLinks {
             val c = el.obj() ?: return@mapNotNull null
             val type = c.str("type")
             val id = c.str("id")
-            if (id.isBlank() || type != "tv") return@mapNotNull null
+            if (id.isBlank() || (type != "tv" && type != "channel")) return@mapNotNull null
             if ((c.arr("extraRequired")?.size() ?: 0) > 0) return@mapNotNull null
             val extraReq = c.arr("extra")?.any { e -> e.obj()?.get("isRequired")?.let { it.isJsonPrimitive && it.asBoolean } == true } == true
             if (extraReq) return@mapNotNull null
             AddonCatalog(type, id, c.str("name").ifBlank { id })
         }
+    }
+
+    /**
+     * Types que os catálogos do manifest DECLARAM, sem duplicar e na ordem
+     * (ex.: ["movie", "series", "channel"]). Diagnóstico (Lote 16, v1.26.0):
+     * quando um addon ligado responde mas não rende catálogo de TV, isto diz
+     * o que ele declara — sem ir na rede de novo.
+     */
+    fun declaredCatalogTypes(manifest: JsonObject): List<String> {
+        val arr = manifest.arr("catalogs") ?: return emptyList()
+        val out = ArrayList<String>()
+        arr.forEach { el ->
+            val t = el.obj()?.str("type").orEmpty()
+            if (t.isNotBlank() && t !in out) out += t
+        }
+        return out
     }
 
     /**

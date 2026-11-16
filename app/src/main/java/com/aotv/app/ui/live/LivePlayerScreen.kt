@@ -62,7 +62,13 @@ import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.recordings.RecordingService
 import com.aotv.app.data.recordings.RecordingStore
 import com.aotv.app.data.recordings.ScheduledRecording
+import com.aotv.app.ui.movies.ColorFilterDebouncer
+import com.aotv.app.ui.movies.ColorFilterPanel
+import com.aotv.app.ui.movies.ColorFilterState
+import com.aotv.app.ui.movies.ColorPreset
+import com.aotv.app.ui.movies.DaltonismMode
 import com.aotv.app.ui.movies.RecordProgramDialog
+import com.aotv.app.ui.movies.buildColorEffects
 import com.aotv.app.ui.theme.*
 import kotlinx.coroutines.delay
 
@@ -108,6 +114,8 @@ fun LivePlayerScreen(
     var backupId by remember { mutableStateOf<String?>(null) }
     var failDetail by remember { mutableStateOf<String?>(null) }
     var showAudioPicker by remember { mutableStateOf(false) }
+    // Lote 16 item 8: painel de cor no ao vivo (botão "Cor" nos controles).
+    var showColorPanel by remember { mutableStateOf(false) }
     var audioAppliedFor by remember { mutableStateOf<String?>(null) }
     // Lote 12 — Frente 2: gravar o programa atual (ou o de catch-up).
     var showRecordDialog by remember { mutableStateOf(false) }
@@ -123,6 +131,24 @@ fun LivePlayerScreen(
     var forceLive by remember { mutableStateOf(false) }
     val inCatchup = isCatchup && !forceLive
     var positionMs by remember { mutableLongStateOf(0L) }
+    // Lote 16 (v1.26.0): filtro de cor na TV ao vivo — o MESMO
+    // ColorFilterState/buildColorEffects do player de filmes, com as
+    // MESMAS prefs por perfil (pref_player_color_*, via rawPref) e o
+    // MESMO debounce (ColorFilterDebouncer). O painel abre pelo botão
+    // "Cor" nos controles (abaixo) e salva nas mesmas prefs do perfil.
+    var liveColorState by remember {
+        mutableStateOf(
+            ColorFilterState(
+                brightness = (recordPrefs.rawPref("pref_player_color_brightness") as? Float) ?: 0f,
+                contrast = (recordPrefs.rawPref("pref_player_color_contrast") as? Float) ?: 1f,
+                saturation = (recordPrefs.rawPref("pref_player_color_saturation") as? Float) ?: 1f,
+                hueDegrees = (recordPrefs.rawPref("pref_player_color_hue") as? Float) ?: 0f,
+                preset = (recordPrefs.rawPref("pref_player_color_preset") as? String) ?: ColorPreset.PADRAO.id,
+                daltonism = DaltonismMode.fromId((recordPrefs.rawPref("pref_player_color_daltonism") as? String) ?: "off"),
+            )
+        )
+    }
+    var prevLiveColorState by remember { mutableStateOf(liveColorState) }
 
     val activity = context as? android.app.Activity
     val player = remember {
@@ -214,6 +240,44 @@ fun LivePlayerScreen(
         return out
     }
 
+    /** (Re)aplica o filtro de cor no player ao vivo, sem reiniciar o vídeo. */
+    fun applyLiveColorEffects() {
+        runCatching { player.setVideoEffects(buildColorEffects(liveColorState)) }
+    }
+
+    /** Salva o estado do filtro nas prefs do perfil (as mesmas do player de filmes). */
+    fun saveLiveColorState(ns: ColorFilterState) {
+        recordPrefs.writeRawPref("pref_player_color_brightness", ns.brightness)
+        recordPrefs.writeRawPref("pref_player_color_contrast", ns.contrast)
+        recordPrefs.writeRawPref("pref_player_color_saturation", ns.saturation)
+        recordPrefs.writeRawPref("pref_player_color_hue", ns.hueDegrees)
+        recordPrefs.writeRawPref("pref_player_color_preset", ns.preset)
+        recordPrefs.writeRawPref("pref_player_color_daltonism", ns.daltonism.id)
+    }
+
+    /** Novo estado vindo do painel: salva; a aplicação vai pelo LaunchedEffect com debounce. */
+    fun applyLiveColorState(ns: ColorFilterState) {
+        liveColorState = ns
+        saveLiveColorState(ns)
+    }
+
+    val liveColorScope = rememberCoroutineScope()
+    val liveColorDebouncer = remember {
+        ColorFilterDebouncer(liveColorScope) { applyLiveColorEffects() }
+    }
+
+    /** Ao soltar o slider do painel: aplica o filtro na hora (cancela o debounce pendente). */
+    fun onLiveColorSliderFinished() {
+        liveColorDebouncer.applyNow()
+    }
+
+    // Slider mexeu: espera ~200 ms sem mudança p/ aplicar (mesmo fix do
+    // player de filmes — Lote 16 item 8); preset/daltonismo aplicam na hora.
+    LaunchedEffect(liveColorState) {
+        liveColorDebouncer.onStateChanged(liveColorState, prevLiveColorState)
+        prevLiveColorState = liveColorState
+    }
+
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -250,6 +314,10 @@ fun LivePlayerScreen(
             val path = targetUrl.substringBefore('?').lowercase()
             if (path.endsWith(".m3u8") || path.endsWith(".m3u")) setMimeType(MimeTypes.APPLICATION_M3U8)
         }.build()
+        // Lote 16 (v1.26.0): filtro de cor no ao vivo — 1x antes do
+        // prepare, como no player de filmes (setVideoEffects aceito:
+        // o player ao vivo é um ExoPlayer comum).
+        player.setVideoEffects(buildColorEffects(liveColorState))
         player.setMediaSource(DefaultMediaSourceFactory(http).createMediaSource(item))
         player.prepare()
         // Lote 8 (v1.18.0): registra no Continuar assistindo (o mesmo
@@ -477,6 +545,11 @@ fun LivePlayerScreen(
                     TextButton(onClick = { showAudioPicker = true }) {
                         Text("Áudio", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
+                    // Lote 16 item 8: filtro de cor no ao vivo (mesmo painel
+                    // do player de filmes, mesmas prefs do perfil).
+                    TextButton(onClick = { showColorPanel = true }) {
+                        Text("Cor", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                     // Lote 12 — Frente 2: gravar o programa atual (em
                     // catch-up, grava o programa em catch-up). Só com o app
                     // aberto — o diálogo avisa (ver RecordProgramDialog).
@@ -568,6 +641,19 @@ fun LivePlayerScreen(
                     }
                 },
                 confirmButton = { TextButton(onClick = { showAudioPicker = false }) { Text("Fechar", color = TextSecondary) } },
+            )
+        }
+
+        // Filtro de cor (Lote 16 item 8): o mesmo painel do player de filmes,
+        // com o mesmo estado/debounce; salva nas mesmas prefs do perfil.
+        if (showColorPanel) {
+            ColorFilterPanel(
+                state = liveColorState,
+                focusIdx = 0,
+                onStateChange = ::applyLiveColorState,
+                onSliderFinished = ::onLiveColorSliderFinished,
+                onDismiss = { showColorPanel = false },
+                television = com.aotv.app.ui.common.LocalIsTv.current,
             )
         }
 

@@ -82,6 +82,10 @@ fun MoviesHomeScreen(
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     /** Ao vivo (Lote 8): jogo da fileira "Próximos" abre o player do canal. Sem ele, o jogo só grava. */
     onPlayLive: (String) -> Unit = {},
+    /** On Demand do Xtream (acréscimo v1.26.0): pôster da fileira abre o detalhe no On Demand. */
+    onVodClick: (com.aotv.app.data.live.VodItem, Boolean) -> Unit = { _, _ -> },
+    /** "Ver tudo" da fileira On Demand: abre a tela On Demand na aba certa. */
+    onOpenOnDemand: (Boolean) -> Unit = {},
     viewModel: MoviesHomeViewModel = hiltViewModel(),
     randomVm: RandomEpisodeViewModel = hiltViewModel(),
 ) {
@@ -416,6 +420,24 @@ private fun CatalogTab(
 internal fun rowKey(item: MovieItem) =
     com.aotv.app.data.local.posterKey(item).ifBlank { "embed:${item.embedId.ifBlank { item.title }}" }
 
+/**
+ * On Demand → MovieItem p/ reaproveitar a fileira padrão. tmdbId 0: o toque
+ * não abre o detalhe TMDB — a fileira mapeia de volta p/ o VodItem pelo
+ * embedId ("vod:<id>") e abre o detalhe no On Demand. Só o que o painel
+ * devolve (capa, sinopse, ano, nota); sem TMDB de preenchimento.
+ */
+private fun com.aotv.app.data.live.VodItem.toMovieItem(isSeries: Boolean): MovieItem = MovieItem(
+    tmdbId = 0,
+    embedId = "vod:$id",
+    title = title,
+    overview = plot,
+    posterUrl = cover,
+    backdropUrl = "",
+    year = year,
+    rating = rating.toDoubleOrNull() ?: 0.0,
+    type = if (isSeries) MediaType.SERIES else MediaType.MOVIE,
+)
+
 @Composable
 fun MediaCard(
     item: MovieItem,
@@ -551,6 +573,9 @@ private fun HomeSectionsTab(
             com.aotv.app.data.recordings.WorkScheduler.noteLiveGames(context, currentState.upcomingGames)
         }
     }
+    // On Demand do Xtream (acréscimo v1.26.0): 1x por sessão; sem fonte
+    // Xtream, sem VOD ou com falha, as fileiras somem em silêncio.
+    LaunchedEffect(Unit) { viewModel.loadVodRows() }
     // Listas derivadas estáveis: map/associate novos a cada composição tornavam
     // a fileira não-pulável (o LazyColumn recompunha a fileira inteira a cada
     // emissão do UiState, mesmo sem nada mudar nela).
@@ -660,6 +685,28 @@ private fun HomeSectionsTab(
                         onLongClick = { pendingNotToday = it },
                     )
                 }
+                // On Demand do Xtream (acréscimo v1.26.0): o toque NÃO abre o
+                // detalhe TMDB (tmdbId 0) — mapeia de volta p/ o VodItem pelo
+                // embedId e abre o detalhe no On Demand. "Ver tudo" abre a
+                // tela On Demand na aba certa.
+                SystemRow.VOD_MOVIES -> if (state.vodMovies.isNotEmpty()) item(key = row.key) {
+                    val items = remember(state.vodMovies) { state.vodMovies.map { it.toMovieItem(false) } }
+                    SectionRow(
+                        row.displayTitle, items,
+                        onItemClick = { mi -> state.vodMovies.firstOrNull { "vod:${it.id}" == mi.embedId }?.let { onVodClick(it, false) } },
+                        display = display,
+                        onSeeMore = { onOpenOnDemand(false) },
+                    )
+                }
+                SystemRow.VOD_SERIES -> if (state.vodSeries.isNotEmpty()) item(key = row.key) {
+                    val items = remember(state.vodSeries) { state.vodSeries.map { it.toMovieItem(true) } }
+                    SectionRow(
+                        row.displayTitle, items,
+                        onItemClick = { mi -> state.vodSeries.firstOrNull { "vod:${it.id}" == mi.embedId }?.let { onVodClick(it, true) } },
+                        display = display,
+                        onSeeMore = { onOpenOnDemand(true) },
+                    )
+                }
                 SystemRow.RECOMMENDED -> if (recommended.isNotEmpty()) item(key = row.key) {
                     SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, recommended, onItemClick, display = display)
                 }
@@ -694,7 +741,18 @@ private fun HomeSectionsTab(
                     item(key = row.key) {
                         com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null) { f -> onFolderClick(col.id, f.id) }
                     }
-                } else state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || vis(it.items).isNotEmpty() }?.let { ar ->
+                } else state.tvAddonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || it.channels.isNotEmpty() }?.let { tv ->
+                    // Lote 16 (v1.26.0): fileira de TV dos addons — tocar no
+                    // canal abre o player ao vivo (não o detalhe, como filme/série).
+                    item(key = "addon-tv:" + tv.ref.key) {
+                        // Carrega ao aparecer na tela, como as fileiras de filme/série.
+                        LaunchedEffect(tv.ref.key) {
+                            if (tv.channels.isEmpty() && tv.loading) viewModel.loadTvAddonRow(tv.ref.key)
+                        }
+                        if (tv.channels.isEmpty()) com.aotv.app.ui.common.SkeletonRail()
+                        else TvAddonChannelRow(tv.title, tv.channels, display, onPlayLive)
+                    }
+                } ?: state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || vis(it.items).isNotEmpty() }?.let { ar ->
                     item(key = "addon:" + ar.ref.key) {
                         // Carrega ao aparecer na tela (a LazyColumn só compõe o
                         // visível): antes todas as fileiras de addon disparavam
@@ -1148,6 +1206,48 @@ private fun GenresChipsRow(
 }
 
 @Composable
+/** Fileira de canais de TV dos addons (Lote 16 item 10): tocar no canal abre
+ * o player ao vivo — não o detalhe, como filme/série. Logo do canal (ou as
+ * 2 primeiras letras) + nome, no mesmo desenho da lista do player ao vivo. */
+@Composable
+private fun TvAddonChannelRow(
+    title: String,
+    channels: List<com.aotv.app.data.live.LiveChannel>,
+    display: HomeDisplayPrefs,
+    onPlayLive: (String) -> Unit,
+) {
+    val pad = com.aotv.app.ui.common.pagePadding()
+    Column {
+        com.aotv.app.ui.common.SectionHeader(
+            title = title,
+            underline = display.sectionUnderline,
+            compact = display.compact,
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = pad),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(channels, key = { it.id }) { c ->
+                val click = remember(c.id) { { onPlayLive(c.id) } }
+                Column(
+                    Modifier.width(110.dp).clip(RoundedCornerShape(12.dp))
+                        .background(Color.White.copy(alpha = .05f))
+                        .clickable { click() }
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(Modifier.size(width = 64.dp, height = 36.dp), contentAlignment = Alignment.Center) {
+                        if (c.logo.isNotBlank()) coil.compose.AsyncImage(c.logo, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                        else Text(c.name.take(2).uppercase(), color = TextSecondary, fontWeight = FontWeight.ExtraBold)
+                    }
+                    Text(c.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
 private fun SectionRow(
     title: String,
     items: List<MovieItem>,

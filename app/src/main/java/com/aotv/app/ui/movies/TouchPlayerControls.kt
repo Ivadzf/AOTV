@@ -50,6 +50,8 @@ internal fun TouchPlayerControls(
     tapSeek: Boolean = true,
     /** Vidro fosco/blur nas folhas do player (pref `pref_panel_blur`, Lote 4). */
     panelBlur: Boolean = true,
+    /** Divisões da barra (Lote 16 item 5): intro/recap/créditos da IntroDB. */
+    markers: List<ProgressMarker> = emptyList(),
 ) {
     var more by remember { mutableStateOf(false) }
     var controlsHeight by remember { mutableFloatStateOf(0f) }
@@ -125,7 +127,7 @@ internal fun TouchPlayerControls(
                 if (showDetail && detail.isNotBlank()) Text(detail, color = TextSecondary, fontSize = 12.sp,
                     lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            PlayerSeekRow(position, duration, onSeek, videoUrl, buffered, showTimes = false, tapSeek = tapSeek)
+            PlayerSeekRow(position, duration, onSeek, videoUrl, buffered, showTimes = false, tapSeek = tapSeek, markers = markers)
             if (timeSeparate) Text(times, color = Color.White, fontSize = 12.sp, lineHeight = 18.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.align(Alignment.End))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,

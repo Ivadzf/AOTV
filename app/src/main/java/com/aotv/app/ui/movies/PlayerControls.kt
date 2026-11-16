@@ -164,13 +164,15 @@ internal fun CustomPlayerControls(
     tapSeek: Boolean = true,
     /** Vidro fosco/blur nas folhas do player (pref `pref_panel_blur`, Lote 4). */
     panelBlur: Boolean = true,
+    /** Divisões da barra (Lote 16 item 5): intro/recap/créditos da IntroDB. */
+    markers: List<ProgressMarker> = emptyList(),
 ) {
     if (isTv) {
-        TvPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo, position, duration, buffered, onSeekTo, tvChips, tvChipIdx)
+        TvPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo, position, duration, buffered, onSeekTo, tvChips, tvChipIdx, markers = markers)
         return
     }
     TouchPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo,
-        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek, panelBlur = panelBlur)
+        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek, panelBlur = panelBlur, markers = markers)
 }
 
 /** Tempo, barra fina com bolinha e duração na mesma linha (.pl-bar-row). Toque ou arraste busca.
@@ -180,7 +182,7 @@ internal fun CustomPlayerControls(
  * rápido chega ao detector de toque sem conflito. [tapSeek] (pref
  * `playerTapSeek`) só liga/desliga o toque; desligado, só o arraste busca. */
 @Composable
-internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> Unit, videoUrl: String, buffered: Long = 0, showTimes: Boolean = true, tapSeek: Boolean = true) {
+internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> Unit, videoUrl: String, buffered: Long = 0, showTimes: Boolean = true, tapSeek: Boolean = true, markers: List<ProgressMarker> = emptyList()) {
     val total = if (duration > 0) duration else 0L
     val frac = if (total > 0) (position.toFloat() / total).coerceIn(0f, 1f) else 0f
     var barW by remember { mutableFloatStateOf(1f) }
@@ -232,6 +234,21 @@ internal fun PlayerSeekRow(position: Long, duration: Long, onSeekTo: (Long) -> U
             Box(Modifier.fillMaxWidth(frac).height(4.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
             Box(Modifier.fillMaxWidth(frac), contentAlignment = Alignment.CenterEnd) {
                 Box(Modifier.requiredSize(12.dp).clip(CircleShape).background(Color.White))
+            }
+            // Lote 16 item 5: ticks de intro/recap/créditos (início e fim do
+            // trecho, cor de destaque) — a barra fica dividida sem tocar no
+            // gesto de busca.
+            markers.forEach { m ->
+                if (total > 0) {
+                    val sFrac = (m.startMs.toFloat() / total).coerceIn(0f, 1f)
+                    val eFrac = (m.endMs.toFloat() / total).coerceIn(0f, 1f)
+                    Box(Modifier.fillMaxWidth(sFrac), contentAlignment = Alignment.CenterEnd) {
+                        Box(Modifier.requiredWidth(2.dp).height(10.dp).background(Accent))
+                    }
+                    Box(Modifier.fillMaxWidth(eFrac), contentAlignment = Alignment.CenterEnd) {
+                        Box(Modifier.requiredWidth(2.dp).height(10.dp).background(Accent))
+                    }
+                }
             }
             if (scrubbing) ScrubPreview(
                 bitmap = preview, timeMs = scrubMs, xPx = scrubX, barWidthPx = barW,

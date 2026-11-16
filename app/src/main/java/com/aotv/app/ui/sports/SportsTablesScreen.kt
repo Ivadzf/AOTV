@@ -333,7 +333,10 @@ fun SportsTablesScreen(
             contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(SPORTS_LEAGUES, key = { it.id }) { league ->
+            // Lote 16 (v1.26.0): só as ligas com tabela (as 8 de futebol) — as
+            // 5 novas (NFL, NBA, NHL, MLB, MLS) não têm tabela na ESPN
+            // (o summary só traz o fragmento da divisão dos 2 times do jogo).
+            items(SPORTS_LEAGUES.filter { it.hasTable }, key = { it.id }) { league ->
                 com.aotv.app.ui.common.FilterChipPill(
                     league.name, ui.league.id == league.id,
                     { viewModel.selectLeague(league) }, icon = Icons.Default.TableChart,

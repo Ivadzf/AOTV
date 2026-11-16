@@ -2,22 +2,27 @@ package com.aotv.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aotv.app.data.local.HomeCatalogRef
 import com.aotv.app.data.local.HomeLayout
 import com.aotv.app.data.local.HomeRowPref
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.local.SystemRow
+import com.aotv.app.data.remote.AddonTvCatalogLoader
+import com.aotv.app.data.remote.AddonTvDiag
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** Personalizar Início. Tudo é local e aplica na hora (a Início observa o mesmo fluxo). */
 @HiltViewModel
 class HomeCustomizeViewModel @Inject constructor(
     private val prefs: PlatformPrefs,
+    private val tvCatalogs: AddonTvCatalogLoader,
 ) : ViewModel() {
 
     /** Uma linha da lista. [blocked] explica por que a fileira ligada não aparece agora. */
@@ -41,6 +46,19 @@ class HomeCustomizeViewModel @Inject constructor(
         val canDown: Boolean,
     )
 
+    /** Um catálogo de TV de addon na seção "Canais de TV dos addons" (Lote 16, v1.26.0). */
+    data class TvCatalogOption(
+        val key: String,
+        val label: String,
+        val addonName: String,
+        val type: String,
+        val base: String,
+        val catalogId: String,
+        val catalogName: String,
+        /** Já está como fileira na Início (liga/desliga na lista de fileiras). */
+        val inHome: Boolean,
+    )
+
     data class UiState(
         val rows: List<Row> = emptyList(),
         val total: Int = 0,
@@ -59,7 +77,21 @@ class HomeCustomizeViewModel @Inject constructor(
         /** null = catálogos do destaque no automático. */
         val heroCatalogs: Set<String>? = null,
         val heroCatalogOptions: List<HeroCatalogOption> = emptyList(),
+        /** Catálogos de TV dos addons (Lote 16, v1.26.0). */
+        val tvCatalogsLoading: Boolean = false,
+        val tvCatalogOptions: List<TvCatalogOption> = emptyList(),
+        /** Addons que responderam sem catálogo de TV (o que cada um declara). */
+        val tvDiag: List<AddonTvDiag> = emptyList(),
     )
+
+    /** Estado da leitura dos catálogos de TV (rede, fora do combine de prefs). */
+    private data class TvState(
+        val loading: Boolean = false,
+        val options: List<TvCatalogOption> = emptyList(),
+        val diag: List<AddonTvDiag> = emptyList(),
+    )
+
+    private val tvState = MutableStateFlow(TvState())
 
     /** Prefs do Layout da Página Inicial, juntas p/ um combine só. */
     private data class LayoutPrefs(
@@ -80,25 +112,32 @@ class HomeCustomizeViewModel @Inject constructor(
 
     /**
      * Destaque pode vir de qualquer fileira com pôster grande. Trailers, Gêneros, Novos
-     * episódios e coleções (cartões de pasta, não de título) não servem.
+     * episódios e coleções (cartões de pasta, não de título) não servem. Fileira de TV
+     * também não (Lote 16, v1.26.0): o destaque lê MovieItems de [addonRows] e o
+     * canal de TV não é um título do TMDB. Fileira On Demand também não (acréscimo
+     * v1.26.0): os itens vivem em [MoviesHomeViewModel.UiState.vodMovies]/vodSeries,
+     * não em [addonRows] — o destaque não os encontraria.
      */
     private fun isHeroable(r: HomeRowPref): Boolean =
         r.enabled && r.key != SystemRow.TRAILERS.key && r.key != SystemRow.GENRES.key &&
-            r.key != SystemRow.NEW_EPISODES.key && r.collectionId == null
+            r.key != SystemRow.NEW_EPISODES.key && r.key != SystemRow.VOD_MOVIES.key &&
+            r.key != SystemRow.VOD_SERIES.key && r.collectionId == null &&
+            r.ref?.type != "tv" && r.ref?.type != "channel"
 
     private val onlyOn = MutableStateFlow(false)
     private val heroTrailer = MutableStateFlow(prefs.heroTrailer)
 
     private val baseState: StateFlow<UiState> = combine(
         combine(prefs.homeLayoutFlow, prefs.catalogOnFlow, prefs.heroSourceFlow, ::Triple),
-        prefs.addons, onlyOn, heroTrailer,
-    ) { (layout, catalogOn, hero), addons, only, trailer ->
+        prefs.addons, onlyOn, heroTrailer, tvState,
+    ) { (layout, catalogOn, hero), addons, only, trailer, tv ->
         val addonOn = addons.associate { com.aotv.app.data.remote.AddonLinks.baseOf(it.url) to it.enabled }
         val visible: (HomeRowPref) -> Boolean = { !only || it.enabled }
         val cols = prefs.collectionsFlow.value.associateBy { HomeLayout.COL_PREFIX + it.id }
         val pinned = cols.filterValues { it.pinToTop }.keys
         val movable: (HomeRowPref) -> Boolean = { visible(it) && it.key !in pinned }
         val shown = layout.filter(visible)
+        val inHomeKeys = layout.mapTo(HashSet()) { it.key }
         val rows = shown.map { r ->
             val sys = r.system
             val col = cols[r.key]
@@ -107,12 +146,17 @@ class HomeCustomizeViewModel @Inject constructor(
                 source = when {
                     col != null -> "Coleção"
                     sys == null -> r.ref?.addon?.ifBlank { "Addon" } ?: "Addon"
+                    sys == SystemRow.VOD_MOVIES || sys == SystemRow.VOD_SERIES -> "On Demand"
                     sys.catalog -> "AOTV"
                     else -> "Seu progresso"
                 },
                 typeLabel = when {
                     col != null -> if (col.pinToTop) "Fixada no topo" else com.aotv.app.ui.collections.countOf(col.folders.size, "pasta", "pastas")
-                    else -> when (r.ref?.type) { "movie" -> "Filmes"; "series" -> "Séries"; else -> "" }
+                    else -> when (r.ref?.type) {
+                        "movie" -> "Filmes"; "series" -> "Séries"
+                        "tv" -> "TV ao vivo"; "channel" -> "Canais"
+                        else -> ""
+                    }
                 },
                 blocked = when {
                     !r.enabled -> null
@@ -137,8 +181,61 @@ class HomeCustomizeViewModel @Inject constructor(
             onlyOn = only,
             addonsWithCatalogs = layout.mapNotNull { it.ref?.base }.distinct().size,
             kids = prefs.isKids,
+            tvCatalogsLoading = tv.loading,
+            tvCatalogOptions = tv.options.map { it.copy(inHome = it.key in inHomeKeys) },
+            tvDiag = tv.diag,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, UiState())
+
+    init { refreshTvCatalogs() }
+
+    /**
+     * Lê os catálogos de TV dos addons ligados (Lote 16, v1.26.0). Sem addon
+     * ligado, não faz nada. O diagnóstico ([UiState.tvDiag]) guarda quem
+     * respondeu sem catálogo de TV e o que declara.
+     */
+    fun refreshTvCatalogs() {
+        if (tvState.value.loading) return
+        if (prefs.addons.value.none { it.enabled }) {
+            tvState.value = TvState(loading = false)
+            return
+        }
+        tvState.value = tvState.value.copy(loading = true)
+        viewModelScope.launch {
+            val result = runCatching { tvCatalogs.loadCatalogs() }.getOrNull()
+            tvState.value = TvState(
+                loading = false,
+                options = result?.catalogs?.map { c ->
+                    val ref = HomeCatalogRef(c.base, c.type, c.id, c.name, c.addonName)
+                    TvCatalogOption(
+                        key = ref.key,
+                        label = c.label,
+                        addonName = c.addonName,
+                        type = c.type,
+                        base = c.base,
+                        catalogId = c.id,
+                        catalogName = c.name,
+                        inHome = false,
+                    )
+                }.orEmpty(),
+                diag = result?.diagnostics.orEmpty(),
+            )
+        }
+    }
+
+    /**
+     * Liga/desliga o catálogo de TV como fileira na Início. A fileira entra
+     * no layout do perfil ([PlatformPrefs.setHomeRowEnabled] com o ref) e
+     * passa a aparecer na lista de fileiras, onde dá p/ reordenar e renomear
+     * como as outras. Desligar aqui tira a fileira do layout.
+     */
+    fun setTvCatalogInHome(key: String, on: Boolean) {
+        val opt = tvState.value.options.firstOrNull { it.key == key } ?: return
+        // Desligar um catálogo que nunca virou fileira não cria fileira desligada.
+        if (!on && prefs.homeLayout.none { it.key == key }) return
+        val ref = HomeCatalogRef(opt.base, opt.type, opt.catalogId, opt.catalogName, opt.addonName)
+        prefs.setHomeRowEnabled(key, on, ref)
+    }
 
     /** Estado final: o base + as prefs do Layout da Página Inicial. */
     val state: StateFlow<UiState> = combine(baseState, layoutPrefsFlow) { base, lp ->

@@ -104,7 +104,14 @@ private sealed class MoviesRoute(val route: String) {
     object Live : MoviesRoute("movies_live")
     object LiveSources : MoviesRoute("movies_live_sources")
     // On Demand Xtream (Lote 9, v1.19.0) — o hub da Live TV (Frente 3) linka esta rota.
-    object LiveOnDemand : MoviesRoute("live_ondemand")
+    // Acréscimo v1.26.0: deep link da Início — ?tab={tab}&itemId={itemId} abre a
+    // aba e o detalhe do item; sem eles, abre no topo como antes.
+    object LiveOnDemand : MoviesRoute("live_ondemand?tab={tab}&itemId={itemId}") {
+        fun create(tab: String = "", itemId: String = "") =
+            "live_ondemand" +
+                if (tab.isBlank() && itemId.isBlank()) ""
+                else "?tab=${android.net.Uri.encode(tab)}&itemId=${android.net.Uri.encode(itemId)}"
+    }
     // Live TV parte 2 (Lote 12, v1.22.0 — Frente 1): Multiview, guia em
     // rota própria (aberta do player) e gerenciador de canais.
     object LiveMultiview : MoviesRoute("live_multiview")
@@ -296,6 +303,25 @@ fun MoviesNavigation(
                 else MoviesHomeScreen(
                     onItemClick     = openDetail,
                     onPlayLive      = { channelId -> navController.navigate(MoviesRoute.LivePlayer.create(channelId)) },
+                    // On Demand do Xtream (acréscimo v1.26.0): pôster da fileira
+                    // abre o detalhe no On Demand; "Ver tudo" abre a aba.
+                    onVodClick      = { item, series ->
+                        navController.navigate(
+                            MoviesRoute.LiveOnDemand.create(
+                                if (series) com.aotv.app.ui.live.OnDemandViewModel.SERIES
+                                else com.aotv.app.ui.live.OnDemandViewModel.MOVIES,
+                                item.id,
+                            ),
+                        )
+                    },
+                    onOpenOnDemand  = { series ->
+                        navController.navigate(
+                            MoviesRoute.LiveOnDemand.create(
+                                if (series) com.aotv.app.ui.live.OnDemandViewModel.SERIES
+                                else com.aotv.app.ui.live.OnDemandViewModel.MOVIES,
+                            ),
+                        )
+                    },
                     onSearchClick   = { navController.navigate(MoviesRoute.Search.route) },
                     onSettingsClick = { navController.navigate(MoviesRoute.Settings.route) },
                     onLibraryClick  = { navController.navigate(MoviesRoute.MinhaLista.route) },
@@ -763,7 +789,15 @@ fun MoviesNavigation(
             }
             // On Demand Xtream (Lote 9, v1.19.0): filmes e séries da conta já
             // configurada; toca pelo player existente (mesmo caminho do detalhe).
-            composable(MoviesRoute.LiveOnDemand.route) {
+            // Acréscimo v1.26.0: deep link da Início (?tab=&itemId=) abre a aba
+            // e o detalhe do item; sem eles, abre no topo como antes.
+            composable(
+                MoviesRoute.LiveOnDemand.route,
+                arguments = listOf(
+                    navArgument("tab") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("itemId") { type = NavType.StringType; defaultValue = "" },
+                ),
+            ) { entry ->
                 tvScale(isTV) {
                     com.aotv.app.ui.live.OnDemandScreen(
                         onBack = { navController.popBackStack() },
@@ -778,6 +812,8 @@ fun MoviesNavigation(
                                 season = season, episode = episode,
                             )
                         },
+                        initialTab = entry.arguments?.getString("tab").orEmpty(),
+                        initialItemId = entry.arguments?.getString("itemId").orEmpty(),
                     )
                 }
             }

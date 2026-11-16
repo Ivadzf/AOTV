@@ -29,6 +29,10 @@ import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.RgbMatrix
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.aotv.app.ui.common.Eyebrow
 import com.aotv.app.ui.common.SidePanel
 import com.aotv.app.ui.theme.*
@@ -48,6 +52,69 @@ const val COLOR_FILTER_SLIDERS = 4
 
 /** Preset guardado quando o usuário mexe num slider à mão. */
 const val COLOR_PRESET_CUSTOM = "custom"
+
+/**
+ * Debounce da aplicação do filtro (Lote 16 item 8, v1.26.0 — fix dos
+ * sliders que travavam o vídeo): o `setVideoEffects` a cada tick do
+ * slider recriava a cadeia de efeitos do Media3 no meio da reprodução
+ * e travava o vídeo. Agora o slider só aplica ~200 ms depois da
+ * última mudança (ou ao soltar o slider — ver `onSliderFinished` no
+ * painel); presets, Redefinir e daltonismo aplicam NA HORA (eles já
+ * funcionavam e continuam iguais).
+ *
+ * ── API DE PLUG (p/ o coordenador, MoviePlayerScreen) ────────────────
+ *   val colorDebouncer = remember { ColorFilterDebouncer(scope) { applyColorEffects() } }
+ *   // No lugar do LaunchedEffect atual que chama applyColorEffects() direto:
+ *   LaunchedEffect(colorBrightness, colorContrast, colorSaturation, colorHue, colorDaltonism) {
+ *       colorDebouncer.onStateChanged(colorState, previousColorState) // guardar o anterior numa var
+ *       previousColorState = colorState
+ *   }
+ *   // Ao soltar o slider (o painel já chama onSliderFinished):
+ *   ColorFilterPanel(..., onSliderFinished = { colorDebouncer.applyNow() })
+ *   // No dispose da sessão: colorDebouncer.cancel()
+ *
+ * As faixas e os mapeamentos de [buildColorEffects] NÃO mudaram.
+ */
+const val COLOR_FILTER_DEBOUNCE_MS = 200L
+
+/** Debounce p/ aplicar os efeitos de cor (ver o doc de [COLOR_FILTER_DEBOUNCE_MS]). */
+class ColorFilterDebouncer(
+    private val scope: CoroutineScope,
+    private val apply: () -> Unit,
+) {
+    private var pending: Job? = null
+
+    /** Slider mexeu: agenda a aplicação p/ 200 ms depois da última mudança. */
+    fun onSliderChanged() {
+        pending?.cancel()
+        pending = scope.launch {
+            delay(COLOR_FILTER_DEBOUNCE_MS)
+            apply()
+        }
+    }
+
+    /**
+     * Mudança de estado (slider ou ação discreta): preset, Redefinir ou
+     * daltonismo aplicam NA HORA; só o slider espera o debounce.
+     */
+    fun onStateChanged(newState: ColorFilterState, oldState: ColorFilterState) {
+        if (newState.preset != oldState.preset || newState.daltonism != oldState.daltonism) applyNow()
+        else onSliderChanged()
+    }
+
+    /** Aplica agora (ao soltar o slider, preset, daltonismo, Redefinir). */
+    fun applyNow() {
+        pending?.cancel()
+        pending = null
+        apply()
+    }
+
+    /** Cancela uma aplicação pendente (ao fechar o player). */
+    fun cancel() {
+        pending?.cancel()
+        pending = null
+    }
+}
 
 /** Modo de correção p/ daltonismo — os 3 modos do Android + desligado. */
 enum class DaltonismMode(val id: String, val label: String, val sub: String) {
@@ -258,9 +325,11 @@ internal fun ColorFilterPanel(
     onStateChange: (ColorFilterState) -> Unit,
     onDismiss: () -> Unit,
     television: Boolean = false,
+    /** Chamado ao SOLTAR um slider: o coordenador aplica o filtro na hora (ver [ColorFilterDebouncer]). */
+    onSliderFinished: () -> Unit = {},
 ) {
-    if (television) TvScaled { ColorFilterPanelBody(state, focusIdx, onStateChange, onDismiss, true) }
-    else ColorFilterPanelBody(state, focusIdx, onStateChange, onDismiss, false)
+    if (television) TvScaled { ColorFilterPanelBody(state, focusIdx, onStateChange, onDismiss, true, onSliderFinished) }
+    else ColorFilterPanelBody(state, focusIdx, onStateChange, onDismiss, false, onSliderFinished)
 }
 
 @Composable
@@ -270,6 +339,7 @@ private fun ColorFilterPanelBody(
     onStateChange: (ColorFilterState) -> Unit,
     onDismiss: () -> Unit,
     television: Boolean,
+    onSliderFinished: () -> Unit = {},
 ) {
     SidePanel(
         title = "Cor do vídeo",
@@ -284,22 +354,22 @@ private fun ColorFilterPanelBody(
         LazyColumn(state = listState, modifier = Modifier.fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Eyebrow("Ajustes", Modifier.padding(top = 10.dp, start = 4.dp)) }
             item {
-                ColorSliderRow("Brilho", fmt2(state.brightness), state.brightness, -1f..1f, focused = focusIdx == 0) {
+                ColorSliderRow("Brilho", fmt2(state.brightness), state.brightness, -1f..1f, focused = focusIdx == 0, onFinished = onSliderFinished) {
                     onStateChange(state.copy(brightness = it, preset = COLOR_PRESET_CUSTOM))
                 }
             }
             item {
-                ColorSliderRow("Contraste", fmt2(state.contrast), state.contrast, 0f..2f, focused = focusIdx == 1) {
+                ColorSliderRow("Contraste", fmt2(state.contrast), state.contrast, 0f..2f, focused = focusIdx == 1, onFinished = onSliderFinished) {
                     onStateChange(state.copy(contrast = it, preset = COLOR_PRESET_CUSTOM))
                 }
             }
             item {
-                ColorSliderRow("Saturação", fmt2(state.saturation), state.saturation, 0f..2f, focused = focusIdx == 2) {
+                ColorSliderRow("Saturação", fmt2(state.saturation), state.saturation, 0f..2f, focused = focusIdx == 2, onFinished = onSliderFinished) {
                     onStateChange(state.copy(saturation = it, preset = COLOR_PRESET_CUSTOM))
                 }
             }
             item {
-                ColorSliderRow("Matiz", fmtHue(state.hueDegrees), state.hueDegrees, -180f..180f, focused = focusIdx == 3) {
+                ColorSliderRow("Matiz", fmtHue(state.hueDegrees), state.hueDegrees, -180f..180f, focused = focusIdx == 3, onFinished = onSliderFinished) {
                     onStateChange(state.copy(hueDegrees = it, preset = COLOR_PRESET_CUSTOM))
                 }
             }
@@ -353,6 +423,8 @@ private fun ColorSliderRow(
     range: ClosedFloatingPointRange<Float>,
     focused: Boolean,
     onChange: (Float) -> Unit,
+    /** Chamado ao soltar o slider (debounce: aplicar na hora — Lote 16 item 8). */
+    onFinished: () -> Unit = {},
 ) {
     val bg = if (focused) Color.White else Color.White.copy(alpha = 0.05f)
     val fg = if (focused) TextOnLight else Color.White
@@ -369,6 +441,7 @@ private fun ColorSliderRow(
         Slider(
             value = value,
             onValueChange = onChange,
+            onValueChangeFinished = onFinished,
             valueRange = range,
             colors = SliderDefaults.colors(
                 thumbColor = Accent,
