@@ -210,6 +210,18 @@ fun MoviesNavigation(
         }
     }
 
+    // Deep link stremio:// (Lote 17, v1.27.0): a MainActivity oferece a URL
+    // (onCreate/onNewIntent) e aqui a navegação pousa na tela de addons — o
+    // AddonsViewModel consome a URL do holder e instala pelo fluxo normal
+    // de install(). O holder NÃO é consumido aqui: o ViewModel consome ao
+    // receber, p/ não perder a URL se a tela remontar antes do init.
+    val addonDeepLinkUrl by com.aotv.app.data.party.AddonDeepLink.url.collectAsStateWithLifecycle()
+    LaunchedEffect(addonDeepLinkUrl) {
+        if (addonDeepLinkUrl != null) {
+            navController.navigate(MoviesRoute.Addons.route) { launchSingleTop = true }
+        }
+    }
+
     // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
     // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
     // Configurações cobre o hub e as páginas (movies_settings/*).

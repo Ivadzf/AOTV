@@ -12,13 +12,25 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Legenda externa (arquivo .srt) de um filme/episódio. */
-data class ExternalSub(val url: String, val lang: String, val label: String)
+/** Legenda externa (arquivo .srt) de um filme/episódio.
+ * [id] é o id da legenda na fonte (ex.: "14183659" no OpenSubtitles v3) — o
+ * painel de legendas mostra como no Nuvio; "" quando a fonte não dá id.
+ * [source] é a fonte real ("OpenSubtitles v3", nome do addon, "SubDL") — o
+ * selo do painel; "" = deduzir do rótulo (compat com o builder antigo).
+ * [detail] é uma linha extra (ex.: release name do SubDL); "" = sem linha. */
+data class ExternalSub(val url: String, val lang: String, val label: String,
+    val id: String = "", val source: String = "", val detail: String = "")
+
+/** Quantas legendas guardar por idioma (o teto que o Nuvio mostra, ex.:
+ * "Inglês 8") e no total. Antes era 1 por idioma (ver [SubtitleService.openSubtitles]). */
+private const val MAX_SUBS_PER_LANG = 8
+private const val MAX_SUBS_TOTAL = 60
 
 private data class SubResponse(val subtitles: List<SubDto> = emptyList())
 private data class SubDto(
     @SerializedName("url") val url: String? = null,
     @SerializedName("lang") val lang: String? = null,
+    @SerializedName("id") val id: String? = null,
 )
 
 /**
@@ -150,10 +162,14 @@ class SubtitleService @Inject constructor(
                     resp?.subtitles.orEmpty().mapNotNull { s ->
                         val url = s.url?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
                         val lang = s.lang.orEmpty().lowercase()
-                        ExternalSub(url, lang, label(lang) + " · " + name)
+                        ExternalSub(url, lang, label(lang) + " · " + name, id = s.id.orEmpty(), source = name)
                     }
                 }
-            }.awaitAll().flatten().sortedBy { rank(it.lang) }.take(30)
+            }.awaitAll().flatten()
+                .sortedBy { rank(it.lang) }
+                .groupBy { com.aotv.app.data.local.SubLangs.of(it.lang)?.key ?: it.lang }
+                .values.flatMap { it.take(MAX_SUBS_PER_LANG) }
+                .take(30)
         }
 
     private suspend fun openSubtitles(imdb: String, type: String, season: Int, episode: Int): List<ExternalSub> =
@@ -175,12 +191,19 @@ class SubtitleService @Inject constructor(
                 .mapNotNull { s ->
                     val u = s.url?.takeIf { it.startsWith("http") } ?: return@mapNotNull null
                     val lang = s.lang?.lowercase() ?: return@mapNotNull null
-                    ExternalSub(u, lang, label(lang))
+                    ExternalSub(u, lang, label(lang), id = s.id.orEmpty(), source = "OpenSubtitles v3")
                 }
-                // 1 por idioma (a 1ª costuma ser a melhor), o idioma do perfil primeiro. Sem corte
-                // curto, para quem escolheu outro idioma achar a legenda dele.
-                .distinctBy { it.lang }
+                // Lote 17 item 14 — CAUSA RAIZ 1: o `.distinctBy { it.lang }`
+                // daqui deixava UMA legenda por idioma (de 73 legendas de
+                // Dexter S01E01 sobravam 22, conferido ao vivo em 2026-11-16):
+                // o painel nunca podia mostrar "Inglês 8" nem deixar escolher
+                // entre os arquivos do mesmo idioma. Agora guarda até 8 por
+                // idioma (o teto que o Nuvio mostra) e 60 no total, com a
+                // ordem pelo idioma do perfil; a contagem do painel passa a
+                // ser real. O `id` (ex.: "14183659") alimenta o painel novo.
                 .sortedBy { rank(it.lang) }
-                .take(40)
+                .groupBy { com.aotv.app.data.local.SubLangs.of(it.lang)?.key ?: it.lang }
+                .values.flatMap { it.take(MAX_SUBS_PER_LANG) }
+                .take(MAX_SUBS_TOTAL)
         }
 }

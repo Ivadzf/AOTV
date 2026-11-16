@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         offerPartyDeepLink(intent)
+        offerAddonDeepLink(intent)
         enableEdgeToEdge()
         hideSystemBars()
 
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         offerPartyDeepLink(intent)
+        offerAddonDeepLink(intent)
     }
 
     // Extrai o código de `aotv://party/?code=XXXXXX` e oferece p/ navegação
@@ -111,6 +113,15 @@ class MainActivity : ComponentActivity() {
     private fun offerPartyDeepLink(intent: Intent?) {
         val code = com.aotv.app.data.party.WatchParty.parseDeepLink(intent?.data) ?: return
         com.aotv.app.data.party.PartyDeepLink.offer(code)
+    }
+
+    // Deep link stremio:// (Lote 17, v1.27.0): oferece a URL completa p/
+    // instalação (MoviesNavigation navega p/ movies_addons e o
+    // AddonsViewModel consome). Só o esquema é checado aqui; a validação
+    // (host, /manifest.json) fica p/ quem consome. Sem stremio://, nada.
+    private fun offerAddonDeepLink(intent: Intent?) {
+        val url = com.aotv.app.data.party.AddonDeepLink.parse(intent?.data) ?: return
+        com.aotv.app.data.party.AddonDeepLink.offer(url)
     }
 
     // Coleta ranks/quality isolada: cada emissão só recompõe este wrapper.

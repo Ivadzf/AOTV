@@ -414,7 +414,9 @@ internal class AllDebridApi(private val http: DebridHttp) {
         return u.optString("username") to until
     }
 
-    /** Sem probe sem efeito: o /magnet/instant não existe mais. Ver o comentário da classe. */
+    /** Sem probe sem efeito: o /magnet/instant não existe mais. Ver o comentário da classe.
+     *  Lote 17 item 9: o [DebridService.check] NÃO chama resolve() p/ adivinhar cache
+     *  em RD/AD — o cache só se descobre resolvendo 1x na hora de tocar. */
     fun cached(key: String, hashes: List<String>): Set<String> = emptySet()
 
     fun resolve(key: String, magnet: String, spec: TorrentSpec, season: Int, episode: Int): DebridResolve {

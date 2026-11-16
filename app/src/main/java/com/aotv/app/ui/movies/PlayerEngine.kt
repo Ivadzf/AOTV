@@ -3,13 +3,18 @@ package com.aotv.app.ui.movies
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import com.google.android.gms.cast.CastMediaControlIntent
 import java.nio.ByteBuffer
 
@@ -76,34 +81,105 @@ enum class DecoderMode(val id: String, val label: String) {
  * `ExoPlayer.Builder` (conferido no AAR: só o `DefaultAudioSink.Builder`
  * aceita processadores). O `buildAudioSink` padrão da 1.6.0 só monta o
  * sink com float/playback-params, então a sobrescrita preserva tudo.
+ *
+ * Com [videoDelay] (Lote 17 item 10, v1.27.0), a mesma fábrica
+ * sobrescreve [DefaultRenderersFactory.buildVideoRenderers] p/ trocar o
+ * renderer de vídeo padrão por [VideoDelayRenderer], que segura os
+ * frames p/ atrasar o vídeo (adiantar o som) — ver o doc da classe. A
+ * troca só acontece com extensão OFF: com renderers de extensão o
+ * caminho é o da fábrica-base (que usa reflection) e o atraso de vídeo
+ * não vale. Sem [videoDelay] o caminho de vídeo é o padrão. O
+ * `buildSecondaryVideoRenderer` (pré-aquecimento) NÃO é sobrescrito: o
+ * app nunca liga o pré-aquecimento (default desligado), então ele nunca
+ * é chamado — se um dia ligar, a fábrica-base montaria o renderer
+ * padrão sem atraso de vídeo p/ o item pré-aquecido.
  */
 @OptIn(UnstableApi::class)
-fun decoderRenderersFactory(context: Context, mode: DecoderMode, delayProcessor: AudioDelayProcessor? = null): DefaultRenderersFactory {
+fun decoderRenderersFactory(context: Context, mode: DecoderMode, delayProcessor: AudioDelayProcessor? = null, videoDelay: VideoDelayState? = null): DefaultRenderersFactory {
     val base: DefaultRenderersFactory =
-        if (delayProcessor != null) DelayAudioRenderersFactory(context, delayProcessor)
+        if (delayProcessor != null || videoDelay != null) DelayRenderersFactory(context, delayProcessor, videoDelay)
         else DefaultRenderersFactory(context)
     return base
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
         .setEnableDecoderFallback(mode == DecoderMode.HW_FALLBACK)
 }
 
-/** Fábrica que pluga o [AudioDelayProcessor] no sink de áudio (Lote 14 item 3). */
+/**
+ * Fábrica que pluga o [AudioDelayProcessor] no sink de áudio (Lote 14
+ * item 3) e o [VideoDelayRenderer] no lugar do renderer de vídeo padrão
+ * (Lote 17 item 10). Cada sobrescrita só vale quando o respectivo
+ * parâmetro não é null — sem ele, delega p/ a fábrica-base.
+ *
+ * O renderer de vídeo é montado com a MESMA cadeia de Builder do
+ * `DefaultRenderersFactory.buildVideoRenderers` da 1.6.0 (ver
+ * DefaultRenderersFactory.java L790–812): o construtor público
+ * `MediaCodecVideoRenderer.Builder(context)` e os mesmos setters. Os
+ * dois últimos (`parseAv1SampleDependencies` e `lateThreshold...`) são
+ * campos privados da fábrica-base que o app nunca muda (defaults:
+ * `false` e `C.TIME_UNSET` — ver o construtor da fábrica, L222–236),
+ * então são reproduzidos com os valores default; os demais vêm dos
+ * parâmetros que a fábrica-base recebe. Só muda a classe instanciada
+ * no final: `VideoDelayRenderer(state, builder)` em vez de
+ * `builder.build()`.
+ */
 @OptIn(UnstableApi::class)
-private class DelayAudioRenderersFactory(
+private class DelayRenderersFactory(
     context: Context,
-    private val delayProcessor: AudioDelayProcessor,
+    private val delayProcessor: AudioDelayProcessor?,
+    private val videoDelay: VideoDelayState?,
 ) : DefaultRenderersFactory(context) {
     @OptIn(UnstableApi::class)
-    override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
-        DefaultAudioSink.Builder(context)
-            .setAudioProcessors(arrayOf(delayProcessor))
+    override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+        val processor = delayProcessor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+        return DefaultAudioSink.Builder(context)
+            .setAudioProcessors(arrayOf(processor))
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .build()
+    }
+
+    @OptIn(UnstableApi::class)
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        val state = videoDelay
+        if (state == null || extensionRendererMode != DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF) {
+            super.buildVideoRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, allowedVideoJoiningTimeMs, out)
+            return
+        }
+        out.add(
+            VideoDelayRenderer(
+                state,
+                MediaCodecVideoRenderer.Builder(context)
+                    .setCodecAdapterFactory(getCodecAdapterFactory())
+                    .setMediaCodecSelector(mediaCodecSelector)
+                    .setAllowedJoiningTimeMs(allowedVideoJoiningTimeMs)
+                    .setEnableDecoderFallback(enableDecoderFallback)
+                    .setEventHandler(eventHandler)
+                    .setEventListener(eventListener)
+                    .setMaxDroppedFramesToNotify(DefaultRenderersFactory.MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY)
+                    .experimentalSetParseAv1SampleDependencies(false)
+                    .experimentalSetLateThresholdToDropDecoderInputUs(C.TIME_UNSET),
+            )
+        )
+    }
 }
 
-/** Teto do atraso do áudio próprio: 10 s (um passo grosso do JOTV a partir do zero). */
+/**
+ * Faixa da sincronia do áudio próprio (Lote 14 item 3 + Lote 17 item 10):
+ * −10 s (som adiantado — o VÍDEO atrasa, via [VideoDelayRenderer]) a
+ * +10 s (som atrasado — o áudio atrasa, via [AudioDelayProcessor]).
+ * Um passo grosso do JOTV a partir do zero, p/ os dois lados.
+ */
 const val OWN_AUDIO_DELAY_MAX_SEC = 10.0
+const val OWN_AUDIO_DELAY_MIN_SEC = -OWN_AUDIO_DELAY_MAX_SEC
 private const val OWN_AUDIO_DELAY_MAX_MS = 10_000L
 
 /**
@@ -114,12 +190,39 @@ private const val OWN_AUDIO_DELAY_MAX_MS = 10_000L
  * controla velocidade/pitch) — este processador é a implementação, não
  * uma chamada a uma API que não existe.
  *
- * Limite honesto: só o atraso POSITIVO (som depois da imagem) é
- * possível por buffer. Atraso NEGATIVO (adiantar o som) exigiria atrasar
- * o VÍDEO, p/ o que não há API — por isso o atraso nunca passa de 0 p/
- * baixo e a ajuda da UI diz isso ("só atrasa o som; para adiantar, use
- * o som de outra fonte"). O som de outra fonte (ExtAudioSync) continua
- * existindo p/ quem precisa adiantar.
+ * Dois lados (Lote 17 item 10, v1.27.0): o atraso POSITIVO (som depois
+ * da imagem) é este processador; o NEGATIVO (adiantar o som) atrasa o
+ * VÍDEO, via [VideoDelayRenderer] — ver o doc da classe. A faixa é
+ * −10 s a +10 s ([OWN_AUDIO_DELAY_MIN_SEC]..[OWN_AUDIO_DELAY_MAX_SEC]).
+ *
+ * Troca de faixa de áudio (Lote 17 item 13, v1.27.0) — o que foi provado
+ * no fonte da 1.6.0 e o que NÃO era a causa:
+ * - A suspeita do brief (o sink/processador recriado na troca) NÃO se
+ *   confirma: a sessão cria UMA instância deste processador
+ *   (propriedade da `PlayerSession`, 1x por sessão) e o sink é
+ *   construído 1x por player; o `DefaultAudioSink.configure()`
+ *   REUTILIZA o pipeline quando as referências dos processadores são
+ *   iguais. O que se perde na troca é o PCM BUFFERIZADO — e ele PRECISA
+ *   ser descartado (é o áudio da faixa/posição antiga). A troca
+ *   desabilita e reabilita o renderer de áudio (`MediaCodecRenderer`
+ *   1.6.0 não tem override de `replaceStream`), e o caminho
+ *   `onDisabled` → `audioSink.flush()` → `pipeline.flush()` →
+ *   `flush()` aqui limpa a linha.
+ * - Efeito real pós-troca: com atraso D > 0 salvo, a linha precisa
+ *   reacumular D do áudio da NOVA faixa antes de emitir — o som fica
+ *   silencioso por ~D enquanto o vídeo continua. É inerente a uma
+ *   delay-line pura em qualquer descontinuidade (troca E busca); não
+ *   dá p/ pré-preencher (o áudio novo ainda não existe) nem tocar o
+ *   que ficou (seria o idioma errado por D segundos). Com atraso 0
+ *   (o padrão) resta só o gap normal de re-init do codec/AudioTrack.
+ * - O que este arquivo endurece: [delayMs] e [delayBytes] NÃO são
+ *   zerados no [reset] (o atraso é do título e vale p/ a sessão
+ *   inteira). O formato da última faixa fica guardado
+ *   ([lastSampleRate]/[lastBytesPerFrame]) p/ que um `setDelayMs`
+ *   chamado na janela entre o `reset()` e o próximo `configure()`
+ *   (ex.: o usuário arrasta a barra durante a troca) recalcule o
+ *   [delayBytes] certo em vez de zerar — o próximo `configure()`
+ *   recalcula de qualquer forma com o formato novo.
  *
  * Detalhe de Media3 que decide o desenho: o `AudioProcessingPipeline`
  * congela a lista de processadores ativos no `configure()` (e no
@@ -144,6 +247,9 @@ class AudioDelayProcessor : AudioProcessor {
         private set
 
     private var inputFormat = AudioProcessor.AudioFormat.NOT_SET
+    /** Formato da última faixa configurada — sobrevive ao [reset] (ver o doc da classe). */
+    private var lastSampleRate = 0
+    private var lastBytesPerFrame = 0
     private var delayBytes = 0
     private val chunks = ArrayDeque<ByteArray>()
     private var headOffset = 0
@@ -165,14 +271,24 @@ class AudioDelayProcessor : AudioProcessor {
         else -> 0
     }
 
+    /**
+     * Recalcula [delayBytes] a partir de [delayMs]. Usa o formato atual
+     * quando há um configurado; sem formato (janela entre o [reset] e o
+     * próximo [configure]) usa o formato da última faixa, p/ o atraso
+     * não zerar no meio de uma troca — ver o doc da classe.
+     */
     private fun updateDelayBytes() {
         val f = inputFormat
-        delayBytes = if (f == AudioProcessor.AudioFormat.NOT_SET || f.sampleRate <= 0 || f.bytesPerFrame <= 0) 0
-        else ((delayMs * f.sampleRate.toLong() * f.bytesPerFrame / 1000) / f.bytesPerFrame * f.bytesPerFrame).toInt()
+        val sampleRate = if (f != AudioProcessor.AudioFormat.NOT_SET) f.sampleRate else lastSampleRate
+        val bytesPerFrame = if (f != AudioProcessor.AudioFormat.NOT_SET) f.bytesPerFrame else lastBytesPerFrame
+        delayBytes = if (sampleRate <= 0 || bytesPerFrame <= 0) 0
+        else ((delayMs * sampleRate.toLong() * bytesPerFrame / 1000) / bytesPerFrame * bytesPerFrame).toInt()
     }
 
     override fun configure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         inputFormat = inputAudioFormat
+        lastSampleRate = inputAudioFormat.sampleRate
+        lastBytesPerFrame = inputAudioFormat.bytesPerFrame
         updateDelayBytes()
         return inputAudioFormat
     }
@@ -249,10 +365,17 @@ class AudioDelayProcessor : AudioProcessor {
         inputEnded = false
     }
 
+    /**
+     * Limpa só o buffer. O atraso ([delayMs] e [delayBytes]) e o formato
+     * da última faixa sobrevivem: o atraso é do título, não da faixa —
+     * zerar aqui faria a troca de faixa soltar o som sem atraso até o
+     * próximo `setDelayMs`, e o `updateDelayBytes()` da janela entre o
+     * `reset()` e o próximo `configure()` precisa do formato guardado.
+     * O próximo `configure()` recalcula [delayBytes] com o formato novo.
+     */
     override fun reset() {
         flush()
         inputFormat = AudioProcessor.AudioFormat.NOT_SET
-        delayBytes = 0
     }
 
     override fun getDurationAfterProcessorApplied(durationUs: Long): Long = durationUs + delayMs * 1000

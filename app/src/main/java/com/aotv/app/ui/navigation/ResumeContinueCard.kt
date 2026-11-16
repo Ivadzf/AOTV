@@ -85,13 +85,27 @@ fun resumeEpisodeLabel(h: MovieHistoryEntity): String = when {
     else -> "Filme"
 }
 
-/** "T1:E3" -> (1, 3); null sem episódio válido. */
+/**
+ * "T1:E3" -> (1, 3); null sem episódio válido. Aceita as variantes que
+ * aparecem no histórico ("T1 E3", "S1E3", "1x03"): sem isso a série abre
+ * com temporada/episódio 0 e as legendas externas voltam vazias (Lote 17
+ * item 14, causa raiz 3). Não inventa episódio: sem formato válido, null.
+ */
 fun parseResumeEpisode(lastEpisode: String): Pair<Int, Int>? {
-    val m = Regex("T(\\d+):E(\\d+)").find(lastEpisode) ?: return null
-    val season = m.groupValues[1].toIntOrNull() ?: return null
-    val episode = m.groupValues[2].toIntOrNull() ?: return null
-    if (season <= 0 || episode <= 0) return null
-    return season to episode
+    val patterns = listOf(
+        Regex("T(\\d+):E(\\d+)"),
+        Regex("T(\\d+) E(\\d+)"),
+        Regex("S(\\d+)E(\\d+)", RegexOption.IGNORE_CASE),
+        Regex("(\\d+)x(\\d+)", RegexOption.IGNORE_CASE),
+    )
+    for (pattern in patterns) {
+        val m = pattern.find(lastEpisode) ?: continue
+        val season = m.groupValues[1].toIntOrNull() ?: continue
+        val episode = m.groupValues[2].toIntOrNull() ?: continue
+        if (season <= 0 || episode <= 0) continue
+        return season to episode
+    }
+    return null
 }
 
 /** Chave da arte em recentArtwork p/ esta linha do histórico. */

@@ -114,11 +114,17 @@ class DebridService @Inject constructor(
     }
 
     /**
-     * Consulta de uma vez os torrents da lista. TorBox e Premiumize respondem em lote. O
-     * Real-Debrid e o AllDebrid não têm consulta sem efeito, então eles conferem só os
-     * [rdTop] primeiros tentando resolver (o que já deixa o link pronto para tocar na hora).
+     * Consulta de uma vez os torrents da lista — SÓ quando a consulta é de
+     * leitura, sem efeito na conta (Lote 17 item 9). TorBox e Premiumize
+     * respondem em lote e não mexem em nada. O Real-Debrid e o AllDebrid
+     * NÃO têm consulta sem efeito: o que o [check] antigo fazia era
+     * RESOLVER os 3 primeiros magnets (upload na conta + apagar os não
+     * cacheados) só p/ adivinhar o cache — e o `resolve()` na hora de tocar
+     * já deixa o link pronto de qualquer jeito. Por isso RD/AD NÃO entram
+     * aqui: o cache deles só se descobre resolvendo na hora de tocar (1x,
+     * ver [resolve]), nunca ao listar fontes. Sem conta ativa, vazio.
      */
-    suspend fun check(magnets: List<String>, season: Int = 0, episode: Int = 0, rdTop: Int = 3): Map<String, Boolean> = withContext(Dispatchers.IO) {
+    suspend fun check(magnets: List<String>, season: Int = 0, episode: Int = 0): Map<String, Boolean> = withContext(Dispatchers.IO) {
         val a = active() ?: return@withContext emptyMap()
         val hashes = magnets.mapNotNull { hashOf(it) }.distinct()
         val todo = hashes.filter { cache["${a.provider.id}:$it"] == null }
@@ -127,9 +133,16 @@ class DebridService @Inject constructor(
                 val ok = if (a.provider == DebridProvider.TORBOX) tb.cached(a.token, todo) else pm.cached(a.token, todo)
                 todo.forEach { cache["${a.provider.id}:$it"] = it in ok }
             }
-            DebridProvider.REAL_DEBRID, DebridProvider.ALL_DEBRID -> magnets.filter { m -> hashOf(m) in todo }.take(rdTop).forEach { resolve(it, season, episode) }
+            // RD/AD: sem consulta de leitura — NÃO resolver p/ adivinhar cache.
+            DebridProvider.REAL_DEBRID, DebridProvider.ALL_DEBRID -> Unit
         }
         hashes.mapNotNull { h -> cache["${a.provider.id}:$h"]?.let { h to it } }.toMap()
+    }
+
+    /** O debrid ativo responde consulta de cache só de leitura (TorBox/Premiumize)? */
+    fun hasReadOnlyCacheCheck(): Boolean {
+        val a = active() ?: return false
+        return a.provider == DebridProvider.TORBOX || a.provider == DebridProvider.PREMIUMIZE
     }
 
     // ── Link direto ─────────────────────────────────────────────────────────────

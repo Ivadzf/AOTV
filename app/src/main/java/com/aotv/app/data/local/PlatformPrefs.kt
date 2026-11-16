@@ -91,6 +91,12 @@ internal val SCOPED_KEYS = listOf(
     "pref_stream_search", "pref_stream_badges_size", "pref_stream_badges_codec",
     "pref_stream_badges_lang", "pref_stream_badges_pos", "pref_stream_logo",
     "pref_stream_pinned",
+    // Lote 17 — Ranking de fontes (v1.27.0): preset, estratégia, filtro de
+    // idioma, original primeiro, ordem manual, saúde aprendida, esconder o
+    // que o aparelho não toca e lembrar a escolha por título.
+    "pref_source_preset_v1", "pref_source_strategy_v1", "pref_source_lang_filter_v1",
+    "pref_source_original_first_v1", "pref_source_manual_order_v1", "pref_source_health_v1",
+    "pref_source_hide_unplayable_v1", "pref_source_remember_pick_v1",
     "pref_player_buttons", "pref_player_top_actions", "pref_player_tap_seek",
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
@@ -213,7 +219,7 @@ internal val SCOPED_KEYS = listOf(
  * lista quando não há nada salvo).
  */
 val DEFAULT_PLAYER_BUTTONS = listOf(
-    "subs", "audio", "sources", "episodes", "prev", "next", "screen", "speed", "pin", "skip",
+    "subs", "audio", "sources", "episodes", "prev", "next", "screen", "speed", "pin", "skip", "color", "info",
 )
 
 /** Botões do topo do player (voltar sempre aparece; estes são os opcionais). */
@@ -1834,6 +1840,75 @@ class PlatformPrefs @Inject constructor(
         get() = _streamPinned.value
         set(value) { writePinnedList(value); _streamPinned.value = value }
 
+    // ── Ranking de fontes (Lote 17, v1.27.0) ─────────────────────────────
+    // Preset, estratégia, filtro de idioma e ordem manual — por perfil, no
+    // mesmo padrão de fluxo + var das prefs da Fase C. A saúde aprendida
+    // ([sourceHealth]) é mapa host → [SourceHealth], lido do disco a cada
+    // acesso (sem fluxo: quem grava é o teste das fontes e o player, em lote).
+
+    private val _sourcePreset = MutableStateFlow(prefs.getString(sk("pref_source_preset_v1"), "balanced") ?: "balanced")
+    /** Preset de fonte: "best" (melhor imagem) | "balanced" | "fast" (início rápido). */
+    val sourcePresetFlow: StateFlow<String> = _sourcePreset.asStateFlow()
+    var sourcePreset: String
+        get() = _sourcePreset.value
+        set(value) {
+            val clean = if (value in setOf("best", "balanced", "fast")) value else "balanced"
+            prefs.edit().putString(sk("pref_source_preset_v1"), clean).apply(); _sourcePreset.value = clean
+        }
+
+    private val _sourceStrategy = MutableStateFlow(prefs.getString(sk("pref_source_strategy_v1"), "quality") ?: "quality")
+    /** Estratégia de ranking: "quality" | "speed" | "reliability" | "language". */
+    val sourceStrategyFlow: StateFlow<String> = _sourceStrategy.asStateFlow()
+    var sourceStrategy: String
+        get() = _sourceStrategy.value
+        set(value) {
+            val clean = if (value in setOf("quality", "speed", "reliability", "language")) value else "quality"
+            prefs.edit().putString(sk("pref_source_strategy_v1"), clean).apply(); _sourceStrategy.value = clean
+        }
+
+    private val _sourceLangFilter = MutableStateFlow(prefs.getString(sk("pref_source_lang_filter_v1"), "") ?: "")
+    /** Filtro de idioma da lista: "" (todos) | "dub" | "leg" | "original". */
+    val sourceLangFilterFlow: StateFlow<String> = _sourceLangFilter.asStateFlow()
+    var sourceLangFilter: String
+        get() = _sourceLangFilter.value
+        set(value) {
+            val clean = if (value in setOf("", "dub", "leg", "original")) value else ""
+            prefs.edit().putString(sk("pref_source_lang_filter_v1"), clean).apply(); _sourceLangFilter.value = clean
+        }
+
+    private val _sourceOriginalFirst = MutableStateFlow(prefs.getBoolean(sk("pref_source_original_first_v1"), false))
+    /** "Original primeiro": áudio sem marca de dublado/legendado ganha pontos no ranking. */
+    val sourceOriginalFirstFlow: StateFlow<Boolean> = _sourceOriginalFirst.asStateFlow()
+    var sourceOriginalFirst: Boolean
+        get() = _sourceOriginalFirst.value
+        set(value) { prefs.edit().putBoolean(sk("pref_source_original_first_v1"), value).apply(); _sourceOriginalFirst.value = value }
+
+    private val _sourceManualOrder = MutableStateFlow(readStringList("pref_source_manual_order_v1"))
+    /** Ordem manual das fontes (nomes de addon, na ordem escolhida): vale por cima do ranking. Vazio = sem ordem manual. */
+    val sourceManualOrderFlow: StateFlow<List<String>> = _sourceManualOrder.asStateFlow()
+    var sourceManualOrder: List<String>
+        get() = _sourceManualOrder.value
+        set(value) { writeStringList("pref_source_manual_order_v1", value); _sourceManualOrder.value = value }
+
+    private val _sourceHideUnplayable = MutableStateFlow(prefs.getBoolean(sk("pref_source_hide_unplayable_v1"), true))
+    /** Esconde fontes com codec que este aparelho não decodifica (AV1/HEVC sem suporte). */
+    val sourceHideUnplayableFlow: StateFlow<Boolean> = _sourceHideUnplayable.asStateFlow()
+    var sourceHideUnplayable: Boolean
+        get() = _sourceHideUnplayable.value
+        set(value) { prefs.edit().putBoolean(sk("pref_source_hide_unplayable_v1"), value).apply(); _sourceHideUnplayable.value = value }
+
+    private val _sourceRememberPick = MutableStateFlow(prefs.getBoolean(sk("pref_source_remember_pick_v1"), true))
+    /** "Lembrar minha escolha por título": a última fonte à mão ganha pontos no ranking do título. */
+    val sourceRememberPickFlow: StateFlow<Boolean> = _sourceRememberPick.asStateFlow()
+    var sourceRememberPick: Boolean
+        get() = _sourceRememberPick.value
+        set(value) { prefs.edit().putBoolean(sk("pref_source_remember_pick_v1"), value).apply(); _sourceRememberPick.value = value }
+
+    /** Saúde aprendida por host (ver [SourceHealth]): o que funciona neste aparelho. */
+    var sourceHealth: Map<String, com.aotv.app.data.remote.SourceHealth>
+        get() = com.aotv.app.data.remote.decodeHealthMap(prefs.getString(sk("pref_source_health_v1"), null))
+        set(value) { prefs.edit().putString(sk("pref_source_health_v1"), com.aotv.app.data.remote.encodeHealthMap(value)).apply() }
+
     // ── Player (por perfil, Fase C) ──────────────────────────────────────────
     // Botões configuráveis, tocar-p/-buscar, Volume Boost, mini player e
     // "A seguir" automático. Mesmo padrão de fluxo + var das prefs da Fase B.
@@ -1844,6 +1919,30 @@ class PlatformPrefs @Inject constructor(
     var playerButtons: List<String>
         get() = _playerButtons.value
         set(value) { writeStringList("pref_player_buttons", value); _playerButtons.value = value }
+
+    init { migratePlayerButtonsV127() }
+
+    /**
+     * Migração v1.27.0 (Lote 17 item 15): "color" e "info" entraram no
+     * [DEFAULT_PLAYER_BUTTONS] e ganharam toggle. Quem salvou uma ordem antes
+     * disso nunca teve como desligá-los — a falta deles na lista guardada NÃO
+     * é "desligado", é "não existia o toggle". Anexa os dois no fim (na ordem
+     * do padrão) uma única vez por perfil; quem desligar depois, o toggle tira.
+     * A flag é só contabilidade e NÃO entra em SCOPED_KEYS (não é dado do usuário).
+     */
+    private fun migratePlayerButtonsV127() {
+        if (prefs.getBoolean(sk("player_buttons_v127_migrated"), false)) return
+        val saved = readStringList("pref_player_buttons")
+        if (saved.isNotEmpty()) {
+            val missing = listOf("color", "info").filterNot { it in saved }
+            if (missing.isNotEmpty()) {
+                val migrated = saved + missing
+                writeStringList("pref_player_buttons", migrated)
+                _playerButtons.value = migrated
+            }
+        }
+        prefs.edit().putBoolean(sk("player_buttons_v127_migrated"), true).apply()
+    }
 
     private val _playerTopActions = MutableStateFlow(readStringList("pref_player_top_actions"))
     /** Botões do topo do player (ids de [DEFAULT_PLAYER_TOP_ACTIONS]). Vazio = padrão. "Voltar" sempre aparece. */
@@ -2865,6 +2964,7 @@ class PlatformPrefs @Inject constructor(
         // Proteção para chamada durante a construção, antes do fluxo existir.
         @Suppress("SENSELESS_COMPARISON")
         if (_homeLayout == null) return
+        migratePlayerButtonsV127()
         // Coleções são do perfil. Troca de perfil passa por aqui e recarrega as dele.
         _collections.value = readCollections()
         _homeLayout.value = computeLayout()
@@ -2892,6 +2992,13 @@ class PlatformPrefs @Inject constructor(
         _streamBadgesPos.value = prefs.getString(sk("pref_stream_badges_pos"), "stats") ?: "stats"
         _streamLogo.value = prefs.getBoolean(sk("pref_stream_logo"), true)
         _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
+        _sourcePreset.value = prefs.getString(sk("pref_source_preset_v1"), "balanced") ?: "balanced"
+        _sourceStrategy.value = prefs.getString(sk("pref_source_strategy_v1"), "quality") ?: "quality"
+        _sourceLangFilter.value = prefs.getString(sk("pref_source_lang_filter_v1"), "") ?: ""
+        _sourceOriginalFirst.value = prefs.getBoolean(sk("pref_source_original_first_v1"), false)
+        _sourceManualOrder.value = readStringList("pref_source_manual_order_v1")
+        _sourceHideUnplayable.value = prefs.getBoolean(sk("pref_source_hide_unplayable_v1"), true)
+        _sourceRememberPick.value = prefs.getBoolean(sk("pref_source_remember_pick_v1"), true)
         _playerButtons.value = readStringList("pref_player_buttons")
         _playerTopActions.value = readStringList("pref_player_top_actions")
         _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)

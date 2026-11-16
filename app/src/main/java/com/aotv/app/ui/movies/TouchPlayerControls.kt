@@ -59,10 +59,10 @@ internal fun TouchPlayerControls(
     val font = density.fontScale.coerceAtLeast(1f)
     val options = actions.withIndex().filter { !it.value.main }
     val optionState = rememberLazyListState()
-    LaunchedEffect(focusedIndex, options.size) {
-        val index = options.indexOfFirst { it.index == focusedIndex }
-        if (index >= 0 && optionState.layoutInfo.visibleItemsInfo.none { it.index == index }) optionState.animateScrollToItem(index)
-    }
+    // Lote 17 item 11 (player compacto): o botão ">" / "<" de recolher é
+    // sempre visível — sem ele não dá p/ expandir/recolher a fileira.
+    val toggleOption = options.firstOrNull { it.value.id == "expand" || it.value.id == "collapse" }
+    val restOptions = options.filter { it.value.id != "expand" && it.value.id != "collapse" }
     BoxWithConstraints(Modifier.fillMaxSize().background(Brush.verticalGradient(
         0f to Color.Black.copy(alpha = .72f), .30f to Color.Black.copy(alpha = .72f),
         .46f to Color.Transparent, 1f to Color.Black.copy(alpha = .94f),
@@ -75,9 +75,33 @@ internal fun TouchPlayerControls(
         val side = if (maxWidth >= 600.dp) 24.dp else 16.dp
         val times = formatTime(position) + " / " + if (duration > 0) formatTime(duration) else "AO VIVO"
         val estimatedTimeWidth = with(density) { 12.sp.toDp() } * (times.length * .6f)
-        val timeSeparate = maxWidth - side * 2 < 180.dp + (if (showMore) 56.dp else 0.dp) + estimatedTimeWidth
+        // Lote 17 item 11 — fileira compacta: play 48dp + 2x voltar/avançar
+        // 40dp + vãos de 6dp = 146dp; o "Mais" (40dp + vão) é reservado na
+        // fileira única, onde ele aparece quando há opções escondidas.
+        val timeSeparate = maxWidth - side * 2 < 146.dp + (if (showMore) 40.dp else 0.dp) + (if (singleRow) 46.dp else 0.dp) + estimatedTimeWidth
         val timeHeight = if (timeSeparate) with(density) { 18.sp.toDp() } + 4.dp else 0.dp
-        val fixedHeight = 56.dp + 48.dp + 20.dp + timeHeight + (if (optionRow) 56.dp else 0.dp)
+        val fixedHeight = 48.dp + 48.dp + 20.dp + timeHeight + (if (optionRow) 40.dp else 0.dp)
+        // Quantas opções cabem na fileira única (só paisagem larga): cada
+        // ícone compacto ocupa 40dp + 6dp de vão. O que não couber vai p/ a
+        // folha "Mais opções" (o botão aparece no lugar) em vez de rolar
+        // p/ fora da tela sem o usuário perceber — era o que o print da
+        // v1.26.0 mostrava: 8 ícones visíveis e o resto escondido.
+        val optionSlot = 46.dp
+        val fitCount = if (!singleRow) restOptions.size else if (restOptions.isEmpty()) 0 else {
+            val timeW = if (timeSeparate) 0.dp else estimatedTimeWidth + 6.dp
+            val avail = maxWidth - side * 2 - 146.dp - timeW - 46.dp
+            (avail / optionSlot).toInt().coerceIn(1, restOptions.size)
+        }
+        val visibleOptions = restOptions.take(fitCount)
+        val hiddenOptions = restOptions.drop(fitCount)
+        val shownOptions = visibleOptions + listOfNotNull(toggleOption)
+        // A folha "Mais opções" mostra só o que ficou escondido na fileira;
+        // no modo compacto (sem fileira única) mostra tudo, como antes.
+        val sheetOptions = if (hiddenOptions.isNotEmpty()) hiddenOptions else options
+        LaunchedEffect(focusedIndex, shownOptions.size) {
+            val index = shownOptions.indexOfFirst { it.index == focusedIndex }
+            if (index >= 0 && optionState.layoutInfo.visibleItemsInfo.none { it.index == index }) optionState.animateScrollToItem(index)
+        }
         val topReserve = 64.dp + WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
         val metadataHeight = (maxHeight - fixedHeight - topReserve).coerceIn(0.dp, if (landscape) 140.dp else 220.dp)
         val titleLine = with(density) { 26.sp.toDp() }
@@ -132,30 +156,30 @@ internal fun TouchPlayerControls(
                 fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.align(Alignment.End))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(56.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onToggle),
+                Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onToggle),
                     contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(48.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(40.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) {
                         Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (isPlaying) "Pausar" else "Assistir", tint = TextOnLight, modifier = Modifier.size(28.dp))
+                            if (isPlaying) "Pausar" else "Assistir", tint = TextOnLight, modifier = Modifier.size(24.dp))
                     }
                 }
-                CtlButton(Icons.Default.Replay10, "Voltar 10 segundos", 48.dp, onClick = onBack)
-                CtlButton(Icons.Default.Forward10, "Avançar 10 segundos", 48.dp, onClick = onForward)
+                CtlButton(Icons.Default.Replay10, "Voltar 10 segundos", 40.dp, compact = true, onClick = onBack)
+                CtlButton(Icons.Default.Forward10, "Avançar 10 segundos", 40.dp, compact = true, onClick = onForward)
                 if (singleRow) LazyRow(Modifier.weight(1f), state = optionState,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    items(options, key = { it.index }) { (index, action) -> TouchPlayerActionIcon(action, index == focusedIndex) }
+                    horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    items(shownOptions, key = { it.index }) { (index, action) -> TouchPlayerActionIcon(action, index == focusedIndex) }
                 } else Spacer(Modifier.weight(1f))
-                if (showMore) CtlButton(Icons.Default.MoreHoriz, "Opções de reprodução", 48.dp, onClick = { more = true })
+                if (hiddenOptions.isNotEmpty()) CtlButton(Icons.Default.MoreHoriz, "Mais opções", 40.dp, compact = true, onClick = { more = true })
+                else if (showMore) CtlButton(Icons.Default.MoreHoriz, "Opções de reprodução", 40.dp, compact = true, onClick = { more = true })
                 if (!timeSeparate) Text(times, color = Color.White, fontSize = 12.sp, lineHeight = 18.sp,
                     fontWeight = FontWeight.SemiBold, maxLines = 1)
             }
             if (optionRow) LazyRow(Modifier.fillMaxWidth(), state = optionState,
-                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 items(options, key = { it.index }) { (index, action) -> TouchPlayerActionIcon(action, index == focusedIndex) }
             }
         }
-    }
-    if (more) ModalBottomSheet(onDismissRequest = { more = false }, containerColor = BackgroundElevated,
+        if (more) ModalBottomSheet(onDismissRequest = { more = false }, containerColor = BackgroundElevated,
         // Lote 4: com o toggle ligado o scrim é leve (0.32) p/ o blur da janela
         // aparecer; desligado (ou abaixo do Android 12, sem blur) o scrim mais
         // escuro (0.6) faz o papel de fallback fosco.
@@ -166,9 +190,10 @@ internal fun TouchPlayerControls(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(options) { (_, action) ->
+            items(sheetOptions) { (_, action) ->
                 TouchPlayerAction(action.copy(onRun = { more = false; action.onRun() }), false, Modifier.fillMaxWidth())
             }
+        }
         }
     }
 }
@@ -203,11 +228,13 @@ private fun TouchPlayerActionIcon(action: PlayerChipItem, focused: Boolean) {
     TooltipBox(positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = { PlainTooltip { Text(action.label) } }, state = rememberTooltipState()) {
         Box(contentAlignment = Alignment.Center) {
-            Row(Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).clip(CircleShape)
+            // Lote 17 item 11 — ícone compacto (40dp, ícone 20dp): a fileira
+            // cabe sem rolar p/ fora da tela (ver o fit em TouchPlayerControls).
+            Row(Modifier.heightIn(min = 40.dp).widthIn(min = 40.dp).clip(CircleShape)
                 .background(if (focused) Color.White else Color.Transparent)
-                .clickable(role = Role.Button, onClick = action.onRun).padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally)) {
-                Icon(action.icon, action.label, tint = foreground, modifier = Modifier.size(24.dp))
+                .clickable(role = Role.Button, onClick = action.onRun).padding(horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) {
+                Icon(action.icon, action.label, tint = foreground, modifier = Modifier.size(20.dp))
                 if (action.value.isNotBlank()) Text(action.value, color = foreground, fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold, maxLines = 1)
             }

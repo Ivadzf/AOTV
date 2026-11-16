@@ -104,13 +104,14 @@ internal fun orderTopActions(order: List<String>): List<String> {
  * Recolhe/expande a barra de botões do player (Lote 12 — Frente 2, v1.22.0,
  * igual ao Nuvio: barra recolhida + ">" p/ expandir).
  *
- * Recolhido (só no celular): o botão principal + os 5 primeiros botões da
+ * Recolhido (só no celular): o botão principal + os 6 primeiros botões da
  * ordem configurada + o chevron ">" ([id] "expand"). Expandido: todos os
  * botões + o chevron "<" ([id] "collapse") p/ recolher de novo. Na TV não
- * recolhe (o D-pad precisa de todos os botões na mesma fileira) e com 5 ou
+ * recolhe (o D-pad precisa de todos os botões na mesma fileira) e com 6 ou
  * menos botões não há o que recolher. Os chevrons NÃO entram na lista
  * canônica [DEFAULT_PLAYER_BUTTONS] nem na pref de ordem: são estado da
- * sessão, criados aqui depois da ordenação.
+ * sessão, criados aqui depois da ordenação. 6 em vez de 5 (Lote 17 item 11):
+ * com os ícones compactos de 40dp, 6 cabem no espaço que 5 ocupavam.
  */
 internal fun collapsePlayerChips(
     chips: List<PlayerChipItem>,
@@ -122,11 +123,11 @@ internal fun collapsePlayerChips(
     if (isTv) return chips
     val main = chips.filter { it.main }
     val rest = chips.filter { !it.main }
-    if (rest.size <= 5) return chips
+    if (rest.size <= 6) return chips
     return if (expanded) {
         chips + PlayerChipItem(Icons.Default.ChevronLeft, "Menos opções", id = "collapse") { onCollapse() }
     } else {
-        main + rest.take(5) + PlayerChipItem(Icons.Default.ChevronRight, "Mais opções", id = "expand") { onExpand() }
+        main + rest.take(6) + PlayerChipItem(Icons.Default.ChevronRight, "Mais opções", id = "expand") { onExpand() }
     }
 }
 
@@ -319,20 +320,23 @@ internal fun TimePill(text: String) {
     )
 }
 
-/** Botão redondo dos controles. Nunca menor que 48dp. */
+/** Botão redondo dos controles. 48dp por padrão. [compact] (Lote 17 item 11,
+ * player compacto) baixa o piso p/ 40dp e o ícone p/ 20dp: o Davi pediu
+ * botões menores porque a fileira não cabia na tela — o alvo de toque fica
+ * abaixo do ideal de 48dp, decisão dele, só na fileira do player. */
 @Composable
-internal fun CtlButton(icon: ImageVector, desc: String, size: Dp, big: Boolean = false, onClick: () -> Unit) {
+internal fun CtlButton(icon: ImageVector, desc: String, size: Dp, big: Boolean = false, compact: Boolean = false, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Box(
         Modifier
-            .size(size.coerceAtLeast(48.dp))
+            .size(size.coerceAtLeast(if (compact) 40.dp else 48.dp))
             .onFocusChanged { focused = it.isFocused }
             .clip(CircleShape)
             .background(if (focused) Color.White else Color.Black.copy(alpha = if (big) 0.5f else 0.42f))
             .clickable(role = Role.Button) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, desc, tint = if (focused) TextOnLight else Color.White, modifier = Modifier.size(if (big) 44.dp else if (size >= 56.dp) 30.dp else 24.dp))
+        Icon(icon, desc, tint = if (focused) TextOnLight else Color.White, modifier = Modifier.size(if (big) 44.dp else if (size >= 56.dp) 30.dp else if (compact) 20.dp else 24.dp))
     }
 }
 

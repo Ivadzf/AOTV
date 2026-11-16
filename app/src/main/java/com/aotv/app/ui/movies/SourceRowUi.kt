@@ -191,6 +191,10 @@ fun SourceCard(
     /** URL do logo do addon ("" = sem logo, só o nome como antes). */
     logoUrl: String = "",
     cardPrefs: StreamCardPrefs = StreamCardPrefs(),
+    /** Score do ranking, Lote 17 (v1.27.0): "#1 · 84" — null = sem ranking (não inventa). */
+    scoreText: String? = null,
+    /** Motivo do score em palavras simples ("1080p · rápido · 0 falhas"). */
+    scoreReason: String? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     var focused by remember { mutableStateOf(false) }
@@ -250,6 +254,13 @@ fun SourceCard(
             }
         }
         if (note != null) Text(note, color = Gold, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        // Score do ranking (Lote 17): uma linha só, com o motivo — o que faz
+        // o #1 ser o #1. Sem score, nada aparece (não inventa número).
+        if (scoreText != null) Text(
+            scoreText + (scoreReason?.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()),
+            color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
         if (info.fileName.isNotBlank()) Text(info.fileName, color = TextTertiary, fontSize = 11.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
     }

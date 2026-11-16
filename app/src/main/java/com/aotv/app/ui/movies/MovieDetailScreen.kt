@@ -946,6 +946,11 @@ fun MovieDetailScreen(
                             // v1.8.1 — botão Recarregar da lista: re-busca as fontes do filme.
                             onReloadSources = { viewModel.reloadMovieSources() },
                             loading = state.stremioLoading,
+                            // Lote 17 — mesmo ranking da folha do player, diagnóstico
+                            // honesto sem fonte e a última fonte deste título.
+                            ranked = viewModel.rankedSources(),
+                            diagnosis = viewModel.sourceDiagnosis(),
+                            lastPick = viewModel.lastPickForTitle(),
                         )
                         if (state.stremioLoading) {
                             Text(
@@ -1811,6 +1816,15 @@ private class SourceListData(
     val fact: (com.aotv.app.data.remote.StremioStream) -> com.aotv.app.data.remote.SourceFacts,
     val playable: (ReleaseGroup) -> com.aotv.app.data.remote.StremioStream,
     val addonOf: (ReleaseGroup) -> String,
+    /** Score do ranking por URL (Lote 17): o mesmo do player. Vazio = sem ranking. */
+    val rankedByUrl: Map<String, com.aotv.app.data.remote.RankedSource> = emptyMap(),
+    /** Filtro de idioma acima da lista (Lote 17 item 5): "" | "dub" | "leg" | "original". */
+    val langFilter: String = "",
+    val onLangFilterChange: (String) -> Unit = {},
+    /** Diagnóstico honesto quando não há fonte (Lote 17 item 7). */
+    val diagnosis: String = "",
+    /** Última fonte à mão neste título (Lote 17 item 6): addon + qualidade, nunca a URL. */
+    val lastPick: com.aotv.app.data.local.LastSourcePick? = null,
 )
 
 /** Normaliza p/ busca: minúsculo e sem acento ("Dublado" casa com "dublado"). */
@@ -1861,15 +1875,37 @@ private fun rememberSourceListData(
     loading: Boolean = false,
     /** Re-busca as fontes (ViewModel). null = sem botão Recarregar. */
     onReloadSources: (() -> Unit)? = null,
+    /** Ranking com score explicado (Lote 17): o mesmo da folha do player. */
+    ranked: List<com.aotv.app.data.remote.RankedSource> = emptyList(),
+    /** Diagnóstico honesto quando não há fonte (Lote 17 item 7). */
+    diagnosis: String = "",
+    /** Última fonte à mão neste título (Lote 17 item 6). */
+    lastPick: com.aotv.app.data.local.LastSourcePick? = null,
 ): SourceListData {
     var filter by rememberSaveable { mutableStateOf("all") }
     var showWrong by rememberSaveable { mutableStateOf(false) }
     // Filtro por fonte (""): "Todas" ou o nome do addon/provider.
     var sourceFilter by rememberSaveable { mutableStateOf("") }
+    // Filtro de idioma acima da lista (Lote 17 item 5): "" | "dub" | "leg" | "original".
+    var langFilter by rememberSaveable { mutableStateOf("") }
     // Busca por texto livre (Fase C): só da sessão, não persiste.
     var query by rememberSaveable { mutableStateOf("") }
     // O limite reseta quando qualquer filtro muda (comportamento antigo).
-    var limit by rememberSaveable(filter, showWrong, sourceFilter, query) { mutableStateOf(24) }
+    var limit by rememberSaveable(filter, showWrong, sourceFilter, query, langFilter) { mutableStateOf(24) }
+    // ── Lote 17 item 8 — ordem congelada por ranking (o fix do Lote 14, no detalhe) ──
+    // Antes, `filtered` era reordenado a cada probe/addon que chegava (só o
+    // pin segurava alguma coisa): a lista pulava no meio da busca, igual ao
+    // que o Lote 14 corrigiu na folha do player. Agora a ordem é a do ranking
+    // fotografado na chegada — o que já apareceu fica onde está, o novo entra
+    // no fim — e o ranking só vale 1x por leva (não a cada probe).
+    var frozenOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    androidx.compose.runtime.LaunchedEffect(ranked) {
+        val urls = ranked.map { it.fact.url }
+        val known = frozenOrder.toSet()
+        frozenOrder = frozenOrder.filter { it in urls } + urls.filter { it !in known }
+    }
+    val rankedByUrl = remember(ranked) { ranked.associateBy { it.fact.url } }
+    val frozenIndex = remember(frozenOrder) { frozenOrder.withIndex().associate { it.value to it.index } }
     val groups = remember(streams) { groupReleases(streams) }
     // Tudo abaixo é derivado com remember: antes, cada emissão do UiState
     // (um probe, um addon) re-derivava as listas e criava listas novas, o
@@ -1881,7 +1917,19 @@ private fun rememberSourceListData(
     val visible = remember(groups, facts, showWrong) { groups.filter { g -> showWrong || g.members.any { !fact(it).wrongTitle } } }
     val counts = remember(visible, facts) { SRC_FILTERS.associate { (k, _, fn) -> k to visible.count { g -> g.members.any { fn(fact(it)) } } } }
     val predicate = remember(filter) { SRC_FILTERS.firstOrNull { it.first == filter }?.third ?: { true } }
-    val langFiltered = remember(visible, facts, predicate) { visible.filter { g -> g.members.any { predicate(fact(it)) } } }
+    // Filtro de idioma (Lote 17 item 5): vale por grupo — basta UM membro no
+    // idioma. "Original" = sem marca de dublado nem legendado no rótulo.
+    val langPredicate: (com.aotv.app.data.remote.SourceFacts) -> Boolean = remember(langFilter) {
+        when (langFilter) {
+            "dub" -> { f -> f.lang == "dub" }
+            "leg" -> { f -> f.lang == "leg" }
+            "original" -> { f -> f.lang.isEmpty() }
+            else -> { _ -> true }
+        }
+    }
+    val langFiltered = remember(visible, facts, predicate, langPredicate) {
+        visible.filter { g -> g.members.any { predicate(fact(it)) && langPredicate(fact(it)) } }
+    }
     // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
     // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
     fun playable(group: ReleaseGroup) =
@@ -1897,25 +1945,34 @@ private fun rememberSourceListData(
             .sortedWith(compareBy({ pinIndex[it.key] ?: Int.MAX_VALUE }, { -it.value.maxOf { g -> fact(playable(g)).rank } }))
             .map { it.key to it.value.size }
     }
-    val filtered = remember(langFiltered, facts, sourceFilter, query, pinIndex) {
+    val filtered = remember(langFiltered, facts, sourceFilter, query, pinIndex, frozenIndex) {
         val bySource = if (sourceFilter.isEmpty()) langFiltered
         else langFiltered.filter { addonOf(it) == sourceFilter }
         val words = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.map(::normBusca)
         val byQuery = if (words.isEmpty()) bySource else bySource.filter { groupMatchesQuery(it, words, ::fact) }
-        // Fixadas primeiro (ordenação estável: o resto mantém a ordem de chegada, e as
-        // fixadas sobrevivem ao corte do "Mostrar mais").
-        byQuery.sortedWith(compareBy { pinIndex[addonOf(it)] ?: Int.MAX_VALUE })
+        // Ordem congelada por ranking (Lote 17 item 8): o que chegou primeiro
+        // fica primeiro; fixadas primeiro, na ordem escolhida. Ordenação
+        // estável: o resto mantém a ordem congelada, e as fixadas sobrevivem
+        // ao corte do "Mostrar mais".
+        byQuery.sortedWith(
+            compareBy({ pinIndex[addonOf(it)] ?: Int.MAX_VALUE },
+                { playable(it).url.let { u -> frozenIndex[u] ?: Int.MAX_VALUE } }),
+        )
     }
     // Seções por reprodutor (addon), ordenadas pelo melhor stream de cada uma (maior rank).
     // Fixadas primeiro, na ordem escolhida. O limite ("Mostrar mais") corta antes de
     // agrupar, então ele continua valendo no total.
     val shown = remember(filtered, limit) { filtered.take(limit) }
-    val sections = remember(shown, facts, pinIndex) {
+    val sections = remember(shown, facts, pinIndex, frozenIndex) {
         shown.groupBy(::addonOf).entries.sortedWith(
-            compareBy({ pinIndex[it.key] ?: Int.MAX_VALUE }, { -it.value.maxOf { g -> fact(playable(g)).rank } }),
+            compareBy({ pinIndex[it.key] ?: Int.MAX_VALUE },
+                { it.value.minOf { g -> frozenIndex[playable(g).url] ?: Int.MAX_VALUE } }),
         )
     }
-    val best = remember(facts) { facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url }
+    val best = remember(ranked, facts) {
+        ranked.firstOrNull()?.fact?.url
+            ?: facts.getOrNull(com.aotv.app.data.remote.bestIndex(facts))?.url
+    }
     return SourceListData(
         groups = groups, streamCount = streams.size, wrongCount = wrongCount,
         visible = visible, counts = counts, sources = sources,
@@ -1930,6 +1987,9 @@ private fun rememberSourceListData(
         // por addon, filtro de idioma e fixadas (nenhum deles é tocado aqui).
         onReload = onReloadSources?.let { src -> { limit = 24; src() } },
         fact = { s -> fact(s) }, playable = { g -> playable(g) }, addonOf = { g -> addonOf(g) },
+        rankedByUrl = rankedByUrl,
+        langFilter = langFilter, onLangFilterChange = { langFilter = it },
+        diagnosis = diagnosis, lastPick = lastPick,
     )
 }
 
@@ -1987,7 +2047,16 @@ private fun SourceCardRow(
                 releaseInfo(source, mediaTitle, group.members.map { it.addon }.distinct())
             }
             if (source.qualityRank == 0 && (f.probe?.height ?: 0) > 0) info = info.copy(quality = com.aotv.app.data.remote.heightLabel(f.probe!!.height))
-            val note = when { f.wrongTitle -> "Parece ser outro filme com nome parecido"; f.dead -> "Não respondeu no teste agora"; else -> null }
+            val ranked = data.rankedByUrl[source.url]
+            val isLastPick = data.lastPick != null &&
+                data.lastPick.addon.equals(source.addon, ignoreCase = true) &&
+                (data.lastPick.qualityRank == 0 || data.lastPick.qualityRank == f.rank)
+            val note = when {
+                f.wrongTitle -> "Parece ser outro filme com nome parecido"
+                f.dead -> "Não respondeu no teste agora"
+                isLastPick -> "Última fonte neste título"
+                else -> null
+            }
             val (tag, color) = when {
                 f.wrongTitle -> "OUTRO" to LiveRed
                 f.debrid >= 2 -> debridTag.ifBlank { "DEBRID" } to Ok
@@ -1999,7 +2068,9 @@ private fun SourceCardRow(
                     SourceCard(info, tag, color, onClick = { onPlay(source) }, onDownload = onDownload(source), note = note,
                         suggested = group.members.any { it.url == data.best },
                         logoUrl = if (cardPrefs.showLogo) cardPrefs.logoOf(info.addon) else "",
-                        cardPrefs = cardPrefs)
+                        cardPrefs = cardPrefs,
+                        scoreText = ranked?.let { "#${it.rank} · ${it.score}" },
+                        scoreReason = ranked?.reason)
                 }
             }
         }
@@ -2068,6 +2139,22 @@ private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false)
             SeasonChip("$name $n", data.sourceFilter == name) { data.onSourceFilterChange(name) }
         }
     }
+    // Por idioma (Lote 17 item 5): sempre visível quando há fontes — é o
+    // filtro que o Davi mais usa (dublado/legendado), não só quando há 5 grupos.
+    if (data.groups.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val langCounts = remember(data.visible, data.fact) {
+            mapOf(
+                "" to data.visible.size,
+                "dub" to data.visible.count { g -> g.members.any { data.fact(it).lang == "dub" } },
+                "leg" to data.visible.count { g -> g.members.any { data.fact(it).lang == "leg" } },
+                "original" to data.visible.count { g -> g.members.any { data.fact(it).lang.isEmpty() } },
+            )
+        }
+        listOf("" to "Todos", "dub" to "Dublado", "leg" to "Legendado", "original" to "Original").forEach { (key, name) ->
+            val n = langCounts[key] ?: 0
+            if (key.isEmpty() || n > 0) SeasonChip("$name $n", data.langFilter == key) { data.onLangFilterChange(key) }
+        }
+    }
     if (data.groups.size > 4 || data.wrongCount > 0) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (data.groups.size > 4) SRC_FILTERS.forEach { (key, name, _) ->
             val n = data.counts[key] ?: 0
@@ -2102,15 +2189,28 @@ internal fun SourceList(
     onReloadSources: (() -> Unit)? = null,
     /** true enquanto as fontes ainda estão chegando (botão Recarregar ocupado). */
     loading: Boolean = false,
+    /** Ranking com score explicado (Lote 17): o mesmo da folha do player. */
+    ranked: List<com.aotv.app.data.remote.RankedSource> = emptyList(),
+    /** Diagnóstico honesto quando não há fonte (Lote 17 item 7). */
+    diagnosis: String = "",
+    /** Última fonte à mão neste título (Lote 17 item 6). */
+    lastPick: com.aotv.app.data.local.LastSourcePick? = null,
 ) {
     if (television) {
-        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon, streamPrefs = streamPrefs, onReloadSources = onReloadSources, loading = loading) }
+        com.aotv.app.ui.tv.TvScaled { SourceList(streams, facts, mediaTitle, onPlay, onDownload, cols, debridTag, television = false, kodiAddons = kodiAddons, onOpenKodiAddon = onOpenKodiAddon, streamPrefs = streamPrefs, onReloadSources = onReloadSources, loading = loading, ranked = ranked, diagnosis = diagnosis, lastPick = lastPick) }
         return
     }
     val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
     val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
     val cardPrefs = rememberStreamCardPrefs(streamPrefs)
-    val data = rememberSourceListData(streams, facts, pinned, loading = loading, onReloadSources = onReloadSources)
+    val data = rememberSourceListData(streams, facts, pinned, loading = loading, onReloadSources = onReloadSources, ranked = ranked, diagnosis = diagnosis, lastPick = lastPick)
+    // Sem fonte nenhuma e sem busca em curso: diagnóstico honesto + Tentar
+    // novamente + QR com o diagnóstico (Lote 17 item 7). Antes, a tela ficava
+    // vazia em silêncio — sem dizer por que nem o que fazer.
+    if (streams.isEmpty() && !loading) {
+        SourceEmptyState(diagnosis = diagnosis.ifBlank { "Nenhuma fonte encontrada para este título." }, onRetry = onReloadSources)
+        return
+    }
     if (data.groups.isNotEmpty()) Text("${data.groups.size} versões em ${data.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
     SourceListFilters(data, showSearch = searchOn)
     data.sections.forEach { (addon, gs) ->
@@ -2318,47 +2418,78 @@ private fun CastCard(member: com.aotv.app.domain.model.CastMember, onClick: () -
 
 // ── Empty state for unavailable sources ───────────────────────────────────────
 @Composable
-private fun SourceEmptyState() {
-    Row(
+/**
+ * Sem fonte: o motivo real + o que fazer (Lote 17 item 7). O QR carrega o
+ * mesmo diagnóstico em texto — a pessoa mostra a tela p/ pedir ajuda sem
+ * precisar digitar o erro. O botão "Tentar novamente" re-busca as fontes.
+ */
+@Composable
+private fun SourceEmptyState(
+    diagnosis: String = "Nenhuma fonte encontrada para este título.",
+    onRetry: (() -> Unit)? = null,
+) {
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(BackgroundCard)
             .border(1.dp, Border, RoundedCornerShape(16.dp))
             .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(13.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(BackgroundCard2)
-                .border(1.dp, Border, RoundedCornerShape(12.dp)),
-            contentAlignment = Alignment.Center,
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(13.dp),
         ) {
-            Icon(
-                Icons.Default.PlayArrow,
-                null,
-                tint = TextTertiary,
-                modifier = Modifier.size(18.dp),
-            )
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BackgroundCard2)
+                    .border(1.dp, Border, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    null,
+                    tint = TextTertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Indisponível no momento",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = TextPrimary,
+                    fontFamily = SoraFontFamily,
+                )
+                Text(
+                    diagnosis,
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    fontFamily = ManropeFontFamily,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Indisponível no momento",
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = TextPrimary,
-                fontFamily = SoraFontFamily,
-            )
-            Text(
-                "Nenhuma fonte encontrada para este título.",
-                fontSize = 11.5.sp,
-                color = TextTertiary,
-                fontFamily = ManropeFontFamily,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (onRetry != null) com.aotv.app.ui.common.AotvButton("Tentar novamente", onClick = onRetry)
+            // QR com o diagnóstico (texto, não link — não há página de ajuda
+            // p/ apontar; o QR serve p/ mostrar o erro a outra pessoa).
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                com.aotv.app.ui.settings.QrCode(
+                    "AOTV — sem fontes: $diagnosis",
+                    Modifier.size(96.dp).clip(RoundedCornerShape(8.dp)).background(androidx.compose.ui.graphics.Color.White).padding(6.dp),
+                    "Código QR com o diagnóstico",
+                )
+                Text("QR com o diagnóstico", color = TextTertiary, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            }
         }
     }
 }

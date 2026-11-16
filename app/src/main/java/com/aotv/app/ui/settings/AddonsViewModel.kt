@@ -53,6 +53,22 @@ class AddonsViewModel @Inject constructor(
     init {
         _uiState.update { it.copy(addons = prefs.addonEntries) }
         refreshAll()
+        // Deep link stremio:// (Lote 17, v1.27.0): a MainActivity oferece a
+        // URL e o MoviesNavigation traz o usuário p/ esta tela — aqui a URL
+        // vira instalação pelo fluxo normal de install() (progresso, erro e
+        // "instalado" na tela, como se o usuário tivesse colado o link).
+        // O holder é consumido ANTES de validar, p/ não reinstalar se a
+        // tela remontar; link inválido (sem host de verdade ou sem
+        // /manifest.json, mesmo critério do AddonLinks.capturedLink) é
+        // ignorado em silêncio, sem toast e sem crash.
+        viewModelScope.launch {
+            com.aotv.app.data.party.AddonDeepLink.url.collect { raw ->
+                if (raw == null) return@collect
+                com.aotv.app.data.party.AddonDeepLink.consume()
+                val url = com.aotv.app.data.remote.AddonLinks.capturedLink(raw) ?: return@collect
+                install(url)
+            }
+        }
         // A loja instala e remove por fora. Observa a lista para o gerenciador acompanhar.
         viewModelScope.launch {
             prefs.addons.collect { list ->

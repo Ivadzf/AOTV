@@ -671,6 +671,9 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_READY) {
                     duration = exoPlayer.duration.coerceAtLeast(0L); movieStarted = true
+                    // Lote 17 item 1: tocou de verdade — o host ganha um acerto
+                    // na saúde aprendida (1x por URL nesta sessão).
+                    streamUrl?.let { noteSourceReady(it) }
                     readyUrl = streamUrl
                     switching = false // novo episódio no ar, tira o loading da troca
                     refreshTechInfo()
@@ -777,8 +780,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         extSync?.setDelay(audioDelay)
         if (extUrl != null) saveExt()
         else {
-            // Áudio próprio (Lote 14 item 3): o atraso vai p/ o processador de PCM e fica salvo por título.
-            ownAudioDelayProcessor.setDelayMs((audioDelay * 1000).roundToLong())
+            // Áudio próprio (Lote 14 item 3 + Lote 17 item 10): atraso positivo vai
+            // p/ o processador de PCM; adianto (−) atrasa o vídeo pelo mesmo valor.
+            ownAudioDelayProcessor.setDelayMs((audioDelay.coerceAtLeast(0.0) * 1000).roundToLong())
+            videoDelayState.setDelayMs((-audioDelay.coerceAtMost(0.0) * 1000).roundToLong())
             if (audioDelay != 0.0 || progressVm.ownAudioDelay(extKey) != null) saveOwnAudio()
         }
     }
@@ -1211,7 +1216,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                     val r = ev.nativeKeyEvent.repeatCount
                     fun shift(base: Double) {
                         audioDelay = if (extUrl != null) addDelay(audioDelay, syncStep(base, r))
-                        else addDelay(audioDelay, syncStep(base, r)).coerceIn(0.0, OWN_AUDIO_DELAY_MAX_SEC)
+                        else addDelay(audioDelay, syncStep(base, r)).coerceIn(OWN_AUDIO_DELAY_MIN_SEC, OWN_AUDIO_DELAY_MAX_SEC)
                     }
                     when (kc) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> shift(-0.05)
@@ -1646,7 +1651,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 delaySec = audioDelay,
                 onShift = {
                     audioDelay = if (extUrl != null) addDelay(audioDelay, it)
-                    else addDelay(audioDelay, it).coerceIn(0.0, OWN_AUDIO_DELAY_MAX_SEC)
+                    else addDelay(audioDelay, it).coerceIn(OWN_AUDIO_DELAY_MIN_SEC, OWN_AUDIO_DELAY_MAX_SEC)
                 },
                 onBack5 = { seekBy(-5_000); controlsVisible = false },
                 onZero = { audioDelay = 0.0 },
@@ -1721,6 +1726,7 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 television = isTv,
                 // Lote 4: painel de fontes (e demais painéis) em vidro fosco.
                 frosted = panelBlurOn,
+                subtitleMode = panelKind == "subs",
                 // Lote 15 item 2 — chips de provider no topo da folha de Fontes
                 // (Todos + um por addon presente). Só no celular: na TV o D-pad
                 // é dono do painel e a fileira ficaria fora da navegação.
@@ -2061,6 +2067,8 @@ class PlayerSession(
     // título, como o ExtAudioPick; 0 = sincronia original). O processador
     // que atrasa o PCM vive na sessão p/ o player ser criado com ele.
     val ownAudioDelayProcessor = AudioDelayProcessor()
+    /** Atraso do vídeo em ms (Lote 17 item 10): adiantar o som = atrasar o vídeo. */
+    val videoDelayState = VideoDelayState()
     var audioDelay by run { mutableDoubleStateOf(progressVm.ownAudioDelay(extKey)?.delaySec ?: 0.0) }
     var syncBarOpen by run { mutableStateOf(false) }
     var extRestored by run { mutableStateOf(false) }
@@ -2188,6 +2196,73 @@ class PlayerSession(
     var sourceProviderFilter by run { mutableStateOf("") }
     /** Salva a vista da folha no perfil (ligado pela tela a [PlayerPrefsViewModel.setSourcesRanked]). */
     var onSourcesRankedChange: (Boolean) -> Unit = {}
+    // ── Lote 17 — saúde aprendida + downgrade adaptativo (v1.27.0) ───────
+    /** Prefs do perfil (leitura direta, mesmo padrão de LiveTvScreen). */
+    private val prefs by lazy { com.aotv.app.data.local.PlatformPrefs(context.applicationContext) }
+    /** URLs que já ganharam um acerto nesta sessão (1x cada). */
+    private val healthRecordedUrls = mutableSetOf<String>()
+    /** Oferta "Mudar para 720p?" ativa (fonte 1080p parou 3x em 1 minuto). */
+    var showDowngradeOffer by run { mutableStateOf(false) }
+
+    /** Tocou de verdade: o host ganha um acerto (1x por URL nesta sessão). */
+    fun noteSourceReady(url: String) {
+        if (url.isBlank() || !healthRecordedUrls.add(url)) return
+        val ms = episodeVm.probeCached(url)?.ms ?: 0
+        prefs.sourceHealth = com.aotv.app.data.remote.recordSourceSuccess(
+            prefs.sourceHealth, url, ms, System.currentTimeMillis(),
+        )
+    }
+
+    /** Falhou (não respondeu / erro): o host ganha uma falha. */
+    fun noteSourceFailed(url: String) {
+        if (url.isBlank()) return
+        prefs.sourceHealth = com.aotv.app.data.remote.recordSourceFailure(
+            prefs.sourceHealth, url, System.currentTimeMillis(),
+        )
+    }
+
+    /** Travou no meio da reprodução: conta a travada e avalia o downgrade. */
+    fun noteSourceStall(url: String) {
+        if (url.isBlank()) return
+        val now = System.currentTimeMillis()
+        val health = com.aotv.app.data.remote.recordSourceStall(prefs.sourceHealth, url, now)
+        prefs.sourceHealth = health
+        val rank = facts().firstOrNull { it.url == url }?.rank ?: 0
+        if (rank >= 1080 && com.aotv.app.data.remote.shouldOfferDowngrade(health[com.aotv.app.data.remote.sourceHost(url)], now)) {
+            showDowngradeOffer = true
+        }
+    }
+
+    fun dismissDowngradeOffer() { showDowngradeOffer = false }
+
+    /**
+     * "Tentar a próxima fonte" (Lote 17 item 1): a próxima do ranking ainda
+     * não tentada — retoma DE ONDE PAROU, porque [applyMovieSource] mantém
+     * a posição. false = acabou a lista.
+     */
+    fun tryNextSource(): Boolean {
+        val f = facts()
+        val rankedOrder = rankedSourceOrder()
+        val next = rankedOrder.firstOrNull { idx ->
+            val s = f.getOrNull(idx) ?: return@firstOrNull false
+            s.url !in triedUrls && !s.dead && !s.wrongTitle
+        } ?: rankedOrder.firstOrNull { idx -> (f.getOrNull(idx)?.url ?: "") !in triedUrls }
+        if (next == null) return false
+        applyMovieSource(next)
+        return true
+    }
+
+    /** Downgrade adaptativo: a melhor fonte até 720p ainda não tentada. */
+    fun switchToLowerQuality(maxRank: Int = 720): Boolean {
+        val f = facts()
+        val next = rankedSourceOrder().firstOrNull { idx ->
+            val s = f.getOrNull(idx) ?: return@firstOrNull false
+            s.rank in 1..maxRank && s.url !in triedUrls && !s.dead && !s.wrongTitle
+        } ?: return false
+        showDowngradeOffer = false
+        applyMovieSource(next)
+        return true
+    }
     /** Repo da TV ao vivo p/ o On Demand da folha (ligado pela tela; null = sem repo). */
     var onDemandRepo: LiveTvRepository? = null
     /** Fonte Xtream usada no On Demand da folha (a conta já configurada). */
@@ -2390,7 +2465,7 @@ class PlayerSession(
             .build()
         try {
             ExoPlayer.Builder(context)
-                .setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor))
+                .setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setMediaSourceFactory(mediaSourceFactory(context))
                 .setAudioAttributes(audioAttrs, true)
@@ -2409,15 +2484,16 @@ class PlayerSession(
                         .build()
                 }
         } catch (_: Exception) {
-            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor))
+            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
                 .build().apply { playWhenReady = true }
         }
     }.also {
-        // Sincronia do áudio próprio (Lote 14 item 3): o atraso salvo vale
-        // desde o 1º quadro, sem esperar o efeito debounced de 450 ms.
-        ownAudioDelayProcessor.setDelayMs((audioDelay * 1000).roundToLong())
+        // Sincronia do áudio próprio (Lote 14 item 3 + Lote 17 item 10): o atraso
+        // salvo vale desde o 1º quadro, sem esperar o efeito debounced de 450 ms.
+        ownAudioDelayProcessor.setDelayMs((audioDelay.coerceAtLeast(0.0) * 1000).roundToLong())
+        videoDelayState.setDelayMs((-audioDelay.coerceAtMost(0.0) * 1000).roundToLong())
     }
     // Controle pela tela bloqueada, fone Bluetooth e Google Assistant. Só o player LOCAL —
     // o Cast tem a própria sessão separada via Google Cast framework.
@@ -3095,25 +3171,49 @@ class PlayerSession(
     }
 
     /**
-     * Ordem em ranking de TODAS as fontes, da melhor p/ pior (Lote 12 —
-     * Frente 2, v1.22.0). Reusa o MESMO escore do `bestSourceIndex()`:
-     * tira o melhor que sobrou com [bestIndex], repete com o resto. O #1
-     * daqui é o mesmo #1 que o "Assistir" escolhe. Sem o teto de qualidade
-     * do perfil (a sessão não o lê): a ordem relativa é a mesma, só sem
-     * o corte de quem passa do teto.
+     * Ordem em ranking de TODAS as fontes, da melhor p/ pior (Lote 17 —
+     * v1.27.0). O MESMO score do detalhe ([rankSources]): resolução, tempo
+     * até o 1º byte, saúde aprendida, idioma, debrid, CAM/sample — com o
+     * desempate final por URL, então a ordem é determinística (nada de
+     * "parece sorteio"). A folha NÃO esconde fonte aqui (sem filtro de
+     * idioma nem de codec): quem está no player pode escolher qualquer uma
+     * à mão; os filtros valem na lista do detalhe. O #1 daqui é o mesmo #1
+     * que o "Assistir" escolhe.
      */
     fun rankedSourceOrder(): List<Int> {
         val f = facts()
         if (f.isEmpty()) return emptyList()
-        val remaining = f.indices.toMutableList()
-        val out = ArrayList<Int>()
-        while (remaining.isNotEmpty()) {
-            val sub = remaining.map { f[it] }
-            val best = bestIndex(sub).coerceIn(0, sub.lastIndex)
-            out += remaining[best]
-            remaining.removeAt(best)
-        }
-        return out
+        val item = progressVm.lastSourcePick(tmdbId, type)
+        return com.aotv.app.data.remote.rankSources(
+            facts = f,
+            health = prefs.sourceHealth,
+            preset = com.aotv.app.data.remote.SourcePreset.of(prefs.sourcePreset),
+            strategy = com.aotv.app.data.remote.SourceStrategy.of(prefs.sourceStrategy),
+            langPref = prefs.audioPref,
+            maxQuality = prefs.maxQuality,
+            manualOrder = prefs.sourceManualOrder,
+            lastPick = if (prefs.sourceRememberPick) item else null,
+            originalFirst = prefs.sourceOriginalFirst,
+            runtimeMin = runtimeMin,
+        ).map { it.index }
+    }
+
+    /** Score com motivo por URL, p/ a folha mostrar "#1 · 84 — 1080p · rápido". */
+    fun rankedByUrl(): Map<String, com.aotv.app.data.remote.RankedSource> {
+        val f = facts()
+        if (f.isEmpty()) return emptyMap()
+        return com.aotv.app.data.remote.rankSources(
+            facts = f,
+            health = prefs.sourceHealth,
+            preset = com.aotv.app.data.remote.SourcePreset.of(prefs.sourcePreset),
+            strategy = com.aotv.app.data.remote.SourceStrategy.of(prefs.sourceStrategy),
+            langPref = prefs.audioPref,
+            maxQuality = prefs.maxQuality,
+            manualOrder = prefs.sourceManualOrder,
+            lastPick = if (prefs.sourceRememberPick) progressVm.lastSourcePick(tmdbId, type) else null,
+            originalFirst = prefs.sourceOriginalFirst,
+            runtimeMin = runtimeMin,
+        ).associateBy { it.fact.url }
     }
 
     // ── Lote 14 item 4 — folha de fontes estável durante a busca (v1.24.0) ──
@@ -3290,10 +3390,27 @@ class PlayerSession(
     // [slow] = troca por lentidão. Aí só vale fonte que não seja de outro filme, senão é melhor
     // seguir esperando a atual do que abrir o filme errado.
     fun nextMovieSource(slow: Boolean = false): Boolean {
-        currentSources.getOrNull(currentSourceIdx)?.addon?.takeIf { it.isNotBlank() }?.let { failedAddons += it }
+        // Failover (Lote 17 item 1): a fonte atual falhou — o host ganha uma
+        // falha na saúde aprendida; se foi travada (slow), conta a travada
+        // p/ o downgrade adaptativo. A próxima vem do RANKING (não da ordem
+        // de chegada): primeiro as vivas, do título certo e de addon que não
+        // acabou de falhar; depois qualquer uma não tentada. Retoma a posição
+        // via applyMovieSource (ver tryNextSource).
+        currentSources.getOrNull(currentSourceIdx)?.let { cur ->
+            noteSourceFailed(cur.url)
+            if (slow) noteSourceStall(cur.url)
+            if (cur.addon.isNotBlank()) failedAddons += cur.addon
+        }
         val f = facts()
-        val next = nextIndex(f, triedUrls, failedAddons)
-        if (next < 0) return false
+        val rankedOrder = rankedSourceOrder()
+        val next = rankedOrder.firstOrNull { idx ->
+            val s = f.getOrNull(idx) ?: return@firstOrNull false
+            s.url !in triedUrls && !s.dead && !s.wrongTitle && s.addon !in failedAddons
+        } ?: rankedOrder.firstOrNull { idx ->
+            val s = f.getOrNull(idx) ?: return@firstOrNull false
+            s.url !in triedUrls && !s.wrongTitle
+        } ?: rankedOrder.firstOrNull { idx -> (f.getOrNull(idx)?.url ?: "") !in triedUrls }
+        if (next == null) return false
         if (slow && f[next].wrongTitle && f.getOrNull(currentSourceIdx)?.wrongTitle == false) return true
         applyMovieSource(next)
         return true
@@ -3373,6 +3490,29 @@ class PlayerSession(
                 sourcesRanked = !sourcesRanked
                 onSourcesRankedChange(sourcesRanked)
             })
+            // Lote 17 item 1 — "Tentar a próxima fonte": a próxima do ranking
+            // ainda não tentada, retomando a posição (ver tryNextSource).
+            // Só aparece quando há outra fonte p/ tentar.
+            if (currentSources.size > 1) add(TvPlayerAction(
+                "Tentar a próxima fonte", false, false, header = "Fontes",
+                sub = "Próxima do ranking, sem perder o ponto", keepOpen = true,
+            ) {
+                if (!tryNextSource()) toastMsg = "Não há outra fonte para tentar"
+            })
+            // Lote 17 item 2 — downgrade adaptativo: a fonte 1080p parou 3x
+            // em 1 minuto. Oferece, não impõe: "Mudar para 720p?" ou manter.
+            if (showDowngradeOffer) {
+                add(TvPlayerAction(
+                    "Mudar para 720p?", false, false, header = "Fonte instável",
+                    sub = "A fonte 1080p parou 3 vezes em 1 minuto", keepOpen = true,
+                ) {
+                    if (!switchToLowerQuality()) { dismissDowngradeOffer(); toastMsg = "Não há fonte 720p para trocar" }
+                })
+                add(TvPlayerAction(
+                    "Manter 1080p", false, false, header = "Fonte instável",
+                    sub = "Continuar nesta fonte", keepOpen = true,
+                ) { dismissDowngradeOffer() })
+            }
             if (sourcesRanked) {
                 // Ranking: lista única de TODAS as streams, da melhor p/
                 // pior (mesmo escore do bestSourceIndex — ver
@@ -3385,6 +3525,8 @@ class PlayerSession(
                 val order = stableSourceOrder().filter { idx ->
                     matchesFilter(currentSources.getOrNull(idx)?.addon.orEmpty())
                 }
+                // Score com motivo (Lote 17): o mesmo do detalhe.
+                val scores = rankedByUrl()
                 order.take(sourceLimit).forEachIndexed { rank, idx ->
                     val src = currentSources.getOrNull(idx) ?: return@forEachIndexed
                     val stream = src.stream ?: com.aotv.app.data.remote.StremioStream(src.label, src.url, src.addon,
@@ -3394,8 +3536,11 @@ class PlayerSession(
                     val best = rank == 0 && providerFilter.isBlank()
                     // O card já mostra o addon no título — o sub não repete.
                     // T/E entra no card quando for série (Lote 15 item 2).
+                    val scored = scores[src.url]
                     add(TvPlayerAction(src.label, true, src.url == playing, addon = src.addon, stream = stream,
-                        sub = "#${rank + 1}" + (if (best) " · Melhor fonte" else "") +
+                        sub = "#${rank + 1}" + (scored?.let { " · ${it.score}" }.orEmpty()) +
+                            (if (best) " · Melhor fonte" else "") +
+                            (scored?.reason?.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()) +
                             (if (episodeCode.isNotBlank()) " · $episodeCode" else ""),
                         header = if (rank == 0) "Ranking da melhor para a pior" else "") {
                         markSourceTouched(src.url)
@@ -3468,17 +3613,18 @@ class PlayerSession(
                 val f = g.getTrackFormat(0)
                 val name = f.label?.takeIf { it.isNotBlank() } ?: SubLangs.label(f.language)
                 add(TvPlayerAction(name, false, subtitleOn && group.any { it.isSelected },
-                    header = if (i == 0) "No vídeo" else "", count = group.size) { pickSub(g, null) })
+                    header = if (i == 0) "No vídeo" else "", count = group.size,
+                    langKey = SubLangs.of(f.language)?.key ?: f.language.orEmpty(),
+                    source = "No vídeo") { pickSub(g, null) })
             }
-            val externalByLang = externalSubs
-                .groupBy { SubLangs.of(it.lang)?.key ?: it.lang }
-            externalByLang.values.forEachIndexed { i, group ->
-                val sub = group.first()
-                // Nome do idioma, sem o sufixo do addon (vira o sub: a fonte da 1ª opção).
-                val source = sub.label.substringAfter(" · ", "").ifBlank { "OpenSubtitles" }
-                add(TvPlayerAction(SubLangs.label(sub.lang), false, group.any { it.url == selectedSubUrl },
-                    header = if (i == 0) "Legendas externas" else "", count = group.size,
-                    sub = source) { pickSub(null, sub) })
+            // Lote 17 item 14 — uma ação por legenda: o painel duas-colunas agrupa
+            // por idioma na coluna "Idiomas" e mostra selo + ID por entrada.
+            externalSubs.forEachIndexed { i, sub ->
+                val source = sub.source.ifBlank { sub.label.substringAfter(" · ", "").ifBlank { "OpenSubtitles" } }
+                add(TvPlayerAction(SubLangs.label(sub.lang), false, sub.url == selectedSubUrl,
+                    header = if (i == 0) "Legendas externas" else "",
+                    langKey = SubLangs.of(sub.lang)?.key ?: sub.lang,
+                    source = source, entryId = sub.id, detail = sub.detail) { pickSub(null, sub) })
             }
             // Ajustes no fim da lista, sempre na mesma ordem, para nada pular de lugar ao tocar.
             add(TvPlayerAction("Tamanho", false, false, sub = subSizeLabel(subSize), header = "Ajustes", keepOpen = true) {
@@ -3605,7 +3751,7 @@ class PlayerSession(
         add(TvPlayerAction(
             "Ajustar sincronia", false, false, header = "Sincronia do som",
             sub = if (ext != null) audioDelayLabel(audioDelay) + "  ·  o filme continua tocando"
-            else audioDelayLabel(audioDelay) + "  ·  áudio da própria fonte (só atrasa o som)",
+            else audioDelayLabel(audioDelay) + "  ·  áudio da própria fonte (− adianta o som · + atrasa o som)",
         ) { syncBarOpen = true; controlsVisible = false })
     }
     val speedActions get() = speeds.mapIndexed { i, speed ->

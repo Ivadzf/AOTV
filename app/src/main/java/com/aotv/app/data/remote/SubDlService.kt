@@ -67,8 +67,13 @@ data class SubDlResult(
     /** Pacote de temporada inteira (só vale com unpack=1 resolvido). */
     val fullSeason: Boolean,
 ) {
-    /** P/ mesclar com a lista do SubtitleService (OpenSubtitles + addons). */
-    fun toExternalSub(): ExternalSub = ExternalSub(url, lang, label)
+    /**
+     * P/ mesclar com a lista do SubtitleService (OpenSubtitles + addons). A
+     * fonte real vai no selo do painel ("SubDL") e o release name na linha de
+     * detalhe — o SubDL não devolve um id numérico por legenda, então [id]
+     * fica vazio (o painel só mostra a linha quando há id).
+     */
+    fun toExternalSub(): ExternalSub = ExternalSub(url, lang, label, source = "SubDL", detail = releaseName)
 }
 
 @Singleton

@@ -33,6 +33,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
@@ -1212,6 +1214,118 @@ private fun StreamsPage(
                         title = name,
                         sub = "Aparece primeiro na folha de fontes",
                         trailing = { TextButton(onClick = { viewModel.unpin(name) }) { Text("Desfixar", color = DangerText) } },
+                        grouped = true,
+                        divider = i > 0,
+                    )
+                }
+            }
+        }
+        // ── Ranking de fontes (Lote 17, v1.27.0) ────────────────────────
+        // Score 0–100 com motivo, preset, estratégia, filtro de idioma e
+        // ordem manual — o mesmo ranking do detalhe e da folha do player.
+        val preset by viewModel.sourcePreset.collectAsStateWithLifecycle()
+        val strategy by viewModel.sourceStrategy.collectAsStateWithLifecycle()
+        val langFilter by viewModel.sourceLangFilter.collectAsStateWithLifecycle()
+        val originalFirst by viewModel.sourceOriginalFirst.collectAsStateWithLifecycle()
+        val manualOrder by viewModel.sourceManualOrder.collectAsStateWithLifecycle()
+        val hideUnplayable by viewModel.sourceHideUnplayable.collectAsStateWithLifecycle()
+        val rememberPick by viewModel.sourceRememberPick.collectAsStateWithLifecycle()
+        SettingsSection("Ranking de fontes", anchor = SettingsAnchors.STREAMS_RANKING)
+        Text(
+            "Cada fonte ganha um score de 0 a 100 com o motivo (ex.: \"#1 · 84 — 1080p · rápido · 0 falhas\"). O mesmo score vale no detalhe e na folha do player.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        SettingsCard {
+            PrefRow(
+                "Preset",
+                listOf("best" to "Melhor imagem", "balanced" to "Equilibrado", "fast" to "Início rápido"),
+                preset, viewModel::setSourcePreset,
+            )
+            PrefRow(
+                "Estratégia do ranking",
+                listOf("quality" to "Qualidade", "speed" to "Rapidez", "reliability" to "Confiabilidade", "language" to "Idioma"),
+                strategy, viewModel::setSourceStrategy,
+            )
+            PrefRow(
+                "Idioma das fontes",
+                listOf("" to "Todos", "dub" to "Dublado", "leg" to "Legendado", "original" to "Original"),
+                langFilter, viewModel::setSourceLangFilter,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Translate,
+                title = "Original primeiro",
+                sub = if (originalFirst) "Fontes sem marca de dublado/legendado ganham pontos no ranking"
+                    else "O áudio original não ganha ponto extra",
+                trailing = { Switch(checked = originalFirst, onCheckedChange = { viewModel.setSourceOriginalFirst(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSourceOriginalFirst(!originalFirst) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Block,
+                title = "Esconder o que o aparelho não toca",
+                sub = if (hideUnplayable) "Fontes AV1/HEVC sem suporte neste aparelho não aparecem na lista"
+                    else "Todas as fontes aparecem, mesmo sem suporte a codec",
+                trailing = { Switch(checked = hideUnplayable, onCheckedChange = { viewModel.setSourceHideUnplayable(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSourceHideUnplayable(!hideUnplayable) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.History,
+                title = "Lembrar minha escolha por título",
+                sub = if (rememberPick) "A última fonte escolhida à mão ganha pontos no ranking daquele título"
+                    else "A última escolha não influencia o ranking",
+                trailing = { Switch(checked = rememberPick, onCheckedChange = { viewModel.setSourceRememberPick(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setSourceRememberPick(!rememberPick) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        SettingsSection("Ordem manual das fontes", anchor = SettingsAnchors.STREAMS_RANKING)
+        Text(
+            "A ordem manual vale por cima do ranking. Use as setas para reordenar; um addon fora da lista segue só pelo score.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        if (manualOrder.isEmpty()) {
+            SettingsCard {
+                Text("Sem ordem manual — vale só o ranking.", fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp)
+            }
+        } else {
+            com.aotv.app.ui.common.SettingsGroup {
+                manualOrder.forEachIndexed { i, name ->
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.FormatListNumbered,
+                        title = "${i + 1}. $name",
+                        sub = "Ordem manual",
+                        trailing = {
+                            Row {
+                                IconButton(onClick = { viewModel.moveManualSource(name, -1) }, enabled = i > 0) {
+                                    Icon(Icons.Default.KeyboardArrowUp, "Subir", tint = TextSecondary)
+                                }
+                                IconButton(onClick = { viewModel.moveManualSource(name, 1) }, enabled = i < manualOrder.lastIndex) {
+                                    Icon(Icons.Default.KeyboardArrowDown, "Descer", tint = TextSecondary)
+                                }
+                                TextButton(onClick = { viewModel.removeManualSource(name) }) { Text("Tirar", color = DangerText) }
+                            }
+                        },
+                        grouped = true,
+                        divider = i > 0,
+                    )
+                }
+            }
+        }
+        // Adicionar: um addon fixado que ainda não está na ordem manual.
+        val addable = pinned.filter { it !in manualOrder }
+        if (addable.isNotEmpty()) {
+            com.aotv.app.ui.common.SettingsGroup {
+                addable.forEachIndexed { i, name ->
+                    com.aotv.app.ui.common.SettingsRow(
+                        icon = Icons.Default.Add,
+                        title = "Adicionar $name",
+                        sub = "Põe no fim da ordem manual",
+                        trailing = { TextButton(onClick = { viewModel.addManualSource(name) }) { Text("Adicionar", color = Accent) } },
                         grouped = true,
                         divider = i > 0,
                     )

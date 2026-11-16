@@ -50,6 +50,50 @@ class StreamPrefsViewModel @Inject constructor(
 
     /** Logo do manifest do addon ("" quando o addon não tem logo ou o manifest não foi lido). */
     fun logoFor(addon: String): String = stremio.logoForAddon(addon)
+
+    // ── Ranking de fontes (Lote 17, v1.27.0) ─────────────────────────────
+    val sourcePreset: StateFlow<String> = prefs.sourcePresetFlow
+    fun setSourcePreset(v: String) { prefs.sourcePreset = v }
+
+    val sourceStrategy: StateFlow<String> = prefs.sourceStrategyFlow
+    fun setSourceStrategy(v: String) { prefs.sourceStrategy = v }
+
+    val sourceLangFilter: StateFlow<String> = prefs.sourceLangFilterFlow
+    fun setSourceLangFilter(v: String) { prefs.sourceLangFilter = v }
+
+    val sourceOriginalFirst: StateFlow<Boolean> = prefs.sourceOriginalFirstFlow
+    fun setSourceOriginalFirst(v: Boolean) { prefs.sourceOriginalFirst = v }
+
+    val sourceManualOrder: StateFlow<List<String>> = prefs.sourceManualOrderFlow
+    /** Move um addon na ordem manual (delta −1 sobe, +1 desce). Fora da lista, não faz nada. */
+    fun moveManualSource(name: String, delta: Int) {
+        val cur = prefs.sourceManualOrder.toMutableList()
+        val i = cur.indexOf(name)
+        val j = i + delta
+        if (i < 0 || j !in cur.indices) return
+        cur.removeAt(i)
+        cur.add(j, name)
+        prefs.sourceManualOrder = cur
+    }
+
+    /** Tira um addon da ordem manual (volta a valer só o ranking). */
+    fun removeManualSource(name: String) { prefs.sourceManualOrder = prefs.sourceManualOrder.filterNot { it == name } }
+
+    /** Põe um addon fixado na ordem manual (no fim). Já estando, não duplica. */
+    fun addManualSource(name: String) {
+        val clean = name.trim()
+        if (clean.isBlank() || clean in prefs.sourceManualOrder) return
+        prefs.sourceManualOrder = prefs.sourceManualOrder + clean
+    }
+
+    val sourceHideUnplayable: StateFlow<Boolean> = prefs.sourceHideUnplayableFlow
+    fun setSourceHideUnplayable(v: Boolean) { prefs.sourceHideUnplayable = v }
+
+    val sourceRememberPick: StateFlow<Boolean> = prefs.sourceRememberPickFlow
+    fun setSourceRememberPick(v: Boolean) { prefs.sourceRememberPick = v }
+
+    /** Última fonte escolhida à mão neste título ("TIPO:tmdbId"), ou null. */
+    fun lastPickFor(key: String): com.aotv.app.data.local.LastSourcePick? = prefs.lastSourcePicks[key]
 }
 
 /**

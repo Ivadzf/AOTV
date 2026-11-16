@@ -74,13 +74,21 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
             </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
+            </intent-filter>
         </activity>
 
         <!-- Ícones coloridos (Lote 11, v1.21.0 — ideia do Tuvora): um alias por
              cor, todos DESLIGADOS por padrão. O ícone atual continua sendo a
              MainActivity (sem alias). Trocar o ícone liga o alias da cor e
              desliga a MainActivity (ver AppIconVariants.applyVariant); voltar
-             ao Padrão faz o contrário. Os deep links (AniList e Watch Party)
+             ao Padrão faz o contrário. Os deep links (AniList, Watch Party e stremio://)
              estão duplicados em cada alias porque, com a MainActivity
              desligada, o link só resolve no alias ativo — em cada estado só
              UM componente está ligado. O banner é o mesmo do app em todos. -->
@@ -113,6 +121,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
             </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
@@ -143,6 +159,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
+            </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
             </intent-filter>
         </activity-alias>
 
@@ -175,6 +199,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
             </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
@@ -205,6 +237,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
+            </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
             </intent-filter>
         </activity-alias>
 
@@ -237,6 +277,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
             </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
@@ -267,6 +315,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="aotv" android:host="party" />
+            </intent-filter>
+            <!-- Deep link stremio:// (Lote 17, v1.27.0): instalar addon pelo
+                 link (ex.: tocado no navegador) — o app aparece no "Abrir com". -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="stremio" />
             </intent-filter>
         </activity-alias>
 

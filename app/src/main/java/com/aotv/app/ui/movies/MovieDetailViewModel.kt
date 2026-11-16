@@ -90,6 +90,15 @@ class MovieDetailViewModel @Inject constructor(
                     delay(400)
                     val batch = pendingProbes.toMap()
                     pendingProbes.clear()
+                    // Saúde aprendida (Lote 17 item 1): o probe diz se o host
+                    // respondeu — grava 1x por leva, não 1x por fonte.
+                    val now = System.currentTimeMillis()
+                    var health = prefs.sourceHealth
+                    batch.forEach { (url, r) ->
+                        health = if (r.ok) com.aotv.app.data.remote.recordSourceSuccess(health, url, r.ms, now)
+                        else com.aotv.app.data.remote.recordSourceFailure(health, url, now)
+                    }
+                    prefs.sourceHealth = health
                     _uiState.update { it.copy(probes = it.probes + batch) }
                 }
             }
@@ -124,10 +133,15 @@ class MovieDetailViewModel @Inject constructor(
 
     /**
      * Pergunta ao debrid quais torrents ele tem prontos. Espera os addons pararem de chegar
-     * (1,2 s), porque o Real-Debrid confere tentando resolver e só vale gastar com os melhores.
+     * (1,2 s), porque só vale gastar com os melhores. Lote 17 item 9: SÓ quando a
+     * consulta é de leitura (TorBox/Premiumize). Real-Debrid e AllDebrid NÃO têm
+     * consulta sem efeito — o check antigo resolvia os 3 primeiros magnets só p/
+     * adivinhar o cache, e o resolve() na hora de tocar já deixa o link pronto.
+     * Com RD/AD, nem chama: os torrents ficam na lista e resolvem 1x ao tocar.
      */
     private fun scheduleDebridCheck() {
         val a = debrid.active() ?: return
+        if (!debrid.hasReadOnlyCacheCheck()) return
         debridJob?.cancel()
         debridJob = viewModelScope.launch {
             kotlinx.coroutines.delay(1_200)
@@ -162,10 +176,55 @@ class MovieDetailViewModel @Inject constructor(
         else list.filterNot { st.debridCached[it.url] == false }
 
     /**
-     * Índice da fonte do Assistir dentro de [UiState.stremioStreams]. Melhor resolução que
-     * respondeu rápido, no idioma da primeira, fugindo de fonte morta e de outro filme.
+     * Ranking de fontes do filme (Lote 17 item 1/8): o MESMO score da folha
+     * do player ([rankSources]) — resolução, velocidade do probe, saúde
+     * aprendida, idioma, debrid, CAM/sample. Sem score, a ordem parecia
+     * sorteio; aqui o #1 do detalhe é o #1 do player.
      */
-    fun bestSourceIndex(): Int = com.aotv.app.data.remote.bestIndex(_uiState.value.movieFacts(), prefs.maxQuality)
+    private val supportedCodecs by lazy { com.aotv.app.data.remote.deviceSupportedCodecs() }
+
+    /** Última fonte à mão neste título, quando a pref "lembrar" está ligada. */
+    fun lastPickForTitle(): com.aotv.app.data.local.LastSourcePick? {
+        if (!prefs.sourceRememberPick) return null
+        val item = stubItem ?: return null
+        return prefs.lastSourcePicks["${item.type.name}:${item.tmdbId}"]
+    }
+
+    fun rankedSources(): List<com.aotv.app.data.remote.RankedSource> =
+        com.aotv.app.data.remote.rankSources(
+            facts = _uiState.value.movieFacts(),
+            health = prefs.sourceHealth,
+            preset = com.aotv.app.data.remote.SourcePreset.of(prefs.sourcePreset),
+            strategy = com.aotv.app.data.remote.SourceStrategy.of(prefs.sourceStrategy),
+            langPref = prefs.audioPref,
+            maxQuality = prefs.maxQuality,
+            manualOrder = prefs.sourceManualOrder,
+            langFilter = prefs.sourceLangFilter,
+            hideUnplayable = prefs.sourceHideUnplayable,
+            supportedCodecs = supportedCodecs,
+            lastPick = lastPickForTitle(),
+            originalFirst = prefs.sourceOriginalFirst,
+            runtimeMin = _uiState.value.runtimeMin,
+        )
+
+    /** Diagnóstico honesto quando não há fonte tocável (Lote 17 item 7). */
+    fun sourceDiagnosis(): String {
+        val a = debrid.active()
+        return com.aotv.app.data.remote.diagnoseNoSources(
+            facts = _uiState.value.movieFacts(),
+            debridActive = a != null,
+            debridLabel = a?.provider?.label.orEmpty(),
+        )
+    }
+
+    /**
+     * Índice da fonte do Assistir dentro de [UiState.stremioStreams]: o #1
+     * do ranking com score explicado (Lote 17). Sem fontes rankeadas, cai
+     * no melhor índice antigo.
+     */
+    fun bestSourceIndex(): Int =
+        rankedSources().firstOrNull()?.index
+            ?: com.aotv.app.data.remote.bestIndex(_uiState.value.movieFacts(), prefs.maxQuality)
 
     /** Extrai o stream do trailer (YouTube) p/ o ExoPlayer — toca até com embed bloqueado. null = falhou. */
     suspend fun trailerStream(): com.aotv.app.data.remote.YoutubeTrailer.TrailerStream? {

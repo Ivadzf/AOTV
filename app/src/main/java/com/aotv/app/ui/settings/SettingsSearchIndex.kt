@@ -38,6 +38,8 @@ object SettingsAnchors {
     const val STREAMS_SHEET = "streams-folha"
     const val STREAMS_BADGES = "streams-emblemas"
     const val STREAMS_PINNED = "streams-fixadas"
+    // Ranking de fontes (Lote 17, v1.27.0): preset, estratégia, idioma, ordem manual.
+    const val STREAMS_RANKING = "streams-ranking"
     // Conteúdo & Descoberta
     const val CONTENT_ADDONS = "conteudo-addons"
     const val CONTENT_STATUS = "conteudo-status"
@@ -411,6 +413,49 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("fixadas", "pin", "ordem", "fontes"),
         pageId = SettingsPageIds.Streams,
         anchor = SettingsAnchors.STREAMS_PINNED,
+    ),
+    // ── Ranking de fontes (Lote 17, v1.27.0) ─────────────────────────────
+    SettingOptionEntry(
+        title = "Preset de fontes",
+        sub = "Melhor imagem, Equilibrado ou Início rápido",
+        keywords = listOf("preset", "fontes", "ranking", "qualidade", "rápido"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    SettingOptionEntry(
+        title = "Estratégia do ranking",
+        sub = "Qualidade, rapidez, confiabilidade ou idioma primeiro",
+        keywords = listOf("estratégia", "ranking", "fontes", "score", "ordem"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    SettingOptionEntry(
+        title = "Idioma das fontes",
+        sub = "Todos, Dublado, Legendado ou Original",
+        keywords = listOf("idioma", "fontes", "dublado", "legendado", "original", "filtro"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    SettingOptionEntry(
+        title = "Ordem manual das fontes",
+        sub = "A ordem escolhida vale por cima do ranking",
+        keywords = listOf("ordem", "manual", "fontes", "ranking", "reordenar"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    SettingOptionEntry(
+        title = "Esconder o que o aparelho não toca",
+        sub = "Fontes com codec sem suporte não aparecem na lista",
+        keywords = listOf("codec", "AV1", "HEVC", "esconder", "fontes", "aparelho"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    SettingOptionEntry(
+        title = "Lembrar minha escolha por título",
+        sub = "A última fonte escolhida à mão ganha pontos no ranking",
+        keywords = listOf("lembrar", "escolha", "título", "fontes", "última"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
     ),
     // ── Conteúdo & Descoberta ────────────────────────────────────────────
     SettingOptionEntry(

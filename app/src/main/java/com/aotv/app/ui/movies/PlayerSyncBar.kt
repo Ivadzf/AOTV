@@ -37,7 +37,7 @@ internal fun SyncBar(
     onZero: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
-    /** true = ajusta o áudio próprio (só atrasa, 0 a +10 s); false = som de outra fonte (atrasa e adianta). */
+    /** true = ajusta o áudio próprio (−10 s a +10 s: − adianta o som atrasando o vídeo, + atrasa o som); false = som de outra fonte (atrasa e adianta). */
     ownAudio: Boolean = false,
 ) {
     BoxWithConstraints(
@@ -74,7 +74,7 @@ internal fun SyncBar(
                 SyncAction("Fechar", Modifier.weight(1f), onClose)
             }
             Text(
-                if (ownAudio) "Só atrasa o som (0 a +10 s). Para adiantar o som, use o som de outra fonte. Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido."
+                if (ownAudio) "− adianta o som (a imagem atrasa junto, e some por esse tempo no início) · + atrasa o som. Faixa −10 s a +10 s. Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido."
                 else "Voz antes da boca mexer, aumente (+). Voz depois, diminua (−). Segure para ir mais rápido.",
                 color = TextSecondary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally),
             )
