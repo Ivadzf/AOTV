@@ -2417,7 +2417,6 @@ private fun CastCard(member: com.aotv.app.domain.model.CastMember, onClick: () -
 }
 
 // ── Empty state for unavailable sources ───────────────────────────────────────
-@Composable
 /**
  * Sem fonte: o motivo real + o que fazer (Lote 17 item 7). O QR carrega o
  * mesmo diagnóstico em texto — a pessoa mostra a tela p/ pedir ajuda sem

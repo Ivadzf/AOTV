@@ -130,7 +130,10 @@ private class DelayRenderersFactory(
 ) : DefaultRenderersFactory(context) {
     @OptIn(UnstableApi::class)
     override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+        // buildAudioSink do super é @Nullable na Media3 1.6.0 — o fallback
+        // nunca roda na prática (o DefaultRenderersFactory sempre devolve um sink).
         val processor = delayProcessor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+            ?: DefaultAudioSink.Builder(context).build()
         return DefaultAudioSink.Builder(context)
             .setAudioProcessors(arrayOf(processor))
             .setEnableFloatOutput(enableFloatOutput)
