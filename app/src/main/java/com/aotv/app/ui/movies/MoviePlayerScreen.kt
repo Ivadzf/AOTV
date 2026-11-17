@@ -91,11 +91,13 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.aotv.app.data.kodi.kodiProxyHostnameVerifier
 import com.aotv.app.data.local.SubLangs
+import com.aotv.app.data.party.PartyPlayer
 import com.aotv.app.data.torrent.TorrentMagnet
 import com.aotv.app.data.torrent.Torrents
 import com.aotv.app.ui.common.ImmersiveFullscreen
 import com.aotv.app.ui.common.KeepScreenOn
 import com.aotv.app.ui.common.PostPlayRatingDialog
+import com.aotv.app.ui.settings.WatchPartyViewModel
 import com.aotv.app.ui.theme.*
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -267,6 +269,8 @@ fun MoviePlayerScreen(
     episodeVm: EpisodePlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     /** Prefs do player (Fase C): botões, tap-seek, boost, mini player, "A seguir". */
     playerPrefsVm: PlayerPrefsViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
+    /** Watch Party (Lote 19, v1.29.0): a sala comanda este player quando há sessão ativa. */
+    partyVm: WatchPartyViewModel = androidx.hilt.navigation.compose.hiltViewModel(),
     /** playId da rota (p/ o mini player reabrir esta mesma sessão ao expandir). */
     playId: Int = -1,
     /** Sessão minimizada a reutilizar (expandir do mini player, em vez de criar outra). */
@@ -320,6 +324,48 @@ fun MoviePlayerScreen(
             existingSession.minimizedByUser = false
             MiniPlayerState.clearStored()
         }
+    }
+    // Watch Party (Lote 19, v1.29.0): com sessão ativa, a sala comanda
+    // este player (posição/play/pause/velocidade) e mostra o overlay.
+    // O adaptador delega p/ o player atual da sessão (ExoPlayer ou cast).
+    val partyUiState by partyVm.ui.collectAsState()
+    val partyPlayer = remember(s) {
+        object : PartyPlayer {
+            override fun positionMs(): Long =
+                runCatching { s.currentPlayer().currentPosition }.getOrDefault(0L)
+
+            override fun isPlaying(): Boolean =
+                runCatching { s.currentPlayer().playWhenReady }.getOrDefault(false)
+
+            override fun durationMs(): Long =
+                runCatching { s.currentPlayer().duration }.getOrDefault(0L)
+                    .takeIf { it > 0L } ?: 0L
+
+            override fun seekTo(positionMs: Long) {
+                runCatching { s.currentPlayer().seekTo(positionMs) }
+            }
+
+            override fun setPlaying(playing: Boolean) {
+                runCatching { s.currentPlayer().playWhenReady = playing }
+            }
+
+            override fun setSpeed(rate: Float) {
+                runCatching { s.currentPlayer().setPlaybackSpeed(rate) }
+            }
+
+            override fun normalSpeed(): Float = s.speeds.getOrElse(s.speedIdx) { 1f }
+        }
+    }
+    LaunchedEffect(partyUiState.session) {
+        val partySession = partyUiState.session
+        if (partySession != null) {
+            partyVm.runtime.bindPlayer(partyPlayer, title, tmdbId)
+        } else {
+            partyVm.runtime.unbindPlayer()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { partyVm.runtime.unbindPlayer() }
     }
     // Prefs do player (Fase C): a tela lê os fluxos e entrega à sessão, que aplica
     // (mesmo padrão do `s.onBack = onBack` abaixo). Mudar nas Configurações aplica
@@ -810,12 +856,27 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         val url = sourceActions.getOrNull(sourcePanelIdx)?.stream?.url
         if (!url.isNullOrBlank()) markSourceTouched(url)
     }
-    // Transmitindo, o som vai pela TV. Desliga o da outra fonte.
-    LaunchedEffect(casting) { if (casting) dropExt() }
+    // Hear it (Lote 19 item 3, v1.29.0): transmitindo, o som da outra fonte NÃO
+    // desliga — vira o áudio do celular em outro idioma, seguindo a posição da
+    // TV (CastPlayer). O volume da TV é silenciado pelo sync e devolvido ao
+    // parar de transmitir (ver ExtAudioSync.reanchor). Ao parar, volta a
+    // seguir o player local. Sem som de outra fonte, nada muda.
+    LaunchedEffect(casting) {
+        val cp = castPlayer
+        if (casting && cp != null) {
+            if (extSync != null) {
+                extSync?.reanchor(cp)
+                toastMsg = "Ouvindo no celular em outro idioma — a TV mostra só a imagem. Ajuste fino em Ajustar sincronia."
+            }
+        } else if (!casting) {
+            extSync?.reanchor(exoPlayer)
+        }
+    }
     // Ao voltar ao título, religa o som da mesma fonte com o mesmo ajuste. As fontes podem
-    // chegar aos poucos (série), por isso tenta de novo a cada lista nova.
-    LaunchedEffect(readyUrl, currentSources) {
-        if (extRestored || extUrl != null || readyUrl == null || casting) return@LaunchedEffect
+    // chegar aos poucos (série), por isso tenta de novo a cada lista nova. Vale também
+    // transmitindo: o setExt usa o player atual (CastPlayer) como referência.
+    LaunchedEffect(readyUrl, currentSources, casting) {
+        if (extRestored || extUrl != null || readyUrl == null) return@LaunchedEffect
         val saved = progressVm.extAudio(extKey) ?: run { extRestored = true; return@LaunchedEffect }
         val s = currentSources.firstOrNull {
             it.url != streamUrl && extAudioBlock(it.url).isEmpty() && sourceSig(it, title) == saved.sig
@@ -1456,6 +1517,13 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
 
                 // Transmitindo p/ Chromecast: a mídia roda na TV; celular vira controle.
                 if (casting) CastingOverlay(title)
+
+                // Watch Party (Lote 19, v1.29.0): botão + painel da sala,
+                // só com sessão ativa (o overlay some sozinho sem sessão).
+                PartyPlayerOverlay(
+                    viewModel = partyVm,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                )
 
                 // Pular trechos (v1.8.1): aparece quando há um segmento ativo na posição
                 // atual (resumo/abertura/encerramento/pós-créditos dos serviços, ou o
@@ -2859,7 +2927,8 @@ class PlayerSession(
         extSync = null; extUrl = null; extHeld = false; syncBarOpen = false
         if (restoreOwn) restoreOwnAudioDelay()
     }
-    /** Liga o som de [src] com a imagem atual. [onDone] diz se deu certo. */
+    /** Liga o som de [src] com a imagem atual. [onDone] diz se deu certo. A referência
+     *  de posição é o player atual (local ou CastPlayer, no Hear it) — ver [currentPlayer]. */
     fun setExt(src: MoviePlayerSource, onDone: (Boolean) -> Unit) {
         dropExt(restoreOwn = false)
         val ext = ExoPlayer.Builder(context).setMediaSourceFactory(mediaSourceFactory(context)).build().apply {
@@ -2873,7 +2942,7 @@ class PlayerSession(
         }
         extUrl = src.url
         extSync = ExtAudioSync(
-            exoPlayer, ext, scope, audioDelay,
+            currentPlayer(), ext, scope, audioDelay,
             onHold = { extHeld = it },
             onReady = { if (extUrl == src.url) { saveExt(); onDone(true) } },
             onError = { msg ->
@@ -3796,7 +3865,9 @@ class PlayerSession(
             }
             add(TvPlayerAction(
                 src.label, true, ext == src.url, addon = src.addon, sub = sub, disabled = why.isNotBlank(), keepOpen = true,
-                header = if (i == 0) "Som de outra fonte (a imagem continua a atual)" else "", stream = src.stream,
+                // Hear it (Lote 19 item 3): transmitindo, o som da outra fonte sai
+                // no celular em outro idioma e a TV mostra só a imagem.
+                header = if (i == 0) (if (casting) "Ouvir no celular em outro idioma (a TV mostra só a imagem; o som segue a posição da TV, aproximada)" else "Som de outra fonte (a imagem continua a atual)") else "", stream = src.stream,
             ) {
                 if (why.isNotBlank()) { toastMsg = why; return@TvPlayerAction }
                 if (ext == src.url) return@TvPlayerAction
@@ -3811,7 +3882,8 @@ class PlayerSession(
         // outra fonte — aí ela abre a barra p/ o áudio próprio (só atrasa).
         add(TvPlayerAction(
             "Ajustar sincronia", false, false, header = "Sincronia do som",
-            sub = if (ext != null) audioDelayLabel(audioDelay) + "  ·  o filme continua tocando"
+            sub = if (ext != null && casting) audioDelayLabel(audioDelay) + "  ·  o som do celular segue a TV (posição aproximada; ajuste fino aqui)"
+            else if (ext != null) audioDelayLabel(audioDelay) + "  ·  o filme continua tocando"
             else audioDelayLabel(audioDelay) + "  ·  áudio da própria fonte (− adianta o som · + atrasa o som)",
         ) { syncBarOpen = true; controlsVisible = false })
     }
@@ -3935,7 +4007,7 @@ class PlayerSession(
             if (isPlaying) "Pausar" else "Assistir", main = true) { togglePlay() })
         if (subActions.isNotEmpty()) add(PlayerChipItem(WebPlayerIcons.Subtitles, "Legendas", active = subtitleOn || selectedSubUrl != null, id = "subs") { openDpadPanel("subs") })
         if (audioGroups.size > 1 || currentSources.size > 1)
-            add(PlayerChipItem(WebPlayerIcons.Audio, if (extUrl != null) "Som de outra fonte" else "Áudio", active = extUrl != null, id = "audio") { openDpadPanel("audio") })
+            add(PlayerChipItem(WebPlayerIcons.Audio, if (extUrl != null) (if (casting) "Ouvir no celular" else "Som de outra fonte") else "Áudio", active = extUrl != null, id = "audio") { openDpadPanel("audio") })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Sources, "Fontes", id = "sources") { openDpadPanel("sources") })
         if (type == "SERIES") {
             add(PlayerChipItem(WebPlayerIcons.Episodes, "Episódios", id = "episodes") { openDpadPanel("episodes") })

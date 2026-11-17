@@ -112,16 +112,20 @@ class HomeCustomizeViewModel @Inject constructor(
 
     /**
      * Destaque pode vir de qualquer fileira com pôster grande. Trailers, Gêneros, Novos
-     * episódios e coleções (cartões de pasta, não de título) não servem. Fileira de TV
-     * também não (Lote 16, v1.26.0): o destaque lê MovieItems de [addonRows] e o
-     * canal de TV não é um título do TMDB. Fileira On Demand também não (acréscimo
-     * v1.26.0): os itens vivem em [MoviesHomeViewModel.UiState.vodMovies]/vodSeries,
-     * não em [addonRows] — o destaque não os encontraria.
+     * episódios, Up Next do Trakt e coleções (cartões de pasta, não de título) não
+     * servem. Fileira de TV também não (Lote 16, v1.26.0): o destaque lê MovieItems
+     * de [addonRows] e o canal de TV não é um título do TMDB. Fileira On Demand
+     * também não (acréscimo v1.26.0): os itens vivem em
+     * [MoviesHomeViewModel.UiState.vodMovies]/vodSeries, não em [addonRows] — o
+     * destaque não os encontraria. Up Next também não (Lote 19 item 4, v1.29.0):
+     * os itens vivem em [MoviesHomeViewModel.UiState.traktUpNext], fora do
+     * [heroCandidates] — sem a exclusão, escolher a fileira como destaque
+     * deixava o herói vazio.
      */
     private fun isHeroable(r: HomeRowPref): Boolean =
         r.enabled && r.key != SystemRow.TRAILERS.key && r.key != SystemRow.GENRES.key &&
             r.key != SystemRow.NEW_EPISODES.key && r.key != SystemRow.VOD_MOVIES.key &&
-            r.key != SystemRow.VOD_SERIES.key && r.collectionId == null &&
+            r.key != SystemRow.VOD_SERIES.key && r.key != SystemRow.TRAKT_UP_NEXT.key && r.collectionId == null &&
             r.ref?.type != "tv" && r.ref?.type != "channel"
 
     private val onlyOn = MutableStateFlow(false)

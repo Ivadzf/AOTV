@@ -756,6 +756,24 @@ class MovieDetailViewModel @Inject constructor(
     }
 
     /**
+     * Motivo em PT-BR p/ a seção agregada quando o MDBList não devolveu
+     * nota (Lote 19, v1.29.0): a seção mostra o motivo em vez de sumir.
+     * Nunca inventa nota — só explica por que não há.
+     */
+    private fun mdbEmptyReason(lookup: com.aotv.app.data.remote.MdbRatingLookup, title: String, originalTitle: String): String {
+        lookup.apiError?.let { return mdbList.translateApiError(it) }
+        if (lookup.matchedTitle != null) {
+            return "O MDBList achou o título, mas nenhuma das fontes de nota ativadas tem nota para ele."
+        }
+        val original = originalTitle.trim()
+        return if (lookup.attemptedTitles.size > 1 && original.isNotBlank()) {
+            "O MDBList não achou “$title” nem pelo título original “$original”."
+        } else {
+            "O MDBList não achou “$title”."
+        }
+    }
+
+    /**
      * A nota exibida de filmes/séries pode vir do MDBList? Só quando a pref
      * de fonte permite ("auto" ou "mdblist" — "tmdb" força o TMDB) E o
      * MDBList está habilitado (chave configurada + ligado no perfil).
@@ -768,11 +786,16 @@ class MovieDetailViewModel @Inject constructor(
         if (title.isBlank()) return
         // Nota agregada (MDBList) + nota exibida: UMA só chamada p/ os dois
         // usos. Busca quando a seção agregada está ligada OU quando a nota
-        // exibida pode vir do MDBList; sem fonte com nota, fica null e a
-        // seção some / o TMDB assume como fallback (nunca inventa nota).
+        // exibida pode vir do MDBList; sem fonte com nota, fica null, a
+        // seção mostra o motivo (Lote 19) e o TMDB assume como fallback
+        // (nunca inventa nota).
         if ((prefs.detailShowAggregateRating || useMdbListRating()) && mdbList.isEnabled) {
             viewModelScope.launch {
-                mdbList.getRatings(title, year, isMovie).onSuccess { ratings ->
+                // Lote 19 (v1.29.0): getRatingsWithFallback tenta o título
+                // localizado e depois o original; sem nota, o motivo vai p/
+                // aggregateError e a seção o mostra em vez de sumir.
+                mdbList.getRatingsWithFallback(title, originalTitle, year, isMovie).onSuccess { lookup ->
+                    val ratings = lookup.ratings
                     val sources = ratings.mapNotNull { (source, value) ->
                         if (value == null) null else DetailSourceRating(source, normalizeSourceScore(source, value))
                     }
@@ -781,7 +804,9 @@ class MovieDetailViewModel @Inject constructor(
                         it.copy(
                             aggregateScore = if (prefs.detailShowAggregateRating) score else it.aggregateScore,
                             aggregateSources = if (prefs.detailShowAggregateRating) sources else it.aggregateSources,
-                            aggregateError = null,
+                            aggregateError = if (prefs.detailShowAggregateRating) {
+                                if (score != null) null else mdbEmptyReason(lookup, title, originalTitle)
+                            } else it.aggregateError,
                             // Nota exibida em 0–10 (mesma média da agregada).
                             // Sem nota MDBList p/ o título, displayRating fica
                             // null e a tela mostra a nota do TMDB.

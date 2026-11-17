@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -72,9 +73,10 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Hub das Configurações (redesign Lote 6, v1.15.0, formato Nuvio): busca no
- * topo, cartão do perfil e as 13 páginas em 8 cartões por grupo — Conta,
+ * topo, cartão do perfil e as 14 páginas em 8 cartões por grupo — Conta,
  * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações,
- * Acompanhamento e Conexão (VPN + Watch Party, Lote 10). Cada página é uma
+ * Acompanhamento e Conexão (VPN + Watch Party, Lote 10, + Social Hub,
+ * Lote 19). Cada página é uma
  * `?anchor=` opcional p/ a busca profunda — ver SettingsPages.kt).
  *
  * A busca profunda casa também cada OPÇÃO dentro das páginas (ver
@@ -285,7 +287,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 13 páginas. Os ids são as rotas `movies_settings/{id}`. */
+/** As 14 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -394,6 +396,14 @@ private val hubEntries = listOf(
         keywords = listOf("Watch Party", "assistir junto", "código", "convite", "sessão", "grupo", "sincronizar"),
         kidsHidden = true,
     ),
+    HubEntry(
+        id = SettingsPageIds.SocialHub,
+        title = "Social Hub",
+        sub = "Amigos, film night e couch match — tudo local",
+        icon = Icons.Default.People,
+        keywords = listOf("Social Hub", "amigos", "film night", "couch match", "assistir junto", "grupo", "noite de filme"),
+        kidsHidden = true,
+    ),
 )
 
 private val hubEntriesById = hubEntries.associateBy { it.id }
@@ -403,7 +413,8 @@ private val hubEntriesById = hubEntries.associateBy { it.id }
  * Conta (só o backup real — sem fingir sync), Aparência (com Diagnóstico,
  * Lote 11), Layout (Início, detalhes e streams, como o "Layout" do Nuvio),
  * Conteúdo & Descoberta, Reprodução (com Downloads), Integrações,
- * Acompanhamento (com Trackers) e Conexão (VPN + Watch Party, Lote 10).
+ * Acompanhamento (com Trackers) e Conexão (VPN + Watch Party, Lote 10, +
+ * Social Hub, Lote 19).
  * Sem "Notificações" (não existe no AOTV) e sem "Avançadas" (sem conteúdo
  * real) — grupos omitidos de propósito.
  */
@@ -415,7 +426,7 @@ private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),
     listOf(SettingsPageIds.Integracoes),
     listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
-    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty),
+    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub),
 )
 
 /** Resumo das configurações (.set-summary). Logo, versão e o estado do que importa. */

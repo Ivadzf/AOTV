@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 65
-        versionName    = "1.28.0"
+        versionCode    = 66
+        versionName    = "1.29.0"
         // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
         // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
         // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com
@@ -258,6 +258,17 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39")
     debugImplementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.1.0-39")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    // Watch Party real (Lote 19, v1.29.0): WebRTC P2P (voz, vídeo, canal de
+    // dados DTLS). `org.webrtc:google-webrtc` (1.0.32006) NÃO está mais no
+    // Maven Central (o Google parou de publicar; o JCenter morreu) — o
+    // sucessor mantido é `io.github.webrtc-sdk:android` (mesmo pacote
+    // `org.webrtc.*`, BSD-3), conferido no Maven Central em 2026-11-17:
+    // 150.7871.04 (M150, 24/out/2026). Custo: o AAR tem ~47 MB de nativo
+    // (4 ABIs); só arm64-v8a + armeabi-v7a entram no APK (ver abiFilters),
+    // mas o APK universal cresce na casa de +25–35 MB — é o preço do
+    // WebRTC de verdade (sem ele, não há voz/vídeo P2P).
+    implementation("io.github.webrtc-sdk:android:150.7871.04")
 
     testImplementation("junit:junit:4.13.2")
     // org.json de verdade nos testes de JVM (o do Android é só casca e lança "not mocked").

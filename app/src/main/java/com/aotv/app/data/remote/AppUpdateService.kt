@@ -274,11 +274,17 @@ fun parseUpdateFeed(json: JSONObject, supportedAbis: Array<String> = Build.SUPPO
 /**
  * Changelog embutido no app p/ a versão instalada ("What's new" sem
  * depender do feed — vale p/ quem atualiza por sideload do APK das
- * Actions, sem passar pela checagem). Só cobre o que este lote entrega
- * (itens 1 e 5 do Lote 18); o changelog completo da versão vive nas
- * notas da release / no feed. "" = versão sem notas embutidas.
+ * Actions, sem passar pela checagem). Só cobre o que este lote entrega;
+ * o changelog completo da versão vive nas notas da release / no feed.
+ * "" = versão sem notas embutidas.
  */
 fun embeddedChangelogFor(version: String): String = when (version.trim()) {
+    "1.29.0" -> "Novidades do Lote 19:\n" +
+        "• Watch Party: assista junto com sincronização real, voz, chat e reações.\n" +
+        "• Social Hub: amigos, film night e couch match — tudo local, sem servidor; \"Assistir junto\" abre a Watch Party em 1 toque.\n" +
+        "• \"Ver todos\" em cada fileira da Início: abre a grade com todos os itens.\n" +
+        "• Fix do MDBList: notas voltam a aparecer no detalhe, com o motivo quando não há nota.\n" +
+        "O changelog completo da versão está nas notas da release no GitHub."
     "1.28.0" -> "Novidades do Lote 18 (atualizador):\n" +
         "• Atualizador com SHA-256: o APK baixado tem o hash conferido antes de instalar; sem hash no feed, só o tamanho é conferido e a tela diz isso.\n" +
         "• APK da ABI do aparelho: baixa o APK arm64-v8a ou armeabi-v7a em vez do universal (~76 MB), quando a release trouxer o asset da ABI.\n" +

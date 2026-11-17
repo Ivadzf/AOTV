@@ -94,6 +94,18 @@ object SettingsAnchors {
     const val PARTY_JOIN = "party-entrar"
     const val PARTY_MEMBERS = "party-participantes"
     const val PARTY_SYNC = "party-sincronizacao"
+    // Watch Party real (Lote 19, v1.29.0, item 1): voz, câmera e relay TURN.
+    const val PARTY_VOICE = "party-voz"
+    const val PARTY_CAMERA = "party-camera"
+    const val PARTY_RELAY = "party-relay"
+    // Social Hub (Lote 19, v1.29.0, item 2): amigos, quer assistir, match,
+    // film night e a sessão ativa (que é da Watch Party — só espelhada aqui).
+    const val SOCIAL_ABOUT = "social-sem-servidor"
+    const val SOCIAL_SESSION = "social-sessao"
+    const val SOCIAL_FRIENDS = "social-amigos"
+    const val SOCIAL_WANTS = "social-quer-assistir"
+    const val SOCIAL_MATCH = "social-couch-match"
+    const val SOCIAL_FILM_NIGHT = "social-film-night"
     // Diagnóstico (Lote 11, v1.21.0)
     const val DIAG_DEVICE = "diagnostico-aparelho"
     const val DIAG_ADDONS = "diagnostico-addons"
@@ -1440,10 +1452,86 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Sincronização da Watch Party",
-        sub = "Play, pause e seek sincronizados — indisponível sem relay",
+        sub = "Play, pause e seek sincronizados via WebRTC",
         keywords = listOf("watch party", "sincronização", "sincronizar", "play", "pause", "seek"),
         pageId = SettingsPageIds.WatchParty,
         anchor = SettingsAnchors.PARTY_SYNC,
+        kidsHidden = true,
+    ),
+    // ── Watch Party real (Lote 19, v1.29.0, item 1) ───────────────────────
+    SettingOptionEntry(
+        title = "Voz da Watch Party",
+        sub = "Microfone e anel de quem fala",
+        keywords = listOf("watch party", "voz", "microfone", "falar", "anel"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_VOICE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Câmera da Watch Party",
+        sub = "Sua câmera na TV",
+        keywords = listOf("watch party", "câmera", "camera", "vídeo", "video"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_CAMERA,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Relay (TURN) da Watch Party",
+        sub = "Só quando o P2P direto falha",
+        keywords = listOf("watch party", "relay", "turn", "conexão", "p2p", "nat"),
+        pageId = SettingsPageIds.WatchParty,
+        anchor = SettingsAnchors.PARTY_RELAY,
+        kidsHidden = true,
+    ),
+    // ── Social Hub (Lote 19, v1.29.0, item 2) ────────────────────────────
+    // Sem servidor: amigos são lista local, o "quer assistir" é anotado à
+    // mão e a atividade só aparece dentro de uma Watch Party ativa.
+    SettingOptionEntry(
+        title = "Social Hub",
+        sub = "Amigos, film night e couch match — tudo local, sem servidor",
+        keywords = listOf("social", "amigos", "film night", "couch match", "assistir junto", "grupo"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_ABOUT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Amigos do Social Hub",
+        sub = "Lista local de amigos, só nomes",
+        keywords = listOf("social", "amigos", "adicionar amigo", "lista de amigos", "remover amigo"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_FRIENDS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "O que meus amigos querem assistir",
+        sub = "Títulos anotados à mão p/ cada amigo",
+        keywords = listOf("social", "quer assistir", "amigos", "anotar", "lista", "títulos"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_WANTS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Couch match",
+        sub = "Títulos que 2 ou mais amigos querem ver — assistir junto em 1 toque",
+        keywords = listOf("social", "couch match", "match", "amigos", "querem ver", "assistir junto", "combinar"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_MATCH,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Film night",
+        sub = "Agende a noite do filme com os amigos",
+        keywords = listOf("social", "film night", "noite de filme", "agendar", "amigos", "data", "hora"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_FILM_NIGHT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Assistir junto com amigos",
+        sub = "Cria a sessão da Watch Party a partir do match ou da film night",
+        keywords = listOf("social", "assistir junto", "watch party", "sessão", "código", "convite", "amigos"),
+        pageId = SettingsPageIds.SocialHub,
+        anchor = SettingsAnchors.SOCIAL_SESSION,
         kidsHidden = true,
     ),
     // ── Diagnóstico (Lote 11, v1.21.0) ────────────────────────────────────

@@ -7,23 +7,26 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
 /**
- * Watch Party (Lote 10, v1.20.0) — modelos, código e deep link.
+ * Watch Party (Lote 10, v1.20.0; sync real no Lote 19, v1.29.0) — modelos,
+ * código e deep link.
  *
  * Ideia portada do Tuvora (deep links `tuvora.co/party/` e
  * `tuvora://party/?code=`): uma sessão compartilhada por código, com
  * playback sincronizado (play/pause/seek). Reimplementada, sem copiar
  * código da fork (GPL-3.0).
  *
- * ── SINCRONIZAÇÃO INVIÁVEL SEM BACKEND ─────────────────────────────────
- * O play/pause/seek sincronizado entre aparelhos precisa de um relay:
- * alguém tem que receber o "pausei aos 12:34" de um participante e
- * entregar aos outros em tempo real (servidor, WebSocket ou sala P2P com
- * sinalização). O AOTV não tem servidor próprio, conta na nuvem nem
- * infra de sinalização — e esta frente não inventa um. O que existe:
- * gerar o código, entrar com o código, deep link `aotv://party/?code=` e
- * a tela da sessão. A sincronização em tempo real fica documentada como
- * inviável (ver [PARTY_SYNC_UNAVAILABLE_REASON]) até existir um relay.
- * Nenhum participante é simulado: sem backend, a sessão só mostra quem
+ * ── SINCRONIZAÇÃO (Lote 19) ─────────────────────────────────────────────
+ * O play/pause/seek sincronizado agora existe, via WebRTC P2P (ver
+ * [PartyRuntime]): o anfitrião é a verdade (posição + relógio com
+ * offsets por ping), os convidados seguem com "catch up" a 1,5× ou seek.
+ * A sinalização NÃO usa backend de terceiro: ou é a rede local (o
+ * anfitrião liga um servidor HTTP efêmero no próprio aparelho — ver
+ * [PartyLanServer]) ou é a troca manual de SDP (copiar e colar — ver
+ * [ManualSdp]). O que continua sem existir: servidor de sinalização
+ * hospedado, conta na nuvem e relay TURN embutido — o TURN é opcional e
+ * configurado pelo usuário (ver [PARTY_TURN_*] em PlatformPrefs). Sem
+ * TURN e com o P2P falhando, a conexão falha com o motivo honesto.
+ * Nenhum participante é simulado: sem conexão, a sessão só mostra quem
  * está NESTE aparelho (ver [WatchPartyStore.members]).
  */
 
@@ -51,17 +54,35 @@ data class PartySession(
     }
 }
 
-/** Alguém na sessão. Sem backend, só existe o participante local ([isSelf]). */
+/** Alguém na sessão. Sem conexão, só existe o participante local ([isSelf]). */
 data class PartyMember(val name: String, val isSelf: Boolean)
 
-/** Motivo exato da sincronização em tempo real estar indisponível (mostrado na tela, sem inventar). */
+/**
+ * Motivo da sincronização estar indisponível QUANDO a conexão direta
+ * falha e não há relay configurado (mostrado na tela, sem inventar).
+ * Com a sala conectada, a sincronização funciona (ver [PartyRuntime]).
+ */
 const val PARTY_SYNC_UNAVAILABLE_REASON =
-    "Sincronização indisponível: play, pause e seek sincronizados precisam " +
-        "de um servidor de relay, e o AOTV não tem um. O código e o convite " +
-        "funcionam, mas cada aparelho toca por conta própria por enquanto."
+    "Sincronização indisponível: a conexão direta falhou e não há relay " +
+        "(TURN) configurado. A sala funciona na mesma rede Wi-Fi ou com " +
+        "um TURN seu nas Configurações — sem servidor de terceiro no meio."
 
-/** Estado da sincronização. Sem relay, só existe INDISPONÍVEL. */
-enum class PartySyncState { UNAVAILABLE_NO_BACKEND }
+/** STUN público sem credencial (só descoberta de NAT — não é backend). */
+const val PARTY_STUN_URL = "stun:stun.l.google.com:19302"
+
+/** Estado da sincronização (vive no [PartyRuntime], não na sessão). */
+enum class PartySyncState {
+    /** Sem sala aberta. */
+    IDLE,
+    /** Sala aberta esperando gente (anfitrião na rede local). */
+    LOBBY,
+    /** Trocando SDP/ICE com o outro lado. */
+    CONNECTING,
+    /** Canal de dados aberto com pelo menos 1 participante. */
+    CONNECTED,
+    /** A conexão falhou (o motivo está em PartyRuntime.failureReason). */
+    FAILED,
+}
 
 object WatchParty {
     /** Esquema do deep link de convite (ver AndroidManifest.xml). */

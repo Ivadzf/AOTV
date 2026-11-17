@@ -9,16 +9,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Sessão da Watch Party (Lote 10, v1.20.0) — estado local.
+ * Sessão da Watch Party (Lote 10, v1.20.0; conexão real no Lote 19,
+ * v1.29.0) — estado local.
  *
  * A sessão vive na pref `party_session_v1` (JSON de
  * [PartySession], por perfil): código + papel + criação. É local e
- * efêmera — sair do app não avisa ninguém (não há ninguém p/ avisar sem
- * backend) e a sessão some ao sair dela na tela.
+ * efêmera — sair da sala apaga o código (ver [PartyRuntime.leaveParty]).
  *
- * Participantes: sem relay não há como saber quem mais está na sessão,
- * então [members] devolve SÓ quem está neste aparelho (o nome do perfil
- * ativo). Nenhum participante é inventado ou simulado.
+ * Participantes: sem conexão, [members] devolve SÓ quem está neste
+ * aparelho (o nome do perfil ativo). Com a sala conectada, quem manda
+ * nos membros é o [PartyRuntime] (a tela lê de lá). Nenhum participante
+ * é inventado ou simulado.
  */
 @Singleton
 class WatchPartyStore @Inject constructor(
@@ -35,13 +36,6 @@ class WatchPartyStore @Inject constructor(
 
     /** Sessão atual, ou null sem sessão. */
     val session: PartySession? get() = _session.value
-
-    /**
-     * Estado da sincronização em tempo real. Sempre INDISPONÍVEL: sem
-     * relay não há como sincronizar play/pause/seek (ver
-     * [PARTY_SYNC_UNAVAILABLE_REASON]).
-     */
-    val syncState: PartySyncState get() = PartySyncState.UNAVAILABLE_NO_BACKEND
 
     /** Nome de quem está neste aparelho (o nome do perfil ativo). */
     val localName: String get() = prefs.profile.name.trim().ifBlank { "Você" }

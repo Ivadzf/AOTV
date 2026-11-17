@@ -141,12 +141,15 @@ fun UpcomingRow(
     onEpisodeClick: (CalendarEntry) -> Unit,
     onPlayGame: (SportsGame) -> Unit,
     onRecordGame: (SportsGame) -> Unit,
+    /** "Ver tudo" (Lote 19, v1.29.0): abre a grade com todos os episódios e jogos. null = sem link. */
+    onSeeMore: (() -> Unit)? = null,
 ) {
     if (episodes.isEmpty() && games.isEmpty()) return
     val today = todayMs()
     Column {
         com.aotv.app.ui.common.SectionHeader(
             title = "Próximos",
+            action = onSeeMore?.let { seeMore -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", seeMore) } },
             underline = display.sectionUnderline,
             compact = display.compact,
         )
@@ -185,51 +188,70 @@ fun UpcomingRow(
             }
             if (sportsShow) {
                 items(games, key = { "game:${it.channelId}:${it.startMs}" }) { game ->
-                    val live = game.isNow(now)
-                    val program = LiveProgram(game.startMs, game.stopMs, game.title, game.desc)
-                    val score = if (live) visibleScore(program, now, hideScores, scoreDelaySec) else null
-                    Column(
-                        Modifier.width(300.dp).height(96.dp)
-                            .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (live) {
-                                Box(
-                                    Modifier.clip(RoundedCornerShape(6.dp)).background(Accent)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                ) {
-                                    Text("AO VIVO", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
-                                }
-                            } else {
-                                Text(upcomingHhmm(game.startMs), color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                            Text(game.channelName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        Text(game.title, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (score != null) {
-                                Text("Placar: $score", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                            } else {
-                                Box(Modifier.weight(1f))
-                            }
-                            TextButton(onClick = { onRecordGame(game) }) {
-                                Text("Gravar", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-                            TextButton(onClick = { onPlayGame(game) }) {
-                                Text("Assistir", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+                    UpcomingGameCard(game, now, hideScores, scoreDelaySec, onPlayGame, onRecordGame)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Cartão de jogo da fileira "Próximos" (Lote 19, v1.29.0): extraído p/ ser
+ * o MESMO cartão na fileira e na grade "Ver tudo" — "Assistir" abre o ao
+ * vivo e "Gravar" agenda a gravação, nos dois lugares. Na fileira o cartão
+ * tem 300dp de largura; na grade ocupa a largura toda.
+ */
+@Composable
+internal fun UpcomingGameCard(
+    game: SportsGame,
+    now: Long,
+    hideScores: Boolean,
+    scoreDelaySec: Int,
+    onPlayGame: (SportsGame) -> Unit,
+    onRecordGame: (SportsGame) -> Unit,
+    modifier: Modifier = Modifier.width(300.dp).height(96.dp),
+) {
+    val live = game.isNow(now)
+    val program = LiveProgram(game.startMs, game.stopMs, game.title, game.desc)
+    val score = if (live) visibleScore(program, now, hideScores, scoreDelaySec) else null
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (live) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(6.dp)).background(Accent)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text("AO VIVO", color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            } else {
+                Text(upcomingHhmm(game.startMs), color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+            Text(game.channelName, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(game.title, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (score != null) {
+                Text("Placar: $score", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+            } else {
+                Box(Modifier.weight(1f))
+            }
+            TextButton(onClick = { onRecordGame(game) }) {
+                Text("Gravar", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            TextButton(onClick = { onPlayGame(game) }) {
+                Text("Assistir", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

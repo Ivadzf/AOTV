@@ -23,13 +23,21 @@ enum class SystemRow(val key: String, val label: String, val catalog: Boolean) {
      * perfil infantil não as vê (o carregamento barra em [MoviesHomeViewModel.loadVodRows]).
      */
     VOD_MOVIES("sys:vod_movies", "Filmes On Demand", false),
-    VOD_SERIES("sys:vod_series", "Séries On Demand", false);
+    VOD_SERIES("sys:vod_series", "Séries On Demand", false),
+    /**
+     * Up Next do Trakt (Lote 19 item 4, v1.29.0): o próximo episódio de cada
+     * série em andamento no Trakt (derivado de séries vistas + progresso, ver
+     * TraktService.getUpNext — o Trakt não tem endpoint de "up next").
+     * [catalog] = false: é do progresso, não some quando o catálogo AOTV
+     * desliga (mas precisa do TMDB p/ os pôsteres, como Novos episódios).
+     */
+    TRAKT_UP_NEXT("sys:trakt_up_next", "Up Next — Trakt", false);
 
     companion object {
         fun of(key: String): SystemRow? = entries.firstOrNull { it.key == key }
         /** Antes das fileiras de addon, igual à Início de antes da personalização. */
         val HEAD = listOf(CONTINUE, NEW_EPISODES)
-        val TAIL = listOf(VOD_MOVIES, VOD_SERIES, RECOMMENDED, TRAILERS, TRENDING_MOVIES, TRENDING_TV, NOW_PLAYING, RELEASES, GENRES)
+        val TAIL = listOf(VOD_MOVIES, VOD_SERIES, TRAKT_UP_NEXT, RECOMMENDED, TRAILERS, TRENDING_MOVIES, TRENDING_TV, NOW_PLAYING, RELEASES, GENRES)
     }
 }
 

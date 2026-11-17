@@ -434,6 +434,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
                     subs = state.newEpisodes.associate { it.item.tmdbId to it.sub },
                 )
             }
+            // Up Next do Trakt (Lote 19 item 4): mesmo formato de Novos
+            // episódios (selo "T3 E2" + nome do episódio). Sem "Ver tudo"
+            // (lista curta e derivada, sem grade p/ paginar).
+            SystemRow.TRAKT_UP_NEXT -> if (state.traktUpNext.isNotEmpty()) item(key = row.key) {
+                PosterRail(
+                    row.displayTitle, state.traktUpNext.map { it.item }, onItemClick, onFocus,
+                    badges = state.traktUpNext.associate { it.item.tmdbId to it.badge },
+                    subs = state.traktUpNext.associate { it.item.tmdbId to it.sub },
+                )
+            }
             SystemRow.RECOMMENDED -> if (state.recommended.isNotEmpty()) item(key = row.key) {
                 PosterRail(row.title.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, state.recommended, onItemClick, onFocus)
             }

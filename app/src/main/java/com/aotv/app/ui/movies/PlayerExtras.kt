@@ -142,6 +142,30 @@ internal fun driftSpeed(errMs: Long, speed: Float): Float? {
     return Math.round(speed * (1 - c) * 200) / 200f
 }
 
+// ── Hear it in your language (Lote 19 item 3, v1.29.0) ────────────────────
+
+/**
+ * Posição-alvo do som do celular p/ a posição [tvPositionMs] da TV e o
+ * atraso [delaySec] (mesmo sinal do som de outra fonte: + atrasa o som).
+ * É o `target()` do [ExtAudioSync] sem player: a TV (CastPlayer) só
+ * entrega a posição aproximada do receiver, então o alvo é aproximado e
+ * a correção de deriva ([driftSpeed]) + o ajuste fino da SyncBar fazem o
+ * resto. Nunca negativo.
+ */
+internal fun hearItTargetMs(tvPositionMs: Long, delaySec: Double): Long =
+    (tvPositionMs - (delaySec * 1000).roundToLong()).coerceAtLeast(0L)
+
+/** Erro do som do celular em relação ao alvo: positivo = som adiantado. */
+internal fun hearItDriftMs(audioPositionMs: Long, tvPositionMs: Long, delaySec: Double): Long =
+    audioPositionMs - hearItTargetMs(tvPositionMs, delaySec)
+
+/**
+ * Fora da faixa que a correção de velocidade cobre (±300 ms, ver
+ * [driftSpeed]): aí o som pula direto p/ o alvo em vez de acelerar ou
+ * frear. O mesmo teto do som de outra fonte local.
+ */
+internal fun hearItNeedsJump(driftMs: Long): Boolean = abs(driftMs) > 300
+
 // ── Legenda externa ───────────────────────────────────────────────────────────
 
 /** Uma fala da legenda, em ms. */
@@ -181,9 +205,21 @@ internal fun cueAt(cues: List<SubCue>, posMs: Long, delayMs: Long): String {
  * de 0,3 s de diferença pula, abaixo muda a velocidade do som em poucos por cento até alinhar.
  * Se o som precisar carregar, a imagem espera ([onHold]). O principal fica mudo depois que
  * o som da outra fonte entra.
+ *
+ * Hear it (Lote 19 item 3, v1.29.0): [main] é um [Player] qualquer, não só o ExoPlayer
+ * local — ao transmitir, o [reanchor] troca a referência p/ o CastPlayer e o som continua
+ * no celular, em outro idioma, seguindo a posição da TV. O volume do [main] é guardado
+ * antes de silenciar e devolvido na saída (a TV não fica muda p/ sempre nem volta a 100%).
+ *
+ * Limites honestos do Hear it (a UI diz isso): a posição do CastPlayer é a aproximada
+ * que o receiver reporta (atualizada ~1x/s e extrapolada entre leituras), então a
+ * sincronia é aproximada — a correção de deriva e o ajuste fino da SyncBar (±10 s)
+ * mantêm o som perto, mas não há sample-accuracy entre dois aparelhos. Sem Chromecast
+ * (TV com o app AOTV direto), não há canal vivo entre celular e TV: o som de outra
+ * fonte só vale no mesmo aparelho — o pareamento celular↔TV é do Lote 22 (remoto).
  */
 class ExtAudioSync(
-    private val main: ExoPlayer,
+    private var main: Player,
     private val ext: ExoPlayer,
     scope: CoroutineScope,
     delaySec: Double,
@@ -199,6 +235,8 @@ class ExtAudioSync(
     // O som leva uns 300 ms para voltar a sair depois de um pulo com a imagem andando. O pulo
     // mira esse tanto à frente, e o valor se ajusta pelo erro medido depois de cada pulo.
     private var lead = 0L
+    /** Volume do [main] antes de o som externo entrar (p/ devolver na saída). */
+    private var prevVolume = runCatching { main.volume }.getOrDefault(1f)
 
     private fun target() = main.currentPosition - delayMs
 
@@ -229,7 +267,7 @@ class ExtAudioSync(
                 }
                 ready = true
                 android.util.Log.i("ExtAudio", "som pronto em ${ext.currentPosition} ms")
-                main.volume = 0f
+                runCatching { main.volume = 0f }
                 seekExt()
                 hold(false)
                 onReady()
@@ -267,7 +305,8 @@ class ExtAudioSync(
     private fun tick() {
         if (!ready) return
         val t = target()
-        val speed = main.playbackParameters.speed
+        // CastPlayer pode não ter velocidade (receiver sem suporte): 1x, sem quebrar o loop.
+        val speed = runCatching { main.playbackParameters.speed }.getOrDefault(1f)
         // Imagem tocando e o som travou carregando depois de um pulo feito com o vídeo parado.
         if (main.isPlaying && !held && ext.playbackState == Player.STATE_BUFFERING) { hold(true); return }
         val play = main.isPlaying && !held && t >= 0
@@ -297,6 +336,30 @@ class ExtAudioSync(
         if (ready) seekExt()
     }
 
+    /**
+     * Troca o player de referência sem recriar o som (Hear it, Lote 19 item 3):
+     * local → CastPlayer ao transmitir, e de volta ao parar de transmitir. O som
+     * continua no mesmo [ext]; só a referência de posição muda. O volume do player
+     * antigo volta (a TV não fica muda) e o novo é silenciado quando o som já está
+     * pronto — a TV mostra só a imagem e o celular toca o áudio do outro idioma.
+     * Não mexe no playWhenReady do player antigo: a tela é dona dele (o Cast já
+     * pausa o local ao transmitir e o retoma ao parar). Sem efeito se morto ou se
+     * o novo é o mesmo de antes.
+     */
+    fun reanchor(newMain: Player) {
+        if (dead || newMain === main) return
+        main.removeListener(mainL)
+        runCatching { main.volume = prevVolume }
+        main = newMain
+        prevVolume = runCatching { newMain.volume }.getOrDefault(1f)
+        newMain.addListener(mainL)
+        if (ready) {
+            runCatching { newMain.volume = 0f }
+            seekExt()
+            hold(false)
+        }
+    }
+
     private fun fail(msg: String) {
         if (dead) return
         android.util.Log.i("ExtAudio", "falhou $msg")
@@ -312,7 +375,7 @@ class ExtAudioSync(
         main.removeListener(mainL)
         ext.removeListener(extL)
         runCatching { ext.release() }
-        main.volume = 1f
+        runCatching { main.volume = prevVolume }
         if (held) { held = false; main.playWhenReady = true; onHold(false) }
     }
 }

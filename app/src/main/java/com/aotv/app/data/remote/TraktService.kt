@@ -180,6 +180,37 @@ data class TraktWatchedShow(
     @SerializedName("seasons") val seasons: List<TraktWatchedSeason>? = null,
 )
 
+/** Próximo episódio de uma série (GET /shows/{id}/progress/watched). */
+data class TraktNextEpisode(
+    @SerializedName("season") val season: Int = 0,
+    @SerializedName("number") val number: Int = 0,
+    @SerializedName("title") val title: String? = null,
+)
+
+/** Progresso de uma série (GET /shows/{id}/progress/watched). Só o que a
+ *  fileira Up Next lê: o próximo episódio. `completed`/`aired` ficam p/
+ *  depuração futura — nunca inventados como "assistido". */
+data class TraktShowProgress(
+    @SerializedName("aired") val aired: Int = 0,
+    @SerializedName("completed") val completed: Int = 0,
+    @SerializedName("next_episode") val nextEpisode: TraktNextEpisode? = null,
+)
+
+/**
+ * Um item da fileira "Up Next": o próximo episódio de uma série em
+ * andamento no Trakt. Não é um endpoint do Trakt — é DERIVADO (ver
+ * [TraktService.getUpNext]): séries vistas + progresso de cada uma.
+ */
+data class TraktUpNextItem(
+    val tmdbId: Int,
+    val traktId: Int,
+    val title: String,
+    val year: Int?,
+    val season: Int,
+    val episode: Int,
+    val episodeTitle: String?,
+)
+
 data class TraktWatchedSeason(
     @SerializedName("number") val number: Int = 0,
     @SerializedName("episodes") val episodes: List<TraktWatchedEpisode>? = null,
@@ -357,6 +388,19 @@ private interface TraktApi {
         @Header("Authorization") auth: String,
         @Header("trakt-api-key") key: String,
     ): List<TraktWatchedShow>
+
+    /** Progresso de uma série (Lote 19 item 4, v1.29.0): o próximo episódio
+     *  não visto. Séries terminadas e séries sem episódio exibido devolvem
+     *  `next_episode` null — nunca um episódio inventado. */
+    @GET("shows/{id}/progress/watched")
+    suspend fun getShowProgressWatched(
+        @Header("Authorization") auth: String,
+        @Header("trakt-api-key") key: String,
+        @Path("id") traktId: Int,
+        @Query("hidden") hidden: Boolean = false,
+        @Query("specials") specials: Boolean = false,
+        @Query("count_specials") countSpecials: Boolean = false,
+    ): TraktShowProgress
 
     // ── Comentários (públicos: só client_id, sem login) ──────────────────
     @GET("search/tmdb/{id}")
@@ -841,6 +885,46 @@ class TraktService @Inject constructor(
     suspend fun clearPlayback(id: Long): Result<Unit> = runCatching {
         require(isConnected) { "Trakt não conectado" }
         withAuth { auth, key -> api.deletePlayback(auth, key, id).checkOk() }
+    }
+
+    // ── Up Next (Lote 19 item 4, v1.29.0) ─────────────────────────────────
+    // O Trakt NÃO tem endpoint de "up next" (nem /shows/next_episode, que é
+    // o próximo a EXIBIR, nem lista pronta de próximos a assistir). A fileira
+    // é DERIVADA: séries vistas (GET /sync/watched/shows) + progresso de cada
+    // uma (GET /shows/{id}/progress/watched, que devolve next_episode). Uma
+    // série por chamada de progresso — [limit] é o teto (padrão 10) e também
+    // o teto de chamadas, p/ não martelar a API. Série sem id do TMDB, série
+    // terminada (next_episode null) ou progresso que falhou NÃO entram — a
+    // fileira fica menor, nunca inventada. Só entram séries com ao menos 1
+    // episódio visto no Trakt: série começada sem episódio marcado não tem
+    // como ser descoberta por aqui. Ordem: a que o Trakt devolve em
+    // /sync/watched/shows (vistos por último primeiro). Erro de rede/HTTP
+    // propaga como Result failure — a tela esconde a fileira, sem "vazia"
+    // inventada.
+
+    suspend fun getUpNext(limit: Int = 10): Result<List<TraktUpNextItem>> = runCatching {
+        require(isConnected) { "Trakt não conectado" }
+        val max = limit.coerceIn(1, 20)
+        val watched = withAuth { auth, key -> api.getWatchedShows(auth, key) }
+        val out = ArrayList<TraktUpNextItem>()
+        for (show in watched) {
+            if (out.size >= max) break
+            val ref = show.show ?: continue
+            val traktId = ref.ids?.trakt ?: continue
+            val tmdbId = ref.ids?.tmdb ?: 0
+            if (tmdbId <= 0) continue
+            val progress = runCatching {
+                withAuth { auth, key -> api.getShowProgressWatched(auth, key, traktId) }
+            }.getOrNull() ?: continue
+            val next = progress.nextEpisode ?: continue
+            if (next.season <= 0 || next.number <= 0) continue
+            out += TraktUpNextItem(
+                tmdbId = tmdbId, traktId = traktId,
+                title = ref.title.orEmpty(), year = ref.year,
+                season = next.season, episode = next.number, episodeTitle = next.title,
+            )
+        }
+        out
     }
 
     // ── Comentários / avaliações (Lote 8, v1.18.0) ─────────────────────────

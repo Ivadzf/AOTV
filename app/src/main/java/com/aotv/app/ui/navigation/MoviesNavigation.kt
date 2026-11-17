@@ -593,6 +593,10 @@ fun MoviesNavigation(
                         // partir de Integrações → Multiview e canais.
                         onOpenLiveChannels = { navController.navigate(MoviesRoute.LiveChannelsManage.route) },
                         onOpenCollections = { navController.navigate(MoviesRoute.Collections.route) },
+                        // Lote 19 (v1.29.0, item 2 — Social Hub): "Assistir
+                        // junto" abre a tela da Watch Party (a sessão é do
+                        // bloco dela; o hub só navega p/ lá).
+                        onOpenWatchParty = { navController.navigate(MoviesRoute.SettingsPage.create(com.aotv.app.ui.settings.SettingsPageIds.WatchParty)) },
                     )
                 }
             }

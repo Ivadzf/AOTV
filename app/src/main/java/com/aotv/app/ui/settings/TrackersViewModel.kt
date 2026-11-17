@@ -42,6 +42,8 @@ data class TrackersUiState(
     val mdbSources: Set<String> = emptySet(),
     val mdbMessage: String? = null,
     val mdbError: String? = null,
+    // Lote 19 (v1.29.0): "Testar chave" em andamento.
+    val mdbTesting: Boolean = false,
     // AniList (v1.17.0, OAuth por deep link aotv://anilist/callback).
     val aniClientId: String = "",
     val aniConnected: Boolean = false,
@@ -321,6 +323,38 @@ class TrackersViewModel @Inject constructor(
     fun setMdbEnabled(on: Boolean) {
         mdbList.setEnabled(on)
         _ui.update { it.copy(mdbEnabled = mdbList.isEnabled) }
+    }
+
+    /**
+     * Testa a chave digitada (pode ainda não estar salva) contra o MDBList
+     * (Lote 19, v1.29.0): busca conhecida ("Dune", 2021) só p/ validar a
+     * chave — o resultado vai p/ mdbMessage/mdbError, que a tela já exibe
+     * em banner. Sem a chave salva, avisa p/ salvar; com a chave salva mas
+     * o toggle desligado neste perfil, avisa p/ ativar.
+     */
+    fun testMdbApiKey(key: String) {
+        val trimmed = key.trim()
+        if (trimmed.isBlank()) {
+            _ui.update { it.copy(mdbError = "Cole a chave de API do MDBList antes de testar.", mdbMessage = null) }
+            return
+        }
+        viewModelScope.launch {
+            _ui.update { it.copy(mdbTesting = true, mdbMessage = null, mdbError = null) }
+            val result = mdbList.testApiKey(trimmed)
+            val extra = buildList {
+                if (trimmed != mdbList.apiKey) add("Toque em “Salvar chave do MDBList” para usar esta chave.")
+                if (trimmed == mdbList.apiKey && !mdbList.isEnabled) add("O MDBList está desligado neste perfil — ative o interruptor acima para ver as notas.")
+            }
+            _ui.update {
+                it.copy(
+                    mdbTesting = false,
+                    mdbMessage = result.getOrNull()?.let { msg ->
+                        if (extra.isEmpty()) msg else "$msg ${extra.joinToString(" ")}"
+                    },
+                    mdbError = result.exceptionOrNull()?.message,
+                )
+            }
+        }
     }
 
     /** Liga/desliga uma fonte de nota (IMDb, TMDB, Trakt, Letterboxd, Rotten Tomatoes, Metacritic). */

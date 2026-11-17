@@ -213,6 +213,15 @@ internal val SCOPED_KEYS = listOf(
     // (código + papel). Sem servidor, sem segredo: o código expira ao sair
     // da sessão.
     "party_session_v1",
+    // Lote 19 — Watch Party real (v1.29.0): voz, câmera e catch-up
+    // automático a 1,5× (por perfil). O relay TURN é DO APARELHO (ver as
+    // vars partyTurn* abaixo) e NÃO entra aqui (não vai p/ backup/sync).
+    "party_voice_v1", "party_camera_v1", "party_catchup_v1",
+    // Lote 19 — Social Hub (v1.29.0, item 2): amigos locais (só nomes),
+    // "quer assistir" anotado à mão e film nights agendadas. Tudo por
+    // perfil, sem segredo (só nomes e títulos, nenhuma credencial) e sem
+    // servidor: a atividade ao vivo não existe fora de uma Watch Party.
+    "social_friends_v1", "social_wants_v1", "social_film_nights_v1",
     // Lote 14 (v1.24.0) — Descobrir com catálogos dos addons: o catálogo escolhido
     // ("addonId|type|id", vazio = TMDB). Só a escolha, sem credencial.
     "pref_discover_catalog_v1",
@@ -954,6 +963,61 @@ class PlatformPrefs @Inject constructor(
     var partySessionJson: String
         get() = prefs.getString(sk("party_session_v1"), "") ?: ""
         set(value) { prefs.edit().putString(sk("party_session_v1"), value).apply() }
+
+    /** Microfone da Watch Party ligado neste perfil (padrão: ligado). */
+    var partyVoiceEnabled: Boolean
+        get() = prefs.getBoolean(sk("party_voice_v1"), true)
+        set(value) { prefs.edit().putBoolean(sk("party_voice_v1"), value).apply() }
+
+    /** Câmera da Watch Party ligada neste perfil (padrão: desligada). */
+    var partyCameraEnabled: Boolean
+        get() = prefs.getBoolean(sk("party_camera_v1"), false)
+        set(value) { prefs.edit().putBoolean(sk("party_camera_v1"), value).apply() }
+
+    /** "Catch up" automático a 1,5× ligado neste perfil (padrão: ligado). */
+    var partyCatchUpEnabled: Boolean
+        get() = prefs.getBoolean(sk("party_catchup_v1"), true)
+        set(value) { prefs.edit().putBoolean(sk("party_catchup_v1"), value).apply() }
+
+    // ── Lote 19 — Relay TURN da Watch Party (v1.29.0, DO APARELHO) ───────
+    // Conta de TURN DO USUÁRIO (URL + usuário + senha), colada por ele em
+    // Configurações. Vazio = sem relay (a sala só funciona em P2P direto:
+    // mesma rede Wi-Fi ou NAT aberto). NUNCA há valor embutido. NÃO vai p/
+    // SCOPED_KEYS (não viaja no backup/sync) e NÃO é lida por nenhuma
+    // outra frente: só o PartyCallManager monta os ICE servers com ela.
+    /** URL do TURN do usuário (ex.: turn:seu-servidor:3478). "" = sem relay. */
+    var partyTurnUrl: String
+        get() = prefs.getString("party_turn_url_v1", "") ?: ""
+        set(value) { prefs.edit().putString("party_turn_url_v1", value.trim()).apply() }
+
+    /** Usuário do TURN do usuário. "" = sem autenticação. */
+    var partyTurnUsername: String
+        get() = prefs.getString("party_turn_username_v1", "") ?: ""
+        set(value) { prefs.edit().putString("party_turn_username_v1", value.trim()).apply() }
+
+    /** Senha do TURN do usuário. "" = sem autenticação. */
+    var partyTurnPassword: String
+        get() = prefs.getString("party_turn_password_v1", "") ?: ""
+        set(value) { prefs.edit().putString("party_turn_password_v1", value).apply() }
+
+    // ── Lote 19 — Social Hub (v1.29.0, item 2) ───────────────────────────
+    // Amigos locais, "quer assistir" e film nights (JSON arrays, por
+    // perfil — ver SocialHubStore). Sem segredo: só nomes e títulos.
+
+    /** Amigos locais (JSON array de SocialFriend). "[]" = nenhum amigo. */
+    var socialFriendsJson: String
+        get() = prefs.getString(sk("social_friends_v1"), "[]") ?: "[]"
+        set(value) { prefs.edit().putString(sk("social_friends_v1"), value).apply() }
+
+    /** Títulos que os amigos querem assistir (JSON array de FriendWant). "[]" = nenhum. */
+    var socialWantsJson: String
+        get() = prefs.getString(sk("social_wants_v1"), "[]") ?: "[]"
+        set(value) { prefs.edit().putString(sk("social_wants_v1"), value).apply() }
+
+    /** Film nights agendadas (JSON array de FilmNight). "[]" = nenhuma. */
+    var socialFilmNightsJson: String
+        get() = prefs.getString(sk("social_film_nights_v1"), "[]") ?: "[]"
+        set(value) { prefs.edit().putString(sk("social_film_nights_v1"), value).apply() }
 
     // ── Fase D — trackers, Discord e servidores de mídia (por perfil) ─────────
     // Sessões em JSON cru, como o Trakt. IDs/chaves são configuráveis pelo usuário

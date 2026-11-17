@@ -119,6 +119,25 @@ fun MoviesHomeScreen(
     val seeMore = remember(viewModel) { { q: MoviesHomeViewModel.CatalogQuery -> viewModel.openCatalog(q) } }
     val playTrailerFn = remember { { card: MoviesHomeViewModel.TrailerCard -> playTrailer(card) } }
 
+    // Coleções do perfil (p/ a grade "Ver Tudo" de pastas, Lote 19).
+    val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
+    // Data de hoje p/ "Ocultar conteúdo não lançado" nas grades (o mesmo
+    // filtro das fileiras, via [isUnreleased]).
+    val today = remember(state.hideUnreleased) { todayIso() }
+    // Gravação de jogo (Lote 8): o botão "Gravar" do card — da fileira e da
+    // grade "Ver Tudo" de Próximos — abre o diálogo. O estado vive aqui (e
+    // não na HomeSectionsTab) porque a grade é irmã da fileira, não filha.
+    var recordGame by remember { mutableStateOf<SportsGame?>(null) }
+    recordGame?.let { game ->
+        RecordProgramDialog(
+            channelId = game.channelId, channelName = game.channelName, channelUrl = game.channelUrl,
+            channelHeaders = game.channelHeaders, programTitle = game.title,
+            startMs = game.startMs, stopMs = game.stopMs,
+            onDismiss = { recordGame = null },
+            onScheduled = { recordGame = null },
+        )
+    }
+
     // SEM bottom bar aqui — a barra é a única do MoviesNavigation (Início, Descobrir, Minha Lista, Downloads, Busca e Config).
     Box(Modifier.fillMaxSize().background(Background)) {
         when {
@@ -133,6 +152,39 @@ fun MoviesHomeScreen(
                 androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
                 CatalogGridView(state, viewModel, gridMode.title, onItemClick, onBack = { viewModel.closeCatalog() })
             }
+            // Grades "Ver Tudo" de fileira que não é TMDB (Lote 19, v1.29.0):
+            // addon, TV de addon, lista local, trailers, coleção e próximos.
+            // O BACK fecha a grade em vez de sair da home, como no grid TMDB.
+            state.addonGridKey != null -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                AddonGridView(state, viewModel, state.addonGridTitle, today, onItemClick, onBack = { viewModel.closeCatalog() })
+            }
+            state.tvGridKey != null -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                TvGridView(state, viewModel, state.tvGridTitle, onPlayLive, onBack = { viewModel.closeCatalog() })
+            }
+            state.localGrid != null -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                LocalGridView(state, state.localGrid, today, onItemClick, onBack = { viewModel.closeCatalog() })
+            }
+            state.trailersGrid -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                TrailersGridView(state, viewModel, playTrailerFn, onBack = { viewModel.closeCatalog() })
+            }
+            state.collectionGridId != null -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                CollectionGridView(state, collections, state.collectionGridId, onFolderClick, onBack = { viewModel.closeCatalog() })
+            }
+            state.upcomingGrid -> {
+                androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
+                UpcomingGridView(
+                    state = state,
+                    onEpisodeClick = { entry -> onItemClick(upcomingEpisodeItem(entry)) },
+                    onPlayGame = { game -> onPlayLive(game.channelId) },
+                    onRecordGame = { game -> recordGame = game },
+                    onBack = { viewModel.closeCatalog() },
+                )
+            }
             else -> HomeSectionsTab(
                 state = state, viewModel = viewModel, onItemClick = onItemClick,
                 onSearchClick = onSearchClick, onSettingsClick = onSettingsClick,
@@ -143,6 +195,7 @@ fun MoviesHomeScreen(
                 onFolderClick = onFolderClick,
                 onPlayEpisode = onPlayEpisode,
                 onPlayLive = onPlayLive,
+                onRecordGame = { game -> recordGame = game },
                 onVodClick = onVodClick,
                 onOpenOnDemand = onOpenOnDemand,
                 randomVm = randomVm,
@@ -471,6 +524,8 @@ private fun HomeSectionsTab(
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
     /** Ao vivo (Lote 8): jogo da fileira "Próximos" abre o player do canal. */
     onPlayLive: (String) -> Unit = {},
+    /** Gravação de jogo (Lote 8): o estado do diálogo vive na MoviesHomeScreen (a grade "Ver Tudo" de Próximos usa o mesmo). */
+    onRecordGame: (SportsGame) -> Unit = {},
     /** On Demand do Xtream (acréscimo v1.26.0): pôster da fileira abre o detalhe no On Demand. */
     onVodClick: (com.aotv.app.data.live.VodItem, Boolean) -> Unit = { _, _ -> },
     /** "Ver tudo" da fileira On Demand: abre a tela On Demand na aba certa. */
@@ -532,17 +587,8 @@ private fun HomeSectionsTab(
         onPlayEpisode(ready.item, ready.season, ready.episode, ready.episodeTotal)
         randomVm.consume()
     }
-    // Gravação de jogo (Lote 8): o botão "Gravar" do card abre o diálogo.
-    var recordGame by remember { mutableStateOf<SportsGame?>(null) }
-    recordGame?.let { game ->
-        RecordProgramDialog(
-            channelId = game.channelId, channelName = game.channelName, channelUrl = game.channelUrl,
-            channelHeaders = game.channelHeaders, programTitle = game.title,
-            startMs = game.startMs, stopMs = game.stopMs,
-            onDismiss = { recordGame = null },
-            onScheduled = { recordGame = null },
-        )
-    }
+    // Gravação de jogo (Lote 8): o diálogo vive na MoviesHomeScreen — a
+    // fileira e a grade "Ver Tudo" de Próximos chamam [onRecordGame].
     // Gravações e lembretes (Lote 8; app fechado no Lote 13, v1.23.0): o
     // in-app dispara o que venceu e avisa o que começa em 1 minuto, e o
     // WorkManager agenda o MESMO p/ quando o app estiver fechado (o agendar
@@ -589,6 +635,11 @@ private fun HomeSectionsTab(
     val newEpItems = remember(state.newEpisodes) { state.newEpisodes.map { it.item } }
     val newEpBadges = remember(state.newEpisodes) { state.newEpisodes.associate { it.item.tmdbId to it.badge } }
     val newEpSubs = remember(state.newEpisodes) { state.newEpisodes.associate { it.item.tmdbId to it.sub } }
+    // Up Next do Trakt (Lote 19 item 4): mesmas listas derivadas estáveis
+    // de Novos episódios (o LazyColumn não recompõe a fileira à toa).
+    val upNextItems = remember(state.traktUpNext) { state.traktUpNext.map { it.item } }
+    val upNextBadges = remember(state.traktUpNext) { state.traktUpNext.associate { it.item.tmdbId to it.badge } }
+    val upNextSubs = remember(state.traktUpNext) { state.traktUpNext.associate { it.item.tmdbId to it.sub } }
 
     // Destaque vem da fileira escolhida no Personalizar Início (ou do automático).
     val heroSource = heroCandidates(state)
@@ -680,7 +731,7 @@ private fun HomeSectionsTab(
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
-                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onOptions = { pendingOptions = it })
+                    ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onOptions = { pendingOptions = it }, onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_CONTINUE) })
                 }
                 SystemRow.NEW_EPISODES -> if (state.newEpisodes.isNotEmpty()) item(key = row.key) {
                     SectionRow(
@@ -690,6 +741,20 @@ private fun HomeSectionsTab(
                         subs = newEpSubs,
                         // Segurar o card dispensa o episódio até amanhã ("Não hoje", Lote 13).
                         onLongClick = { pendingNotToday = it },
+                        // "Ver tudo" (Lote 19, v1.29.0): grade com todos os episódios novos.
+                        onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_NEW_EPISODES) },
+                    )
+                }
+                // Up Next do Trakt (Lote 19 item 4): o toque abre o detalhe
+                // da série, como em Novos episódios. "Ver tudo" (item 5): a
+                // grade local mostra todos (no máximo 10, o teto do getUpNext).
+                SystemRow.TRAKT_UP_NEXT -> if (state.traktUpNext.isNotEmpty()) item(key = row.key) {
+                    SectionRow(
+                        row.displayTitle, upNextItems, onItemClick,
+                        display = display,
+                        badges = upNextBadges,
+                        subs = upNextSubs,
+                        onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_UP_NEXT) },
                     )
                 }
                 // On Demand do Xtream (acréscimo v1.26.0): o toque NÃO abre o
@@ -715,10 +780,10 @@ private fun HomeSectionsTab(
                     )
                 }
                 SystemRow.RECOMMENDED -> if (recommended.isNotEmpty()) item(key = row.key) {
-                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, recommended, onItemClick, display = display)
+                    SectionRow(custom.ifBlank { "Porque você assistiu ${state.recommendedBecause}" }, recommended, onItemClick, display = display, onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_RECOMMENDED) })
                 }
                 SystemRow.TRAILERS -> if (state.trailersLoading || state.latestTrailers.isNotEmpty()) item(key = row.key) {
-                    LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle, display = display)
+                    LatestTrailersRow(state, viewModel, onPlay = onPlayTrailer, title = row.displayTitle, display = display, onSeeMore = { viewModel.openTrailersGrid() })
                 }
                 SystemRow.TRENDING_MOVIES -> if (trendingMovies.isNotEmpty()) item(key = row.key) {
                     val more = remember(row.key, row.displayTitle, onSeeMore) { { onSeeMore(MoviesHomeViewModel.CatalogQuery(row.displayTitle, MoviesHomeViewModel.CatalogType.MOVIE, MoviesHomeViewModel.CatalogEndpoint.TRENDING)) } }
@@ -746,7 +811,8 @@ private fun HomeSectionsTab(
                 // Coleção sem pasta não aparece, como no Nuvio.
                 null -> if (row.collectionId != null) collections.firstOrNull { it.id == row.collectionId }?.takeIf { it.folders.isNotEmpty() }?.let { col ->
                     item(key = row.key) {
-                        com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null) { f -> onFolderClick(col.id, f.id) }
+                        // "Ver tudo" (Lote 19, v1.29.0): grade com todas as pastas da coleção.
+                        com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null, onFolder = { f -> onFolderClick(col.id, f.id) }, onSeeMore = { viewModel.openCollectionGrid(col.id) })
                     }
                 } else state.tvAddonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || it.channels.isNotEmpty() }?.let { tv ->
                     // Lote 16 (v1.26.0): fileira de TV dos addons — tocar no
@@ -757,7 +823,8 @@ private fun HomeSectionsTab(
                             if (tv.channels.isEmpty() && tv.loading) viewModel.loadTvAddonRow(tv.ref.key)
                         }
                         if (tv.channels.isEmpty()) com.aotv.app.ui.common.SkeletonRail()
-                        else TvAddonChannelRow(tv.title, tv.channels, display, onPlayLive)
+                        // "Ver tudo" (Lote 19, v1.29.0): grade com todos os canais do catálogo.
+                        else TvAddonChannelRow(tv.title, tv.channels, display, onPlayLive, onSeeMore = { viewModel.openTvGrid(tv.ref.key) })
                     }
                 } ?: state.addonRows.firstOrNull { it.ref.key == row.key }?.takeIf { it.loading || vis(it.items).isNotEmpty() }?.let { ar ->
                     item(key = "addon:" + ar.ref.key) {
@@ -774,6 +841,8 @@ private fun HomeSectionsTab(
                             addonRowTitle(ar, state.typeSuffix), shownItems, onItemClick,
                             display = display,
                             onNearEnd = if (ar.more) remember(ar.ref.key) { { viewModel.loadAddonRow(ar.ref.key) } } else null,
+                            // "Ver tudo" (Lote 19, v1.29.0): grade com todo o catálogo do addon.
+                            onSeeMore = { viewModel.openAddonGrid(ar.ref.key) },
                         )
                     }
                 }
@@ -789,16 +858,12 @@ private fun HomeSectionsTab(
                 hideScores = state.sportsHideScores, scoreDelaySec = state.sportsScoreDelaySec,
                 sportsShow = state.sportsShow, display = display,
                 onEpisodeClick = { entry ->
-                    onItemClick(
-                        MovieItem(
-                            tmdbId = entry.tmdbId, embedId = entry.tmdbId.toString(), title = entry.title,
-                            overview = "", posterUrl = entry.posterUrl, backdropUrl = "",
-                            year = "", rating = 0.0, type = MediaType.SERIES,
-                        ),
-                    )
+                    onItemClick(upcomingEpisodeItem(entry))
                 },
                 onPlayGame = { game -> onPlayLive(game.channelId) },
-                onRecordGame = { game -> recordGame = game },
+                onRecordGame = onRecordGame,
+                // "Ver tudo" (Lote 19, v1.29.0): grade com todos os episódios e jogos.
+                onSeeMore = { viewModel.openUpcomingGrid() },
             )
         }
         // ── Fim da Início (Lote 4, Correção B) ──────────────────────────────
@@ -908,6 +973,33 @@ internal fun addonRowTitle(row: MoviesHomeViewModel.AddonRow, typeSuffix: Boolea
     return row.title + if (row.ref.type == "series") " · Série" else " · Filme"
 }
 
+/** Episódio de "Próximos" → MovieItem do detalhe (o mesmo que o toque no card da fileira abre). */
+private fun upcomingEpisodeItem(entry: CalendarEntry): MovieItem = MovieItem(
+    tmdbId = entry.tmdbId, embedId = entry.tmdbId.toString(), title = entry.title,
+    overview = "", posterUrl = entry.posterUrl, backdropUrl = "",
+    year = "", rating = 0.0, type = MediaType.SERIES,
+)
+
+/**
+ * Título da grade "Ver Tudo" de lista local (Lote 19, v1.29.0): o nome que o
+ * perfil deu à fileira no Personalizar Início, ou o padrão da fileira.
+ */
+private fun localGridTitle(state: MoviesHomeViewModel.UiState, kind: String?): String {
+    val key = when (kind) {
+        MoviesHomeViewModel.LOCAL_CONTINUE -> SystemRow.CONTINUE.key
+        MoviesHomeViewModel.LOCAL_NEW_EPISODES -> SystemRow.NEW_EPISODES.key
+        MoviesHomeViewModel.LOCAL_UP_NEXT -> SystemRow.TRAKT_UP_NEXT.key
+        else -> SystemRow.RECOMMENDED.key
+    }
+    return state.layout.firstOrNull { it.key == key }?.displayTitle
+        ?: when (kind) {
+            MoviesHomeViewModel.LOCAL_CONTINUE -> "Continuar assistindo"
+            MoviesHomeViewModel.LOCAL_NEW_EPISODES -> "Novos episódios"
+            MoviesHomeViewModel.LOCAL_UP_NEXT -> "Up Next — Trakt"
+            else -> "Porque você assistiu ${state.recommendedBecause}"
+        }
+}
+
 /**
  * De onde vêm os títulos do destaque. Fileira escolhida no Personalizar Início, ou no
  * automático os catálogos escolhidos lá, senão o que está em alta no AOTV, senão a
@@ -993,10 +1085,14 @@ private fun ContinueRow(
     frosted: Boolean = false,
     /** Segurar o card abre o painel de opções do título (Lote 14, v1.24.0). null = sem painel. */
     onOptions: ((MovieItem) -> Unit)? = null,
+    /** "Ver tudo" (Lote 19, v1.29.0): abre a grade com tudo que está no Continuar. null = sem link. */
+    onSeeMore: (() -> Unit)? = null,
 ) {
     Column {
         com.aotv.app.ui.common.SectionHeader(
-            title, underline = display.sectionUnderline, compact = display.compact,
+            title,
+            action = onSeeMore?.let { seeMore -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", seeMore) } },
+            underline = display.sectionUnderline, compact = display.compact,
         )
         LazyRow(contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding()),
             horizontalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeRowSpacing(display.density))) {
@@ -1221,11 +1317,14 @@ private fun TvAddonChannelRow(
     channels: List<com.aotv.app.data.live.LiveChannel>,
     display: HomeDisplayPrefs,
     onPlayLive: (String) -> Unit,
+    /** "Ver tudo" (Lote 19, v1.29.0): abre a grade com todos os canais do catálogo. null = sem link. */
+    onSeeMore: (() -> Unit)? = null,
 ) {
     val pad = com.aotv.app.ui.common.pagePadding()
     Column {
         com.aotv.app.ui.common.SectionHeader(
             title = title,
+            action = onSeeMore?.let { seeMore -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", seeMore) } },
             underline = display.sectionUnderline,
             compact = display.compact,
         )
@@ -1234,23 +1333,38 @@ private fun TvAddonChannelRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(channels, key = { it.id }) { c ->
-                val click = remember(c.id) { { onPlayLive(c.id) } }
-                Column(
-                    Modifier.width(110.dp).clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = .05f))
-                        .clickable { click() }
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(Modifier.size(width = 64.dp, height = 36.dp), contentAlignment = Alignment.Center) {
-                        if (c.logo.isNotBlank()) coil.compose.AsyncImage(c.logo, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                        else Text(c.name.take(2).uppercase(), color = TextSecondary, fontWeight = FontWeight.ExtraBold)
-                    }
-                    Text(c.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                TvChannelCard(c, onPlayLive)
             }
         }
+    }
+}
+
+/**
+ * Cartão de canal de TV de addon (Lote 19, v1.29.0): extraído da fileira p/
+ * ser o MESMO cartão na fileira e na grade "Ver tudo" — tocar abre o player
+ * ao vivo nos dois lugares. Na fileira tem 110dp de largura; na grade ocupa
+ * a célula toda.
+ */
+@Composable
+private fun TvChannelCard(
+    channel: com.aotv.app.data.live.LiveChannel,
+    onPlayLive: (String) -> Unit,
+    modifier: Modifier = Modifier.width(110.dp),
+) {
+    val click = remember(channel.id) { { onPlayLive(channel.id) } }
+    Column(
+        modifier.clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = .05f))
+            .clickable { click() }
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(Modifier.size(width = 64.dp, height = 36.dp), contentAlignment = Alignment.Center) {
+            if (channel.logo.isNotBlank()) coil.compose.AsyncImage(channel.logo, null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            else Text(channel.name.take(2).uppercase(), color = TextSecondary, fontWeight = FontWeight.ExtraBold)
+        }
+        Text(channel.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1388,6 +1502,400 @@ private fun CatalogGridView(
     }
 }
 
+// ── Grades "Ver Tudo" de fileira que não é TMDB (Lote 19, v1.29.0) ─────────
+// Mesmo desenho do CatalogGridView (voltar + título + grade); cada grade
+// mostra TODOS os itens da fileira e o toque abre o MESMO destino que o
+// toque no card da fileira.
+
+/** Cabeçalho das grades "Ver Tudo": voltar + título (o mesmo do CatalogGridView). */
+@Composable
+private fun SeeAllGridHeader(title: String, onBack: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        com.aotv.app.ui.common.GlassCircleButton(Icons.AutoMirrored.Filled.ArrowBack, onBack, contentDescription = "Voltar")
+        Text(
+            title, color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, letterSpacing = (-0.4).sp,
+        )
+    }
+}
+
+/** Grade "Ver Tudo" de catálogo de addon: pagina o mesmo catálogo da fileira. */
+@Composable
+private fun AddonGridView(
+    state: MoviesHomeViewModel.UiState,
+    viewModel: MoviesHomeViewModel,
+    title: String,
+    today: String,
+    onItemClick: (MovieItem) -> Unit,
+    onBack: () -> Unit,
+) {
+    val gridState = rememberLazyGridState()
+    val display = state.display
+    // Mesmo filtro da fileira ("Ocultar conteúdo não lançado").
+    val shown = remember(state.addonGridItems, state.hideUnreleased, today) {
+        if (state.hideUnreleased) state.addonGridItems.filterNot { isUnreleased(it, today) } else state.addonGridItems
+    }
+    val loadMore by remember {
+        derivedStateOf {
+            val li = gridState.layoutInfo
+            val total = li.totalItemsCount
+            val last = li.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total > 0 && last >= total - 6
+        }
+    }
+    LaunchedEffect(loadMore) { if (loadMore) viewModel.loadMoreAddonGrid() }
+
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader(title, onBack)
+        when {
+            state.addonGridLoading && state.addonGridItems.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                }
+            shown.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Essa lista está vazia agora.")
+                }
+            else -> LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidthFor(display.posterSize)),
+                contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (display.compact) 8.dp else 12.dp),
+                verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeGridSpacing(display.density)),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(shown, key = { rowKey(it) }) { item ->
+                    val click = remember(item) { { onItemClick(item) } }
+                    MediaCard(
+                        item = item, onClick = click,
+                        showBadges = display.showPosterBadges, showQualityBadges = display.showQualityBadges,
+                        cornerRadius = display.posterRadiusDp.dp,
+                    )
+                }
+                if (state.addonGridLoadingMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Grade "Ver Tudo" de TV de addon: todos os canais do catálogo; o toque abre o ao vivo. */
+@Composable
+private fun TvGridView(
+    state: MoviesHomeViewModel.UiState,
+    viewModel: MoviesHomeViewModel,
+    title: String,
+    onPlayLive: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val gridState = rememberLazyGridState()
+    val loadMore by remember {
+        derivedStateOf {
+            val li = gridState.layoutInfo
+            val total = li.totalItemsCount
+            val last = li.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total > 0 && last >= total - 6
+        }
+    }
+    LaunchedEffect(loadMore) { if (loadMore) viewModel.loadMoreTvGrid() }
+
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader(title, onBack)
+        when {
+            state.tvGridLoading && state.tvGridChannels.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                }
+            state.tvGridChannels.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Essa lista está vazia agora.")
+                }
+            else -> LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Adaptive(110.dp),
+                contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(state.tvGridChannels, key = { it.id }) { channel ->
+                    TvChannelCard(channel, onPlayLive, modifier = Modifier.fillMaxWidth())
+                }
+                if (state.tvGridLoadingMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Grade "Ver Tudo" de lista local finita (Continuar assistindo, Novos
+ * episódios, Up Next do Trakt, Recomendados): mostra tudo que a fileira já
+ * tem, sem buscar nada; o toque abre o mesmo detalhe. O Continuar mantém o
+ * progresso e os minutos restantes no card; Novos episódios e Up Next
+ * mantêm selo e legenda.
+ */
+@Composable
+private fun LocalGridView(
+    state: MoviesHomeViewModel.UiState,
+    kind: String?,
+    today: String,
+    onItemClick: (MovieItem) -> Unit,
+    onBack: () -> Unit,
+) {
+    val display = state.display
+    val title = localGridTitle(state, kind)
+    val items: List<MovieItem>
+    val progress: Map<Int, Float>?
+    val remaining: Map<Int, Int>?
+    val badges: Map<Int, String>?
+    val subs: Map<Int, String>?
+    when (kind) {
+        MoviesHomeViewModel.LOCAL_CONTINUE -> {
+            items = state.continueWatching
+            progress = state.continueProgress
+            remaining = state.continueRemaining
+            badges = null
+            subs = null
+        }
+        MoviesHomeViewModel.LOCAL_NEW_EPISODES -> {
+            items = state.newEpisodes.map { it.item }
+            progress = null
+            remaining = null
+            badges = state.newEpisodes.associate { it.item.tmdbId to it.badge }
+            subs = state.newEpisodes.associate { it.item.tmdbId to it.sub }
+        }
+        MoviesHomeViewModel.LOCAL_UP_NEXT -> {
+            items = state.traktUpNext.map { it.item }
+            progress = null
+            remaining = null
+            badges = state.traktUpNext.associate { it.item.tmdbId to it.badge }
+            subs = state.traktUpNext.associate { it.item.tmdbId to it.sub }
+        }
+        else -> {
+            // Recomendados: o mesmo filtro de não lançados da fileira.
+            items = if (state.hideUnreleased) state.recommended.filterNot { isUnreleased(it, today) } else state.recommended
+            progress = null
+            remaining = null
+            badges = null
+            subs = null
+        }
+    }
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader(title, onBack)
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Essa lista está vazia agora.")
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidthFor(display.posterSize)),
+                contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (display.compact) 8.dp else 12.dp),
+                verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeGridSpacing(display.density)),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(items, key = { rowKey(it) }) { item ->
+                    val click = remember(item) { { onItemClick(item) } }
+                    val remain = remaining?.get(item.tmdbId)
+                    com.aotv.app.ui.common.PosterCard(
+                        item = item,
+                        onClick = click,
+                        caption = if (remain != null) "$remain min restantes" else item.title,
+                        sub = subs?.get(item.tmdbId),
+                        badge = badges?.get(item.tmdbId),
+                        progress = progress?.get(item.tmdbId),
+                        showBadges = display.showPosterBadges,
+                        showQualityBadges = display.showQualityBadges,
+                        cornerRadius = display.posterRadiusDp.dp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Grade "Ver Tudo" da fileira "Últimos Trailers": as mesmas abas da fileira
+ * (Popular, Streaming, Na TV, Para Alugar, Nos Cinemas) e os cards 16:9 em
+ * grade; o toque toca o trailer no overlay, como na fileira.
+ */
+@Composable
+private fun TrailersGridView(
+    state: MoviesHomeViewModel.UiState,
+    viewModel: MoviesHomeViewModel,
+    onPlay: (MoviesHomeViewModel.TrailerCard) -> Unit,
+    onBack: () -> Unit,
+) {
+    val pad = com.aotv.app.ui.common.pagePadding()
+    val title = state.layout.firstOrNull { it.key == SystemRow.TRAILERS.key }?.displayTitle ?: "Últimos trailers"
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader(title, onBack)
+        androidx.compose.foundation.lazy.LazyRow(
+            contentPadding = PaddingValues(horizontal = pad),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(MoviesHomeViewModel.TrailerTab.entries.toList(), key = { it.name }) { tab ->
+                com.aotv.app.ui.common.FilterChipPill(
+                    label = tab.label,
+                    selected = state.trailerTab == tab,
+                    onClick = { viewModel.selectTrailerTab(tab) },
+                )
+            }
+        }
+        when {
+            state.trailersLoading && state.latestTrailers.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                }
+            state.latestTrailers.isEmpty() ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Nenhum trailer nessa aba agora.", color = TextTertiary, fontSize = 14.sp)
+                }
+            else -> LazyVerticalGrid(
+                columns = GridCells.Adaptive(264.dp),
+                contentPadding = PaddingValues(horizontal = pad, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(state.latestTrailers, key = { "${it.tmdbId}:${it.videoKey}" }) { card ->
+                    TrailerCardView(card, onClick = { onPlay(card) })
+                }
+            }
+        }
+    }
+}
+
+/** Grade "Ver Tudo" das pastas de uma coleção: o toque abre a mesma pasta que o card da fileira. */
+@Composable
+private fun CollectionGridView(
+    state: MoviesHomeViewModel.UiState,
+    collections: List<com.aotv.app.data.collections.MediaCollection>,
+    collectionId: String?,
+    onFolderClick: (String, String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val collection = collections.firstOrNull { it.id == collectionId }
+    val title = state.layout.firstOrNull { it.collectionId == collectionId }?.displayTitle
+        ?: collection?.title ?: ""
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader(title, onBack)
+        if (collection == null || collection.folders.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Essa coleção não tem pastas.")
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(140.dp),
+                contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(collection.folders, key = { it.id }) { folder ->
+                    com.aotv.app.ui.collections.FolderTile(
+                        folder = folder,
+                        onClick = { onFolderClick(collection.id, folder.id) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Grade "Ver Tudo" da fileira "Próximos": episódios em grade de pôsteres
+ * (mesma legenda da fileira — T/E + data, ou "Episódio em breve" com
+ * spoiler) e jogos em cartões de largura toda — o MESMO cartão da fileira
+ * ([UpcomingGameCard]), com "Assistir" abrindo o ao vivo e "Gravar"
+ * agendando a gravação.
+ */
+@Composable
+private fun UpcomingGridView(
+    state: MoviesHomeViewModel.UiState,
+    onEpisodeClick: (CalendarEntry) -> Unit,
+    onPlayGame: (SportsGame) -> Unit,
+    onRecordGame: (SportsGame) -> Unit,
+    onBack: () -> Unit,
+) {
+    val display = state.display
+    val now = System.currentTimeMillis()
+    val today = todayMs()
+    val pad = com.aotv.app.ui.common.pagePadding()
+    val hasEpisodes = state.upcomingEpisodes.isNotEmpty()
+    val hasGames = state.sportsShow && state.upcomingGames.isNotEmpty()
+    Column(Modifier.fillMaxSize()) {
+        SeeAllGridHeader("Próximos", onBack)
+        if (!hasEpisodes && !hasGames) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Nada chegando por agora.")
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidthFor(display.posterSize)),
+                contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (display.compact) 8.dp else 12.dp),
+                verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeGridSpacing(display.density)),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (hasEpisodes) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            "Episódios", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                            fontFamily = Inter, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(state.upcomingEpisodes, key = { "ep:${it.tmdbId}:${it.season}:${it.episode}" }) { entry ->
+                        val item = upcomingEpisodeItem(entry)
+                        val click = remember(entry) { { onEpisodeClick(entry) } }
+                        val hideLabel = state.calendarHideSpoilers && !entry.isAired(today)
+                        val sub = if (hideLabel) "Episódio em breve" else "${entry.seLabel} · ${entry.dateLabel(today)}"
+                        com.aotv.app.ui.common.PosterCard(
+                            item = item,
+                            onClick = click,
+                            sub = sub,
+                            showBadges = display.showPosterBadges,
+                            showQualityBadges = display.showQualityBadges,
+                            cornerRadius = display.posterRadiusDp.dp,
+                        )
+                    }
+                }
+                if (hasGames) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            "Jogos", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                            fontFamily = Inter, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(state.upcomingGames, key = { "game:${it.channelId}:${it.startMs}" }) { game ->
+                        UpcomingGameCard(
+                            game = game, now = now, hideScores = state.sportsHideScores,
+                            scoreDelaySec = state.sportsScoreDelaySec, onPlayGame = onPlayGame,
+                            onRecordGame = onRecordGame, modifier = Modifier.fillMaxWidth().height(96.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── ÚLTIMOS TRAILERS ──────────────────────────────────────────────────────────
 
 /**
@@ -1402,12 +1910,16 @@ private fun LatestTrailersRow(
     onPlay: (MoviesHomeViewModel.TrailerCard) -> Unit,
     title: String = "Últimos trailers",
     display: HomeDisplayPrefs = HomeDisplayPrefs(),
+    /** "Ver tudo" (Lote 19, v1.29.0): abre a grade com todos os trailers da aba atual. null = sem link. */
+    onSeeMore: (() -> Unit)? = null,
 ) {
     val pad = com.aotv.app.ui.common.pagePadding()
     val rowSpace = com.aotv.app.ui.common.homeRowSpacing(display.density)
     Column(verticalArrangement = Arrangement.spacedBy(if (display.compact) 4.dp else 6.dp)) {
         com.aotv.app.ui.common.SectionHeader(
-            title, underline = display.sectionUnderline, compact = display.compact,
+            title,
+            action = onSeeMore?.let { seeMore -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", seeMore) } },
+            underline = display.sectionUnderline, compact = display.compact,
         )
         // Abas roláveis (cabem 5 sem espremer em tela pequena).
         androidx.compose.foundation.lazy.LazyRow(

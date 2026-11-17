@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -423,6 +424,15 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                         "Salvar chave do MDBList", { viewModel.saveMdbApiKey(mdbApiKey) },
                         icon = Icons.Default.CheckCircle, tone = ButtonTone.SECONDARY,
                         enabled = mdbApiKey != st.mdbApiKey, compact = true,
+                    )
+                    // Lote 19 (v1.29.0): valida a chave digitada (ainda não
+                    // salva, ou a salva) contra o MDBList e mostra o
+                    // resultado no banner acima da seção.
+                    AotvButton(
+                        "Testar chave", { viewModel.testMdbApiKey(mdbApiKey) },
+                        icon = Icons.Default.Search, tone = ButtonTone.SECONDARY,
+                        enabled = mdbApiKey.isNotBlank() && !st.mdbTesting,
+                        busy = st.mdbTesting, busyLabel = "Testando…", compact = true,
                     )
                 }
                 if (st.mdbApiKey.isBlank()) {

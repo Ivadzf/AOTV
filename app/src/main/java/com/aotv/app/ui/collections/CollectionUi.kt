@@ -26,10 +26,21 @@ import com.aotv.app.ui.theme.*
 
 /** Fileira da Início com as pastas da coleção. */
 @Composable
-fun CollectionFolderRow(collection: MediaCollection, title: String, eyebrow: String? = "Coleção", onFolder: (CollectionFolder) -> Unit) {
+fun CollectionFolderRow(
+    collection: MediaCollection,
+    title: String,
+    eyebrow: String? = "Coleção",
+    onFolder: (CollectionFolder) -> Unit,
+    /** "Ver tudo" (Lote 19, v1.29.0): abre a grade com todas as pastas. null = sem link. */
+    onSeeMore: (() -> Unit)? = null,
+) {
     val pad = com.aotv.app.ui.common.pagePadding()
     Column {
-        com.aotv.app.ui.common.SectionHeader(title = title, eyebrow = eyebrow)
+        com.aotv.app.ui.common.SectionHeader(
+            title = title,
+            eyebrow = eyebrow,
+            action = onSeeMore?.let { seeMore -> { com.aotv.app.ui.common.SeeAllLink("Ver tudo", seeMore) } },
+        )
         LazyRow(contentPadding = PaddingValues(horizontal = pad), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(collection.folders, key = { it.id }) { f -> FolderTile(f, onClick = { onFolder(f) }) }
         }

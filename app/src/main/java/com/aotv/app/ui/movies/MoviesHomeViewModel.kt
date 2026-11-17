@@ -39,7 +39,7 @@ class MoviesHomeViewModel @Inject constructor(
     private val seriesDetailCache: com.aotv.app.data.remote.SeriesDetailCache,
     private val youtubeTrailer: com.aotv.app.data.remote.YoutubeTrailer,
     private val stremio: com.aotv.app.data.remote.StremioAddonService,
-    trakt: com.aotv.app.data.remote.TraktService,
+    private val trakt: com.aotv.app.data.remote.TraktService,
     private val addonMetas: com.aotv.app.data.remote.AddonMetaResolver,
     collections: com.aotv.app.data.collections.CollectionsRepository,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
@@ -96,6 +96,13 @@ class MoviesHomeViewModel @Inject constructor(
         private const val ADDON_PAGE = 40
         /** Itens por fileira On Demand na Início (o resto vive na tela On Demand). */
         private const val VOD_ROW_MAX = 20
+        /** Intervalo mínimo entre rebuscas da fileira "Up Next — Trakt" (Lote 19 item 4). */
+        private const val TRAKT_UP_NEXT_MIN_REFETCH_MS = 15 * 60 * 1000L
+        /** Grades "Ver Tudo" de lista local finita (Lote 19, v1.29.0): valores de [UiState.localGrid]. */
+        const val LOCAL_CONTINUE = "continue"
+        const val LOCAL_NEW_EPISODES = "new_episodes"
+        const val LOCAL_RECOMMENDED = "recommended"
+        const val LOCAL_UP_NEXT = "up_next"
     }
 
     data class UiState(
@@ -129,6 +136,38 @@ class MoviesHomeViewModel @Inject constructor(
         val gridTotalPages: Int = 1,
         val gridLoading: Boolean = false,
         val gridLoadingMore: Boolean = false,
+        // ── Grid "Ver Tudo" de fileira de addon (Lote 19, v1.29.0) ──
+        // Catálogo de addon (filme/série): a grade pagina o MESMO catálogo
+        // da fileira (skip de 40 em 40), sem tocar no skip da fileira.
+        val addonGridKey: String? = null,
+        val addonGridTitle: String = "",
+        val addonGridItems: List<MovieItem> = emptyList(),
+        val addonGridSkip: Int = 0,
+        val addonGridMore: Boolean = true,
+        val addonGridLoading: Boolean = false,
+        val addonGridLoadingMore: Boolean = false,
+        // ── Grid "Ver Tudo" de fileira de TV de addon ──
+        // Canais do MESMO catálogo de TV da fileira (skip de 40 em 40).
+        // O toque abre o ao vivo, como o card da fileira.
+        val tvGridKey: String? = null,
+        val tvGridTitle: String = "",
+        val tvGridChannels: List<com.aotv.app.data.live.LiveChannel> = emptyList(),
+        val tvGridSkip: Int = 0,
+        val tvGridMore: Boolean = true,
+        val tvGridLoading: Boolean = false,
+        val tvGridLoadingMore: Boolean = false,
+        // ── Grid "Ver Tudo" de lista local finita (Lote 19, v1.29.0) ──
+        // Continuar assistindo, Novos episódios, Up Next do Trakt ou
+        // Recomendados: a lista JÁ está no estado — a grade só mostra tudo,
+        // sem buscar nada. Valores: [LOCAL_CONTINUE], [LOCAL_NEW_EPISODES],
+        // [LOCAL_UP_NEXT] ou [LOCAL_RECOMMENDED].
+        val localGrid: String? = null,
+        // ── Grid "Ver Tudo" de trailers, coleção e próximos ──
+        // Também só mostram o que já está no estado (aba de trailer atual,
+        // pastas da coleção, episódios + jogos). null/false = grade fechada.
+        val trailersGrid: Boolean = false,
+        val collectionGridId: String? = null,
+        val upcomingGrid: Boolean = false,
         // ── Continuar assistindo (home TV/Cinema) ──
         val continueWatching: List<MovieItem> = emptyList(),
         val continueProgress: Map<Int, Float> = emptyMap(),  // tmdbId -> fração assistida
@@ -175,6 +214,11 @@ class MoviesHomeViewModel @Inject constructor(
         val vodChecked: Boolean = false,
         // ── Novos episódios das séries do histórico e da Minha Lista ──
         val newEpisodes: List<NewEpisode> = emptyList(),
+        // ── Fileira "Up Next — Trakt" (Lote 19 item 4, v1.29.0): próximo
+        // episódio de cada série em andamento no Trakt (ver
+        // TraktService.getUpNext). Mesmo formato de Novos episódios
+        // (selo "T3 E2" + nome do episódio) — o toque abre o detalhe da série.
+        val traktUpNext: List<NewEpisode> = emptyList(),
         // ── Fileira "Próximos" (Lote 8, v1.18.0): episódios + jogos de esporte ──
         val upcomingEpisodes: List<CalendarEntry> = emptyList(),
         val upcomingGames: List<SportsGame> = emptyList(),
@@ -319,6 +363,59 @@ class MoviesHomeViewModel @Inject constructor(
     // Calendário da Biblioteca. Só entram os que ainda vão ao ar (hoje em
     // diante) — o último episódio já exibido fica só na Biblioteca.
     private var lastUpcomingKey = ""
+
+    // ── Fileira "Up Next — Trakt" (Lote 19 item 4, v1.29.0) ─────────────
+    private var lastTraktUpNextKey = ""
+    private var lastTraktUpNextAt = 0L
+
+    /**
+     * Carrega a fileira "Up Next — Trakt": o próximo episódio de cada série
+     * em andamento no Trakt (TraktService.getUpNext, no máximo 10). Pôsteres
+     * e sinopse vêm do cache de detalhe de série (Lote 2), como em Novos
+     * episódios — sem chave TMDB a fileira fica vazia e some. Sem Trakt
+     * conectado, fileira vazia (nunca erro na tela). Rebusca no máximo 1x
+     * a cada 15 min ([TRAKT_UP_NEXT_MIN_REFETCH_MS]) p/ a abertura da Início
+     * e a mudança do histórico não martelarem a API; [force] ignora o
+     * intervalo (p/ quando o usuário acabou de conectar o Trakt). A chave
+     * evita refazer os detalhes do TMDB quando nada mudou no Trakt.
+     */
+    fun loadTraktUpNext(force: Boolean = false) {
+        // Fileira desligada não busca na rede (ao religar, o applyLayout repõe).
+        if (!sysRowOn(com.aotv.app.data.local.SystemRow.TRAKT_UP_NEXT.key)) return
+        if (!trakt.isConnected) {
+            if (_uiState.value.traktUpNext.isNotEmpty()) _uiState.update { it.copy(traktUpNext = emptyList()) }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (!force && _uiState.value.traktUpNext.isNotEmpty() && now - lastTraktUpNextAt < TRAKT_UP_NEXT_MIN_REFETCH_MS) return
+        viewModelScope.launch {
+            val items = trakt.getUpNext().getOrNull().orEmpty()
+            val key = items.joinToString(",") { "${it.tmdbId}:${it.season}:${it.episode}" }
+            if (!force && key == lastTraktUpNextKey && _uiState.value.traktUpNext.isNotEmpty()) return@launch
+            lastTraktUpNextKey = key
+            lastTraktUpNextAt = System.currentTimeMillis()
+            if (items.isEmpty()) {
+                _uiState.update { it.copy(traktUpNext = emptyList()) }
+                return@launch
+            }
+            val out = items.map { up ->
+                async {
+                    // Detalhe via cache (Lote 2): a mesma série não é buscada 2x
+                    // entre a Início e o Calendário da Biblioteca.
+                    val d = seriesDetailCache.get(up.tmdbId) ?: return@async null
+                    val item = MovieItem(
+                        tmdbId = up.tmdbId, embedId = up.tmdbId.toString(),
+                        title = up.title.ifBlank { d.name }, overview = d.overview.orEmpty(),
+                        posterUrl = d.posterPath?.let { "https://image.tmdb.org/t/p/w342$it" }.orEmpty(),
+                        backdropUrl = d.backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" }.orEmpty(),
+                        year = up.year?.takeIf { it > 0 }?.toString().orEmpty(), rating = d.voteAverage, type = MediaType.SERIES,
+                    )
+                    NewEpisode(item, badge = "T${up.season} E${up.episode}", sub = up.episodeTitle.orEmpty(), at = System.currentTimeMillis(), upcoming = false)
+                }
+            }.awaitAll().filterNotNull()
+            _uiState.update { it.copy(traktUpNext = out) }
+        }
+    }
 
     /** Monta os próximos episódios da fileira "Próximos". */
     private fun buildUpcomingEpisodes(series: List<Triple<Int, String, String>>) {
@@ -538,6 +635,36 @@ class MoviesHomeViewModel @Inject constructor(
     private val tvAddonRowsInFlight = HashSet<String>()
 
     /**
+     * Monta o catálogo de TV a partir da referência da fileira. HomeCatalogRef
+     * não guarda o id do manifest, só o nome do addon — o nome serve de
+     * addonId aqui (só alimenta o sourceId "addon-tv:<addon>" do canal, p/
+     * distinguir a fonte). Usado pela fileira ([loadTvAddonRow]) e pela grade
+     * "Ver Tudo" ([openTvGrid]/[loadMoreTvGrid]).
+     */
+    private fun tvCatalogOf(ref: com.aotv.app.data.local.HomeCatalogRef): com.aotv.app.data.remote.AddonTvCatalog =
+        com.aotv.app.data.remote.AddonTvCatalog(
+            addonId = ref.addon,
+            addonName = ref.addon,
+            base = ref.base,
+            id = ref.id,
+            name = ref.name,
+            type = ref.type,
+        )
+
+    /** Metas do catálogo → canais, sem id ou nome em branco e sem repetido. */
+    private fun metasToChannels(
+        catalog: com.aotv.app.data.remote.AddonTvCatalog,
+        metas: List<com.aotv.app.data.remote.AddonMeta>,
+    ): List<com.aotv.app.data.live.LiveChannel> =
+        metas.take(ADDON_PAGE).mapNotNull { meta ->
+            if (meta.id.isBlank() || meta.name.isBlank()) null
+            else com.aotv.app.data.remote.AddonTvChannel(
+                catalog, meta.id, meta.name,
+                meta.poster.ifBlank { meta.background },
+            ).toLiveChannel()
+        }.distinctBy { it.id }
+
+    /**
      * Lê a 1ª página de canais da fileira de TV. O catálogo vem do layout
      * (Personalizar Início); o type ("tv" ou "channel") decide as URLs, via
      * [com.aotv.app.data.remote.AddonTvCatalogLoader]. Sem paginação: a
@@ -547,25 +674,9 @@ class MoviesHomeViewModel @Inject constructor(
         val row = _uiState.value.tvAddonRows.firstOrNull { it.ref.key == key } ?: return
         if (!tvAddonRowsInFlight.add(key)) return
         viewModelScope.launch {
-            val catalog = com.aotv.app.data.remote.AddonTvCatalog(
-                // HomeCatalogRef não guarda o id do manifest, só o nome do
-                // addon — o nome serve de addonId aqui (só alimenta o
-                // sourceId "addon-tv:<addon>" do canal, p/ distinguir a fonte).
-                addonId = row.ref.addon,
-                addonName = row.ref.addon,
-                base = row.ref.base,
-                id = row.ref.id,
-                name = row.ref.name,
-                type = row.ref.type,
-            )
+            val catalog = tvCatalogOf(row.ref)
             val metas = tvCatalogs.loadChannels(catalog).orEmpty()
-            val channels = metas.take(ADDON_PAGE).mapNotNull { meta ->
-                if (meta.id.isBlank() || meta.name.isBlank()) null
-                else com.aotv.app.data.remote.AddonTvChannel(
-                    catalog, meta.id, meta.name,
-                    meta.poster.ifBlank { meta.background },
-                ).toLiveChannel()
-            }.distinctBy { it.id }
+            val channels = metasToChannels(catalog, metas)
             tvAddonRowsInFlight.remove(key)
             _uiState.update { st ->
                 st.copy(tvAddonRows = st.tvAddonRows.map { r ->
@@ -573,6 +684,172 @@ class MoviesHomeViewModel @Inject constructor(
                 })
             }
         }
+    }
+
+    // ── Grades "Ver Tudo" (Lote 19, v1.29.0) ────────────────────────────────
+    // Uma grade por vez: abrir uma fecha as outras (a Início some atrás da
+    // grade, então não há como abrir duas ao mesmo tempo — a limpeza aqui é
+    // defesa, não caminho normal). [closeCatalog] fecha qualquer uma delas.
+
+    /** Zera o estado de todas as grades "Ver Tudo" (TMDB, addon, TV e locais). */
+    private fun clearGrids(s: UiState): UiState = s.copy(
+        gridQuery = null, gridItems = emptyList(), gridPage = 1, gridTotalPages = 1,
+        gridLoading = false, gridLoadingMore = false,
+        addonGridKey = null, addonGridTitle = "", addonGridItems = emptyList(),
+        addonGridSkip = 0, addonGridMore = true, addonGridLoading = false, addonGridLoadingMore = false,
+        tvGridKey = null, tvGridTitle = "", tvGridChannels = emptyList(),
+        tvGridSkip = 0, tvGridMore = true, tvGridLoading = false, tvGridLoadingMore = false,
+        localGrid = null, trailersGrid = false, collectionGridId = null, upcomingGrid = false,
+    )
+
+    /**
+     * Abre a grade "Ver Tudo" da fileira de catálogo de addon [key]. Pagina
+     * o MESMO catálogo da fileira (skip de [ADDON_PAGE] em [ADDON_PAGE]),
+     * com o mesmo resolve da fileira — o toque no item abre o mesmo detalhe
+     * que o toque no card da fileira. O skip da grade é próprio: a fileira
+     * continua de onde estava quando a grade fecha.
+     */
+    fun openAddonGrid(key: String) {
+        val row = _uiState.value.addonRows.firstOrNull { it.ref.key == key } ?: return
+        // Já aberta com itens → mantém (voltando do detalhe).
+        if (_uiState.value.addonGridKey == key && _uiState.value.addonGridItems.isNotEmpty()) return
+        val series = row.ref.type == "series"
+        val title = row.title
+        _uiState.update {
+            clearGrids(it).copy(addonGridKey = key, addonGridTitle = title, addonGridLoading = true)
+        }
+        viewModelScope.launch {
+            val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, 0)
+            val page = metas.orEmpty().take(ADDON_PAGE)
+            val items = resolveAddonMetas(page, series)
+            _uiState.update { cur ->
+                if (cur.addonGridKey != key) cur else cur.copy(
+                    addonGridLoading = false,
+                    addonGridItems = items.distinctBy { item -> item.tmdbId to item.embedId },
+                    addonGridSkip = page.size,
+                    // Página curta ou vazia = fim do catálogo. Página que não
+                    // trouxe item NOVO também para: o addon pode não respeitar
+                    // o skip (devolveria a mesma página p/ sempre) — sem item
+                    // novo não há o que mostrar, e nada é inventado.
+                    addonGridMore = metas != null && metas.size >= ADDON_PAGE && items.isNotEmpty(),
+                )
+            }
+        }
+    }
+
+    /** Próxima página da grade "Ver Tudo" de addon (scroll infinito). */
+    fun loadMoreAddonGrid() {
+        val s = _uiState.value
+        val key = s.addonGridKey ?: return
+        if (s.addonGridLoading || s.addonGridLoadingMore || !s.addonGridMore) return
+        val row = s.addonRows.firstOrNull { it.ref.key == key } ?: return
+        val series = row.ref.type == "series"
+        val skip = s.addonGridSkip
+        viewModelScope.launch {
+            _uiState.update { it.copy(addonGridLoadingMore = true) }
+            val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, skip)
+            val page = metas.orEmpty().take(ADDON_PAGE)
+            val items = resolveAddonMetas(page, series)
+            _uiState.update { cur ->
+                if (cur.addonGridKey != key) cur.copy(addonGridLoadingMore = false)
+                else {
+                    val known = cur.addonGridItems.mapTo(HashSet()) { item -> item.tmdbId to item.embedId }
+                    val fresh = items.filter { item -> (item.tmdbId to item.embedId) !in known }
+                    cur.copy(
+                        addonGridLoadingMore = false,
+                        addonGridItems = cur.addonGridItems + fresh,
+                        addonGridSkip = skip + page.size,
+                        addonGridMore = metas != null && metas.size >= ADDON_PAGE && fresh.isNotEmpty(),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Abre a grade "Ver Tudo" da fileira de TV de addon [key]. Pagina o
+     * MESMO catálogo de TV da fileira (skip de [ADDON_PAGE] em [ADDON_PAGE]);
+     * o toque no canal abre o ao vivo, como o card da fileira. A fileira só
+     * mostra a 1ª página (até 40 canais) — a grade é onde o resto aparece.
+     */
+    fun openTvGrid(key: String) {
+        val row = _uiState.value.tvAddonRows.firstOrNull { it.ref.key == key } ?: return
+        if (_uiState.value.tvGridKey == key && _uiState.value.tvGridChannels.isNotEmpty()) return
+        val catalog = tvCatalogOf(row.ref)
+        val title = row.title
+        _uiState.update {
+            clearGrids(it).copy(tvGridKey = key, tvGridTitle = title, tvGridLoading = true)
+        }
+        viewModelScope.launch {
+            val metas = tvCatalogs.loadChannels(catalog, 0).orEmpty()
+            val channels = metasToChannels(catalog, metas)
+            _uiState.update { cur ->
+                if (cur.tvGridKey != key) cur else cur.copy(
+                    tvGridLoading = false,
+                    tvGridChannels = channels,
+                    tvGridSkip = metas.size.coerceAtMost(ADDON_PAGE),
+                    // Mesma regra da grade de addon: página curta, vazia ou
+                    // sem canal novo para (o addon pode não respeitar o skip).
+                    tvGridMore = metas.size >= ADDON_PAGE && channels.isNotEmpty(),
+                )
+            }
+        }
+    }
+
+    /** Próxima página da grade "Ver Tudo" de TV (scroll infinito). */
+    fun loadMoreTvGrid() {
+        val s = _uiState.value
+        val key = s.tvGridKey ?: return
+        if (s.tvGridLoading || s.tvGridLoadingMore || !s.tvGridMore) return
+        val row = s.tvAddonRows.firstOrNull { it.ref.key == key } ?: return
+        val catalog = tvCatalogOf(row.ref)
+        val skip = s.tvGridSkip
+        viewModelScope.launch {
+            _uiState.update { it.copy(tvGridLoadingMore = true) }
+            val metas = tvCatalogs.loadChannels(catalog, skip).orEmpty()
+            val channels = metasToChannels(catalog, metas)
+            _uiState.update { cur ->
+                if (cur.tvGridKey != key) cur.copy(tvGridLoadingMore = false)
+                else {
+                    val known = cur.tvGridChannels.mapTo(HashSet()) { channel -> channel.id }
+                    val fresh = channels.filter { channel -> channel.id !in known }
+                    cur.copy(
+                        tvGridLoadingMore = false,
+                        tvGridChannels = cur.tvGridChannels + fresh,
+                        tvGridSkip = skip + metas.size.coerceAtMost(ADDON_PAGE),
+                        tvGridMore = metas.size >= ADDON_PAGE && fresh.isNotEmpty(),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Abre a grade "Ver Tudo" de uma lista local finita: Continuar assistindo
+     * ([LOCAL_CONTINUE]), Novos episódios ([LOCAL_NEW_EPISODES]), Up Next do
+     * Trakt ([LOCAL_UP_NEXT]) ou Recomendados ([LOCAL_RECOMMENDED]). Nada é
+     * buscado — a grade mostra todos os itens que a fileira já tem; o toque
+     * abre o mesmo detalhe.
+     */
+    fun openLocalGrid(kind: String) {
+        if (kind != LOCAL_CONTINUE && kind != LOCAL_NEW_EPISODES && kind != LOCAL_RECOMMENDED && kind != LOCAL_UP_NEXT) return
+        _uiState.update { clearGrids(it).copy(localGrid = kind) }
+    }
+
+    /** Abre a grade "Ver Tudo" da fileira "Últimos Trailers" (aba atual). */
+    fun openTrailersGrid() {
+        _uiState.update { clearGrids(it).copy(trailersGrid = true) }
+    }
+
+    /** Abre a grade "Ver Tudo" das pastas da coleção [collectionId]. */
+    fun openCollectionGrid(collectionId: String) {
+        if (collectionId.isBlank()) return
+        _uiState.update { clearGrids(it).copy(collectionGridId = collectionId) }
+    }
+
+    /** Abre a grade "Ver Tudo" da fileira "Próximos" (episódios + jogos). */
+    fun openUpcomingGrid() {
+        _uiState.update { clearGrids(it).copy(upcomingGrid = true) }
     }
 
     // ── Fileiras On Demand do Xtream na Início (acréscimo v1.26.0) ────────────
@@ -698,6 +975,9 @@ class MoviesHomeViewModel @Inject constructor(
         }
         if (com.aotv.app.data.local.SystemRow.NEW_EPISODES.key in newlyVisible && stNow.newEpisodes.isEmpty()) {
             buildNewEpisodes(lastNewEpSeries)
+        }
+        if (com.aotv.app.data.local.SystemRow.TRAKT_UP_NEXT.key in newlyVisible && stNow.traktUpNext.isEmpty()) {
+            loadTraktUpNext()
         }
         if (com.aotv.app.data.local.SystemRow.RECOMMENDED.key in newlyVisible && stNow.recommended.isEmpty()) {
             lastRecKey = ""
@@ -853,6 +1133,10 @@ class MoviesHomeViewModel @Inject constructor(
                 // Toda vez que o histórico muda, a recomendação é refeita. É isso que faz a
                 // lista acompanhar o que a pessoa anda assistindo.
                 buildRecommendations(list)
+                // Up Next do Trakt (Lote 19 item 4): o histórico mudou (episódio
+                // visto) — o próximo episódio pode ter andado. O throttle de
+                // 15 min dentro de loadTraktUpNext segura a frequência.
+                loadTraktUpNext()
                 coroutineScope {
                     continueList.take(20).map { h -> async {
                         // Ao vivo (Lote 8, v1.18.0): o tmdbId do canal é
@@ -1070,9 +1354,9 @@ class MoviesHomeViewModel @Inject constructor(
     }.getOrNull()
 
     /** Abre o grid "Ver Tudo" para [query]. Carrega EXATAMENTE o conteúdo que a fileira mostra. */
-    /** Fecha o grid "Ver Tudo" e volta pras fileiras da home. */
+    /** Fecha o grid "Ver Tudo" e volta pras fileiras da home (qualquer grade: TMDB, addon, TV ou local). */
     fun closeCatalog() {
-        _uiState.update { it.copy(gridQuery = null, gridItems = emptyList(), gridPage = 1, gridTotalPages = 1) }
+        _uiState.update { clearGrids(it) }
     }
 
     fun openCatalog(query: CatalogQuery) {
@@ -1080,7 +1364,7 @@ class MoviesHomeViewModel @Inject constructor(
         if (_uiState.value.gridQuery == query && _uiState.value.gridItems.isNotEmpty()) return
         val apiKey = prefs.tmdbApiKey
         _uiState.update {
-            it.copy(gridQuery = query, gridItems = emptyList(), gridPage = 1, gridTotalPages = 1, gridLoading = true, gridLoadingMore = false)
+            clearGrids(it).copy(gridQuery = query, gridItems = emptyList(), gridPage = 1, gridTotalPages = 1, gridLoading = true, gridLoadingMore = false)
         }
         if (apiKey.isBlank()) { _uiState.update { it.copy(gridLoading = false) }; return }
         viewModelScope.launch {

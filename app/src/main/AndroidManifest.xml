@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Busca por voz (Lote 3, item 1): pedida em runtime só quando o microfone é tocado. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Watch Party real (Lote 19, v1.29.0): a câmera do celular vira a
+         câmera da TV. Pedida em runtime só quando a câmera é ligada na sala. -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <!-- Gravações (Lote 8): aviso de início/fim/falha (Android 13+, pedido em runtime ao agendar) e serviço em 2º plano. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Atualizador dentro do app (Lote 12, v1.22.0): instalar o APK baixado
@@ -16,6 +19,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Microfone opcional: aparelho sem ele instala normal e a busca por voz some. -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Câmera opcional (Watch Party, Lote 19): aparelho sem ela (TV) instala
+         normal e a câmera da sala some — a voz continua funcionando. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

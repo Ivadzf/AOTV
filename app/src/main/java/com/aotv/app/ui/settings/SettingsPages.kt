@@ -180,10 +180,11 @@ object SettingsPageIds {
     const val Trackers = "trackers"
     const val Vpn = "vpn"
     const val WatchParty = "watchparty"
+    const val SocialHub = "social"
     const val Diagnostico = "diagnostico"
 
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, Diagnostico)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, SocialHub, Diagnostico)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -199,6 +200,7 @@ object SettingsPageIds {
         Trackers -> "Trackers e Sincronização"
         Vpn -> "VPN"
         WatchParty -> "Watch Party"
+        SocialHub -> "Social Hub"
         Diagnostico -> "Diagnóstico"
         else -> "Configurações"
     }
@@ -223,6 +225,7 @@ fun SettingsPageScreen(
     onOpenLive: () -> Unit = {},
     onOpenLiveChannels: () -> Unit = {},
     onOpenCollections: () -> Unit = {},
+    onOpenWatchParty: () -> Unit = {},
     onBack: () -> Unit,
     onPlatformChanged: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -248,6 +251,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
         SettingsPageIds.Vpn -> VpnScreen(onBack, highlightAnchor)
         SettingsPageIds.WatchParty -> WatchPartyScreen(onBack, highlightAnchor)
+        SettingsPageIds.SocialHub -> SocialHubScreen(onBack, highlightAnchor, onOpenWatchParty = onOpenWatchParty)
         SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
