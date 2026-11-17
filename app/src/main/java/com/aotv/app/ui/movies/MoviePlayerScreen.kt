@@ -1208,7 +1208,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
                 if (i == currentSourceIdx || f.dead || f.wrongTitle || f.url in triedUrls || h == 0 || f.lang != lang) return@forEachIndexed
                 // Lote 19 item 7 (b+e): o upgrade respeita a qualidade máxima do
                 // perfil (não sobe p/ 4K com teto de 720p) e o gate do debrid (f).
-                if (prefs.maxQuality > 0 && f.rank > prefs.maxQuality) return@forEachIndexed
+                if (maxQuality > 0 && f.rank > maxQuality) return@forEachIndexed
                 if (debridBlocksAutoSwitch(f.url)) return@forEachIndexed
                 if (h >= bestH && f.probe!!.ms < 6_000) { best = i; bestH = h }
             }
@@ -2348,6 +2348,8 @@ class PlayerSession(
     // ── Lote 17 — saúde aprendida + downgrade adaptativo (v1.27.0) ───────
     /** Prefs do perfil (leitura direta, mesmo padrão de LiveTvScreen). */
     private val prefs by lazy { com.aotv.app.data.local.PlatformPrefs(context.applicationContext) }
+    /** Qualidade máxima do perfil (leitura pública p/ o auto-upgrade em PlayerSourceEffects, que está fora da classe — o `prefs` é privado). */
+    val maxQuality: Int get() = prefs.maxQuality
     /** URLs que já ganharam um acerto nesta sessão (1x cada). */
     private val healthRecordedUrls = mutableSetOf<String>()
     /** Oferta "Mudar para 720p?" ativa (fonte 1080p parou 3x em 1 minuto). */
