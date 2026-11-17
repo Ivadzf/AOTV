@@ -125,6 +125,12 @@ data class SportsLeague(
     val espnSport: String = "soccer",
     val sportLabel: String = "Futebol",
     val hasTable: Boolean = true,
+    /**
+     * Tabela em vários grupos (Libertadores: 8 grupos de 4). O resumo da
+     * ESPN traz só o grupo do jogo, então a tabela é montada com um
+     * resumo por grupo ([EspnSportsRepository.leagueTableMultiGroup]).
+     */
+    val multiGroup: Boolean = false,
 )
 
 /** Ids das 13 ligas que existiam antes da v1.28.0 (Lote 18). Fallback do
@@ -496,25 +502,30 @@ val SPORTS_LEAGUES = listOf(
     // tabela, como decidido no Lote 13). fifa.cwc ficou fora:
     // o Mundial de Clubes não tem edição em 2026 (próxima: 2029) — 0
     // eventos em todas as datas testadas.
+    // Lote 20 (v1.30.0): Champions/Europa/Conference VIRARAM tabela única
+    // de 36 (formato novo da UEFA, verificado ao vivo: o resumo traz 1
+    // grupo com 36 entradas); a Libertadores virou multi-grupo (8 grupos
+    // de 4 — o resumo traz só o grupo do jogo, ver leagueTableMultiGroup).
     SportsLeague(
         "ucl", "Champions League", "uefa.champions", 0, "", 0,
         networkKeywords = listOf("tnt", "max", "space", "espn"),
-        hasTable = false,
+        hasTable = true,
     ),
     SportsLeague(
         "uel", "Europa League", "uefa.europa", 0, "", 0,
         networkKeywords = listOf("espn", "disney"),
-        hasTable = false,
+        hasTable = true,
     ),
     SportsLeague(
         "uecl", "Conference League", "uefa.europa.conf", 0, "", 0,
         networkKeywords = listOf("espn", "disney"),
-        hasTable = false,
+        hasTable = true,
     ),
     SportsLeague(
         "libertadores", "Libertadores", "conmebol.libertadores", 0, "", 0,
         networkKeywords = listOf("espn", "disney", "paramount", "globo"),
-        hasTable = false,
+        hasTable = true,
+        multiGroup = true,
     ),
     SportsLeague(
         "sudamericana", "Sul-Americana", "conmebol.sudamericana", 0, "", 0,
@@ -600,11 +611,21 @@ data class TableRow(
     val zone: TableZone? = null,
 )
 
-/** Tabela de uma liga, com a hora da atualização (p/ mostrar "atualizada às HH:mm"). */
+/** Um grupo da tabela (Libertadores: Grupo A–H; fase única: grupo sem nome). */
+data class TableGroup(
+    val name: String,
+    val rows: List<TableRow>,
+)
+
+/** Tabela de uma liga, com a hora da atualização (p/ mostrar "atualizada às HH:mm").
+ * [groups] é a fonte da verdade quando a liga tem mais de um grupo
+ * (Lote 20, v1.30.0); [rows] é a soma dos grupos, p/ quem só precisa
+ * da lista plana. */
 data class LeagueTable(
     val league: SportsLeague,
     val rows: List<TableRow>,
     val updatedAtMs: Long,
+    val groups: List<TableGroup> = listOf(TableGroup("", rows)),
 )
 
 /** Estado do jogo (o `status.type.name` da ESPN). */
@@ -662,6 +683,15 @@ data class TeamLineup(
     val bench: List<LineupPlayer>,
 )
 
+/** Placar de um período ("1º tempo", "2º tempo", "Prorrogação"). */
+data class PeriodScore(
+    val label: String,
+    val home: Int,
+    val away: Int,
+) {
+    val text: String get() = "$home x $away"
+}
+
 /** Página do jogo: placar, gols, estatísticas, escalações e emissoras. */
 data class GameDetail(
     val game: LeagueGame,
@@ -671,6 +701,8 @@ data class GameDetail(
     val awayLineup: TeamLineup?,
     /** Emissoras da fonte (`broadcasts[].media`), só p/ mostrar — nunca inventadas. */
     val broadcasts: List<String>,
+    /** Placar por período (Lote 20, v1.30.0): só os períodos alcançados. */
+    val periodScores: List<PeriodScore> = emptyList(),
 )
 
 /**
@@ -868,49 +900,101 @@ object EspnSportsApi {
     }
 
     /**
+     * Grupos da tabela a partir do `standings` do summary. Lista vazia
+     * quando o summary não traz tabela (jogo de mata-mata, liga sem
+     * tabela). O resumo da ESPN traz SÓ o grupo do jogo (Libertadores:
+     * 4 times) e sem nome — [groupName] é o nome do grupo vindo do
+     * placar (`competitions[0].group.name`, ex. "Group H"); quando o
+     * resumo traz mais de um grupo sem nome, vira "Grupo 2", "Grupo 3"...
+     * A zona vem da posição + o formato da liga — nunca de dado inventado.
+     */
+    fun parseTableGroups(
+        json: String,
+        league: SportsLeague,
+        form: Map<String, List<FormResult>>,
+        updatedAtMs: Long,
+        groupName: String = "",
+    ): List<TableGroup> {
+        val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyList()
+        val groups = root.optJSONObject("standings")?.optJSONArray("groups") ?: return emptyList()
+        val out = ArrayList<TableGroup>()
+        for (gi in 0 until groups.length()) {
+            val group = groups.optJSONObject(gi) ?: continue
+            val entries = group.optJSONObject("standings")?.optJSONArray("entries") ?: continue
+            val raw = ArrayList<TableRow>()
+            for (i in 0 until entries.length()) {
+                val e = entries.optJSONObject(i) ?: continue
+                val team = e.optString("team")
+                if (team.isBlank()) continue
+                val stats = e.optJSONArray("stats")
+                val rank = statOf(stats, "rank") ?: (i + 1)
+                val played = statOf(stats, "gamesPlayed") ?: 0
+                val wins = statOf(stats, "wins") ?: 0
+                val draws = statOf(stats, "ties") ?: 0
+                val losses = statOf(stats, "losses") ?: 0
+                val gdRaw = statOf(stats, "pointDifferential") ?: 0
+                val points = statOf(stats, "points") ?: 0
+                raw += TableRow(
+                    rank = rank, team = team, logo = e.optString("logo"),
+                    played = played, wins = wins, draws = draws, losses = losses,
+                    goalsFor = statOf(stats, "goalsFor"),
+                    goalsAgainst = statOf(stats, "goalsAgainst"),
+                    goalDiff = gdRaw, points = points,
+                    form = form[team].orEmpty(),
+                )
+            }
+            if (raw.isEmpty()) continue
+            val sorted = raw.sortedBy { it.rank }
+            val total = sorted.size
+            val zoned = sorted.map { row ->
+                val zone = when {
+                    row.rank <= league.topSpots -> TableZone.CONTINENTAL
+                    league.relegationSpots > 0 && row.rank > total - league.relegationSpots -> TableZone.RELEGATION
+                    else -> null
+                }
+                row.copy(zone = zone)
+            }
+            val name = when {
+                groups.length() == 1 -> groupName
+                groupName.isNotBlank() -> "$groupName (${gi + 1})"
+                else -> "Grupo ${gi + 1}"
+            }
+            out += TableGroup(name = name, rows = zoned)
+        }
+        return out
+    }
+
+    /**
      * Tabela a partir do `standings` do summary. null quando o summary não
      * traz tabela (jogo de copa, liga sem tabela). A zona vem da posição +
      * o formato da liga — nunca de dado inventado.
      */
     fun parseTable(json: String, league: SportsLeague, form: Map<String, List<FormResult>>, updatedAtMs: Long): LeagueTable? {
-        val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
-        val groups = root.optJSONObject("standings")?.optJSONArray("groups") ?: return null
-        val first = groups.optJSONObject(0) ?: return null
-        val entries = first.optJSONObject("standings")?.optJSONArray("entries") ?: return null
-        val raw = ArrayList<TableRow>()
-        for (i in 0 until entries.length()) {
-            val e = entries.optJSONObject(i) ?: continue
-            val team = e.optString("team")
-            if (team.isBlank()) continue
-            val stats = e.optJSONArray("stats")
-            val rank = statOf(stats, "rank") ?: (i + 1)
-            val played = statOf(stats, "gamesPlayed") ?: 0
-            val wins = statOf(stats, "wins") ?: 0
-            val draws = statOf(stats, "ties") ?: 0
-            val losses = statOf(stats, "losses") ?: 0
-            val gdRaw = statOf(stats, "pointDifferential") ?: 0
-            val points = statOf(stats, "points") ?: 0
-            raw += TableRow(
-                rank = rank, team = team, logo = e.optString("logo"),
-                played = played, wins = wins, draws = draws, losses = losses,
-                goalsFor = statOf(stats, "goalsFor"),
-                goalsAgainst = statOf(stats, "goalsAgainst"),
-                goalDiff = gdRaw, points = points,
-                form = form[team].orEmpty(),
-            )
+        val groups = parseTableGroups(json, league, form, updatedAtMs)
+        if (groups.isEmpty()) return null
+        return LeagueTable(league = league, rows = groups.flatMap { it.rows }, groups = groups, updatedAtMs = updatedAtMs)
+    }
+
+    /**
+     * Grupo → id do 1º evento do grupo, a partir do placar (o jogo carrega
+     * `competitions[0].group.{name}`). Jogo de mata-mata não tem grupo e é
+     * ignorado. Usado p/ montar a tabela multi-grupo (Libertadores): um
+     * resumo por grupo, cada um com a tabela daquele grupo.
+     */
+    fun parseScoreboardGroups(json: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        val root = runCatching { JSONObject(json) }.getOrNull() ?: return out
+        val events = root.optJSONArray("events") ?: return out
+        for (ei in 0 until events.length()) {
+            val e = events.optJSONObject(ei) ?: continue
+            val eventId = e.optString("id")
+            if (eventId.isBlank()) continue
+            val name = e.optJSONArray("competitions")?.optJSONObject(0)
+                ?.optJSONObject("group")?.optString("name").orEmpty()
+            if (name.isBlank()) continue
+            out.putIfAbsent(name, eventId)
         }
-        if (raw.isEmpty()) return null
-        val sorted = raw.sortedBy { it.rank }
-        val total = sorted.size
-        val zoned = sorted.map { row ->
-            val zone = when {
-                row.rank <= league.topSpots -> TableZone.CONTINENTAL
-                league.relegationSpots > 0 && row.rank > total - league.relegationSpots -> TableZone.RELEGATION
-                else -> null
-            }
-            row.copy(zone = zone)
-        }
-        return LeagueTable(league = league, rows = zoned, updatedAtMs = updatedAtMs)
+        return out
     }
 
     /** Estatísticas que valem na página do jogo (nome da ESPN → rótulo em PT). */
@@ -964,6 +1048,34 @@ object EspnSportsApi {
         val rank = mapOf("G" to 0, "GK" to 0, "D" to 1, "DF" to 1, "M" to 2, "MF" to 2, "F" to 3, "FW" to 3)
         starters.sortWith(compareBy { rank[it.position] ?: 4 })
         return TeamLineup(name, logoOf(team), formation, starters, bench)
+    }
+
+    /**
+     * Placar por período a partir dos gols do resumo (Lote 20, v1.30.0).
+     * 1º tempo = gols até 45' (incl. acréscimos); 2º = 46'–90';
+     * prorrogação = acima de 90'. Só entram os períodos que o jogo
+     * alcançou (pelo relógio/status) — jogo agendado volta vazio, nunca
+     * 0 x 0 inventado. Um 0 x 0 num período alcançado é dado real (nenhum
+     * gol naquele período), não invenção.
+     */
+    fun periodScoresOf(goals: List<GameGoal>, homeTeam: String, awayTeam: String, game: LeagueGame): List<PeriodScore> {
+        if (game.status == GameStatus.SCHEDULED || game.status == GameStatus.POSTPONED) return emptyList()
+        val clockMin = game.clock.trimStart().takeWhile { it.isDigit() }.toIntOrNull()
+        fun minuteOf(minute: String): Int? = minute.trimStart().takeWhile { it.isDigit() }.toIntOrNull()
+        fun count(period: IntRange, team: String): Int = goals.count { g ->
+            val m = minuteOf(g.minute) ?: return@count false
+            m in period && g.team == team
+        }
+        val out = ArrayList<PeriodScore>()
+        out += PeriodScore("1º tempo", count(0..45, homeTeam), count(0..45, awayTeam))
+        val secondReached = game.status == GameStatus.FULL_TIME ||
+            (clockMin != null && clockMin >= 46) ||
+            goals.any { (minuteOf(it.minute) ?: 0) > 45 }
+        if (secondReached) out += PeriodScore("2º tempo", count(46..90, homeTeam), count(46..90, awayTeam))
+        val etReached = (clockMin != null && clockMin > 90) ||
+            goals.any { (minuteOf(it.minute) ?: 0) > 90 }
+        if (etReached) out += PeriodScore("Prorrogação", count(91..200, homeTeam), count(91..200, awayTeam))
+        return out
     }
 
     /**
@@ -1064,7 +1176,7 @@ object EspnSportsApi {
                 if (name.isNotBlank() && name !in broadcasts) broadcasts += name
             }
         }
-        return GameDetail(game, goals, stats, homeLineup, awayLineup, broadcasts)
+        return GameDetail(game, goals, stats, homeLineup, awayLineup, broadcasts, periodScoresOf(goals, game.homeTeam, game.awayTeam, game))
     }
 }
 
@@ -1160,6 +1272,7 @@ class EspnSportsRepository @Inject constructor(
      */
     suspend fun leagueTable(league: SportsLeague): LeagueTable? {
         if (!league.hasTable) return null
+        if (league.multiGroup) return leagueTableMultiGroup(league)
         val cached = readCache("table_${league.espnSlug}.json", tableTtlMs)
         if (cached != null) {
             val table = parseCachedTable(cached.first, league, cached.second)
@@ -1198,6 +1311,86 @@ class EspnSportsRepository @Inject constructor(
         val table = EspnSportsApi.parseTable(summaryJson, league, form, now) ?: return null
         writeCache("table_${league.espnSlug}.json", summaryJson)
         return table
+    }
+
+    /**
+     * Tabela multi-grupo (Libertadores, Lote 20, v1.30.0). O resumo da ESPN
+     * traz SÓ o grupo do jogo, então a tabela é montada com um resumo por
+     * grupo: varre os placares de trás p/ frente (máx. 90 dias, para no
+     * 8º grupo — a fase de grupos tem 8) e guarda o 1º evento de cada
+     * grupo; cada resumo vira um [TableGroup] com o nome vindo do placar.
+     * Cache combinado de 6 h (`table_multi_<slug>.json`: grupo → evento);
+     * os resumos em si já ficam no cache de detalhe. Fora da fase de
+     * grupos (mata-mata), a varredura não acha grupo nenhum e volta null
+     * — a tela mostra "sem dados", sem inventar tabela. O cache negativo
+     * também é guardado (sem varrer de novo por 6 h). Últimos 5: o `form`
+     * dos placares varridos (o mais recente ganha).
+     */
+    private suspend fun leagueTableMultiGroup(league: SportsLeague): LeagueTable? {
+        val cacheName = "table_multi_${league.espnSlug}.json"
+        val now = System.currentTimeMillis()
+        val cached = readCache(cacheName, tableTtlMs)
+        if (cached != null) {
+            // Cache válido: mapa vazio = negativo (fora da fase de grupos) —
+            // volta null sem varrer de novo; mapa ilegível = null, varre.
+            val foundCached = parseMultiCacheMap(cached.first)
+            if (foundCached != null) {
+                if (foundCached.isEmpty()) return null
+                return buildMultiTable(league, foundCached, emptyMap(), cached.second)
+            }
+        }
+        val found = LinkedHashMap<String, String>()
+        val form = LinkedHashMap<String, List<FormResult>>()
+        for (back in 0..90) {
+            if (found.size >= 8) break
+            val dayMs = now - back * 24L * 60 * 60 * 1000
+            val raw = fetchScoreboard(league, EspnSportsApi.ymd(dayMs), back == 0) ?: continue
+            EspnSportsApi.parseScoreboardGroups(raw).forEach { (name, eventId) -> found.putIfAbsent(name, eventId) }
+            EspnSportsApi.parseFormMap(raw).forEach { (team, results) -> form.putIfAbsent(team, results) }
+        }
+        writeCache(cacheName, multiCacheJson(found, now))
+        return buildMultiTable(league, found, form, now)
+    }
+
+    /** Monta a tabela a partir do mapa grupo → evento (cache ou varredura). */
+    private suspend fun buildMultiTable(
+        league: SportsLeague,
+        found: Map<String, String>,
+        form: Map<String, List<FormResult>>,
+        nowMs: Long,
+    ): LeagueTable? {
+        if (found.isEmpty()) return null
+        val groups = ArrayList<TableGroup>()
+        found.entries.sortedBy { it.key }.forEach { (name, eventId) ->
+            val json = fetchSummary(league, eventId) ?: return@forEach
+            val groupForm = LinkedHashMap<String, List<FormResult>>()
+            groupForm.putAll(form)
+            groupForm.putAll(EspnSportsApi.parseLastFive(json))
+            EspnSportsApi.parseTableGroups(json, league, groupForm, nowMs, name).forEach { groups += it }
+        }
+        if (groups.isEmpty()) return null
+        return LeagueTable(league = league, rows = groups.flatMap { it.rows }, groups = groups, updatedAtMs = nowMs)
+    }
+
+    /** Lê o cache combinado (grupo → evento). null = JSON ilegível; mapa vazio = negativo. */
+    private fun parseMultiCacheMap(json: String): Map<String, String>? {
+        val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        val found = LinkedHashMap<String, String>()
+        val arr = root.optJSONArray("groups") ?: return null
+        for (i in 0 until arr.length()) {
+            val g = arr.optJSONObject(i) ?: continue
+            val name = g.optString("name")
+            val eventId = g.optString("eventId")
+            if (name.isNotBlank() && eventId.isNotBlank()) found[name] = eventId
+        }
+        return found
+    }
+
+    private fun multiCacheJson(found: Map<String, String>, atMs: Long): String {
+        val groups = found.entries.joinToString(",") { (name, eventId) ->
+            "{\"name\":${JSONObject.quote(name)},\"eventId\":${JSONObject.quote(eventId)}}"
+        }
+        return "{\"groups\":[$groups],\"updatedAtMs\":$atMs}"
     }
 
     /** Tabela salva em disco (o summary cru + a hora do arquivo). */

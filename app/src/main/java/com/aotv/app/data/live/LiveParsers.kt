@@ -120,6 +120,9 @@ object XtreamParser {
             u.optString("exp_date").toLongOrNull()?.times(1000) ?: 0L,
             u.optString("max_connections").toIntOrNull() ?: 0,
             formats,
+            // Lote 20 (v1.30.0): telas em uso (`active_cons` — nº de conexões
+            // ativas no momento; vem como string ou número).
+            u.optString("active_cons").toIntOrNull() ?: u.optInt("active_cons", 0),
         )
     }.getOrNull()
 
@@ -232,6 +235,15 @@ object XtreamParser {
             val o = a.optJSONObject(i) ?: return@mapNotNull null
             val sid = o.optString("stream_id").ifBlank { return@mapNotNull null }
             val direct = o.optString("direct_source").takeIf { it.startsWith("http", true) }
+            // Lote 20 (v1.30.0) — catch-up Xtream: `tv_archive` (0/1) diz se
+            // o canal grava, `tv_archive_duration` diz por quantas HORAS.
+            // Sem isso o guia nunca oferecia catch-up no Xtream, mesmo com o
+            // servidor suportando timeshift (o `catchupUrl` já sabia montar
+            // a URL `/timeshift/`). `catchupSource = "xtream"` cai no ramo
+            // do `/live/` do `catchupUrl` (não no `?utc=` do default).
+            val archived = o.optString("tv_archive").toIntOrNull() ?: o.optInt("tv_archive", 0)
+            val archiveHours = o.optString("tv_archive_duration").toIntOrNull() ?: o.optInt("tv_archive_duration", 0)
+            val catchupDays = if (archived == 1 && archiveHours > 0) maxOf(1, archiveHours / 24) else 0
             LiveChannel(
                 id = "${source.id}:$sid",
                 sourceId = source.id,
@@ -241,6 +253,8 @@ object XtreamParser {
                 group = groups[o.optString("category_id")].orEmpty(),
                 epgId = o.optString("epg_channel_id"),
                 number = o.optInt("num", i + 1),
+                catchupDays = catchupDays,
+                catchupSource = if (catchupDays > 0) "xtream" else "",
             )
         }
     }.getOrDefault(emptyList())

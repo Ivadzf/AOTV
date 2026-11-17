@@ -54,6 +54,10 @@ import com.aotv.app.ui.theme.TextSecondary
  * URL do logo — sem "image", o selo continua como texto. "category" é uma
  * de: source, resolution, video, audio, channels, encoder, language,
  * streaming, size. Entrada sem id ou com categoria desconhecida é ignorada.
+ * Formato Fusion do Nuvio (Lote 20, v1.30.0): {"filters": [{"id":
+ * "res-4k", "groupId": "resolution", "name": "4K", "imageURL": "..."}]} —
+ * packs como o FR-Badges carregam direto; o grupo vira a categoria e o id
+ * é traduzido p/ o do AOTV.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

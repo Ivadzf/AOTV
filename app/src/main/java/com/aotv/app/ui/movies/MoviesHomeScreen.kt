@@ -599,6 +599,7 @@ private fun HomeSectionsTab(
     val currentState by rememberUpdatedState(state)
     LaunchedEffect(state.upcomingEpisodes, state.upcomingGames) {
         com.aotv.app.data.recordings.RecordingService.checkDue(context)
+        com.aotv.app.data.recordings.RecordingService.checkTeamGames(context, state.upcomingGames)
         com.aotv.app.data.recordings.RecordingReminders.checkDue(
             context, state.upcomingEpisodes, state.upcomingGames,
             state.calendarHideSpoilers, state.sportsGameAlerts,
@@ -614,6 +615,7 @@ private fun HomeSectionsTab(
         while (true) {
             delay(60_000L)
             com.aotv.app.data.recordings.RecordingService.checkDue(context)
+            com.aotv.app.data.recordings.RecordingService.checkTeamGames(context, currentState.upcomingGames)
             com.aotv.app.data.recordings.RecordingReminders.checkDue(
                 context, currentState.upcomingEpisodes, currentState.upcomingGames,
                 currentState.calendarHideSpoilers, currentState.sportsGameAlerts,

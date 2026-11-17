@@ -31,6 +31,12 @@ data class SportsGame(
     val stopMs: Long,
     /** Placar extraído do texto do EPG ("2 x 1"), null quando o texto não traz placar. */
     val score: String? = null,
+    /** Classificação do dicionário local (Lote 20, v1.30.0): esporte,
+     * competição e times — "" quando não classificado. */
+    val sport: String = "",
+    val competition: String = "",
+    val homeTeam: String = "",
+    val awayTeam: String = "",
 ) {
     /** O jogo está passando agora. */
     fun isNow(now: Long) = now in startMs until stopMs
@@ -54,13 +60,17 @@ private val SCORE_REGEX = Regex("""\b(\d{1,2})\s*[xX×]\s*(\d{1,2})\b""")
 /** O grupo ou o nome do canal indica esporte. */
 fun isSportsChannel(channel: LiveChannel): Boolean {
     val hay = (channel.group + " " + channel.name).lowercase()
-    return SPORT_WORDS.any { it in hay }
+    return SPORT_WORDS.any { it in hay } || isSportsChannelName(channel.name)
 }
 
-/** O programa é de esporte (título/descrição) ou já traz um placar no texto. */
+/** O programa é de esporte (título/descrição) ou já traz um placar no texto.
+ * Lote 20 (v1.30.0): o dicionário local também classifica — "Flamengo x
+ * Palmeiras" é esporte mesmo sem nenhuma palavra da lista. */
 fun isSportsProgram(program: LiveProgram): Boolean {
     val hay = (program.title + " " + program.desc).lowercase()
-    return SPORT_WORDS.any { it in hay } || extractScore(program.title + " " + program.desc) != null
+    if (SPORT_WORDS.any { it in hay }) return true
+    if (extractScore(program.title + " " + program.desc) != null) return true
+    return classifySportsProgram(program.title, program.desc) != null
 }
 
 /**
@@ -121,11 +131,19 @@ fun upcomingSportsGames(
         programs.forEach { p ->
             if (p.stop <= now) return@forEach
             if (!isSportsChannel(c) && !isSportsProgram(p)) return@forEach
+            // Lote 20 (v1.30.0): classificação do dicionário local — esporte,
+            // competição e times do programa, p/ a fileira e p/ gravar os
+            // jogos do time seguido.
+            val classification = classifySportsProgram(p.title, p.desc)
             out += SportsGame(
                 channelId = c.id, channelName = c.name, channelUrl = c.url,
                 channelLogo = c.logo, channelHeaders = c.headers,
                 title = p.title, desc = p.desc, startMs = p.start, stopMs = p.stop,
                 score = extractScore(p.title + " " + p.desc),
+                sport = classification?.sport.orEmpty(),
+                competition = classification?.competition.orEmpty(),
+                homeTeam = classification?.homeTeam.orEmpty(),
+                awayTeam = classification?.awayTeam.orEmpty(),
             )
         }
     }

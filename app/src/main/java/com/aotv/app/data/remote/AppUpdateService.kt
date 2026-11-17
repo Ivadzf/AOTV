@@ -279,6 +279,7 @@ fun parseUpdateFeed(json: JSONObject, supportedAbis: Array<String> = Build.SUPPO
  * "" = versão sem notas embutidas.
  */
 fun embeddedChangelogFor(version: String): String = when (version.trim()) {
+    "1.30.0" -> "Novidades do Lote 20: gravações com destino em rede/USB e jogos do time seguido; dicionário de esportes embutido; Multiview com faixa de placares e layouts com nome; logos de canais do tv-logos; catch-up Xtream e conta Xtream com telas em uso; tabelas da Champions e da Libertadores por grupo; fix do atualizador automático e do 'Testar chave' do MDBList; olho nas chaves de API; packs de selos no formato Fusion do Nuvio. O changelog completo da versão está nas notas da release no GitHub."
     "1.29.0" -> "Novidades do Lote 19:\n" +
         "• Watch Party: assista junto com sincronização real, voz, chat e reações.\n" +
         "• Social Hub: amigos, film night e couch match — tudo local, sem servidor; \"Assistir junto\" abre a Watch Party em 1 toque.\n" +
@@ -320,9 +321,13 @@ class AppUpdateService @Inject constructor(
     /** Checagem automática ligada (global, padrão: ligada). */
     val autoCheckEnabled: Boolean get() = prefs.appUpdateCheckEnabled
 
-    /** Já passou o intervalo p/ checar de novo sozinho (24 h desde a última). */
+    /** Já passou o intervalo p/ checar de novo sozinho (24 h desde a última).
+     * Lote 20 (v1.30.0): o gate é ignorado quando a versão instalada mudou
+     * desde o último check — atualizar o app dispara o check no próximo
+     * cold start, mesmo que a versão anterior tenha checado há pouco. */
     fun shouldAutoCheck(nowMs: Long = System.currentTimeMillis()): Boolean =
-        autoCheckEnabled && nowMs - prefs.appUpdateLastCheck >= AUTO_CHECK_INTERVAL_MS
+        autoCheckEnabled && (prefs.appUpdateLastCheckVersion != installedVersionName ||
+            nowMs - prefs.appUpdateLastCheck >= AUTO_CHECK_INTERVAL_MS)
 
     /**
      * Consulta a release mais recente. Ordem (Lote 18, v1.28.0): 1º o feed
@@ -343,6 +348,7 @@ class AppUpdateService @Inject constructor(
             val feedVersion = parseVersionTag(feedRelease.tag)
             if (feedVersion != null && compareVersions(feedVersion, installed) >= 0) {
                 prefs.appUpdateLastCheck = System.currentTimeMillis()
+                prefs.appUpdateLastCheckVersion = installedVersionName
                 saveChangelog(feedRelease)
                 return@withContext if (compareVersions(feedVersion, installed) > 0) {
                     UpdateCheckResult.Available(feedRelease)
@@ -371,6 +377,7 @@ class AppUpdateService @Inject constructor(
             val json = runCatching { JSONObject(body) }.getOrNull()
                 ?: return@withContext UpdateCheckResult.Error("Resposta inválida do GitHub")
             prefs.appUpdateLastCheck = System.currentTimeMillis()
+            prefs.appUpdateLastCheckVersion = installedVersionName
             val release = pickApkAsset(json) ?: return@withContext UpdateCheckResult.NoReleases
             val latest = parseVersionTag(release.tag)
                 ?: return@withContext UpdateCheckResult.Error("Tag da release inválida: ${release.tag}")

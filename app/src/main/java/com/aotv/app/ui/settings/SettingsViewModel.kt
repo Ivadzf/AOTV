@@ -171,6 +171,10 @@ class SettingsViewModel @Inject constructor(
     val recordNotifications: StateFlow<Boolean> = platformPrefs.recordNotificationsFlow
     fun setRecordNotifications(v: Boolean) { platformPrefs.recordNotifications = v }
 
+    /** Gravar local e mover p/ a pasta de destino ao concluir (Lote 20, v1.30.0). */
+    val recordMoveToDestination: StateFlow<Boolean> = platformPrefs.recordMoveToDestinationFlow
+    fun setRecordMoveToDestination(v: Boolean) { platformPrefs.recordMoveToDestination = v }
+
     val recordingsFolderUri: StateFlow<String> = platformPrefs.recordingsFolderUriFlow
     val recordingsFolderName: StateFlow<String> = platformPrefs.recordingsFolderNameFlow
     fun setRecordingsFolder(uri: String, name: String) {

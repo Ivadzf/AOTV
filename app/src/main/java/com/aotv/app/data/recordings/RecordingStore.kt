@@ -41,6 +41,9 @@ data class ScheduledRecording(
     val status: String = STATUS_SCHEDULED,
     /** Nome do arquivo gravado (vazio até a gravação começar). */
     val fileName: String = "",
+    /** O arquivo já foi movido p/ a pasta de destino (Lote 20, v1.30.0):
+     * false = o arquivo está na pasta local do app. */
+    val movedToDestination: Boolean = false,
     /** Erro REAL da falha (mensagem da exceção). Vazio sem falha — nunca genérico. */
     val error: String = "",
     val createdAt: Long = 0L,
@@ -180,6 +183,7 @@ class RecordingStore @Inject constructor(
                     .put("seriesTitle", rec.seriesTitle)
                     .put("startMs", rec.startMs).put("stopMs", rec.stopMs)
                     .put("status", rec.status).put("fileName", rec.fileName)
+                    .put("movedToDestination", rec.movedToDestination)
                     .put("error", rec.error).put("createdAt", rec.createdAt),
             )
         }
@@ -202,6 +206,7 @@ class RecordingStore @Inject constructor(
                 startMs = o.optLong("startMs"), stopMs = o.optLong("stopMs"),
                 status = o.optString("status", ScheduledRecording.STATUS_SCHEDULED),
                 fileName = o.optString("fileName"), error = o.optString("error"),
+                movedToDestination = o.optBoolean("movedToDestination", false),
                 createdAt = o.optLong("createdAt"),
             )
         }.filter { it.id.isNotBlank() && it.channelUrl.isNotBlank() }

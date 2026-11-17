@@ -13,6 +13,8 @@ import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.remote.AppDns
+import com.aotv.app.data.sports.SportsGame
+import com.aotv.app.data.sports.normalizeSportsName
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +29,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -138,6 +141,10 @@ class RecordingService : Service() {
             else downloadTs(rec.channelUrl, rec.channelHeaders, out, endMs)
             out.flush()
             store.update(rec.id) { it.copy(status = ScheduledRecording.STATUS_DONE) }
+            // Lote 20 (v1.30.0): gravou local — move p/ o destino (rede/USB)
+            // agora que o arquivo está completo. Falha ao mover NÃO perde a
+            // gravação: ela fica local e o erro vai no registro.
+            moveToDestination(rec, localFile)
             if (prefs.recordNotifications) {
                 LocalNotifications.notify(
                     applicationContext, LocalNotifications.CHANNEL_RECORDINGS,
@@ -170,32 +177,48 @@ class RecordingService : Service() {
         }
     }
 
-    /** Abre o arquivo de saída: pasta do app (File) ou pasta SAF escolhida (DocumentFile).
-     * Lote 12 — Frente 2: gravação de série vai p/ a subpasta da série
-     * (ver [RecordingStore.folderNameFor]); sem série, vai na raiz. */
+    /**
+     * Abre o arquivo de saída — SEMPRE na pasta local do app (Lote 20,
+     * v1.30.0). Gravar direto na pasta SAF (rede/USB) é lento e falha no
+     * meio; o arquivo é movido p/ o destino ao concluir (ver
+     * [moveToDestination]). Lote 12 — Frente 2: gravação de série vai p/
+     * a subpasta da série (ver [RecordingStore.folderNameFor]); sem série,
+     * vai na raiz. */
     private fun openOutput(rec: ScheduledRecording, fileName: String): Triple<OutputStream, File?, Uri?> {
-        val folderUri = prefs.recordingsFolderUri
         val folder = store.folderNameFor(rec)
-        if (folderUri.isBlank()) {
-            val dir = File(applicationContext.filesDir, "recordings").let {
-                if (folder.isBlank()) it else File(it, folder)
-            }.apply { mkdirs() }
-            val file = File(dir, fileName)
-            return Triple(FileOutputStream(file), file, null)
+        val dir = File(applicationContext.filesDir, "recordings").let {
+            if (folder.isBlank()) it else File(it, folder)
+        }.apply { mkdirs() }
+        val file = File(dir, fileName)
+        return Triple(FileOutputStream(file), file, null)
+    }
+
+    /**
+     * Move a gravação concluída p/ a pasta de destino (SAF — rede/USB).
+     * Sem pasta configurada ou com o mover desligado, não faz nada. Em
+     * falha, o arquivo fica local e o erro vai no registro (a gravação
+     * NÃO se perde). Devolve true quando moveu.
+     */
+    private fun moveToDestination(rec: ScheduledRecording, localFile: File?): Boolean {
+        if (localFile == null || !localFile.exists()) return false
+        if (!prefs.recordMoveToDestination) return false
+        val folderUri = prefs.recordingsFolderUri
+        if (folderUri.isBlank()) return false
+        return try {
+            moveFileToDestination(applicationContext, rec, localFile, folderUri, store)
+        } catch (e: Exception) {
+            val msg = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            store.update(rec.id) {
+                it.copy(error = "Gravada localmente — não consegui mover p/ o destino: $msg")
+            }
+            if (prefs.recordNotifications) {
+                LocalNotifications.notify(
+                    applicationContext, LocalNotifications.CHANNEL_RECORDINGS,
+                    rec.id.hashCode(), "Gravação não moveu: ${rec.programTitle}", msg,
+                )
+            }
+            false
         }
-        val treeUri = Uri.parse(folderUri)
-        var dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri)
-            ?: throw IOException("Pasta de gravações sem acesso — escolha a pasta de novo em Downloads")
-        if (folder.isNotBlank()) {
-            dirDoc = dirDoc.findFile(folder)?.takeIf { it.isDirectory }
-                ?: dirDoc.createDirectory(folder)
-                ?: throw IOException("Não consegui criar a pasta da série nas gravações")
-        }
-        val doc = dirDoc.createFile("video/mp2t", fileName)
-            ?: throw IOException("Não consegui criar o arquivo na pasta de gravações")
-        val stream = applicationContext.contentResolver.openOutputStream(doc.uri)
-            ?: throw IOException("Não consegui abrir o arquivo na pasta de gravações")
-        return Triple(stream, null, doc.uri)
     }
 
     /** Apaga o arquivo parcial de uma gravação que falhou. */
@@ -359,27 +382,30 @@ class RecordingService : Service() {
     }
 
     /** Mantém só as N gravações mais recentes (a mais antiga sai).
-     * Lote 12 — Frente 2: olha também as subpastas de séries (1 nível). */
+     * Lote 12 — Frente 2: olha também as subpastas de séries (1 nível).
+     * Lote 20 (v1.30.0): a gravação agora nasce local e move p/ o destino
+     * ao concluir — a retenção olha os DOIS lugares (local + SAF). */
     private fun pruneRetention() {
         val keep = prefs.recordKeepEpisodes
         runCatching {
-            if (prefs.recordingsFolderUri.isBlank()) {
-                val dir = File(applicationContext.filesDir, "recordings")
-                val files = (dir.listFiles()?.toList().orEmpty())
-                    .flatMap { f -> if (f.isDirectory) f.listFiles()?.toList().orEmpty() else listOf(f) }
-                    .filter { it.name.startsWith("aotv-rec-") }
-                    .sortedByDescending { it.lastModified() }
-                files.drop(keep).forEach { it.delete() }
-            } else {
-                val treeUri = Uri.parse(prefs.recordingsFolderUri)
-                val dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@runCatching
-                val docs = dirDoc.listFiles().flatMap { d ->
-                    if (d.isDirectory) d.listFiles().toList() else listOf(d)
-                }
-                    .filter { (it.name.orEmpty()).startsWith("aotv-rec-") }
-                    .sortedByDescending { it.lastModified() }
-                docs.drop(keep).forEach { it.delete() }
+            val dir = File(applicationContext.filesDir, "recordings")
+            val files = (dir.listFiles()?.toList().orEmpty())
+                .flatMap { f -> if (f.isDirectory) f.listFiles()?.toList().orEmpty() else listOf(f) }
+                .filter { it.name.startsWith("aotv-rec-") }
+                .sortedByDescending { it.lastModified() }
+            files.drop(keep).forEach { it.delete() }
+        }
+        runCatching {
+            val folderUri = prefs.recordingsFolderUri
+            if (folderUri.isBlank()) return@runCatching
+            val treeUri = Uri.parse(folderUri)
+            val dirDoc = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@runCatching
+            val docs = dirDoc.listFiles().flatMap { d ->
+                if (d.isDirectory) d.listFiles().toList() else listOf(d)
             }
+                .filter { (it.name.orEmpty()).startsWith("aotv-rec-") }
+                .sortedByDescending { it.lastModified() }
+            docs.drop(keep).forEach { it.delete() }
         }
     }
 
@@ -412,6 +438,111 @@ class RecordingService : Service() {
             } ?: return false
             start(context, due.id)
             return true
+        }
+
+        /**
+         * Agenda sozinhas as gravações dos jogos dos times com gravação
+         * ligada (Lote 20, v1.30.0 — pref `record_team_games_v1`). [games]
+         * é a mesma lista de `upcomingGames` da Início (jogos do EPG, com
+         * canal e horários). Agenda o jogo quando ele começa nas próximas
+         * 24 h (ou começou há menos de 30 min) e ainda não há gravação p/
+         * o mesmo canal + início (qualquer status, menos cancelada). A
+         * checagem roda a cada minuto com a Início aberta — sem duplicar.
+         */
+        fun checkTeamGames(context: Context, games: List<SportsGame>) {
+            val prefs = PlatformPrefs(context)
+            val teams = prefs.recordTeamGames
+            if (teams.isEmpty()) return
+            val store = RecordingStore(context)
+            val now = System.currentTimeMillis()
+            val existing = store.list()
+            games.forEach { game ->
+                if (teams.none { team -> teamMentions(game.title, team) || teamMentions(game.desc, team) }) return@forEach
+                if (game.startMs < now - 30 * 60_000L) return@forEach
+                if (game.startMs > now + 24 * 3_600_000L) return@forEach
+                if (existing.any {
+                        it.channelId == game.channelId && it.startMs == game.startMs &&
+                            it.status != ScheduledRecording.STATUS_CANCELLED
+                    }
+                ) return@forEach
+                store.schedule(
+                    game.channelId, game.channelName, game.channelUrl, game.channelHeaders,
+                    game.title, game.startMs, game.stopMs,
+                )
+            }
+        }
+
+        /** O texto do programa menciona o time (normalizado: acento/maiúscula fora). */
+        private fun teamMentions(text: String, team: String): Boolean {
+            val normTeam = normalizeSportsName(team.trim())
+            if (normTeam.isBlank()) return false
+            return normTeam in normalizeSportsName(text)
+        }
+
+        /** Arquivo local da gravação (null quando não existe ou já moveu). */
+        fun localFileFor(context: Context, rec: ScheduledRecording): File? {
+            if (rec.fileName.isBlank() || rec.movedToDestination) return null
+            val store = RecordingStore(context)
+            val folder = store.folderNameFor(rec)
+            val base = File(context.filesDir, "recordings")
+            val dir = if (folder.isBlank()) base else File(base, folder)
+            return File(dir, rec.fileName).takeIf { it.exists() }
+        }
+
+        /**
+         * Copia o arquivo local p/ a pasta de destino (SAF) e apaga o
+         * local. A subpasta da série é a mesma dos dois lados. Se o arquivo
+         * já está no destino (retry), só apaga o local. Lança IOException
+         * com o motivo real — quem chama decide o que mostrar.
+         */
+        fun moveFileToDestination(
+            context: Context,
+            rec: ScheduledRecording,
+            localFile: File,
+            folderUri: String,
+            store: RecordingStore,
+        ): Boolean {
+            val treeUri = Uri.parse(folderUri)
+            var dirDoc = DocumentFile.fromTreeUri(context, treeUri)
+                ?: throw IOException("Pasta de destino sem acesso — escolha a pasta de novo em Downloads")
+            val folder = store.folderNameFor(rec)
+            if (folder.isNotBlank()) {
+                dirDoc = dirDoc.findFile(folder)?.takeIf { it.isDirectory }
+                    ?: dirDoc.createDirectory(folder)
+                    ?: throw IOException("Não consegui criar a pasta da série no destino")
+            }
+            val existing = dirDoc.findFile(rec.fileName)
+            if (existing != null && existing.isFile) {
+                localFile.delete()
+                store.update(rec.id) { it.copy(movedToDestination = true, error = "") }
+                return true
+            }
+            val doc = dirDoc.createFile("video/mp2t", rec.fileName)
+                ?: throw IOException("Não consegui criar o arquivo no destino")
+            context.contentResolver.openOutputStream(doc.uri)?.use { out ->
+                FileInputStream(localFile).use { input -> input.copyTo(out) }
+            } ?: throw IOException("Não consegui abrir o arquivo no destino")
+            localFile.delete()
+            store.update(rec.id) { it.copy(movedToDestination = true, error = "") }
+            return true
+        }
+
+        /**
+         * Move manual p/ o destino (botão "Mover p/ destino" na lista de
+         * gravações). Devolve true quando moveu; failure traz o motivo.
+         */
+        fun moveNow(context: Context, recordingId: String): Result<Boolean> = runCatching {
+            val store = RecordingStore(context)
+            val prefs = PlatformPrefs(context)
+            val rec = store.list().firstOrNull { it.id == recordingId }
+                ?: throw IllegalArgumentException("Gravação não encontrada")
+            if (rec.movedToDestination) return@runCatching true
+            val localFile = localFileFor(context, rec)
+                ?: throw IllegalStateException("Arquivo local não encontrado")
+            if (prefs.recordingsFolderUri.isBlank()) {
+                throw IllegalStateException("Escolha a pasta de destino em Downloads → Gravações")
+            }
+            moveFileToDestination(context, rec, localFile, prefs.recordingsFolderUri, store)
         }
     }
 }

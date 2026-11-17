@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -54,6 +56,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -119,6 +122,11 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
     var mdbApiKey by remember(st.mdbApiKey) { mutableStateOf(st.mdbApiKey) }
     var aniClientId by remember(st.aniClientId) { mutableStateOf(st.aniClientId) }
     var tvdbApiKey by remember(st.tvdbApiKey) { mutableStateOf(st.tvdbApiKey) }
+    // Lote 20 (v1.30.0) — olho p/ exibir/mascarar as chaves (só a TMDB
+    // tinha; o AniList Client ID já é texto visível, sem máscara).
+    var traktSecretVisible by remember { mutableStateOf(false) }
+    var mdbKeyVisible by remember { mutableStateOf(false) }
+    var tvdbKeyVisible by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var confirmTraktLogout by remember { mutableStateOf(false) }
     var confirmAniLogout by remember { mutableStateOf(false) }
@@ -328,7 +336,15 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     value = traktClientSecret, onValueChange = { traktClientSecret = it.trim() }, singleLine = true,
                     label = { Text("Client Secret do Trakt (opcional)") },
                     leadingIcon = { Icon(Icons.Default.Key, null, tint = TextSecondary) },
-                    visualTransformation = PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { traktSecretVisible = !traktSecretVisible }) {
+                            Icon(
+                                if (traktSecretVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (traktSecretVisible) "Ocultar Client Secret" else "Mostrar Client Secret",
+                            )
+                        }
+                    },
+                    visualTransformation = if (traktSecretVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -397,7 +413,15 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     value = mdbApiKey, onValueChange = { mdbApiKey = it.trim() }, singleLine = true,
                     label = { Text("Chave de API do MDBList") },
                     leadingIcon = { Icon(Icons.Default.Key, null, tint = TextSecondary) },
-                    visualTransformation = PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { mdbKeyVisible = !mdbKeyVisible }) {
+                            Icon(
+                                if (mdbKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (mdbKeyVisible) "Ocultar chave do MDBList" else "Mostrar chave do MDBList",
+                            )
+                        }
+                    },
+                    visualTransformation = if (mdbKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -549,7 +573,15 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     value = tvdbApiKey, onValueChange = { tvdbApiKey = it.trim() }, singleLine = true,
                     label = { Text("Chave de API do TheTVDB") },
                     leadingIcon = { Icon(Icons.Default.Key, null, tint = TextSecondary) },
-                    visualTransformation = PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { tvdbKeyVisible = !tvdbKeyVisible }) {
+                            Icon(
+                                if (tvdbKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (tvdbKeyVisible) "Ocultar chave do TheTVDB" else "Mostrar chave do TheTVDB",
+                            )
+                        }
+                    },
+                    visualTransformation = if (tvdbKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(

@@ -52,7 +52,11 @@ data class LiveProgram(val start: Long, val stop: Long, val title: String, val d
 data class M3uResult(val channels: List<LiveChannel>, val epgUrls: List<String>)
 
 /** Conta Xtream. [expiresAt] em epoch ms, 0 sem data (conta vitalícia ou não informada). */
-data class XtreamAccount(val status: String, val expiresAt: Long, val maxConnections: Int, val formats: List<String>)
+/** Conta Xtream (`player_api.php` sem action devolve `user_info`). [expiresAt]
+ * em epoch ms (0 = sem expiração informada); [activeConnections] é o nº de
+ * telas em uso no momento (`active_cons`, Lote 20, v1.30.0 — 0 quando o
+ * servidor não informa). */
+data class XtreamAccount(val status: String, val expiresAt: Long, val maxConnections: Int, val formats: List<String>, val activeConnections: Int = 0)
 
 /** Categoria do On Demand Xtream (get_vod_categories / get_series_categories). */
 data class VodCategory(val id: String, val name: String)

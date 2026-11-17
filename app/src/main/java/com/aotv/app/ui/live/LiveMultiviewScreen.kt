@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -42,6 +43,8 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.aotv.app.data.live.LiveChannel
+import com.aotv.app.data.sports.isSportsProgram
+import com.aotv.app.data.sports.visibleScore
 import com.aotv.app.ui.theme.*
 
 /** Rota do Multiview (Lote 12, v1.22.0). */
@@ -82,9 +85,11 @@ fun LiveMultiviewScreen(
             }
             Text("Multiview", color = TextPrimary, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
             if (!isTv) {
-                com.aotv.app.ui.common.FilterChipPill("1", layout == 1, { prefs.liveMultiviewLayout = 1 })
-                com.aotv.app.ui.common.FilterChipPill("2", layout == 2, { prefs.liveMultiviewLayout = 2 })
-                com.aotv.app.ui.common.FilterChipPill("4", layout == 4, { prefs.liveMultiviewLayout = 4 })
+                // Lote 20 (v1.30.0): layouts com nome (o layout é guardado
+                // na pref `live_multiview_layout` e volta no último usado).
+                com.aotv.app.ui.common.FilterChipPill("1 canal", layout == 1, { prefs.liveMultiviewLayout = 1 })
+                com.aotv.app.ui.common.FilterChipPill("2 lado a lado", layout == 2, { prefs.liveMultiviewLayout = 2 })
+                com.aotv.app.ui.common.FilterChipPill("4 em grade", layout == 4, { prefs.liveMultiviewLayout = 4 })
             }
         }
 
@@ -122,12 +127,72 @@ fun LiveMultiviewScreen(
             return@Column
         }
 
+        // Lote 20 (v1.30.0): faixa de placares — os jogos ao vivo do guia,
+        // com o placar quando o texto do EPG traz (respeita esconder placar
+        // e o atraso anti-spoiler). Toque abre o canal no player.
+        MultiviewScoreStrip(
+            rows = v.rows,
+            now = v.now,
+            hideScores = prefs.sportsHideScores,
+            delaySec = prefs.sportsScoreDelaySec,
+            onExpand = onExpand,
+        )
+
         MultiviewGrid(
             rows = v.rows,
             layout = layout,
             onExpand = onExpand,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/**
+ * Faixa horizontal de jogos ao vivo (Lote 20, v1.30.0): um chip por jogo de
+ * esporte passando agora no guia — canal, título do programa e placar
+ * (quando o EPG traz). Sem jogo ao vivo, a faixa some. O placar usa o
+ * mesmo [visibleScore] da aba de esportes (esconder + atraso).
+ */
+@Composable
+private fun MultiviewScoreStrip(
+    rows: List<LiveRow>,
+    now: Long,
+    hideScores: Boolean,
+    delaySec: Int,
+    onExpand: (String) -> Unit,
+) {
+    val games = remember(rows, now, hideScores, delaySec) {
+        rows.mapNotNull { row ->
+            val program = row.now ?: return@mapNotNull null
+            if (!isSportsProgram(program)) return@mapNotNull null
+            Triple(row.channel, program.title, visibleScore(program, now, hideScores, delaySec))
+        }
+    }
+    if (games.isEmpty()) return
+    LazyRow(
+        Modifier.fillMaxWidth().padding(
+            start = com.aotv.app.ui.common.pagePadding(),
+            end = com.aotv.app.ui.common.pagePadding(),
+            bottom = 8.dp,
+        ),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(games, key = { (channel, _, _) -> channel.id }) { (channel, title, score) ->
+            Column(
+                Modifier.clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                    .clickable { onExpand(channel.id) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    channel.name, color = TextPrimary, fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    if (score != null) "$title — $score" else title,
+                    color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 

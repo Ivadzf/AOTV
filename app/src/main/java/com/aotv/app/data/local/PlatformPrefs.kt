@@ -160,6 +160,9 @@ internal val SCOPED_KEYS = listOf(
     "sports_tab_leagues_known_v1",
     "record_start_early_min", "record_run_late_min", "record_keep_episodes",
     "record_low_space_mb", "record_notifications",
+    // Lote 20 (v1.30.0): mover p/ o destino ao concluir (grava local e move)
+    // e os times cujos jogos são gravados sozinhos.
+    "record_move_to_destination", "record_team_games_v1",
     "calendar_hide_spoilers",
     // Lote 13 (v1.23.0): auto-add do calendário via trackers + "Não hoje"
     // dos episódios novos (mapa tmdbId -> data do dispenso).
@@ -1280,6 +1283,16 @@ class PlatformPrefs @Inject constructor(
         get() = _appUpdateLastCheck.value
         set(value) { prefs.edit().putLong("app_update_last_check_v1", value).apply(); _appUpdateLastCheck.value = value }
 
+    /** Versão instalada no último check automático (Lote 20, v1.30.0): o
+     * gate de 24 h é ignorado quando a versão mudou — sem isso, atualizar
+     * o app não disparava o check automático ao abrir, porque a v1.29.0
+     * tinha checado recentemente (bug reportado pelo Davi, 2026-11-17).
+     * Chave do aparelho (não entra no SCOPED_KEYS), como as outras
+     * `app_update_*`. */
+    var appUpdateLastCheckVersion: String
+        get() = prefs.getString("app_update_last_check_version_v1", "") ?: ""
+        set(value) { prefs.edit().putString("app_update_last_check_version_v1", value).apply() }
+
     // ── Atualizador (Lote 18) ────────────────────────────────────────────
     // Download em 2º plano + "What's new" após atualizar (v1.28.0). Tudo
     // GLOBAL (do aparelho, não do perfil; ver AotvBackup.GLOBAL_KEYS): a
@@ -1690,6 +1703,41 @@ class PlatformPrefs @Inject constructor(
     var recordNotifications: Boolean
         get() = _recordNotifications.value
         set(value) { prefs.edit().putBoolean(sk("record_notifications"), value).apply(); _recordNotifications.value = value }
+
+    private val _recordMoveToDestination = MutableStateFlow(prefs.getBoolean(sk("record_move_to_destination"), true))
+    /** Gravar sempre local e mover p/ a pasta de destino ao concluir
+     * (Lote 20, v1.30.0): a gravação direta em rede/USB via SAF é lenta e
+     * falha no meio; local + mover no fim é confiável. Sem pasta de
+     * destino, não há o que mover — fica local. */
+    val recordMoveToDestinationFlow: StateFlow<Boolean> = _recordMoveToDestination.asStateFlow()
+    var recordMoveToDestination: Boolean
+        get() = _recordMoveToDestination.value
+        set(value) { prefs.edit().putBoolean(sk("record_move_to_destination"), value).apply(); _recordMoveToDestination.value = value }
+
+    /** Times cujos jogos são gravados sozinhos (Lote 20, v1.30.0): nomes
+     * como aparecem no guia (a comparação normaliza acento/maiúscula).
+     * Vazio = nenhum jogo gravado automaticamente. */
+    var recordTeamGames: List<String>
+        get() = readStringList("record_team_games_v1")
+        set(value) { writeStringList("record_team_games_v1", value.distinct()) }
+
+    /** Liga/desliga a gravação automática dos jogos de um time. */
+    fun toggleRecordTeamGames(team: String) {
+        val clean = team.trim()
+        if (clean.isBlank()) return
+        val norm = normalizeSportsName(clean)
+        if (norm.isBlank()) return
+        val cur = recordTeamGames
+        val matched = cur.filter { normalizeSportsName(it) == norm }
+        recordTeamGames = if (matched.isEmpty()) cur + clean else cur - matched
+    }
+
+    /** O time tem a gravação automática dos jogos ligada. */
+    fun isRecordTeamGames(team: String): Boolean {
+        val norm = normalizeSportsName(team.trim())
+        if (norm.isBlank()) return false
+        return recordTeamGames.any { normalizeSportsName(it) == norm }
+    }
 
     private val _calendarHideSpoilers = MutableStateFlow(prefs.getBoolean(sk("calendar_hide_spoilers"), false))
     /** Esconder título/sinopse do episódio até ele ir ao ar (fileira "Próximos" e lembretes). */

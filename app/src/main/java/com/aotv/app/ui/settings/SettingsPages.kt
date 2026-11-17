@@ -23,6 +23,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,6 +59,7 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.History
@@ -106,8 +113,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -134,8 +143,11 @@ import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.recordings.RecordingService
 import com.aotv.app.data.recordings.RecordingStore
+import com.aotv.app.data.recordings.RecordingThumbs
 import com.aotv.app.data.recordings.ScheduledRecording
+import com.aotv.app.data.remote.AppUpdateService
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.ui.movies.PlayerPrefsViewModel
@@ -391,17 +403,24 @@ private fun safFolderDisplayName(context: android.content.Context, treeUri: Uri)
 private fun recordingSub(rec: ScheduledRecording): String {
     val day = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(rec.startMs))
     val until = java.text.SimpleDateFormat("HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(rec.stopMs))
-    return "${rec.channelName} · $day até $until · ${rec.statusLabel()}"
+    // Lote 20 (v1.30.0): onde o arquivo está (local ou já movido p/ o destino).
+    val where = when {
+        rec.movedToDestination -> " · No destino"
+        rec.status == ScheduledRecording.STATUS_DONE -> " · Local"
+        else -> ""
+    }
+    return "${rec.channelName} · $day até $until · ${rec.statusLabel()}$where"
 }
 
 /**
- * Abre uma gravação p/ assistir (Lote 12 — Frente 2). A gravação em
- * andamento toca o arquivo parcial (o player abre o arquivo como está).
- * Pasta SAF: o arquivo abre no player do sistema pela URI de conteúdo
- * (com a pasta da série, quando houver). Pasta do app: o arquivo é privado
- * e não há FileProvider p/ ele (só p/ o APK do atualizador) — o toast
- * explica e indica a pasta compartilhada. Tocar dentro do app a partir
- * daqui precisa do callback de navegação p/ o player, fora desta frente.
+ * Abre uma gravação p/ assistir (Lote 12 — Frente 2; local via FileProvider
+ * no Lote 20, v1.30.0). A gravação em andamento toca o arquivo parcial (o
+ * player abre o arquivo como está). Pasta SAF (já movida): o arquivo abre
+ * no player do sistema pela URI de conteúdo (com a pasta da série, quando
+ * houver). Pasta do app (local): o arquivo abre pela URI do FileProvider
+ * (`files-path recordings/` — antes não havia FileProvider p/ ele e o
+ * toast só explicava). Tocar dentro do app a partir daqui precisa do
+ * callback de navegação p/ o player, fora desta frente.
  */
 private fun playRecording(
     context: android.content.Context,
@@ -413,29 +432,21 @@ private fun playRecording(
         Toast.makeText(context, "A gravação ainda não começou — não há arquivo para assistir", Toast.LENGTH_LONG).show()
         return
     }
-    if (folderUri.isBlank()) {
-        val base = java.io.File(context.filesDir, "recordings")
-        val folder = store.folderNameFor(rec)
-        val dir = if (folder.isBlank()) base else java.io.File(base, folder)
-        if (!java.io.File(dir, rec.fileName).exists()) {
-            Toast.makeText(context, "Arquivo da gravação não encontrado", Toast.LENGTH_LONG).show()
-            return
-        }
-        Toast.makeText(
-            context,
-            "A gravação está na pasta do app — escolha uma pasta compartilhada em Downloads → Gravações para assistir fora do app",
-            Toast.LENGTH_LONG,
-        ).show()
-        return
+    val uri: Uri? = if (rec.movedToDestination) {
+        runCatching {
+            var dir = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return@runCatching null
+            val folder = store.folderNameFor(rec)
+            if (folder.isNotBlank()) dir = dir.findFile(folder) ?: return@runCatching null
+            dir.findFile(rec.fileName)?.uri
+        }.getOrNull()
+    } else {
+        val file = RecordingService.localFileFor(context, rec)
+        if (file == null) null else runCatching {
+            FileProvider.getUriForFile(context, AppUpdateService.FILE_PROVIDER_AUTHORITY, file)
+        }.getOrNull()
     }
-    val uri = runCatching {
-        var dir = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return@runCatching null
-        val folder = store.folderNameFor(rec)
-        if (folder.isNotBlank()) dir = dir.findFile(folder) ?: return@runCatching null
-        dir.findFile(rec.fileName)?.uri
-    }.getOrNull()
     if (uri == null) {
-        Toast.makeText(context, "Arquivo da gravação não encontrado na pasta", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Arquivo da gravação não encontrado", Toast.LENGTH_LONG).show()
         return
     }
     val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "video/*")
@@ -477,10 +488,12 @@ private fun DownloadsPage(
     val recKeep by viewModel.recordKeepEpisodes.collectAsStateWithLifecycle()
     val recLowSpace by viewModel.recordLowSpaceMb.collectAsStateWithLifecycle()
     val recNotifications by viewModel.recordNotifications.collectAsStateWithLifecycle()
+    val recMoveToDestination by viewModel.recordMoveToDestination.collectAsStateWithLifecycle()
     val recordings by viewModel.recordingsList.collectAsStateWithLifecycle()
     // Lote 12 — Frente 2: gravações vistas (pref por perfil) e assistir.
     val recPrefs = remember { PlatformPrefs(context) }
     val recStore = remember { RecordingStore(context) }
+    val moveScope = rememberCoroutineScope()
     val seenRecordings by recPrefs.recordingsSeenFlow.collectAsStateWithLifecycle()
     var recFreeMb by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) { viewModel.refreshMobileData(); viewModel.refreshRecordings(); recFreeMb = viewModel.recordingsFreeMb() }
@@ -635,7 +648,8 @@ private fun DownloadsPage(
                 sub = when {
                     recFolderUri.isBlank() -> "Pasta do app (padrão). Toque para escolher outra pasta."
                     !recFolderHasAccess -> "\"$recFolderName\" sem acesso — toque para escolher de novo."
-                    else -> "\"$recFolderName\". As gravações vão para lá."
+                    recMoveToDestination -> "\"$recFolderName\". Grava local e move p/ lá ao concluir."
+                    else -> "\"$recFolderName\". Com o mover desligado, as gravações ficam na pasta do app."
                 },
                 onClick = { pickRecordingsFolder.launch(null) },
                 grouped = true,
@@ -647,6 +661,18 @@ private fun DownloadsPage(
                     else "Sem aviso: a gravação acontece, mas não avisa",
                 trailing = { Switch(checked = recNotifications, onCheckedChange = { viewModel.setRecordNotifications(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setRecordNotifications(!recNotifications) },
+                grouped = true,
+                divider = true,
+            )
+            // Lote 20 (v1.30.0): grava local e move ao concluir — a gravação
+            // direta em rede/USB via SAF é lenta e falha no meio.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.MoveToInbox,
+                title = "Mover p/ a pasta ao concluir",
+                sub = if (recMoveToDestination) "Grava na pasta do app e move p/ o destino quando termina (rede/USB)"
+                    else "Desligado: a gravação fica na pasta do app, mesmo com destino escolhido",
+                trailing = { Switch(checked = recMoveToDestination, onCheckedChange = { viewModel.setRecordMoveToDestination(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setRecordMoveToDestination(!recMoveToDestination) },
                 grouped = true,
                 divider = true,
             )
@@ -709,11 +735,30 @@ private fun DownloadsPage(
                     )
                     items.forEachIndexed { index, rec ->
                         if (index > 0) Spacer(Modifier.height(12.dp))
-                        Text(rec.programTitle, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            recordingSub(rec) + if (rec.id in seenRecordings) " · Vista" else "",
-                            color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
-                        )
+                        // Lote 20 (v1.30.0): miniatura do .ts (frame de 5 s).
+                        var thumbFile by remember(rec.id, rec.status) { mutableStateOf<File?>(null) }
+                        LaunchedEffect(rec.id, rec.status) {
+                            thumbFile = withContext(Dispatchers.IO) {
+                                RecordingThumbs.ensureThumbnail(context, rec, recFolderUri)
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            thumbFile?.let { thumb ->
+                                AsyncImage(
+                                    model = thumb,
+                                    contentDescription = "Miniatura de ${rec.programTitle}",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(64.dp, 36.dp).clip(RoundedCornerShape(8.dp)),
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(rec.programTitle, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    recordingSub(rec) + if (rec.id in seenRecordings) " · Vista" else "",
+                                    color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                                )
+                            }
+                        }
                         if (rec.status == ScheduledRecording.STATUS_FAILED && rec.error.isNotBlank()) {
                             Text("Erro: ${rec.error}", color = DangerText, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(top = 4.dp))
                         }
@@ -724,6 +769,28 @@ private fun DownloadsPage(
                                 }
                                 TextButton(onClick = { recPrefs.setRecordingSeen(rec.id, rec.id !in seenRecordings) }) {
                                     Text(if (rec.id in seenRecordings) "Vista ✓" else "Marcar como vista", color = Accent)
+                                }
+                            }
+                            // Lote 20 (v1.30.0): mover manual p/ o destino
+                            // quando a gravação ficou local (mover desligado
+                            // ou falha ao mover no fim).
+                            if (rec.status == ScheduledRecording.STATUS_DONE && !rec.movedToDestination && recFolderUri.isNotBlank()) {
+                                TextButton(onClick = {
+                                    moveScope.launch(Dispatchers.IO) {
+                                        val result = RecordingService.moveNow(context, rec.id)
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(
+                                                context,
+                                                result.fold(
+                                                    onSuccess = { "Gravação movida p/ o destino" },
+                                                    onFailure = { e -> e.message ?: "Não consegui mover" },
+                                                ),
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
+                                    }
+                                }) {
+                                    Text("Mover p/ destino", color = Accent)
                                 }
                             }
                             when (rec.status) {
@@ -2312,6 +2379,9 @@ private fun ReproducaoPage(
     val subHideSdh by playerPrefs.subHideSdh.collectAsStateWithLifecycle()
     val subDlKey by playerPrefs.subDlApiKey.collectAsStateWithLifecycle()
     var subDlDraft by remember(subDlKey) { mutableStateOf(subDlKey) }
+    // Lote 20 (v1.30.0) — olho p/ exibir/mascarar a chave do SubDL (mesmo
+    // padrão da TMDB, logo acima).
+    var subDlVisible by remember { mutableStateOf(false) }
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack, highlightAnchor = highlightAnchor) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
         SettingsSection("Reprodução", anchor = SettingsAnchors.PLAY_MAIN)
@@ -2433,7 +2503,7 @@ private fun ReproducaoPage(
                     onValueChange = { subDlDraft = it },
                     label = { Text("Chave do SubDL (opcional)") },
                     placeholder = { Text("Cole sua chave aqui", color = TextTertiary) },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (subDlVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
@@ -2449,6 +2519,15 @@ private fun ReproducaoPage(
                         unfocusedLabelColor = TextTertiary,
                         cursorColor = Accent,
                     ),
+                )
+            }
+            IconButton(
+                onClick = { subDlVisible = !subDlVisible }, enabled = subDlDraft.isNotEmpty(),
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    if (subDlVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = if (subDlVisible) "Ocultar chave do SubDL" else "Mostrar chave do SubDL",
                 )
             }
         }

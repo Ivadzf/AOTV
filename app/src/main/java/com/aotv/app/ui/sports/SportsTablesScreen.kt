@@ -523,7 +523,11 @@ private fun NetworkChannelRow(channel: LiveChannel, onPlay: () -> Unit) {
     }
 }
 
-/** Tabela: cabeçalho + linhas com zona colorida e últimos 5. */
+/** Tabela: cabeçalho + linhas com zona colorida e últimos 5.
+ * Lote 20 (v1.30.0): mais de um grupo (Libertadores) vira uma seção por
+ * grupo, com o nome no cabeçalho; grupo único (o caso de todas as outras
+ * ligas) renderiza como antes, sem cabeçalho. A legenda só mostra a zona
+ * que a liga tem de verdade (sem "Rebaixamento" p/ quem não rebaixa). */
 @Composable
 private fun LeagueTableCard(table: LeagueTable) {
     Column(
@@ -531,60 +535,73 @@ private fun LeagueTableCard(table: LeagueTable) {
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("", modifier = Modifier.width(4.dp))
-            Text("#", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
-            Text("Time", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            TableNumHeader("P")
-            TableNumHeader("V")
-            TableNumHeader("E")
-            TableNumHeader("D")
-            TableNumHeader("SG")
-            TableNumHeader("Pts", bold = true)
-            Text("Últimos 5", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp), textAlign = TextAlign.Center)
-        }
-        table.rows.forEach { row ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-                Box(
-                    Modifier.size(width = 4.dp, height = 28.dp).clip(RoundedCornerShape(2.dp))
-                        .background(
-                            when (row.zone) {
-                                TableZone.CONTINENTAL -> Accent
-                                TableZone.RELEGATION -> Color(0xFFE5484D)
-                                null -> Color.Transparent
-                            },
-                        ),
+        table.groups.forEach { group ->
+            if (table.groups.size > 1) {
+                Text(
+                    group.name.ifBlank { "Tabela" },
+                    color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 6.dp, top = 6.dp),
                 )
-                Text(row.rank.toString(), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (row.logo.isNotBlank()) AsyncImage(row.logo, row.team, contentScale = ContentScale.Fit, modifier = Modifier.size(20.dp))
-                    Text(row.team, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                TableNumCell(row.played.toString())
-                TableNumCell(row.wins.toString())
-                TableNumCell(row.draws.toString())
-                TableNumCell(row.losses.toString())
-                TableNumCell(if (row.goalDiff > 0) "+${row.goalDiff}" else row.goalDiff.toString())
-                TableNumCell(row.points.toString(), bold = true)
-                Row(Modifier.width(72.dp), horizontalArrangement = Arrangement.spacedBy(3.dp, alignment = Alignment.CenterHorizontally)) {
-                    row.form.forEach { result ->
-                        Box(
-                            Modifier.size(11.dp).clip(CircleShape).background(
-                                when (result) {
-                                    FormResult.W -> Color(0xFF3DDC84)
-                                    FormResult.D -> Color(0xFF8A93A6)
-                                    FormResult.L -> Color(0xFFE5484D)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("", modifier = Modifier.width(4.dp))
+                Text("#", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
+                Text("Time", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TableNumHeader("P")
+                TableNumHeader("V")
+                TableNumHeader("E")
+                TableNumHeader("D")
+                TableNumHeader("SG")
+                TableNumHeader("Pts", bold = true)
+                Text("Últimos 5", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp), textAlign = TextAlign.Center)
+            }
+            group.rows.forEach { row ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
+                    Box(
+                        Modifier.size(width = 4.dp, height = 28.dp).clip(RoundedCornerShape(2.dp))
+                            .background(
+                                when (row.zone) {
+                                    TableZone.CONTINENTAL -> Accent
+                                    TableZone.RELEGATION -> Color(0xFFE5484D)
+                                    null -> Color.Transparent
                                 },
                             ),
-                        )
+                    )
+                    Text(row.rank.toString(), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (row.logo.isNotBlank()) AsyncImage(row.logo, row.team, contentScale = ContentScale.Fit, modifier = Modifier.size(20.dp))
+                        Text(row.team, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    if (row.form.isEmpty()) Text("–", color = TextTertiary, fontSize = 12.sp)
+                    TableNumCell(row.played.toString())
+                    TableNumCell(row.wins.toString())
+                    TableNumCell(row.draws.toString())
+                    TableNumCell(row.losses.toString())
+                    TableNumCell(if (row.goalDiff > 0) "+${row.goalDiff}" else row.goalDiff.toString())
+                    TableNumCell(row.points.toString(), bold = true)
+                    Row(Modifier.width(72.dp), horizontalArrangement = Arrangement.spacedBy(3.dp, alignment = Alignment.CenterHorizontally)) {
+                        row.form.forEach { result ->
+                            Box(
+                                Modifier.size(11.dp).clip(CircleShape).background(
+                                    when (result) {
+                                        FormResult.W -> Color(0xFF3DDC84)
+                                        FormResult.D -> Color(0xFF8A93A6)
+                                        FormResult.L -> Color(0xFFE5484D)
+                                    },
+                                ),
+                            )
+                        }
+                        if (row.form.isEmpty()) Text("–", color = TextTertiary, fontSize = 12.sp)
+                    }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(start = 6.dp, top = 6.dp)) {
-            ZoneLegend(Accent, table.league.topLabel)
-            ZoneLegend(Color(0xFFE5484D), table.league.relegationLabel)
+        if (table.league.topSpots > 0 && table.league.topLabel.isNotBlank() ||
+            table.league.relegationSpots > 0
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(start = 6.dp, top = 6.dp)) {
+                if (table.league.topSpots > 0 && table.league.topLabel.isNotBlank()) ZoneLegend(Accent, table.league.topLabel)
+                if (table.league.relegationSpots > 0) ZoneLegend(Color(0xFFE5484D), table.league.relegationLabel)
+            }
         }
     }
 }
@@ -720,6 +737,31 @@ fun SportsGameScreen(
                             "Corrigir canal", { showFixDialog = true },
                             icon = Icons.Default.Edit, compact = true,
                         )
+                    }
+                }
+            }
+            // Lote 20 (v1.30.0): placar por período — só os períodos que o
+            // jogo alcançou; jogo agendado não tem a seção.
+            if (detail.periodScores.isNotEmpty()) {
+                item(key = "periods-header") {
+                    com.aotv.app.ui.common.SectionHeader(title = "Placar por período", underline = true, compact = true)
+                }
+                item(key = "periods") {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        detail.periodScores.forEach { period ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(period.label, color = TextSecondary, fontSize = 13.sp)
+                                Text(period.text, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }

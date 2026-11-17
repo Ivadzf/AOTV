@@ -8,6 +8,8 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.aotv.app.data.live.LiveProgram
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.sports.EspnSportsRepository
+import com.aotv.app.data.sports.SPORTS_LEAGUES
 import com.aotv.app.data.sports.extractScore
 import com.aotv.app.data.sports.isSportsProgram
 import com.aotv.app.ui.movies.CalendarEntry
@@ -202,12 +204,84 @@ class GameScoreWorker(appContext: Context, params: WorkerParameters) : Coroutine
                 }
             }
         }
-        // Poda: jogo que sumiu do guia não ocupa mais o estado.
-        seenScores.keys.retainAll(currentKeys)
-        seenLive.retainAll(currentKeys)
+        // Lote 20 (v1.30.0): ESPN p/ as ligas seguidas — o EPG só cobre os
+        // canais do usuário; a ESPN cobre a liga inteira. Sem rede, o
+        // estado ESPN fica p/ a próxima rodada (ver a poda abaixo).
+        val espnRan = runCatching {
+            checkEspnFollowed(ctx, prefs, seenScores, seenLive, currentKeys)
+        }.getOrDefault(false)
+        // Poda: jogo que sumiu do guia não ocupa mais o estado. As chaves
+        // ESPN só são podadas quando a checagem rodou — sem rede, o placar
+        // voltaria como "inicial" na próxima rodada e a virada se perderia.
+        seenScores.keys.retainAll { key ->
+            if (key.startsWith("espn:")) espnRan else key in currentKeys
+        }
+        seenLive.retainAll { key ->
+            if (key.startsWith("espn:")) espnRan else key in currentKeys
+        }
         WorkScheduler.writeGameScores(ctx, seenScores)
         WorkScheduler.writeGameLiveSeen(ctx, seenLive)
         return Result.success()
+    }
+
+    /**
+     * Lote 20 (v1.30.0): alertas do Seguindo via ESPN — placar ao vivo e
+     * fim de jogo p/ as ligas seguidas, com o app fechado. Mesmo estado e
+     * mesmo canal do EPG (chaves "espn:<eventId>"). Só as ligas seguidas:
+     * um time seguido numa liga NÃO seguida não é coberto (varrer as 85
+     * ligas a cada 15 min é rede demais p/ um vigia). Sem rede, nada muda
+     * no estado. Retorna true quando pelo menos uma liga foi consultada
+     * com sucesso.
+     */
+    private suspend fun checkEspnFollowed(
+        context: Context,
+        prefs: PlatformPrefs,
+        seenScores: MutableMap<String, String>,
+        seenLive: MutableSet<String>,
+        currentKeys: MutableSet<String>,
+    ): Boolean {
+        val followed = prefs.sportsFollowedLeagues
+        if (followed.isEmpty()) return false
+        val repo = EspnSportsRepository(context)
+        val now = System.currentTimeMillis()
+        var ran = false
+        followed.forEach { leagueId ->
+            val league = SPORTS_LEAGUES.firstOrNull { it.id == leagueId } ?: return@forEach
+            val games = runCatching { repo.gamesOn(league, now) }.getOrNull() ?: return@forEach
+            ran = true
+            games.forEach { game ->
+                val key = "espn:${game.eventId}"
+                currentKeys += key
+                val score = game.scoreText
+                if (game.isLive) {
+                    if (score != null) {
+                        val prev = seenScores[key]
+                        // Só avisa MUDANÇA: a 1ª vez que o placar aparece é
+                        // o estado inicial, não uma virada.
+                        if (prev != null && prev != score) {
+                            LocalNotifications.notify(
+                                context, LocalNotifications.CHANNEL_REMINDERS,
+                                key.hashCode(), "Placar atualizado",
+                                "${game.homeTeam} $score ${game.awayTeam} — ${league.name}",
+                            )
+                        }
+                        seenScores[key] = score
+                    }
+                    seenLive += key
+                } else if (game.isFinished && key in seenLive) {
+                    // Estava no ar e acabou.
+                    val scoreText = if (score != null) " — $score" else ""
+                    LocalNotifications.notify(
+                        context, LocalNotifications.CHANNEL_REMINDERS,
+                        key.hashCode(), "Fim de jogo",
+                        "${game.homeTeam} x ${game.awayTeam}$scoreText — ${league.name}",
+                    )
+                    seenLive -= key
+                    seenScores.remove(key)
+                }
+            }
+        }
+        return ran
     }
 
     /**

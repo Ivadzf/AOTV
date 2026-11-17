@@ -22,6 +22,12 @@ package com.aotv.app.data.remote
 //   {"badges": [{"id": "4k", "category": "resolution", "label": "4K",
 //                "image": "https://exemplo.com/selos/4k.png"}]}
 //   · O topo também pode ser um array direto: [{"id": ..., ...}, ...].
+//   · Formato Fusion do Nuvio (Lote 20, v1.30.0): {"filters": [{"id":
+//     "res-4k", "groupId": "resolution", "name": "4K", "imageURL":
+//     "https://...", ...}]} — ex.: o FR-Badges
+//     (farizmohd70/FR-Badges, 219 filtros). O `groupId` vira a categoria
+//     e o `id` é traduzido p/ o id do AOTV (ver [FUSION_ID_ALIASES] e
+//     [fusionBadgeId]); entrada sem imagem vira selo de texto.
 //   · "id" é obrigatório (casa com o selo extraído do texto, sem diferenciar
 //     maiúscula/minúscula); "label" é o texto do selo; "image" é a URL do
 //     logo — sem "image", o selo continua como texto.
@@ -235,6 +241,143 @@ data class BadgePackParse(
 const val MAX_BADGE_PACK_ENTRIES = 500
 
 /**
+ * Grupo do pack Fusion → categoria do AOTV (Lote 20, v1.30.0). Grupos do
+ * FR-Badges conferidos ao vivo (2026-11-17): languages, streaming,
+ * subtitles, audio-codec, editions, source, dynamic-range, video-codec,
+ * audio-channels, audio-subs, resolution, video-format, debrid,
+ * containers. Grupo desconhecido → entrada ignorada (contada em skipped).
+ */
+private val FUSION_GROUP_TO_CATEGORY = mapOf(
+    "resolution" to BadgeCategory.RESOLUTION,
+    "dynamic-range" to BadgeCategory.VIDEO,
+    "video-format" to BadgeCategory.VIDEO,
+    "video-codec" to BadgeCategory.ENCODER,
+    "audio-codec" to BadgeCategory.AUDIO,
+    "audio-channels" to BadgeCategory.CHANNELS,
+    "audio-subs" to BadgeCategory.AUDIO,
+    "subtitles" to BadgeCategory.LANGUAGE,
+    "languages" to BadgeCategory.LANGUAGE,
+    "source" to BadgeCategory.SOURCE,
+    "editions" to BadgeCategory.SOURCE,
+    "containers" to BadgeCategory.SOURCE,
+    "streaming" to BadgeCategory.STREAMING,
+    "debrid" to BadgeCategory.STREAMING,
+)
+
+/**
+ * Id do pack Fusion → id do AOTV (Lote 20, v1.30.0). Os ids do Fusion
+ * carregam o prefixo do grupo ("res-4k", "acodec-atmos") e usam hífen
+ * ("dolby-vision"); os ids do AOTV são os extraídos do texto da fonte
+ * ("4k", "atmos", "dolbyvision"). Só os casos que a regra genérica não
+ * resolve entram aqui — o resto passa por [fusionBadgeId].
+ */
+private val FUSION_ID_ALIASES = mapOf(
+    "res-4k" to "4k",
+    "dr-dolby-vision" to "dolbyvision",
+    "dr-dv-p7" to "dolbyvision",
+    "dr-dv-p8" to "dolbyvision",
+    "acodec-atmos" to "atmos",
+    "acodec-ddplus" to "dolbydigital",
+    "acodec-dd" to "dolbydigital",
+    "acodec-dtshd-ma" to "dtshdma",
+    "ch-7-1" to "ch71",
+    "ch-71" to "ch71",
+    "ch-5-1" to "ch51",
+    "ch-51" to "ch51",
+    "codec-av1" to "av1",
+    "codec-hevc" to "hevc",
+    "codec-avc" to "h264",
+    "stream-netflix" to "netflix",
+    "stream-prime-video" to "primevideo",
+    "stream-apple-tv" to "appletv",
+    "stream-disney-plus" to "disneyplus",
+    "stream-max" to "hbomax",
+    "source-remux" to "remux",
+    "source-bluray" to "bluray",
+    "source-uhd-bluray" to "bluray",
+    "source-webdl" to "webdl",
+    "source-webrip" to "webrip",
+    "source-hdtv" to "hdtv",
+    "edition-imax" to "imax",
+    "edition-imax-enhanced" to "imax",
+)
+
+/**
+ * Traduz o id de um filtro Fusion p/ o id do AOTV. Alias exato primeiro;
+ * `lang-*` já casa ("lang-pt-br"); o resto tira o prefixo do grupo e os
+ * separadores ("res-1080p" → "1080p", "dr-hdr10" → "hdr10"). Id sem
+ * tradução volta normalizado — se não casar com nenhum selo extraído, o
+ * pack só não o usa (o [resolvePackBadges] nunca inventa selo).
+ */
+fun fusionBadgeId(fusionId: String): String {
+    val raw = fusionId.trim().lowercase()
+    FUSION_ID_ALIASES[raw]?.let { return it }
+    if (raw.startsWith("lang-")) return raw
+    var stripped = raw
+    for (prefix in listOf("res-", "source-", "codec-", "acodec-", "dr-", "ch-", "stream-", "edition-", "container-")) {
+        if (stripped.startsWith(prefix)) {
+            stripped = stripped.removePrefix(prefix)
+            break
+        }
+    }
+    return stripped.replace("-", "").replace("_", "").replace(".", "")
+}
+
+/**
+ * Lê um pack no formato Fusion do Nuvio (`{"filters": [...]}`). Cada filtro
+ * tem `id`, `groupId`, `name`, `imageURL` (com URL maiúsculo — case
+ * sensitive) e `isEnabled` (false = ignorado). Entrada sem id ou com grupo
+ * desconhecido é ignorada e contada em [BadgePackParse.skipped].
+ */
+fun parseFusionBadgePack(json: String): BadgePackParse {
+    if (json.isBlank()) return BadgePackParse(emptyList(), 0, null)
+    return runCatching {
+        val arr = org.json.JSONObject(json.trim()).optJSONArray("filters")
+            ?: return BadgePackParse(emptyList(), 0, "O JSON não tem um array \"filters\".")
+        if (arr.length() > MAX_BADGE_PACK_ENTRIES) {
+            return BadgePackParse(
+                emptyList(), 0,
+                "O pack tem ${arr.length()} selos (máximo $MAX_BADGE_PACK_ENTRIES).",
+            )
+        }
+        val out = LinkedHashMap<String, SourceBadge>()
+        var skipped = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i)
+            if (o == null) {
+                skipped++
+                continue
+            }
+            if (o.optBoolean("isEnabled", true) == false) {
+                skipped++
+                continue
+            }
+            val rawId = o.optString("id").trim()
+            val category = FUSION_GROUP_TO_CATEGORY[o.optString("groupId").trim().lowercase()]
+            if (rawId.isBlank() || category == null) {
+                skipped++
+                continue
+            }
+            val id = fusionBadgeId(rawId)
+            val label = o.optString("name").ifBlank { id }
+            // Fusion usa `imageURL` (URL maiúsculo); os sinônimos do formato
+            // próprio continuam valendo p/ packs mistos.
+            val image = o.optString("imageURL")
+                .ifBlank { o.optString("imageUrl") }
+                .ifBlank { o.optString("image") }
+                .ifBlank { o.optString("url") }
+                .trim()
+            if (id !in out) {
+                out[id] = SourceBadge(id, category, label, image.ifBlank { null })
+            }
+        }
+        BadgePackParse(out.values.toList(), skipped, null)
+    }.getOrElse { e ->
+        BadgePackParse(emptyList(), 0, "JSON inválido: ${e.message ?: "não deu pra ler"}")
+    }
+}
+
+/**
  * Lê um pack de selos em JSON. Aceita `{"badges": [...]}` ou um array direto.
  * Entrada sem id ou com categoria desconhecida é ignorada e contada em
  * [BadgePackParse.skipped]; id repetido fica com a primeira ocorrência.
@@ -247,7 +390,14 @@ fun parseBadgePack(json: String): BadgePackParse {
         val arr = if (trimmed.startsWith("[")) {
             org.json.JSONArray(trimmed)
         } else {
-            org.json.JSONObject(trimmed).optJSONArray("badges")
+            val obj = org.json.JSONObject(trimmed)
+            // Formato Fusion do Nuvio (Lote 20, v1.30.0): {"filters": [...]}.
+            // O erro honesto de 404 continua no repositório — aqui só o
+            // formato é decidido (o `badges` próprio tem prioridade).
+            if (obj.optJSONArray("badges") == null && obj.optJSONArray("filters") != null) {
+                return parseFusionBadgePack(trimmed)
+            }
+            obj.optJSONArray("badges")
                 ?: return BadgePackParse(emptyList(), 0, "O JSON não tem um array \"badges\".")
         }
         if (arr.length() > MAX_BADGE_PACK_ENTRIES) {

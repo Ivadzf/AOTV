@@ -175,6 +175,8 @@ class SportsTabViewModel @Inject constructor(
         val enabledLeagueIds: List<String> = SPORTS_LEAGUES.map { it.id },
         val followedLeagues: List<String> = emptyList(),
         val followedTeams: List<String> = emptyList(),
+        /** Times com gravação automática dos jogos ligada (Lote 20, v1.30.0). */
+        val recordTeamGames: List<String> = emptyList(),
         val query: String = "",
         val sport: String = "Todos",
     )
@@ -239,6 +241,7 @@ class SportsTabViewModel @Inject constructor(
                     enabledLeagueIds = prefs.sportsEnabledLeagueIds(SPORTS_LEAGUES.map { it.id }),
                     followedLeagues = prefs.sportsFollowedLeagues,
                     followedTeams = prefs.sportsFollowedTeams,
+                    recordTeamGames = prefs.recordTeamGames,
                 )
             }
         }
@@ -262,6 +265,12 @@ class SportsTabViewModel @Inject constructor(
     fun toggleFollowTeam(team: String) {
         prefs.toggleSportsFollowedTeam(team)
         _ui.update { it.copy(followedTeams = prefs.sportsFollowedTeams) }
+    }
+
+    /** Liga/desliga a gravação automática dos jogos do time (Lote 20, v1.30.0). */
+    fun toggleRecordTeamGames(team: String) {
+        prefs.toggleRecordTeamGames(team)
+        _ui.update { it.copy(recordTeamGames = prefs.recordTeamGames) }
     }
 
     fun saveFix(fix: ChannelFix) {
@@ -329,6 +338,7 @@ fun SportsTabScreen(
     val gamesByLeague = ui.games
     val followedLeagues = ui.followedLeagues
     val followedTeams = ui.followedTeams
+    val recordTeamGames = ui.recordTeamGames
     val allGames = remember(gamesByLeague) {
         gamesByLeague.entries.flatMap { (leagueId, games) ->
             val league = SPORTS_LEAGUES.firstOrNull { it.id == leagueId } ?: return@flatMap emptyList()
@@ -539,6 +549,7 @@ fun SportsTabScreen(
             SportsTabViewModel.Section.FOLLOWING -> SportsTabFollowingList(
                 followedLeagues = followedLeagues,
                 followedTeams = followedTeams,
+                recordTeamGames = recordTeamGames,
                 viewModel = viewModel,
                 pad = pad,
             )
@@ -766,6 +777,7 @@ private fun SportsTabTeamRow(
 private fun SportsTabFollowingList(
     followedLeagues: List<String>,
     followedTeams: List<String>,
+    recordTeamGames: List<String>,
     viewModel: SportsTabViewModel,
     pad: androidx.compose.ui.unit.Dp,
 ) {
@@ -810,6 +822,9 @@ private fun SportsTabFollowingList(
             }
         } else {
             items(followedTeams, key = { "follow-team:$it" }) { team ->
+                // Lote 20 (v1.30.0): "Gravar jogos" — com ele ligado, o jogo
+                // do time é gravado sozinho quando passa num canal do guia.
+                val recordOn = recordTeamGames.any { normalizeSportsName(it) == normalizeSportsName(team) }
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -821,6 +836,9 @@ private fun SportsTabFollowingList(
                         fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    com.aotv.app.ui.common.FilterChipPill(
+                        "Gravar jogos", recordOn, { viewModel.toggleRecordTeamGames(team) },
+                    )
                     IconButton(onClick = { viewModel.toggleFollowTeam(team) }, modifier = Modifier.size(40.dp)) {
                         Icon(Icons.Default.Delete, "Deixar de seguir", tint = TextTertiary)
                     }
@@ -829,7 +847,7 @@ private fun SportsTabFollowingList(
         }
         item(key = "follow-alerts-note") {
             Text(
-                "Alertas: o vigia de fim de jogo e placar (a cada 15 min) hoje cobre os jogos do guia de TV — os jogos da ESPN ainda não disparam alerta.",
+                "Alertas: o vigia de fim de jogo e placar (a cada 15 min) hoje cobre os jogos do guia de TV — os jogos da ESPN ainda não disparam alerta. Gravar jogos: com o botão ligado, o jogo do time é gravado sozinho quando passa num canal do guia (Downloads → Gravações).",
                 color = TextTertiary, fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )

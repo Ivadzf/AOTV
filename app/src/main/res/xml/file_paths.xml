@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Caminhos do FileProvider do atualizador (Lote 12, v1.22.0): só o cache
-     do app, onde o AppUpdateService baixa o APK da release oficial. -->
+     do app, onde o AppUpdateService baixa o APK da release oficial.
+     Lote 20 (v1.30.0): a pasta de gravações locais, p/ abrir a gravação
+     num player externo (ACTION_VIEW) — o arquivo fica na pasta do app
+     até mover p/ o destino. -->
 <paths>
     <cache-path name="update" path="." />
+    <files-path name="recordings" path="recordings/" />
 </paths>

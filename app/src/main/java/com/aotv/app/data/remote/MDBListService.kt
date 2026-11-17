@@ -134,6 +134,10 @@ class MDBListService @Inject constructor(
         // MDBList). Só o TÍTULO é fixo — a chave testada vem do usuário.
         private const val TEST_TITLE = "Dune"
         private const val TEST_YEAR = 2021
+        /** 2º título do teste (Lote 20, v1.30.0): 'Dune' (2021) pode voltar
+         * sem o bloco `ratings` mesmo com a chave válida — o teste tenta
+         * 'Inception' (2010) antes de falhar. */
+        private val TEST_TITLES = listOf(TEST_TITLE to TEST_YEAR, "Inception" to 2010)
     }
 
     private val api: MdbApi by lazy {
@@ -318,11 +322,16 @@ class MDBListService @Inject constructor(
     }
 
     /**
-     * Valida uma chave (a digitada, ainda não salva, ou a salva) com uma
-     * busca conhecida — "Dune" (2021) sempre existe no MDBList. Chave
-     * inválida devolve HTTP 503 + "Invalid API key or Rate Limiter Reached!"
-     * (ao vivo, 2026-11-17). Nunca embute chave: a chave testada vem do
-     * parâmetro, digitada pelo usuário.
+     * Valida uma chave (a digitada, ainda não salva, ou a salva) com buscas
+     * conhecidas — "Dune" (2021) e "Inception" (2010) sempre existem no
+     * MDBList. Chave inválida devolve HTTP 503 + "Invalid API key or Rate
+     * Limiter Reached!" (ao vivo, 2026-11-17). Lote 20 (v1.30.0): a chave
+     * é VÁLIDA quando a API devolve o título (ou o score) mesmo sem o
+     * bloco `ratings` — o teste antigo falhava nesse caso ('Dune' sem
+     * `ratings`) e dizia que a chave não funcionava. Só falha rápido
+     * quando o erro menciona chave inválida; nos outros casos tenta o
+     * 2º título e, se falhar, mostra o que a API devolveu. Nunca embute
+     * chave: a chave testada vem do parâmetro, digitada pelo usuário.
      */
     suspend fun testApiKey(key: String): Result<String> {
         val trimmed = key.trim()
@@ -330,14 +339,38 @@ class MDBListService @Inject constructor(
             return Result.failure(IllegalStateException("Cole uma chave antes de testar."))
         }
         return try {
-            val result = api.searchRatings(TEST_TITLE, TEST_YEAR, trimmed, "movie")
-            if (result?.response == "False") {
-                Result.failure(IllegalStateException(translateApiError(result.error)))
-            } else if (result?.ratings == null) {
-                Result.failure(IllegalStateException("O MDBList respondeu, mas sem notas para o título de teste — tente de novo."))
-            } else {
-                Result.success("Chave válida — o MDBList respondeu com as notas de “Dune (2021)”.")
+            var lastNote: String? = null
+            for ((title, year) in TEST_TITLES) {
+                val result = api.searchRatings(title, year, trimmed, "movie")
+                if (result?.response == "False") {
+                    val err = result.error.orEmpty()
+                    if ("Invalid API key" in err) {
+                        return Result.failure(IllegalStateException(translateApiError(err)))
+                    }
+                    lastNote = "“$title ($year)”: ${translateApiError(err)}"
+                    continue
+                }
+                // A API respondeu ao título: título ou score bastam p/
+                // provar a chave — o bloco `ratings` pode faltar p/ o
+                // título sem que a chave esteja errada.
+                val hasTitle = !result?.title.isNullOrBlank()
+                val hasScore = result?.score != null || result?.scoreAverage != null
+                if (hasTitle || hasScore || result?.ratings != null) {
+                    val shown = if (hasTitle && result?.title != title) " (“${result?.title}”)" else ""
+                    return Result.success("Chave válida — o MDBList respondeu com “$title ($year)”$shown.")
+                }
+                lastNote = if (result == null) {
+                    "“$title ($year)”: resposta vazia"
+                } else {
+                    "“$title ($year)”: respondeu sem título nem notas"
+                }
             }
+            Result.failure(
+                IllegalStateException(
+                    "O MDBList respondeu, mas sem título nem notas nos títulos de teste. " +
+                        "Última resposta: ${lastNote ?: "vazia"}. A chave pode estar válida — abra um filme e veja se as notas aparecem no detalhe.",
+                ),
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

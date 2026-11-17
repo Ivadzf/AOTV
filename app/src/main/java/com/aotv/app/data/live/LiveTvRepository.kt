@@ -364,6 +364,22 @@ class LiveTvRepository @Inject constructor(
         Result.failure(e)
     }
 
+    /**
+     * Atualiza os dados da conta Xtream (status, vencimento, telas em uso)
+     * sem tocar nos canais. Lote 20 (v1.30.0): a conta era buscada só ao
+     * adicionar/editar a fonte e ao abrir o app — o botão "Atualizar conta"
+     * na tela de fontes revalida na hora.
+     */
+    suspend fun refreshAccount(id: String): Result<XtreamAccount> = try {
+        val existing = getSource(id) ?: throw Exception("Fonte $id não encontrada")
+        require(existing.type == LiveSourceType.XTREAM) { "Fonte $id não é Xtream" }
+        val (_, acc) = validateXtreamAccount(existing.server, existing.user, existing.pass).getOrThrow()
+        _state.update { it.copy(accounts = it.accounts + (id to acc)) }
+        Result.success(acc)
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
     /** Confere usuário e senha no servidor Xtream. Devolve a base normalizada e a conta. */
     private suspend fun validateXtreamAccount(
         server: String,
@@ -644,12 +660,17 @@ class LiveTvRepository @Inject constructor(
         val group = groups[c.id]
         val number = numbers[c.id]
         val logo = logos[c.id]
-        if (name == null && group == null && number == null && logo == null) return c
+        // Lote 20 (v1.30.0) — logo do tv-logos quando o canal não traz
+        // nenhum: só preenche o vazio, nunca sobrescreve o logo da lista
+        // nem o manual. O nome usado é o exibido (com renome, se houver).
+        val effectiveName = name ?: c.name
+        val fallbackLogo = if (logo == null && c.logo.isBlank()) ChannelLogos.urlFor(effectiveName) else null
+        if (name == null && group == null && number == null && logo == null && fallbackLogo == null) return c
         return c.copy(
             name = name ?: c.name,
             group = group ?: c.group,
             number = number ?: c.number,
-            logo = logo ?: c.logo,
+            logo = logo ?: c.logo.ifBlank { fallbackLogo.orEmpty() },
         )
     }
 

@@ -15,6 +15,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +28,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -213,6 +216,9 @@ private fun ProviderCard(
 ) {
     var keyOpen by remember(provider) { mutableStateOf(false) }
     var key by remember(provider) { mutableStateOf("") }
+    // Lote 20 (v1.30.0) — olho p/ exibir/mascarar a chave da API do debrid
+    // (mesmo padrão da TMDB: só ela tinha o olho).
+    var keyVisible by remember(provider) { mutableStateOf(false) }
     // Confirmar antes de desconectar (v1.13.0).
     var confirmDisconnect by remember { mutableStateOf(false) }
     LaunchedEffect(account) { if (account != null) { keyOpen = false; key = "" } }
@@ -259,7 +265,15 @@ private fun ProviderCard(
                 OutlinedTextField(
                     value = key, onValueChange = { key = it.trim() }, singleLine = true,
                     label = { Text("Chave da API do ${provider.label}") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { keyVisible = !keyVisible }) {
+                            Icon(
+                                if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (keyVisible) "Ocultar chave da API" else "Mostrar chave da API",
+                            )
+                        }
+                    },
+                    visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(

@@ -209,7 +209,16 @@ class LiveTvViewModel @Inject constructor(
             val channels = coroutineScope {
                 result.catalogs.map { catalog ->
                     async {
-                        val metas = tvCatalogs.loadChannels(catalog).orEmpty()
+                        // Lote 20 (v1.30.0): 2ª página do catálogo (skip=100 —
+                        // o Stremio devolve 100 por página). As duas páginas
+                        // em paralelo; dedup por id (addon que ignora o skip
+                        // repetiria a 1ª página) e o teto por catálogo vale
+                        // p/ o total.
+                        val metas = coroutineScope {
+                            val first = async { tvCatalogs.loadChannels(catalog, 0).orEmpty() }
+                            val second = async { tvCatalogs.loadChannels(catalog, 100).orEmpty() }
+                            (first.await() + second.await()).distinctBy { it.id }
+                        }
                         metas.take(MAX_ADDON_TV_CHANNELS_PER_CATALOG).mapNotNull { meta ->
                             if (meta.id.isBlank() || meta.name.isBlank()) null
                             else AddonTvChannel(
@@ -558,6 +567,21 @@ class LiveSourcesViewModel @Inject constructor(private val repo: LiveTvRepositor
             repo.refresh(true)
             val n = repo.state.value.channels.count { it.sourceId == s.id }
             _ui.update { it.copy(busy = null, message = "$n canais de ${s.name}") }
+        }
+    }
+
+    /** Atualiza os dados da conta Xtream (status, vencimento, telas em uso). */
+    fun refreshAccount(id: String) {
+        if (_ui.value.busy != null) return
+        _ui.update { it.copy(busy = "account", error = null, message = null) }
+        viewModelScope.launch {
+            val acc = repo.refreshAccount(id).getOrElse { e ->
+                _ui.update { it.copy(busy = null, error = e.message) }; return@launch
+            }
+            val whenText = if (acc.expiresAt > 0) {
+                " · vence em ${java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("pt", "BR")).format(java.util.Date(acc.expiresAt))}"
+            } else ""
+            _ui.update { it.copy(busy = null, message = "Conta atualizada: ${acc.status}$whenText") }
         }
     }
 

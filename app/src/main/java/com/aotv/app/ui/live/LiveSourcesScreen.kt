@@ -166,7 +166,13 @@ fun LiveSourcesScreen(
                                     listOfNotNull(
                                         a.status.takeIf { it.isNotBlank() },
                                         if (a.expiresAt > 0) "vence em ${date(a.expiresAt)}" else null,
-                                        if (a.maxConnections > 0) "até ${a.maxConnections} conexões" else null,
+                                        // Lote 20 (v1.30.0): telas em uso (`active_cons`).
+                                        when {
+                                            a.maxConnections > 0 && a.activeConnections > 0 -> "${a.activeConnections} de ${a.maxConnections} telas em uso"
+                                            a.maxConnections > 0 -> "até ${a.maxConnections} conexões"
+                                            a.activeConnections > 0 -> "${a.activeConnections} telas em uso"
+                                            else -> null
+                                        },
                                         a.formats.takeIf { it.isNotEmpty() }?.let { "formatos: ${it.joinToString(", ")}" },
                                     )
                                 }.orEmpty())
@@ -176,6 +182,17 @@ fun LiveSourcesScreen(
                                 checked = s.enabled, onCheckedChange = { viewModel.setEnabled(s.id, it) },
                                 colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Accent, uncheckedThumbColor = TextTertiary, uncheckedTrackColor = BackgroundCard2, uncheckedBorderColor = Border),
                             )
+                            // Lote 20 (v1.30.0): atualizar a conta Xtream (status,
+                            // vencimento, telas em uso) sem tocar nos canais.
+                            if (s.type == LiveSourceType.XTREAM) {
+                                IconButton(
+                                    onClick = { viewModel.refreshAccount(s.id) },
+                                    enabled = ui.busy == null,
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(Icons.Default.Refresh, "Atualizar conta de ${s.name}", tint = TextSecondary, modifier = Modifier.size(20.dp))
+                                }
+                            }
                             // Edição — lápis (v1.17.0): pré-preenche o formulário abaixo.
                             IconButton(onClick = { startEdit(s) }, modifier = Modifier.size(48.dp)) {
                                 Icon(Icons.Default.Edit, "Editar ${s.name}", tint = TextSecondary, modifier = Modifier.size(20.dp))
