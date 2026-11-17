@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
@@ -1179,6 +1180,9 @@ private fun StreamsPage(
     val badgesPos by viewModel.badgesPos.collectAsStateWithLifecycle()
     val logo by viewModel.logo.collectAsStateWithLifecycle()
     val pinned by viewModel.pinned.collectAsStateWithLifecycle()
+    val logoBadgesEnabled by viewModel.badgePackEnabled.collectAsStateWithLifecycle()
+    val packBadges by viewModel.packBadges.collectAsStateWithLifecycle()
+    var showBadgePack by remember { mutableStateOf(false) }
     SettingsPageScaffold("Streams", "Pesquisa, emblemas, logo e fontes fixadas", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Folha de fontes", anchor = SettingsAnchors.STREAMS_SHEET)
         com.aotv.app.ui.common.SettingsGroup {
@@ -1238,6 +1242,31 @@ private fun StreamsPage(
                 badgesPos, viewModel::setBadgesPos,
             )
         }
+        // ── Selos com logo (Lote 19 item 9, v1.29.0) ─────────────────────
+        // Pack de selos em JSON por URL, com prévia por categoria. Sem pack,
+        // a folha usa os selos de texto de sempre — o toggle só vale com pack.
+        SettingsSection("Selos com logo", anchor = SettingsAnchors.STREAMS_LOGO_BADGES)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Image,
+                title = "Selos com logo na folha de fontes",
+                sub = if (logoBadgesEnabled) "Com pack carregado, os selos mostram o logo (4K, Dolby Vision, DTS-HD…); sem pack, ficam os selos de texto"
+                    else "Só os selos de texto, como hoje",
+                trailing = { Switch(checked = logoBadgesEnabled, onCheckedChange = { viewModel.setBadgePackEnabled(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setBadgePackEnabled(!logoBadgesEnabled) },
+                grouped = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Link,
+                title = "Pack de selos (URL)",
+                sub = if (packBadges.isEmpty()) "Nenhum pack carregado — toque para colar a URL do pack"
+                    else "${packBadges.size} selos carregados — toque para ver a prévia ou trocar a URL",
+                onClick = { showBadgePack = true },
+                grouped = true,
+                divider = true,
+            )
+        }
+        if (showBadgePack) BadgePackPreviewDialog(viewModel = viewModel, onDismiss = { showBadgePack = false })
         SettingsSection("Fontes fixadas", anchor = SettingsAnchors.STREAMS_PINNED)
         Text(
             "Para fixar uma fonte, toque no pin ao lado do nome dela na folha de fontes. As fixadas aparecem primeiro.",
@@ -2250,6 +2279,10 @@ private fun ReproducaoPage(
     val autoSwitch by playerPrefs.autoSwitch.collectAsStateWithLifecycle()
     val durationGuard by playerPrefs.durationGuard.collectAsStateWithLifecycle()
     val sourceTimeout by playerPrefs.sourceTimeout.collectAsStateWithLifecycle()
+    // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
+    // qualidade sozinho (e) e debrid só com arquivo pronto (f).
+    val autoUpgrade by playerPrefs.autoUpgrade.collectAsStateWithLifecycle()
+    val debridReadyOnly by playerPrefs.debridReadyOnly.collectAsStateWithLifecycle()
     val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
     // Personalização de legenda e velocidade padrão (v1.9.0).
     val subColor by playerPrefs.subColor.collectAsStateWithLifecycle()
@@ -2558,13 +2591,44 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Lote 19 item 7 (c), v1.29.0 — título igual ao da tela REPRODUÇÃO
+            // do JOTV. Desligado, o player fica na fonte escolhida e espera
+            // por ela, mesmo se demorar (o aviso de timeout continua aparecendo).
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Refresh,
-                title = "Troca automática de fonte",
+                title = "Trocar de fonte sozinho",
                 sub = if (autoSwitch) "Se a fonte não iniciar ou travar, troca sozinha por outra"
-                    else "Se a fonte travar, espera nela sem trocar",
+                    else "Fica na fonte escolhida e espera por ela, mesmo se demorar",
                 trailing = { Switch(checked = autoSwitch, onCheckedChange = { playerPrefs.setAutoSwitch(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setAutoSwitch(!autoSwitch) },
+                grouped = true,
+                divider = true,
+            )
+            // Lote 19 item 7 (e), v1.29.0 — "Subir a qualidade sozinho": o
+            // upgrade 1x do player (4 s depois de começar, troca uma vez p/
+            // uma fonte pelo menos 25% melhor, sem perder o ponto). Desligado,
+            // fica na qualidade que começou. Fonte escolhida à mão nunca troca.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.TrendingUp,
+                title = "Subir a qualidade sozinho",
+                sub = if (autoUpgrade) "Se acha uma fonte melhor logo no começo, troca uma vez sem perder o ponto"
+                    else "Fica na qualidade que começou, mesmo se aparecer uma fonte melhor",
+                trailing = { Switch(checked = autoUpgrade, onCheckedChange = { playerPrefs.setAutoUpgrade(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoUpgrade(!autoUpgrade) },
+                grouped = true,
+                divider = true,
+            )
+            // Lote 19 item 7 (f), v1.29.0 — "Debrid só com arquivo pronto": a
+            // troca automática nunca abre torrent que o debrid ativo ainda não
+            // tem pronto, p/ a conta não começar downloads sozinha. Sem conta
+            // de debrid, não muda nada. A escolha à mão continua valendo.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Bolt,
+                title = "Debrid só com arquivo pronto",
+                sub = if (debridReadyOnly) "A troca automática nunca abre torrent que o debrid ainda não tem, para a conta não começar downloads sozinha"
+                    else "A troca automática pode abrir torrent que o debrid ainda não tem — ele começa o download na conta",
+                trailing = { Switch(checked = debridReadyOnly, onCheckedChange = { playerPrefs.setDebridReadyOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setDebridReadyOnly(!debridReadyOnly) },
                 grouped = true,
                 divider = true,
             )
@@ -2658,8 +2722,10 @@ private fun ReproducaoPage(
         }
         Column(Modifier.alpha(if (autoSwitch) 1f else 0.45f)) {
             SettingsCard {
+                // Lote 19 item 7 (d), v1.29.0 — título igual ao da tela REPRODUÇÃO
+                // do JOTV. O padrão do AOTV continua 12 s (o da foto é 20 s).
                 PrefRow(
-                    "Tempo para trocar de fonte",
+                    "Espera antes de trocar",
                     listOf(8 to "8 s", 12 to "12 s", 20 to "20 s", 30 to "30 s", 45 to "45 s", 60 to "60 s"),
                     sourceTimeout, { if (autoSwitch) playerPrefs.setSourceTimeout(it) },
                 )

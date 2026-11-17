@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,11 +14,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -31,6 +42,7 @@ import com.aotv.app.data.live.LiveChannel
 import com.aotv.app.data.live.LiveProgram
 import com.aotv.app.ui.movies.RecordProgramDialog
 import com.aotv.app.ui.theme.*
+import kotlinx.coroutines.launch
 
 /**
  * Guia em grade (Lote 7). Canais nas linhas, horários nas colunas, programa
@@ -46,6 +58,16 @@ import com.aotv.app.ui.theme.*
  * A grade é a mesma tela no celular e na TV (a rota "Ao vivo" não tem tela
  * própria de TV): as células são clicáveis e focáveis, mas o scroll
  * horizontal por controle remoto não foi testado — ver o caveat no relatório.
+ *
+ * Lote 19 (v1.29.0, item 8 — guia estilo JOTV): cabeçalho "N canais ·
+ * M categorias", busca dentro do guia (canal, grupo ou título do programa),
+ * categorias com contagem (barra lateral na TV, chips no celular) e
+ * alternância Cartões/Lista. A categoria é o `group` que a fonte trouxe
+ * (M3U `group-title` / categoria Xtream, com ";" separando várias); canal
+ * sem categoria cai em "Sem grupo" ([LiveTvViewModel.NO_GROUP]) — nunca
+ * inventada. O modo Cartões/Lista, a categoria e a busca vivem só nesta
+ * tela (rememberSaveable, sem pref nova) e o toque continua abrindo o
+ * mesmo destino de hoje.
  */
 @Composable
 fun LiveGuideScreen(
@@ -94,6 +116,52 @@ fun LiveGuideScreen(
     var detail by remember { mutableStateOf<Pair<LiveChannel, LiveProgram>?>(null) }
     // Lote 8 (v1.18.0): programa a gravar (diálogo da Frente 2).
     var record by remember { mutableStateOf<Pair<LiveChannel, LiveProgram>?>(null) }
+    // Lote 19 (v1.29.0, item 8 — guia estilo JOTV): estado só desta tela.
+    val isTv = com.aotv.app.ui.common.LocalIsTv.current
+    var guideQuery by rememberSaveable { mutableStateOf("") }
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var listMode by rememberSaveable { mutableStateOf(false) }
+    // Contador p/ rolar a grade ao topo quando a categoria muda (o efeito
+    // só rola depois da 1ª mudança — na abertura, o scroll p/ focusChannelId
+    // acima continua valendo).
+    var categorySeq by remember { mutableIntStateOf(0) }
+    // Categorias = grupos da fonte, com contagem, na ordem da lista
+    // ([View.groups]); os totais do cabeçalho são os da fonte inteira, e as
+    // linhas seguem o filtro/busca da aba Ao vivo ([View.rows]) — com um
+    // filtro da aba ativo, a vista pode ter menos canais que o total.
+    val categories: List<Pair<String, Int>> = v.groups
+    val guideRows: List<LiveRow> = remember(v.rows, v.epg, selectedCategory, guideQuery, v.cleanGroupNames) {
+        val needle = guideQuery.trim().lowercase()
+        v.rows.filter { row ->
+            val inCategory = selectedCategory == null ||
+                LiveTvViewModel.groupNames(row.channel, v.cleanGroupNames).contains(selectedCategory)
+            if (!inCategory) return@filter false
+            if (needle.isEmpty()) return@filter true
+            if (row.channel.name.lowercase().contains(needle)) return@filter true
+            if (LiveTvViewModel.groupLabel(row.channel).lowercase().contains(needle)) return@filter true
+            (v.epg[row.channel.id].orEmpty()).any { program -> program.title.lowercase().contains(needle) }
+        }
+    }
+    // Seções da vista em Lista, na ordem das categorias (canal em 2 grupos
+    // aparece nas 2, igual a [View.groupedRows]).
+    val guideSections: List<Pair<String, List<LiveRow>>> = remember(guideRows, categories, v.cleanGroupNames) {
+        categories.mapNotNull { category ->
+            val rows = guideRows.filter { row ->
+                LiveTvViewModel.groupNames(row.channel, v.cleanGroupNames).contains(category.first)
+            }
+            if (rows.isEmpty()) null else category.first to rows
+        }
+    }
+    /** Troca a categoria do guia (null = Todas) e rola a grade ao topo. */
+    fun selectGuideCategory(category: String?) {
+        selectedCategory = category
+        categorySeq++
+    }
+    // Rola a grade ao topo quando a categoria muda (só depois da 1ª mudança
+    // — na abertura, o scroll p/ focusChannelId acima continua valendo).
+    LaunchedEffect(categorySeq) {
+        if (categorySeq > 0 && guideRows.isNotEmpty()) listState.scrollToItem(0)
+    }
 
     Column(Modifier.fillMaxSize()) {
         // Lote 12 (v1.22.0): voltar da rota própria do guia retorna ao
@@ -110,6 +178,83 @@ fun LiveGuideScreen(
                 Text("Guia de programação", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
+        // Lote 19 (v1.29.0, item 8): cabeçalho estilo JOTV — "N canais ·
+        // M categorias" (totais da fonte) + quantos a vista atual mostra
+        // quando há categoria ou busca no guia. Na TV, a dica de pular seção.
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "${v.total} canais · ${v.groups.size} categorias" +
+                    if (selectedCategory != null || guideQuery.isNotBlank()) " · ${guideRows.size} nesta vista" else "",
+                color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+            )
+            if (isTv) {
+                Text("Segure ↑↓ para pular seção", color = TextTertiary, fontSize = 12.sp)
+            }
+        }
+        // Honestidade: "Sem grupo" é o canal cuja fonte não trouxe categoria.
+        if (v.groups.any { group -> group.first == LiveTvViewModel.NO_GROUP }) {
+            Text(
+                "Canais sem categoria na fonte aparecem em \"Sem grupo\".",
+                color = TextTertiary, fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = com.aotv.app.ui.common.pagePadding()),
+            )
+        }
+        OutlinedTextField(
+            value = guideQuery,
+            onValueChange = { newQuery -> guideQuery = newQuery },
+            singleLine = true,
+            placeholder = { Text("Buscar no guia — canal ou programa") },
+            leadingIcon = { Icon(Icons.Default.Search, "Buscar", tint = TextTertiary) },
+            trailingIcon = {
+                if (guideQuery.isNotEmpty()) {
+                    IconButton(onClick = { guideQuery = "" }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Close, "Limpar busca", tint = TextTertiary)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+            ),
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            com.aotv.app.ui.common.FilterChipPill(label = "Cartões", selected = !listMode, onClick = { listMode = false }, icon = Icons.Default.GridView)
+            com.aotv.app.ui.common.FilterChipPill(label = "Lista", selected = listMode, onClick = { listMode = true }, icon = Icons.Default.List)
+            if (!isTv) {
+                Text("A lista mostra o que está passando agora", color = TextTertiary, fontSize = 12.sp)
+            }
+        }
+        // Categorias no celular: chips com contagem (na TV é a barra lateral).
+        if (!isTv) {
+            LazyRow(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    com.aotv.app.ui.common.FilterChipPill(
+                        label = "Todas ${v.total}", selected = selectedCategory == null,
+                        onClick = { selectGuideCategory(null) },
+                    )
+                }
+                items(categories, key = { category -> category.first }) { category ->
+                    com.aotv.app.ui.common.FilterChipPill(
+                        label = "${category.first} ${category.second}", selected = selectedCategory == category.first,
+                        onClick = { selectGuideCategory(category.first) },
+                    )
+                }
+            }
+        }
+        if (!listMode) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -150,14 +295,48 @@ fun LiveGuideScreen(
                 }
             }
         }
+        }
 
+        Row(Modifier.fillMaxWidth().weight(1f)) {
+            if (isTv) {
+                GuideCategorySidebar(
+                    categories = categories,
+                    total = v.total,
+                    selected = selectedCategory,
+                    onSelect = { category -> selectGuideCategory(category) },
+                )
+            }
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                if (guideRows.isEmpty()) {
+                    Text(
+                        "Nenhum canal nesta vista — mude a categoria ou limpe a busca.",
+                        color = TextTertiary, fontSize = 14.sp,
+                        modifier = Modifier.padding(com.aotv.app.ui.common.pagePadding()),
+                    )
+                } else if (listMode) {
+                    GuideListContent(sections = guideSections, now = now, onPlay = onPlay)
+                } else {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+                // TV (Lote 19, item 8): segurar ↑↓ na grade pula de categoria
+                // (a dica está no cabeçalho); o toque curto continua andando
+                // o foco normalmente (repeatCount 0 passa direto).
+                if (!isTv) return@onPreviewKeyEvent false
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (event.key != Key.DirectionDown && event.key != Key.DirectionUp) return@onPreviewKeyEvent false
+                if (event.nativeKeyEvent.repeatCount == 0) return@onPreviewKeyEvent false
+                val all = listOf<String?>(null) + categories.map { category -> category.first }
+                val idx = all.indexOf(selectedCategory)
+                val next = if (event.key == Key.DirectionDown) (idx + 1).coerceAtMost(all.size - 1) else (idx - 1).coerceAtLeast(0)
+                if (next == idx) return@onPreviewKeyEvent false
+                selectGuideCategory(all[next])
+                true
+            },
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items(v.rows, key = { it.channel.id }) { row ->
+            items(guideRows, key = { row -> row.channel.id }) { row ->
                 val channel = row.channel
                 val programs = (v.epg[channel.id].orEmpty()).filter { it.stop > windowStart && it.start < windowEnd }
                 Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -206,6 +385,9 @@ fun LiveGuideScreen(
                             Box(Modifier.offset(x = nowXdp).width(2.dp).fillMaxHeight().background(LiveRed))
                         }
                     }
+                }
+            }
+        }
                 }
             }
         }
@@ -318,3 +500,130 @@ private val CHANNEL_WIDTH_DP = 132.dp
 /** Rota do player ao vivo com catch-up. [startSec]/[stopSec] em epoch segundos. */
 fun livePlayerCatchupRoute(channelId: String, startSec: Long, stopSec: Long): String =
     "movies_live_player/$channelId?start=$startSec&stop=$stopSec"
+
+// ── Lote 19 (v1.29.0, item 8 — guia estilo JOTV) ──────────────────────────
+
+/** Barra lateral de Categorias (TV): "Todas" + cada grupo com a contagem. Itens clicáveis e focáveis (D-pad). */
+@Composable
+private fun GuideCategorySidebar(
+    categories: List<Pair<String, Int>>,
+    total: Int,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    Column(Modifier.width(200.dp).fillMaxHeight().padding(end = 8.dp)) {
+        Text(
+            "Categorias", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        )
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            item {
+                GuideCategoryItem(label = "Todas", count = total, selected = selected == null, onClick = { onSelect(null) })
+            }
+            items(categories, key = { category -> category.first }) { category ->
+                GuideCategoryItem(
+                    label = category.first, count = category.second,
+                    selected = selected == category.first, onClick = { onSelect(category.first) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideCategoryItem(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+            .background(if (selected) AccentFill else BackgroundCard2)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            label, color = if (selected) Color.White else TextPrimary,
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+        )
+        Text("$count", color = if (selected) Color.White else TextTertiary, fontSize = 13.sp)
+    }
+}
+
+/**
+ * Vista em Lista do guia: canais agrupados por categoria, com o programa
+ * atual e o seguinte. O toque na linha abre o ao vivo do canal — o mesmo
+ * destino do toque na célula do canal na grade. Sem linha do tempo: o
+ * passado com catch-up e os programas futuros continuam só nos Cartões.
+ * Na TV, segurar ↑↓ pula de seção (cada seção é um item da lista).
+ */
+@Composable
+private fun GuideListContent(
+    sections: List<Pair<String, List<LiveRow>>>,
+    now: Long,
+    onPlay: (String) -> Unit,
+) {
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val isTv = com.aotv.app.ui.common.LocalIsTv.current
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+            if (!isTv) return@onPreviewKeyEvent false
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            if (event.key != Key.DirectionDown && event.key != Key.DirectionUp) return@onPreviewKeyEvent false
+            if (event.nativeKeyEvent.repeatCount == 0) return@onPreviewKeyEvent false
+            val current = listState.firstVisibleItemIndex
+            val target = if (event.key == Key.DirectionDown) (current + 1).coerceAtMost(sections.size - 1) else (current - 1).coerceAtLeast(0)
+            if (target == current) return@onPreviewKeyEvent false
+            scope.launch { listState.scrollToItem(target) }
+            true
+        },
+        contentPadding = PaddingValues(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(sections, key = { section -> section.first }) { section ->
+            val name = section.first
+            val rows = section.second
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "$name · ${rows.size} canais", color = TextPrimary, fontSize = 14.sp,
+                    fontWeight = FontWeight.ExtraBold, modifier = Modifier.padding(start = 4.dp, top = 8.dp),
+                )
+                rows.forEach { row ->
+                    GuideListRow(row = row, now = now, onClick = { onPlay(row.channel.id) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideListRow(row: LiveRow, now: Long, onClick: () -> Unit) {
+    val channel = row.channel
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(width = 64.dp, height = 44.dp).clip(RoundedCornerShape(10.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+            if (channel.logo.isNotBlank()) AsyncImage(channel.logo, channel.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
+            else Text(channel.name.take(2).uppercase(), color = TextSecondary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(channel.name, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val current = row.now
+            if (current != null) {
+                Text(current.title, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                com.aotv.app.ui.common.ProgressBar(current.progress(now), Modifier.fillMaxWidth(0.9f), height = 3.dp)
+            } else {
+                Text("Sem guia para este canal", color = TextTertiary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            row.next?.let { next ->
+                Text("A seguir ${hhmm(next.start)} ${next.title}", color = TextTertiary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}

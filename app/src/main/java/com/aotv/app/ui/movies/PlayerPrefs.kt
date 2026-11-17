@@ -150,6 +150,23 @@ class PlayerPrefsViewModel @Inject constructor(
         prefs.playerSourceTimeout = allowed.minByOrNull { kotlin.math.abs(it - v) } ?: 12
     }
 
+    /**
+     * Subir a qualidade sozinho (Lote 19 item 7e, v1.29.0): com o toggle
+     * ligado, o player troca 1x p/ uma fonte melhor logo no começo, sem
+     * perder o ponto; desligado, fica na qualidade que começou. Padrão ligado.
+     */
+    val autoUpgrade: StateFlow<Boolean> = prefs.playerAutoUpgradeFlow
+    fun setAutoUpgrade(v: Boolean) { prefs.playerAutoUpgrade = v }
+
+    /**
+     * Debrid só com arquivo pronto (Lote 19 item 7f, v1.29.0): com o toggle
+     * ligado, a troca automática nunca abre torrent que o debrid ativo ainda
+     * não tem pronto, p/ a conta não começar downloads sozinha. Sem conta de
+     * debrid ativa, não muda nada. Padrão ligado.
+     */
+    val debridReadyOnly: StateFlow<Boolean> = prefs.playerDebridReadyOnlyFlow
+    fun setDebridReadyOnly(v: Boolean) { prefs.playerDebridReadyOnly = v }
+
     /** Client ID do Anime-Skip, digitado pelo usuário ("" = desligado). */
     val animeSkipClientId: StateFlow<String> = prefs.playerAnimeSkipClientIdFlow
     fun setAnimeSkipClientId(v: String) { prefs.playerAnimeSkipClientId = v.trim() }

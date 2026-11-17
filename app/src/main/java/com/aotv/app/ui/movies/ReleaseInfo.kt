@@ -1,6 +1,7 @@
 package com.aotv.app.ui.movies
 
 import com.aotv.app.data.remote.StremioStream
+import com.aotv.app.data.remote.extractSourceBadges
 import com.aotv.app.data.remote.hasAtmos
 import com.aotv.app.data.remote.hasDolbyVision
 import com.aotv.app.data.remote.hasHdr
@@ -65,5 +66,8 @@ internal fun releaseInfo(stream: StremioStream, title: String, providers: List<S
         language = language, tags = badges.distinct(), fileName = file, size = size,
         seeds = RELEASE_SEEDS.find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0,
         providers = providers.ifEmpty { listOf(stream.addon).filter { it.isNotBlank() } },
+        // Selos com logo (Lote 19 item 9): extraídos do texto RICO do release
+        // (que tem DV/Atmos/tamanho que o rótulo curto nem sempre traz).
+        badges = extractSourceBadges(text, size),
     )
 }

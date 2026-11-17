@@ -28,6 +28,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import com.aotv.app.data.remote.SourceBadge
+import com.aotv.app.data.remote.extractSourceBadges
+import com.aotv.app.data.remote.resolvePackBadges
 import com.aotv.app.ui.common.pressScale
 import com.aotv.app.ui.theme.*
 
@@ -51,6 +55,8 @@ data class SourceInfo(
     val size: String = "",
     val seeds: Int = 0,
     val providers: List<String> = emptyList(),
+    /** Selos extraídos do texto da fonte (Lote 19 item 9) — o pack com logo só troca a imagem. */
+    val badges: List<SourceBadge> = emptyList(),
 )
 
 private val EMOJI = Regex(
@@ -156,6 +162,7 @@ fun parseSourceLabel(
         quality = quality,
         language = language,
         tags = tags,
+        badges = extractSourceBadges(rawLabel, SIZE.find(label)?.value.orEmpty()),
     )
 }
 
@@ -230,15 +237,31 @@ fun SourceCard(
             }
         }
 
+        // Selos com logo (Lote 19 item 9): quando há pack carregado e o toggle
+        // está ligado, os selos extraídos do texto ganham a imagem do pack
+        // (só os que o pack cobre — o resto continua como texto). Sem pack,
+        // a lista fica vazia e a fileira abaixo desenha os pills de sempre.
+        val logoBadges = remember(info.badges, cardPrefs.packBadges, cardPrefs.logoBadgesEnabled) {
+            if (!cardPrefs.logoBadgesEnabled) emptyList()
+            else resolvePackBadges(info.badges, cardPrefs.packBadges)
+                .filter { it.imageUrl != null }
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    if (info.quality.isNotBlank()) com.aotv.app.ui.common.Badge(info.quality,
-                        if (info.quality in listOf("4K", "2K")) Gold else Accent)
-                    // "pills": o tamanho sai do canto e vira pill aqui (só o que o provider informou).
-                    if (cardPrefs.sizeAsPill && cardPrefs.showSize && info.size.isNotBlank()) SourcePill(info.size)
-                    info.tags.filter { cardPrefs.showCodec || it !in CODEC_TAGS }.take(10).forEach { SourcePill(it) }
-                    if (cardPrefs.showLang && info.language.isNotBlank()) SourcePill(info.language)
+                    if (logoBadges.isNotEmpty()) {
+                        // Fileira de selos com logo, estilo Fusion/Elite: 4K,
+                        // Dolby Vision, DTS-HD MA… e o SIZE como pill de texto.
+                        logoBadges.forEach { badge -> LogoBadge(badge) }
+                        if (cardPrefs.showSize && info.size.isNotBlank()) SourcePill("SIZE ${info.size}")
+                    } else {
+                        if (info.quality.isNotBlank()) com.aotv.app.ui.common.Badge(info.quality,
+                            if (info.quality in listOf("4K", "2K")) Gold else Accent)
+                        // "pills": o tamanho sai do canto e vira pill aqui (só o que o provider informou).
+                        if (cardPrefs.sizeAsPill && cardPrefs.showSize && info.size.isNotBlank()) SourcePill(info.size)
+                        info.tags.filter { cardPrefs.showCodec || it !in CODEC_TAGS }.take(10).forEach { SourcePill(it) }
+                        if (cardPrefs.showLang && info.language.isNotBlank()) SourcePill(info.language)
+                    }
                     if (tag.isNotBlank()) com.aotv.app.ui.common.Badge(tag, tagColor)
                 }
                 if (info.providers.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -312,6 +335,29 @@ private fun SourcePill(text: String) {
             .clip(RoundedCornerShape(5.dp))
             .background(FillSubtle)
             .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/**
+ * Um selo com logo (Lote 19 item 9, v1.29.0). A imagem vem da URL do pack,
+ * com o cache do Coil (não baixa de novo a cada abertura da folha). Enquanto
+ * carrega, ocupa o espaço sem piscar; se falhar, volta a ser pill de texto
+ * com o rótulo — o card nunca fica com um buraco no lugar do selo.
+ */
+@Composable
+fun LogoBadge(badge: SourceBadge, modifier: Modifier = Modifier) {
+    val url = badge.imageUrl.orEmpty()
+    if (url.isBlank()) {
+        SourcePill(badge.label)
+        return
+    }
+    SubcomposeAsyncImage(
+        model = url,
+        contentDescription = badge.label,
+        contentScale = ContentScale.Fit,
+        modifier = modifier.height(20.dp),
+        loading = { Box(Modifier.height(20.dp).width(28.dp)) {} },
+        error = { SourcePill(badge.label) },
     )
 }
 

@@ -482,7 +482,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.homeRails(
                 collections.firstOrNull { it.id == row.collectionId }?.takeIf { it.folders.isNotEmpty() }?.let { col ->
                     item(key = row.key) {
                         TvScaled {
-                            com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null) { f -> onFolderClick(col.id, f.id) }
+                            com.aotv.app.ui.collections.CollectionFolderRow(col, row.displayTitle, eyebrow = null, onFolder = { f -> onFolderClick(col.id, f.id) })
                         }
                     }
                 }

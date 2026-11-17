@@ -92,6 +92,10 @@ internal val SCOPED_KEYS = listOf(
     "pref_detail_tabs", "pref_detail_episode_style", "pref_detail_episode_ratings",
     "pref_stream_search", "pref_stream_badges_size", "pref_stream_badges_codec",
     "pref_stream_badges_lang", "pref_stream_badges_pos", "pref_stream_logo",
+    // Lote 19 item 9 — Selos com logo (v1.29.0): URL do pack (JSON) colada
+    // pelo usuário (começa VAZIA — nenhuma URL de terceiro embutida), JSON
+    // guardado do pack e o toggle dos selos com logo.
+    "pref_badge_pack_url", "pref_badge_pack_json", "pref_badge_pack_enabled",
     "pref_stream_pinned",
     // Lote 17 — Ranking de fontes (v1.27.0): preset, estratégia, filtro de
     // idioma, original primeiro, ordem manual, saúde aprendida, esconder o
@@ -103,6 +107,9 @@ internal val SCOPED_KEYS = listOf(
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
     "pref_player_auto_switch", "pref_player_source_timeout",
+    // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
+    // qualidade sozinho e debrid só com arquivo pronto.
+    "pref_player_auto_upgrade", "pref_player_debrid_ready_only",
     // Lote 11 — Guarda de duração (v1.21.0): avisar antes de tocar um
     // arquivo cuja duração destoa >10% da do título no TMDB.
     "pref_duration_guard",
@@ -2089,6 +2096,28 @@ class PlatformPrefs @Inject constructor(
         get() = _streamLogo.value
         set(value) { prefs.edit().putBoolean(sk("pref_stream_logo"), value).apply(); _streamLogo.value = value }
 
+    // ── Selos com logo (Lote 19 item 9, v1.29.0) ─────────────────────────
+    private val _badgePackUrl = MutableStateFlow(prefs.getString(sk("pref_badge_pack_url"), "") ?: "")
+    /** URL do pack de selos (JSON) colada pelo usuário. "" = sem pack (padrão). */
+    val badgePackUrlFlow: StateFlow<String> = _badgePackUrl.asStateFlow()
+    var badgePackUrl: String
+        get() = _badgePackUrl.value
+        set(value) { prefs.edit().putString(sk("pref_badge_pack_url"), value).apply(); _badgePackUrl.value = value }
+
+    private val _badgePackJson = MutableStateFlow(prefs.getString(sk("pref_badge_pack_json"), "") ?: "")
+    /** JSON do pack carregado (guardado; as imagens ficam no cache do Coil). */
+    val badgePackJsonFlow: StateFlow<String> = _badgePackJson.asStateFlow()
+    var badgePackJson: String
+        get() = _badgePackJson.value
+        set(value) { prefs.edit().putString(sk("pref_badge_pack_json"), value).apply(); _badgePackJson.value = value }
+
+    private val _badgePackEnabled = MutableStateFlow(prefs.getBoolean(sk("pref_badge_pack_enabled"), true))
+    /** Selos com logo ligados. Desligado, a folha usa só os selos de texto. */
+    val badgePackEnabledFlow: StateFlow<Boolean> = _badgePackEnabled.asStateFlow()
+    var badgePackEnabled: Boolean
+        get() = _badgePackEnabled.value
+        set(value) { prefs.edit().putBoolean(sk("pref_badge_pack_enabled"), value).apply(); _badgePackEnabled.value = value }
+
     /**
      * SEMÂNTICA DE "USAR ADDONS PRIMÁRIOS" (Lote 3, v1.11.0) — espelho do
      * NuvioAccountService (perfil do Nuvio com usesPrimaryAddons resolve os
@@ -2524,6 +2553,20 @@ class PlatformPrefs @Inject constructor(
     var playerSourceTimeout: Int
         get() = _playerSourceTimeout.value
         set(value) { prefs.edit().putInt(sk("pref_player_source_timeout"), value).apply(); _playerSourceTimeout.value = value }
+
+    private val _playerAutoUpgrade = MutableStateFlow(prefs.getBoolean(sk("pref_player_auto_upgrade"), true))
+    /** Subir a qualidade sozinho (Lote 19 item 7e, v1.29.0): com o toggle ligado, o upgrade 1x do player vale — se acha uma fonte melhor logo no começo, troca uma vez sem perder o ponto; desligado, fica na qualidade que começou. */
+    val playerAutoUpgradeFlow: StateFlow<Boolean> = _playerAutoUpgrade.asStateFlow()
+    var playerAutoUpgrade: Boolean
+        get() = _playerAutoUpgrade.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_auto_upgrade"), value).apply(); _playerAutoUpgrade.value = value }
+
+    private val _playerDebridReadyOnly = MutableStateFlow(prefs.getBoolean(sk("pref_player_debrid_ready_only"), true))
+    /** Debrid só com arquivo pronto (Lote 19 item 7f, v1.29.0): com o toggle ligado, a troca AUTOMÁTICA nunca abre torrent que o debrid ativo ainda não tem pronto, p/ a conta não começar downloads sozinha. Sem conta de debrid ativa, não muda nada (o magnet vai p/ P2P). */
+    val playerDebridReadyOnlyFlow: StateFlow<Boolean> = _playerDebridReadyOnly.asStateFlow()
+    var playerDebridReadyOnly: Boolean
+        get() = _playerDebridReadyOnly.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_debrid_ready_only"), value).apply(); _playerDebridReadyOnly.value = value }
 
     private val _playerAnimeSkipClientId = MutableStateFlow(prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: "")
     /** Client ID do Anime-Skip (v1.8.1), digitado pelo usuário em Configurações. "" = Anime-Skip desligado. NUNCA embutir um ID no código. */
@@ -3298,6 +3341,9 @@ class PlatformPrefs @Inject constructor(
         _streamBadgesLang.value = prefs.getBoolean(sk("pref_stream_badges_lang"), true)
         _streamBadgesPos.value = prefs.getString(sk("pref_stream_badges_pos"), "stats") ?: "stats"
         _streamLogo.value = prefs.getBoolean(sk("pref_stream_logo"), true)
+        _badgePackUrl.value = prefs.getString(sk("pref_badge_pack_url"), "") ?: ""
+        _badgePackJson.value = prefs.getString(sk("pref_badge_pack_json"), "") ?: ""
+        _badgePackEnabled.value = prefs.getBoolean(sk("pref_badge_pack_enabled"), true)
         _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
         _sourcePreset.value = prefs.getString(sk("pref_source_preset_v1"), "balanced") ?: "balanced"
         _sourceStrategy.value = prefs.getString(sk("pref_source_strategy_v1"), "quality") ?: "quality"
@@ -3345,6 +3391,9 @@ class PlatformPrefs @Inject constructor(
         _playerAutoSwitch.value = prefs.getBoolean(sk("pref_player_auto_switch"), true)
         _durationGuard.value = prefs.getBoolean(sk("pref_duration_guard"), true)
         _playerSourceTimeout.value = prefs.getInt(sk("pref_player_source_timeout"), 12)
+        // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV.
+        _playerAutoUpgrade.value = prefs.getBoolean(sk("pref_player_auto_upgrade"), true)
+        _playerDebridReadyOnly.value = prefs.getBoolean(sk("pref_player_debrid_ready_only"), true)
         _playerAnimeSkipClientId.value = prefs.getString(sk("pref_player_animeskip_client_id"), "") ?: ""
         _subDlApiKey.value = prefs.getString(sk("subdl_api_key"), "") ?: ""
         _playerAudioLang.value =

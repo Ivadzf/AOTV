@@ -37,6 +37,7 @@ object SettingsAnchors {
     // Streams
     const val STREAMS_SHEET = "streams-folha"
     const val STREAMS_BADGES = "streams-emblemas"
+    const val STREAMS_LOGO_BADGES = "streams-selos-logo"
     const val STREAMS_PINNED = "streams-fixadas"
     // Ranking de fontes (Lote 17, v1.27.0): preset, estratégia, idioma, ordem manual.
     const val STREAMS_RANKING = "streams-ranking"
@@ -420,6 +421,21 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("posição", "emblemas"),
         pageId = SettingsPageIds.Streams,
         anchor = SettingsAnchors.STREAMS_BADGES,
+    ),
+    // ── Selos com logo (Lote 19 item 9, v1.29.0) ─────────────────────────
+    SettingOptionEntry(
+        title = "Selos com logo",
+        sub = "Logos (4K, Dolby Vision, DTS-HD) na folha de fontes",
+        keywords = listOf("selos", "logo", "4K", "Dolby Vision", "pack", "emblemas"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_LOGO_BADGES,
+    ),
+    SettingOptionEntry(
+        title = "Pack de selos (URL)",
+        sub = "URL do pack de selos em JSON + prévia por categoria",
+        keywords = listOf("pack", "URL", "JSON", "selos", "prévia", "logo"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_LOGO_BADGES,
     ),
     SettingOptionEntry(
         title = "Fontes fixadas",
@@ -1068,10 +1084,26 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
+    // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: o título (c)
+    // é o da foto; (e) e (f) são as opções novas do lote.
     SettingOptionEntry(
-        title = "Troca automática de fonte",
+        title = "Trocar de fonte sozinho",
         sub = "Se a fonte travar, troca sozinha por outra",
         keywords = listOf("troca automática", "fonte", "travar", "falhar"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Subir a qualidade sozinho",
+        sub = "Se acha uma fonte melhor logo no começo, troca uma vez sem perder o ponto",
+        keywords = listOf("qualidade", "melhor", "upgrade", "subir", "trocar"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Debrid só com arquivo pronto",
+        sub = "A troca automática nunca abre torrent que o debrid ainda não tem",
+        keywords = listOf("debrid", "torrent", "cache", "pronto", "download"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
@@ -1083,9 +1115,9 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
     SettingOptionEntry(
-        title = "Tempo para trocar de fonte",
+        title = "Espera antes de trocar",
         sub = "8 s a 60 s",
-        keywords = listOf("tempo", "troca", "fonte", "timeout"),
+        keywords = listOf("tempo", "troca", "fonte", "timeout", "espera"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),

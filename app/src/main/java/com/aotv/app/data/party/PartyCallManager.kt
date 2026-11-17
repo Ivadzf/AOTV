@@ -152,7 +152,7 @@ class PartyCallManager @Inject constructor(
 
         override fun onCameraDisconnected() {}
         override fun onCameraFreezed(freezeDescription: String) {}
-        override fun onCameraOpening() {}
+        override fun onCameraOpening(cameraName: String) {}
         override fun onFirstFrameAvailable() {}
         override fun onCameraClosed() {}
     }

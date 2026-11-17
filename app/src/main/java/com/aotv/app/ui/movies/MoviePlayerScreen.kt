@@ -381,6 +381,9 @@ fun MoviePlayerScreen(
     val playerAutoNextDelay by playerPrefsVm.autoNextDelay.collectAsState()
     val playerAutoSwitch by playerPrefsVm.autoSwitch.collectAsState()
     val playerSourceTimeout by playerPrefsVm.sourceTimeout.collectAsState()
+    // Lote 19 item 7 (v1.29.0): subir a qualidade sozinho (e) e debrid só com arquivo pronto (f).
+    val playerAutoUpgrade by playerPrefsVm.autoUpgrade.collectAsState()
+    val playerDebridReadyOnly by playerPrefsVm.debridReadyOnly.collectAsState()
     val playerAnimeSkipClientId by playerPrefsVm.animeSkipClientId.collectAsState()
     // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): pref por perfil, código SubLangs.
     val playerAudioLang by playerPrefsVm.audioLang.collectAsState()
@@ -450,6 +453,9 @@ fun MoviePlayerScreen(
     // v1.8.1: troca automática de fonte (toggle + tempo) e client ID do Anime-Skip.
     s.autoSwitchEnabled = playerAutoSwitch
     s.sourceTimeoutSec = playerSourceTimeout
+    // Lote 19 item 7 (v1.29.0): subir a qualidade sozinho (e) e debrid só com arquivo pronto (f).
+    s.autoUpgradeEnabled = playerAutoUpgrade
+    s.debridReadyOnly = playerDebridReadyOnly
     s.animeSkipClientId = playerAnimeSkipClientId
     // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): a tela lê o fluxo e
     // entrega à sessão, como as outras prefs do player.
@@ -540,7 +546,7 @@ fun MoviePlayerScreen(
             onDismiss = { progressVm.dismissRating() },
         )
     }
-    PlayerScreenContent(s)
+    PlayerScreenContent(s, partyVm)
 }
 
 /** Efeitos de carga (fontes, legendas, logo, cast). */
@@ -1175,19 +1181,24 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         if (type != "SERIES" && !userLockedSource && durationMismatch(runtimeMin, sec)) {
             wrongUrls += u
             val f = facts()
-            val n = nextIndex(f, triedUrls, emptySet())
+            // Lote 19 item 7 (f): a troca por filme errado também é automática —
+            // pula os torrents que o gate do debrid veta, sem tocar no triedUrls.
+            var n = nextIndex(f, triedUrls, emptySet())
+            while (n >= 0 && debridBlocksAutoSwitch(f[n].url)) n = nextIndex(f, triedUrls + f[n].url, emptySet())
             if (n >= 0 && !f[n].wrongTitle) {
                 toastMsg = "Essa fonte era de outro filme com nome parecido. Tentando a próxima."
                 applyMovieSource(n)
                 return@LaunchedEffect
             }
         }
-        if (upgradeDone || userLockedSource) return@LaunchedEffect
+        // Lote 19 item 7 (e): com "Subir a qualidade sozinho" desligado, o
+        // upgrade 1x não roda — o player fica na qualidade que começou.
+        if (upgradeDone || userLockedSource || !autoUpgradeEnabled) return@LaunchedEffect
         delay(4_000)
         val cur = currentSources.getOrNull(currentSourceIdx) ?: return@LaunchedEffect
         val lang = langOf(cur.label)
         fun consider(): Boolean {
-            if (upgradeDone || userLockedSource || casting || streamUrl != u) return true
+            if (upgradeDone || userLockedSource || !autoUpgradeEnabled || casting || streamUrl != u) return true
             val curH = exoPlayer.videoSize.height
             if (curH <= 0) return false
             var best = -1
@@ -1195,6 +1206,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             facts().forEachIndexed { i, f ->
                 val h = f.probe?.height ?: 0
                 if (i == currentSourceIdx || f.dead || f.wrongTitle || f.url in triedUrls || h == 0 || f.lang != lang) return@forEachIndexed
+                // Lote 19 item 7 (b+e): o upgrade respeita a qualidade máxima do
+                // perfil (não sobe p/ 4K com teto de 720p) e o gate do debrid (f).
+                if (prefs.maxQuality > 0 && f.rank > prefs.maxQuality) return@forEachIndexed
+                if (debridBlocksAutoSwitch(f.url)) return@forEachIndexed
                 if (h >= bestH && f.probe!!.ms < 6_000) { best = i; bestH = h }
             }
             if (best < 0) return false
@@ -1255,7 +1270,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
 /** Tela do player. Vídeo, camadas por cima e painel. */
 @OptIn(UnstableApi::class)
 @Composable
-private fun PlayerScreenContent(s: PlayerSession) = with(s) {
+private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) = with(s) {
     val tapInteraction = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     // Root é dono do foco (D-pad), inclusive enquanto a fonte ainda está sendo resolvida.
@@ -1970,6 +1985,11 @@ class PlayerSession(
     // Troca automática de fonte (v1.8.1): toggle + tempo do watchdog (segundos).
     var autoSwitchEnabled by run { mutableStateOf(true) }
     var sourceTimeoutSec by run { mutableIntStateOf(12) }
+    // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
+    // qualidade sozinho (e) e debrid só com arquivo pronto (f). A tela
+    // entrega as prefs aqui (ver MoviePlayerScreen, junto ao autoSwitch).
+    var autoUpgradeEnabled by run { mutableStateOf(true) }
+    var debridReadyOnly by run { mutableStateOf(true) }
     /** Client ID do Anime-Skip digitado pelo usuário ("" = desligado). */
     var animeSkipClientId by run { mutableStateOf("") }
     /** Alvo do botão de pular trechos: rótulo, alvo em ms, ir p/ o próximo episódio. */
@@ -3393,6 +3413,9 @@ class PlayerSession(
         if (sourceSettledOrder != null) return
         sourceSettledOrder = rankedSourceOrder().mapNotNull { currentSources.getOrNull(it)?.url }
         sourcesSettled = true
+        // Lote 19 item 7 (f): a lista assentou — pede a consulta de cache só de
+        // leitura p/ os magnets, p/ a troca automática saber o que já está pronto.
+        refreshDebridCacheForAutoSwitch()
     }
 
     /** Marca a fonte como tocada/focada pelo usuário na folha. */
@@ -3515,6 +3538,44 @@ class PlayerSession(
         }
     }
 
+    /**
+     * Lote 19 item 7 (f) — "Debrid só com arquivo pronto": com a pref ligada,
+     * a troca AUTOMÁTICA veta um torrent que o debrid ativo ainda não tem
+     * pronto, p/ a conta não começar downloads sozinha. Só vale com conta de
+     * debrid ativa (sem conta, o magnet vai p/ P2P e o gate não se aplica) e
+     * só p/ magnets: link direto nunca passa pelo debrid. "Não se sabe"
+     * (nunca consultado, ou Real-Debrid/AllDebrid — que só descobrem o cache
+     * resolvendo, ver DebridService.check) conta como não pronto. A escolha
+     * à mão e o "Tentar a próxima fonte" NÃO passam por aqui: aí foi o
+     * usuário quem escolheu, e o resolve na hora de tocar vale.
+     */
+    fun debridBlocksAutoSwitch(url: String): Boolean {
+        if (!debridReadyOnly) return false
+        if (!TorrentMagnet.isMagnet(url)) return false
+        if (episodeVm.debridLabel() == null) return false
+        return episodeVm.debridCached(url) != true
+    }
+
+    /** Magnets cuja consulta de cache (só leitura) já foi pedida nesta sessão. */
+    private var debridCacheCheckedUrls = emptySet<String>()
+
+    /**
+     * Lote 19 item 7 (f): com o gate ligado, pede a consulta de cache só de
+     * leitura (TorBox/Premiumize) p/ os magnets da lista assentada, p/ a
+     * troca automática saber o que já está pronto sem resolver nada na conta.
+     * Só os magnets novos de cada leva; sem magnet, sem conta ou com o gate
+     * desligado, não faz nada. RD/AD não respondem sem resolver e ficam como
+     * "não se sabe" (o gate veta na automática — ver [debridBlocksAutoSwitch]).
+     */
+    fun refreshDebridCacheForAutoSwitch() {
+        if (!debridReadyOnly) return
+        val fresh = currentSources.map { it.url }
+            .filter { TorrentMagnet.isMagnet(it) && it !in debridCacheCheckedUrls }
+        if (fresh.isEmpty()) return
+        debridCacheCheckedUrls += fresh
+        episodeVm.debridCheckCache(fresh, curSeason, curEpisode)
+    }
+
     // Próxima FONTE (auto-fallback). Ainda não tentada, fugindo de outro filme, de fonte morta
     // e do addon que acabou de falhar. Retorna false se não sobrou nenhuma.
     // [slow] = troca por lentidão. Aí só vale fonte que não seja de outro filme, senão é melhor
@@ -3533,13 +3594,19 @@ class PlayerSession(
         }
         val f = facts()
         val rankedOrder = rankedSourceOrder()
+        // Lote 19 item 7 (f): o gate do debrid vale nas 3 passagens — a troca
+        // automática nunca abre torrent que o debrid ainda não tem pronto. Sem
+        // candidato que passe, retorna false e a tela de falha oferece a ação manual.
         val next = rankedOrder.firstOrNull { idx ->
             val s = f.getOrNull(idx) ?: return@firstOrNull false
-            s.url !in triedUrls && !s.dead && !s.wrongTitle && s.addon !in failedAddons
+            s.url !in triedUrls && !s.dead && !s.wrongTitle && s.addon !in failedAddons && !debridBlocksAutoSwitch(s.url)
         } ?: rankedOrder.firstOrNull { idx ->
             val s = f.getOrNull(idx) ?: return@firstOrNull false
-            s.url !in triedUrls && !s.wrongTitle
-        } ?: rankedOrder.firstOrNull { idx -> (f.getOrNull(idx)?.url ?: "") !in triedUrls }
+            s.url !in triedUrls && !s.wrongTitle && !debridBlocksAutoSwitch(s.url)
+        } ?: rankedOrder.firstOrNull { idx ->
+            val u = f.getOrNull(idx)?.url ?: ""
+            u !in triedUrls && !debridBlocksAutoSwitch(u)
+        }
         if (next == null) return false
         if (slow && f[next].wrongTitle && f.getOrNull(currentSourceIdx)?.wrongTitle == false) return true
         applyMovieSource(next)

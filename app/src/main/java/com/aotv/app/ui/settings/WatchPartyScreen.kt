@@ -77,6 +77,7 @@ import com.aotv.app.ui.theme.TextPrimary
 import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
 
+@Composable
 private fun partySwitchColors() = SwitchDefaults.colors(
     checkedThumbColor = Color.White,
     checkedTrackColor = Accent,

@@ -34,6 +34,18 @@ class EpisodePlayerViewModel @Inject constructor(
     fun debridLabel(): String? = debrid.active()?.provider?.label
     /** O serviço tem esse torrent pronto? null quando ainda não se sabe. */
     fun debridCached(url: String): Boolean? = debrid.knownCached(url)
+    /**
+     * Consulta de cache só de leitura (Lote 19 item 7f, v1.29.0): TorBox e
+     * Premiumize respondem em lote sem mexer em nada na conta; Real-Debrid e
+     * AllDebrid não entram (só descobrem o cache resolvendo — ver
+     * DebridService.check). O player pede quando a lista assenta, p/ a troca
+     * automática saber o que já está pronto sem resolver nada. Sem conta
+     * ativa, não faz nada. Erro de rede não derruba o player.
+     */
+    fun debridCheckCache(magnets: List<String>, season: Int = 0, episode: Int = 0) {
+        if (magnets.isEmpty()) return
+        viewModelScope.launch { runCatching { debrid.check(magnets, season, episode) } }
+    }
     /** Link direto já resolvido, sem rede (serve para o Chromecast). */
     fun debridNow(url: String, season: Int, episode: Int): String? = debrid.resolvedNow(url, season, episode)
     suspend fun debridResolve(url: String, season: Int, episode: Int) = debrid.resolve(url, season, episode)

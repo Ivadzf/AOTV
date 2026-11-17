@@ -4,10 +4,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.remote.BadgePackLoad
+import com.aotv.app.data.remote.BadgePackRepository
+import com.aotv.app.data.remote.SourceBadge
 import com.aotv.app.data.remote.StremioAddonService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -19,6 +26,7 @@ import javax.inject.Inject
 class StreamPrefsViewModel @Inject constructor(
     private val prefs: PlatformPrefs,
     private val stremio: StremioAddonService,
+    private val badgePacks: BadgePackRepository,
 ) : ViewModel() {
     val search: StateFlow<Boolean> = prefs.streamSearchFlow
     fun setSearch(v: Boolean) { prefs.streamSearch = v }
@@ -37,6 +45,55 @@ class StreamPrefsViewModel @Inject constructor(
 
     val logo: StateFlow<Boolean> = prefs.streamLogoFlow
     fun setLogo(v: Boolean) { prefs.streamLogo = v }
+
+    // ── Selos com logo (Lote 19 item 9, v1.29.0) ─────────────────────────
+    val badgePackEnabled: StateFlow<Boolean> = prefs.badgePackEnabledFlow
+    fun setBadgePackEnabled(v: Boolean) { prefs.badgePackEnabled = v }
+
+    val badgePackUrl: StateFlow<String> = prefs.badgePackUrlFlow
+    fun setBadgePackUrl(v: String) { prefs.badgePackUrl = v.trim() }
+
+    /** Selos do pack guardado (vazio = sem pack; a folha usa os selos de texto). */
+    private val _packBadges = MutableStateFlow(badgePacks.cachedPack())
+    val packBadges: StateFlow<List<SourceBadge>> = _packBadges.asStateFlow()
+
+    /** Estado do último carregamento, p/ a tela de prévia ("" = nada a dizer). */
+    private val _packMessage = MutableStateFlow("")
+    val packMessage: StateFlow<String> = _packMessage.asStateFlow()
+
+    private val _packLoading = MutableStateFlow(false)
+    val packLoading: StateFlow<Boolean> = _packLoading.asStateFlow()
+
+    /** Baixa o pack da URL salva; falha NÃO apaga o pack guardado. */
+    fun loadBadgePack() {
+        val url = prefs.badgePackUrl.trim()
+        if (url.isBlank()) {
+            _packMessage.value = "Cole a URL do pack primeiro."
+            return
+        }
+        viewModelScope.launch {
+            _packLoading.value = true
+            _packMessage.value = "Carregando…"
+            when (val result = badgePacks.fetchPack(url)) {
+                is BadgePackLoad.Loaded -> {
+                    _packBadges.value = result.badges
+                    _packMessage.value = "${result.badges.size} selos carregados desta URL" +
+                        if (result.skipped > 0) " (${result.skipped} ignorados)." else "."
+                }
+                is BadgePackLoad.Failed -> {
+                    _packMessage.value = result.message + " A folha continua com os selos de texto."
+                }
+            }
+            _packLoading.value = false
+        }
+    }
+
+    /** Apaga o pack guardado. A folha volta aos selos de texto. */
+    fun clearBadgePack() {
+        badgePacks.clearPack()
+        _packBadges.value = emptyList()
+        _packMessage.value = "Pack removido — a folha usa os selos de texto."
+    }
 
     val pinned: StateFlow<List<String>> = prefs.streamPinnedFlow
     /** Desfixa uma fonte. Fixar é pelo botão de pin na folha de fontes. */
@@ -108,6 +165,10 @@ data class StreamCardPrefs(
     val sizeAsPill: Boolean = false,
     val showLogo: Boolean = true,
     val logoOf: (String) -> String = { "" },
+    /** Selos com logo ligados (Lote 19 item 9). Desligado, só selos de texto. */
+    val logoBadgesEnabled: Boolean = false,
+    /** Selos do pack guardado (vazio = sem pack; a folha usa os selos de texto). */
+    val packBadges: List<SourceBadge> = emptyList(),
 )
 
 /** Coleta os fluxos de [StreamPrefsViewModel] num [StreamCardPrefs] (recompõe quando muda). */
@@ -118,6 +179,8 @@ fun rememberStreamCardPrefs(viewModel: StreamPrefsViewModel): StreamCardPrefs {
     val showLang by viewModel.badgesLang.collectAsStateWithLifecycle()
     val badgesPos by viewModel.badgesPos.collectAsStateWithLifecycle()
     val showLogo by viewModel.logo.collectAsStateWithLifecycle()
+    val logoBadgesEnabled by viewModel.badgePackEnabled.collectAsStateWithLifecycle()
+    val packBadges by viewModel.packBadges.collectAsStateWithLifecycle()
     return StreamCardPrefs(
         showSize = showSize,
         showCodec = showCodec,
@@ -125,5 +188,7 @@ fun rememberStreamCardPrefs(viewModel: StreamPrefsViewModel): StreamCardPrefs {
         sizeAsPill = badgesPos == "pills",
         showLogo = showLogo,
         logoOf = viewModel::logoFor,
+        logoBadgesEnabled = logoBadgesEnabled,
+        packBadges = packBadges,
     )
 }

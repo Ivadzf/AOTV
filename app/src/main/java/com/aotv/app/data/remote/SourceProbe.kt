@@ -183,9 +183,20 @@ fun hasHdr10Plus(text: String) = HDR10_PLUS.containsMatchIn(text)
 // rótulo que o selo mostra. "" = origem não informada no texto.
 private val RELEASE_KIND = Regex("\\b(web[ .-]?dl|web[ .-]?rip|blu[ .-]?ray|remux|hdtv|dvd[ .-]?rip)\\b", RegexOption.IGNORE_CASE)
 fun releaseKindOf(text: String): String {
-    val found = RELEASE_KIND.find(text)?.value?.uppercase(java.util.Locale.ROOT)
-        ?.replace("WEBDL", "WEB-DL")?.replace("WEBRIP", "WEBRip")?.replace("BLURAY", "BluRay")
-    return if (found in listOf("Remux", "BluRay", "WEB-DL", "WEBRip", "HDTV", "DVDRip")) found ?: "" else ""
+    // Normaliza sem separadores antes de comparar: o uppercase() antigo
+    // comparava "REMUX" com "Remux" e nunca casava — a origem Remux (e o
+    // +5 do score, Lote 17, e o selo Remux do Lote 19 item 9) nunca
+    // disparava p/ a grafia mais comum ("REMUX", "BLU-RAY", "WEB-RIP").
+    val raw = RELEASE_KIND.find(text)?.value?.uppercase(java.util.Locale.ROOT) ?: return ""
+    return when (raw.replace(" ", "").replace("-", "").replace(".", "")) {
+        "REMUX" -> "Remux"
+        "BLURAY" -> "BluRay"
+        "WEBDL" -> "WEB-DL"
+        "WEBRIP" -> "WEBRip"
+        "HDTV" -> "HDTV"
+        "DVDRIP" -> "DVDRip"
+        else -> ""
+    }
 }
 
 /** Melhor origem do arquivo numa lista de textos: Remux vale mais que BluRay, que vale mais que WEB-DL. */
