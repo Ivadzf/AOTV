@@ -1,8 +1,6 @@
 package com.aotv.app.data.torrent
 
 import android.content.Context
-import android.system.Os
-import android.system.OsConstants
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.local.StreamingDataMeter
 import fi.iki.elonen.NanoHTTPD
@@ -48,11 +46,14 @@ import java.util.concurrent.atomic.AtomicInteger
  * tamanho do diretório do torrent no disco. A janela de pré-download
  * encolhe com o teto (teto/4, 4–24 MB); quando o diretório passa do
  * teto e o descarte está ligado, as peças totalmente atrás da posição
- * assistida têm os blocos liberados com `fallocate(PUNCH_HOLE)` e a
- * prioridade vira IGNORE. Sem descarte, o teto não é cumprido (não há
- * como apagar peça sem rebaixar) — ver [enforceTempCap]. Voltar p/ uma
- * peça descartada (seek p/ trás) baixa ela de novo, com 1 `forceRecheck`
- * p/ o libtorrent reconhecer a falta (ver [PieceStream]). Ao completar
+ * assistida viram IGNORE e o torrent é PAUSADO — o teto é cumprido
+ * parando o crescimento, não liberando blocos (o `fallocate` com
+ * PUNCH_HOLE não existe na API pública do Android; a v1.28.0 tentou
+ * e não compilou — build #259). Subir o teto retoma. Sem descarte, o
+ * teto não é cumprido (não há como apagar peça sem rebaixar) — ver
+ * [enforceTempCap]. Voltar p/ uma peça descartada (seek p/ trás)
+ * baixa ela de novo, com 1 `forceRecheck` p/ o libtorrent
+ * reconhecer o estado (ver [PieceStream]). Ao completar
  * o arquivo escolhido o torrent é pausado (sem seed do arquivo
  * completo); ao parar, tudo é apagado (item 3 do Lote 18).
  *
@@ -81,6 +82,18 @@ class TorrentStreamer(
     fun refreshTempSettings(limitBytes: Long, discard: Boolean) {
         tempLimitBytes = limitBytes.coerceAtLeast(0L)
         discardWatched = discard
+        // Subir o teto (ou desligá-lo) retoma os torrents que o teto
+        // pausou — só os que agora cabem no teto novo.
+        active.values.filter { it.pausedByCap }.forEach { a ->
+            val size = runCatching {
+                File(root, a.spec.infoHash).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            }.getOrDefault(Long.MAX_VALUE)
+            if (tempLimitBytes <= 0L || size <= tempLimitBytes) {
+                runCatching { a.handle.resume() }
+                a.pausedByCap = false
+                a.pausedWhenComplete = false
+            }
+        }
     }
 
     data class Status(val peers: Int, val seeds: Int, val downloadBps: Int, val hasMetadata: Boolean)
@@ -97,12 +110,14 @@ class TorrentStreamer(
         @Volatile var windowAt = -1
         /** Maior byte do arquivo escolhido já entregue ao player (posição assistida). */
         @Volatile var watchedThroughByte = 0L
-        /** Peças descartadas do disco (descarte do já assistido, Lote 18) — baixar de novo se voltar nelas. */
+        /** Peças depriorizadas pelo teto (descarte do já assistido, Lote 18) — baixar de novo se voltar nelas. */
         val discardedPieces = ConcurrentHashMap.newKeySet<Int>()
         /** `forceRecheck()` já rodado 1x p/ reconhecer as peças descartadas. */
         @Volatile var recheckTriggered = false
         /** Torrent pausado ao completar o arquivo (sem seed — Lote 18). */
         @Volatile var pausedWhenComplete = false
+        /** Torrent pausado pelo teto de espaço (Lote 18 item 2) — retoma ao subir o teto. */
+        @Volatile var pausedByCap = false
         /** Último `totalDownload()` observado (p/ o delta da medição de torrent). */
         @Volatile var lastTotalDownload = 0L
     }
@@ -212,13 +227,17 @@ class TorrentStreamer(
     /**
      * Teto de espaço temporário (Lote 18 item 2): roda a cada 10 s na
      * limpeza. Se o diretório do torrent passou do teto e o descarte está
-     * ligado, libera no disco as peças totalmente atrás da posição
-     * assistida (`fallocate` com PUNCH_HOLE — best-effort: se o sistema
-     * de arquivos não suportar, o `runCatching` engole e o teto só não é
-     * cumprido naquele aparelho) e marca a prioridade IGNORE p/ o motor
-     * não pedi-las de novo. Sem descarte ligado, não há como cumprir o
-     * teto (apagar peça sem rebaixar não existe no libtorrent) — então
-     * só registra: nada é apagado e nada é pausado no meio da reprodução.
+     * ligado, marca as peças totalmente atrás da posição assistida com
+     * prioridade IGNORE (p/ o motor não pedi-las de novo) e PAUSA o
+     * torrent — o teto é cumprido parando o crescimento, não liberando
+     * blocos. Por quê: o `fallocate` com PUNCH_HOLE não é alcançável
+     * pela API pública do Android (`Os.fallocate` só aceita
+     * fd/offset/length, sem modo; as constantes FALLOC_FL_* não estão
+     * no SDK) — a v1.28.0 tentou e não compilou (build #259). A pausa
+     * não interrompe a reprodução do que já baixou; subir o teto em
+     * Configurações retoma ([refreshTempSettings]). Sem descarte ligado,
+     * o teto não é cumprido — então só registra: nada é apagado e nada
+     * é pausado no meio da reprodução.
      */
     private fun enforceTempCap(a: Active) {
         val f = a.file ?: return
@@ -229,21 +248,16 @@ class TorrentStreamer(
         val watchedPiece = TorrentFiles.pieceAt(f.offset, a.watchedThroughByte, f.pieceLength)
         val discardable = TorrentTempCap.discardablePieces(f.first, f.last, watchedPiece)
         if (discardable.isEmpty()) return
-        runCatching {
-            RandomAccessFile(f.path, "rw").use { raf ->
-                for (p in discardable) {
-                    val range = TorrentTempCap.pieceFileRange(p, f.offset, f.pieceLength, f.size) ?: continue
-                    Os.fallocate(
-                        raf.fd,
-                        OsConstants.FALLOC_FL_KEEP_SIZE or OsConstants.FALLOC_FL_PUNCH_HOLE,
-                        range.first, range.second - range.first,
-                    )
-                    a.discardedPieces += p
-                    a.handle.piecePriority(p, Priority.IGNORE)
-                    a.handle.resetPieceDeadline(p)
-                }
-            }
+        for (p in discardable) {
+            a.discardedPieces += p
+            a.handle.piecePriority(p, Priority.IGNORE)
+            a.handle.resetPieceDeadline(p)
         }
+        // Sem PUNCH_HOLE (ver o KDoc), o teto só se cumpre parando o
+        // crescimento: pausa o torrent. A reprodução do que já baixou
+        // continua; subir o teto retoma (ver refreshTempSettings).
+        runCatching { a.handle.pause() }
+        a.pausedByCap = true
         // Os prazos antigos além da janela só gastariam banda: limpa e
         // deixa a próxima leitura remontar a janela da posição atual.
         runCatching { a.handle.clearPieceDeadlines() }
@@ -317,18 +331,18 @@ class TorrentStreamer(
             val piece = TorrentFiles.pieceAt(f.offset, pos, f.pieceLength)
             // Torrent removido no meio da leitura (saiu do player) faz o libtorrent lançar erro, aí só encerra.
             try {
-                // Peça descartada do disco (descarte do já assistido, Lote 18
-                // item 2): o `havePiece` pode ainda dizer true (estado velho
-                // do libtorrent) — NÃO dá p/ confiar nele aqui. Marca a peça
-                // p/ baixar de novo, retoma o torrent se ele pausou ao
-                // completar e roda 1 `forceRecheck()` p/ o libtorrent
-                // reconhecer que a peça sumiu; só depois do recheck o
-                // `havePiece` volta a ser confiável e a espera normal
-                // (abaixo) baixa a peça de novo. Sem o recheck, o player
-                // serviria zeros do buraco perfurado no arquivo.
+                // Peça depriorizada pelo teto (descarte do já assistido, Lote 18
+                // item 2): ela continua no disco (sem PUNCH_HOLE na API
+                // pública — ver enforceTempCap), mas o motor não a pede
+                // mais e o teto pode ter pausado o torrent. Retoma o
+                // torrent, devolve a prioridade e roda 1 `forceRecheck()`
+                // p/ o libtorrent reconhecer o estado; só depois do
+                // recheck o `havePiece` volta a ser confiável e a espera
+                // normal (abaixo) baixa a peça de novo, se faltar.
                 if (a.discardedPieces.contains(piece)) {
                     runCatching { a.handle.resume() }
                     a.pausedWhenComplete = false
+                    a.pausedByCap = false
                     a.handle.piecePriority(piece, Priority.DEFAULT)
                     a.handle.setPieceDeadline(piece, 0)
                     if (!a.recheckTriggered) {

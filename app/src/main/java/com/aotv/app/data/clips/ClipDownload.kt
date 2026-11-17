@@ -25,7 +25,7 @@ import okhttp3.Request
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
-import kotlin.coroutines.currentCoroutineContext
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * Baixar trechos específicos (clipes) — Lote 18 item 10 (v1.28.0).
@@ -365,7 +365,7 @@ class ClipDownloader(context: Context) {
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} na playlist")
-            return resp.body.string()
+            return resp.body?.string() ?: throw IOException("Resposta sem corpo na playlist")
         }
     }
 
@@ -375,7 +375,8 @@ class ClipDownloader(context: Context) {
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} no segmento")
-            resp.body.byteStream().use { input -> return input.copyTo(out) }
+            resp.body?.byteStream()?.use { input -> return input.copyTo(out) }
+                ?: throw IOException("Resposta sem corpo no segmento")
         }
     }
 

@@ -78,7 +78,7 @@ class StreamingDataMeter(context: Context) {
             localSources[source] = dataSpec.uri.host == "127.0.0.1"
         }
 
-        override fun onBytesTransferred(source: DataSource, bytesTransferred: Int) {
+        override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
             if (localSources[source] == true) return
             val prev = lastSeenBytes[source] ?: 0
             val delta = (bytesTransferred - prev).coerceAtLeast(0)
