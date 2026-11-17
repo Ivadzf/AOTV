@@ -1,1 +1,46 @@
-{"latest":{"assets":{"universal":{"sha256":"90e62a9a25591c5463152036f58f980d71d484ba729e1e86c5ade76b125106f2","size":69699653,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.27.0/AOTV-v1.27.0.apk"}},"changelog":"v1.27.0 — Lote 17: fontes e player. Ranking de fontes com score de 0 a 100 explicado e determinístico (mesma ordem no detalhe e na folha do player). Corrida em paralelo, failover automático e saúde aprendida por host. Presets (Melhor imagem / Equilibrado / Início rápido), ordem manual e filtro de idioma. Sincronia de áudio de -10 s a +10 s (adianto atrasa o vídeo). Player compacto + ligar/desligar botões do player. Painel de legendas estilo Nuvio (idiomas com contagem, selo da fonte e ID). Deep link stremio:// — o AOTV agora aparece no 'Abrir com' pra instalar addon.","published_at":"2026-11-17T00:01:54Z","tag":"v1.27.0","version":"1.27.0","versionCode":64},"versions":[{"assets":{"universal":{"sha256":"90e62a9a25591c5463152036f58f980d71d484ba729e1e86c5ade76b125106f2","size":69699653,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.27.0/AOTV-v1.27.0.apk"}},"changelog":"v1.27.0 — Lote 17: fontes e player. Ranking de fontes com score de 0 a 100 explicado e determinístico (mesma ordem no detalhe e na folha do player). Corrida em paralelo, failover automático e saúde aprendida por host. Presets (Melhor imagem / Equilibrado / Início rápido), ordem manual e filtro de idioma. Sincronia de áudio de -10 s a +10 s (adianto atrasa o vídeo). Player compacto + ligar/desligar botões do player. Painel de legendas estilo Nuvio (idiomas com contagem, selo da fonte e ID). Deep link stremio:// — o AOTV agora aparece no 'Abrir com' pra instalar addon.","published_at":"2026-11-17T00:01:54Z","tag":"v1.27.0","version":"1.27.0","versionCode":64}]}
+{
+ "latest": {
+  "assets": {
+   "universal": {
+    "sha256": "d90ca41e4a0c2cae65976289b4586efdf3f80b0b61787dd2a27d4842de9594fb",
+    "size": 69811549,
+    "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.28.0/AOTV-v1.28.0.apk"
+   }
+  },
+  "changelog": "v1.28.0 — Lote 18: atualizador com SHA-256, torrent/downloads, todas as ligas, fix do 'Meus esportes' e clipes. Atualizador dentro do app (feed com SHA-256, APK da ABI do aparelho, download em 2º plano). 'What's new' com bolinha no avatar. Torrent/downloads: teto de espaço 32–256 MB (pausa ao passar do teto), magnet/link na busca, abas Completos/Restos, retomada, aviso ao sair. Dados móveis medem streaming e torrent. Aba Esportes: 85 ligas, todas ligadas. Fix do bug 'Meus esportes' (seguir liga no seletor + comparação normalizada). Clipes: 'Baixar trecho' no player (HLS).",
+  "published_at": "2026-11-17T18:16:00Z",
+  "tag": "v1.28.0",
+  "version": "1.28.0",
+  "versionCode": 65
+ },
+ "versions": [
+  {
+   "assets": {
+    "universal": {
+     "sha256": "d90ca41e4a0c2cae65976289b4586efdf3f80b0b61787dd2a27d4842de9594fb",
+     "size": 69811549,
+     "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.28.0/AOTV-v1.28.0.apk"
+    }
+   },
+   "changelog": "v1.28.0 — Lote 18: atualizador com SHA-256, torrent/downloads, todas as ligas, fix do 'Meus esportes' e clipes. Atualizador dentro do app (feed com SHA-256, APK da ABI do aparelho, download em 2º plano). 'What's new' com bolinha no avatar. Torrent/downloads: teto de espaço 32–256 MB (pausa ao passar do teto), magnet/link na busca, abas Completos/Restos, retomada, aviso ao sair. Dados móveis medem streaming e torrent. Aba Esportes: 85 ligas, todas ligadas. Fix do bug 'Meus esportes' (seguir liga no seletor + comparação normalizada). Clipes: 'Baixar trecho' no player (HLS).",
+   "published_at": "2026-11-17T18:16:00Z",
+   "tag": "v1.28.0",
+   "version": "1.28.0",
+   "versionCode": 65
+  },
+  {
+   "assets": {
+    "universal": {
+     "sha256": "90e62a9a25591c5463152036f58f980d71d484ba729e1e86c5ade76b125106f2",
+     "size": 69699653,
+     "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.27.0/AOTV-v1.27.0.apk"
+    }
+   },
+   "changelog": "v1.27.0 — Lote 17: fontes e player. Ranking de fontes com score de 0 a 100 explicado e determinístico (mesma ordem no detalhe e na folha do player). Corrida em paralelo, failover automático e saúde aprendida por host. Presets (Melhor imagem / Equilibrado / Início rápido), ordem manual e filtro de idioma. Sincronia de áudio de -10 s a +10 s (adianto atrasa o vídeo). Player compacto + ligar/desligar botões do player. Painel de legendas estilo Nuvio (idiomas com contagem, selo da fonte e ID). Deep link stremio:// — o AOTV agora aparece no 'Abrir com' pra instalar addon.",
+   "published_at": "2026-11-17T00:01:54Z",
+   "tag": "v1.27.0",
+   "version": "1.27.0",
+   "versionCode": 64
+  }
+ ]
+}
