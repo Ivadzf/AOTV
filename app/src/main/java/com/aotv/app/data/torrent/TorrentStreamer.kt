@@ -1,6 +1,10 @@
 package com.aotv.app.data.torrent
 
 import android.content.Context
+import android.system.Os
+import android.system.OsConstants
+import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.StreamingDataMeter
 import fi.iki.elonen.NanoHTTPD
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionHandle
@@ -9,6 +13,7 @@ import org.libtorrent4j.SessionParams
 import org.libtorrent4j.SettingsPack
 import org.libtorrent4j.Sha1Hash
 import org.libtorrent4j.TorrentHandle
+import org.libtorrent4j.TorrentStatus
 import org.libtorrent4j.swig.torrent_flags_t
 import java.io.File
 import java.io.IOException
@@ -36,8 +41,47 @@ import java.util.concurrent.atomic.AtomicInteger
  * apagado ao sair do player ([stopAll]) e na limpeza de ociosos.
  * FOLLOW-UP: reavaliar se o libtorrent4j voltar a expor tamanho de cache
  * (ou se surgir outro motor com o ajuste); até lá, sem controle de cache.
+ *
+ * Teto de espaço temporário + descarte do já assistido (Lote 18 item 2,
+ * v1.28.0 — ver [TorrentTempCap]): o teto ([tempLimitBytes], pref
+ * `torrent_temp_limit_mb`, 32–256 MB, padrão 128 MB) NÃO é cache — é o
+ * tamanho do diretório do torrent no disco. A janela de pré-download
+ * encolhe com o teto (teto/4, 4–24 MB); quando o diretório passa do
+ * teto e o descarte está ligado, as peças totalmente atrás da posição
+ * assistida têm os blocos liberados com `fallocate(PUNCH_HOLE)` e a
+ * prioridade vira IGNORE. Sem descarte, o teto não é cumprido (não há
+ * como apagar peça sem rebaixar) — ver [enforceTempCap]. Voltar p/ uma
+ * peça descartada (seek p/ trás) baixa ela de novo, com 1 `forceRecheck`
+ * p/ o libtorrent reconhecer a falta (ver [PieceStream]). Ao completar
+ * o arquivo escolhido o torrent é pausado (sem seed do arquivo
+ * completo); ao parar, tudo é apagado (item 3 do Lote 18).
+ *
+ * Medição de torrent (Lote 18 item 7): [onTorrentBytes] recebe o delta
+ * de `totalDownload()` do libtorrent (o que o motor baixou de fato,
+ * incluindo o pré-download) — o [Torrents.get] liga isso ao medidor de
+ * dados móveis. [onTorrentStopped] descarrega o resto ao remover.
  */
-class TorrentStreamer(private val root: File) {
+class TorrentStreamer(
+    private val root: File,
+    tempLimitBytes: Long = TorrentTempCap.DEFAULT_TEMP_LIMIT_BYTES,
+    discardWatched: Boolean = true,
+    private val onTorrentBytes: (Long) -> Unit = {},
+    private val onTorrentStopped: () -> Unit = {},
+) {
+
+    /** Teto do espaço temporário, em bytes (vale ao trocar em Configurações — ver [refreshTempSettings]). */
+    @Volatile var tempLimitBytes: Long = tempLimitBytes
+        private set
+
+    /** Descartar do disco as peças já assistidas quando passar do teto. */
+    @Volatile var discardWatched: Boolean = discardWatched
+        private set
+
+    /** Atualiza teto/descarte no motor já criado (a troca em Configurações vale sem reiniciar o app). */
+    fun refreshTempSettings(limitBytes: Long, discard: Boolean) {
+        tempLimitBytes = limitBytes.coerceAtLeast(0L)
+        discardWatched = discard
+    }
 
     data class Status(val peers: Int, val seeds: Int, val downloadBps: Int, val hasMetadata: Boolean)
 
@@ -51,6 +95,16 @@ class TorrentStreamer(private val root: File) {
         val readers = AtomicInteger()
         @Volatile var lastUse = System.currentTimeMillis()
         @Volatile var windowAt = -1
+        /** Maior byte do arquivo escolhido já entregue ao player (posição assistida). */
+        @Volatile var watchedThroughByte = 0L
+        /** Peças descartadas do disco (descarte do já assistido, Lote 18) — baixar de novo se voltar nelas. */
+        val discardedPieces = ConcurrentHashMap.newKeySet<Int>()
+        /** `forceRecheck()` já rodado 1x p/ reconhecer as peças descartadas. */
+        @Volatile var recheckTriggered = false
+        /** Torrent pausado ao completar o arquivo (sem seed — Lote 18). */
+        @Volatile var pausedWhenComplete = false
+        /** Último `totalDownload()` observado (p/ o delta da medição de torrent). */
+        @Volatile var lastTotalDownload = 0L
     }
 
     private val session = SessionManager(false)
@@ -82,10 +136,18 @@ class TorrentStreamer(private val root: File) {
     /** Para tudo e apaga o que baixou (sair do player não deixa o aparelho compartilhando). */
     fun stopAll() = active.keys.toList().forEach(::remove)
 
+    /** Há um torrent baixando/tocando agora (p/ o aviso de saída do app, Lote 18 item 4). */
+    fun hasActiveDownload(): Boolean = active.values.any { a ->
+        a.handle.isValid && (a.readers.get() > 0 ||
+            runCatching { a.handle.status().downloadPayloadRate() > 0 }.getOrDefault(false))
+    }
+
     private fun remove(hash: String) {
         val a = active.remove(hash) ?: return
         runCatching { session.remove(a.handle, SessionHandle.DELETE_FILES) }
         File(root, hash).deleteRecursively()
+        // Descarrega o resto da medição de torrent (o que ficou abaixo de 1 MB no medidor).
+        onTorrentStopped()
     }
 
     private fun ensureServer(): Server = server ?: synchronized(lock) {
@@ -141,8 +203,80 @@ class TorrentStreamer(private val root: File) {
     private fun window(a: Active, f: Picked, piece: Int) {
         if (a.windowAt == piece) return
         a.windowAt = piece
-        val n = (WINDOW_BYTES / f.pieceLength).toInt().coerceIn(4, 64)
+        // Janela de pré-download encolhe com o teto (Lote 18 item 2): teto/4,
+        // entre 4 MB e 24 MB — com teto de 32 MB, só 8 MB à frente.
+        val n = (TorrentTempCap.windowBytes(tempLimitBytes) / f.pieceLength).toInt().coerceIn(4, 64)
         deadline(a.handle, piece, minOf(piece + n - 1, f.last), 0)
+    }
+
+    /**
+     * Teto de espaço temporário (Lote 18 item 2): roda a cada 10 s na
+     * limpeza. Se o diretório do torrent passou do teto e o descarte está
+     * ligado, libera no disco as peças totalmente atrás da posição
+     * assistida (`fallocate` com PUNCH_HOLE — best-effort: se o sistema
+     * de arquivos não suportar, o `runCatching` engole e o teto só não é
+     * cumprido naquele aparelho) e marca a prioridade IGNORE p/ o motor
+     * não pedi-las de novo. Sem descarte ligado, não há como cumprir o
+     * teto (apagar peça sem rebaixar não existe no libtorrent) — então
+     * só registra: nada é apagado e nada é pausado no meio da reprodução.
+     */
+    private fun enforceTempCap(a: Active) {
+        val f = a.file ?: return
+        if (tempLimitBytes <= 0L || !discardWatched) return
+        val dir = File(root, a.spec.infoHash)
+        val size = runCatching { dir.walkTopDown().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
+        if (size <= tempLimitBytes) return
+        val watchedPiece = TorrentFiles.pieceAt(f.offset, a.watchedThroughByte, f.pieceLength)
+        val discardable = TorrentTempCap.discardablePieces(f.first, f.last, watchedPiece)
+        if (discardable.isEmpty()) return
+        runCatching {
+            RandomAccessFile(f.path, "rw").use { raf ->
+                for (p in discardable) {
+                    val range = TorrentTempCap.pieceFileRange(p, f.offset, f.pieceLength, f.size) ?: continue
+                    Os.fallocate(
+                        raf.fd,
+                        OsConstants.FALLOC_FL_KEEP_SIZE or OsConstants.FALLOC_FL_PUNCH_HOLE,
+                        range.first, range.second - range.first,
+                    )
+                    a.discardedPieces += p
+                    a.handle.piecePriority(p, Priority.IGNORE)
+                    a.handle.resetPieceDeadline(p)
+                }
+            }
+        }
+        // Os prazos antigos além da janela só gastariam banda: limpa e
+        // deixa a próxima leitura remontar a janela da posição atual.
+        runCatching { a.handle.clearPieceDeadlines() }
+        a.windowAt = -1
+    }
+
+    /** Delta de `totalDownload()` do libtorrent desde a última observação (medição de torrent, Lote 18 item 7). */
+    private fun pollTorrentBytes(a: Active) {
+        val total = runCatching { if (a.handle.isValid) a.handle.status().totalDownload() else return }.getOrNull() ?: return
+        val delta = (total - a.lastTotalDownload).coerceAtLeast(0L)
+        a.lastTotalDownload = total
+        if (delta > 0L) onTorrentBytes(delta)
+    }
+
+    /**
+     * Sem seed do arquivo completo (Lote 18 item 2): quando o que o motor
+     * queria baixar já chegou (`totalDone >= totalWanted`), pausa o
+     * torrent — o player continua lendo do disco, mas o aparelho não fica
+     * compartilhando o arquivo completo com o player aberto. Se o usuário
+     * voltar p/ uma peça descartada, o caminho de releitura retoma o
+     * torrent ([PieceStream]). Quando `totalWanted` inclui os arquivos
+     * ignorados, a condição nunca dispara e nada muda (só não pausa).
+     */
+    private fun pauseWhenComplete(a: Active) {
+        if (a.pausedWhenComplete) return
+        val complete = runCatching {
+            if (!a.handle.isValid || !a.handle.status().hasMetadata()) false
+            else a.handle.status().let { it.totalDone() >= it.totalWanted() && it.totalWanted() > 0L }
+        }.getOrDefault(false)
+        if (complete) {
+            runCatching { a.handle.pause() }
+            a.pausedWhenComplete = true
+        }
     }
 
     private fun reapLoop() {
@@ -150,6 +284,11 @@ class TorrentStreamer(private val root: File) {
         while (true) {
             Thread.sleep(10_000)
             val now = System.currentTimeMillis()
+            active.values.forEach { a ->
+                pollTorrentBytes(a)
+                enforceTempCap(a)
+                pauseWhenComplete(a)
+            }
             active.values.filter { it.readers.get() == 0 && now - it.lastUse > IDLE_MS }.forEach { remove(it.spec.infoHash) }
             if (active.isNotEmpty() || !session.isRunning) { idleSince = 0L; continue }
             if (idleSince == 0L) idleSince = now
@@ -178,6 +317,31 @@ class TorrentStreamer(private val root: File) {
             val piece = TorrentFiles.pieceAt(f.offset, pos, f.pieceLength)
             // Torrent removido no meio da leitura (saiu do player) faz o libtorrent lançar erro, aí só encerra.
             try {
+                // Peça descartada do disco (descarte do já assistido, Lote 18
+                // item 2): o `havePiece` pode ainda dizer true (estado velho
+                // do libtorrent) — NÃO dá p/ confiar nele aqui. Marca a peça
+                // p/ baixar de novo, retoma o torrent se ele pausou ao
+                // completar e roda 1 `forceRecheck()` p/ o libtorrent
+                // reconhecer que a peça sumiu; só depois do recheck o
+                // `havePiece` volta a ser confiável e a espera normal
+                // (abaixo) baixa a peça de novo. Sem o recheck, o player
+                // serviria zeros do buraco perfurado no arquivo.
+                if (a.discardedPieces.contains(piece)) {
+                    runCatching { a.handle.resume() }
+                    a.pausedWhenComplete = false
+                    a.handle.piecePriority(piece, Priority.DEFAULT)
+                    a.handle.setPieceDeadline(piece, 0)
+                    if (!a.recheckTriggered) {
+                        runCatching { a.handle.forceRecheck() }
+                        a.recheckTriggered = true
+                    }
+                    val untilRecheck = System.currentTimeMillis() + RECHECK_WAIT_MS
+                    while (a.handle.status().state() == TorrentStatus.State.CHECKING_FILES &&
+                        System.currentTimeMillis() < untilRecheck) {
+                        Thread.sleep(200)
+                    }
+                    a.discardedPieces.remove(piece)
+                }
                 window(a, f, piece)
                 val until = System.currentTimeMillis() + PIECE_WAIT_MS
                 while (!a.handle.havePiece(piece)) {
@@ -195,7 +359,12 @@ class TorrentStreamer(private val root: File) {
             val file = raf ?: RandomAccessFile(f.path, "r").also { raf = it }
             file.seek(pos)
             val r = file.read(b, off, n)
-            if (r > 0) { pos += r; a.lastUse = System.currentTimeMillis() }
+            if (r > 0) {
+                pos += r
+                a.lastUse = System.currentTimeMillis()
+                // Posição assistida (p/ o descarte do já assistido): o maior byte entregue ao player.
+                if (pos > a.watchedThroughByte) a.watchedThroughByte = pos
+            }
             return r
         }
 
@@ -268,7 +437,8 @@ class TorrentStreamer(private val root: File) {
     private companion object {
         const val METADATA_MS = 60_000L
         const val PIECE_WAIT_MS = 90_000L
-        const val WINDOW_BYTES = 24L * 1024 * 1024
+        /** Espera máx. pelo fim do recheck após descartar peças (Lote 18 item 2). */
+        const val RECHECK_WAIT_MS = 120_000L
         const val STEP_MS = 120
         const val IDLE_MS = 45_000L
         const val SESSION_IDLE_MS = 120_000L
@@ -279,8 +449,32 @@ class TorrentStreamer(private val root: File) {
 object Torrents {
     @Volatile private var engine: TorrentStreamer? = null
 
-    fun get(context: Context): TorrentStreamer = engine ?: synchronized(this) {
-        engine ?: TorrentStreamer(File(context.applicationContext.cacheDir, "torrents")).also { engine = it }
+    fun get(context: Context): TorrentStreamer {
+        engine?.let { existing ->
+            // Teto/descarte valem sem reiniciar o app (ver refreshTempSettings).
+            val prefs = PlatformPrefs(context.applicationContext)
+            existing.refreshTempSettings(
+                prefs.torrentTempLimitMb * 1024L * 1024L,
+                prefs.torrentDiscardWatched,
+            )
+            return existing
+        }
+        return synchronized(this) {
+            engine ?: run {
+                val appContext = context.applicationContext
+                val prefs = PlatformPrefs(appContext)
+                // Medição de torrent (Lote 18 item 7): o motor entrega o delta
+                // de `totalDownload()` e o medidor soma em dados móveis.
+                val meter = StreamingDataMeter(appContext)
+                TorrentStreamer(
+                    File(appContext.cacheDir, "torrents"),
+                    tempLimitBytes = prefs.torrentTempLimitMb * 1024L * 1024L,
+                    discardWatched = prefs.torrentDiscardWatched,
+                    onTorrentBytes = { bytes -> meter.recordTorrentBytes(bytes) },
+                    onTorrentStopped = { meter.flushTorrent() },
+                ).also { engine = it }
+            }
+        }
     }
 
     fun ifStarted(): TorrentStreamer? = engine

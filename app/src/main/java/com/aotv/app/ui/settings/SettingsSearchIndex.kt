@@ -75,6 +75,8 @@ object SettingsAnchors {
     const val DL_LIMIT = "downloads-limite"
     const val DL_MAIN = "downloads-downloads"
     const val DL_COUNTED = "downloads-conta"
+    // Torrent — espaço temporário (Lote 18, v1.28.0).
+    const val DL_TORRENT = "downloads-torrent"
     // Gravações (Lote 8)
     const val DL_RECORD = "downloads-gravacoes"
     // Backup — Google Drive (Lote 10, v1.20.0). As outras opções do Backup
@@ -873,6 +875,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.APPEAR_UPDATE,
         kidsHidden = true,
     ),
+    // Lote 18 (v1.28.0): download em 2º plano + "What's new".
+    SettingOptionEntry(
+        title = "Atualização em 2º plano",
+        sub = "Baixa a versão nova sozinha e avisa quando estiver pronta",
+        keywords = listOf("atualização", "segundo plano", "baixar sozinho", "versão", "apk"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_UPDATE,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Novidades da versão",
+        sub = "O que mudou na versão instalada",
+        keywords = listOf("novidades", "what's new", "changelog", "o que mudou", "versão"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_UPDATE,
+        kidsHidden = true,
+    ),
     // ── Reprodução ───────────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Áudio preferido",
@@ -1165,7 +1184,7 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     // ── Downloads ────────────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Dados móveis usados",
-        sub = "Hoje e este mês (só downloads .mp4 medidos)",
+        sub = "Hoje e este mês (downloads, streaming e torrent medidos)",
         keywords = listOf("dados móveis", "consumo", "hoje", "mês"),
         pageId = SettingsPageIds.Downloads,
         anchor = SettingsAnchors.DL_DATA,
@@ -1190,6 +1209,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("pasta", "download", "armazenamento", "SAF"),
         pageId = SettingsPageIds.Downloads,
         anchor = SettingsAnchors.DL_MAIN,
+    ),
+    // Torrent — espaço temporário (Lote 18, v1.28.0).
+    SettingOptionEntry(
+        title = "Teto do espaço temporário do torrent",
+        sub = "Limite de 32–256 MB + descartar o que já foi assistido",
+        keywords = listOf("torrent", "espaço", "temporário", "teto", "descarte", "cache"),
+        pageId = SettingsPageIds.Downloads,
+        anchor = SettingsAnchors.DL_TORRENT,
     ),
     // ── Gravações (Lote 8, v1.18.0) ─────────────────────────────────────
     SettingOptionEntry(

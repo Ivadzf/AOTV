@@ -12,6 +12,9 @@ import com.aotv.app.data.sports.extractScore
 import com.aotv.app.data.sports.isSportsProgram
 import com.aotv.app.ui.movies.CalendarEntry
 import com.aotv.app.data.sports.SportsGame
+import com.aotv.app.data.remote.AppRelease
+import com.aotv.app.data.remote.AppUpdateService
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 import java.io.File
 
@@ -241,5 +244,55 @@ class GameScoreWorker(appContext: Context, params: WorkerParameters) : Coroutine
             }
         }
         return epg to names
+    }
+}
+
+/**
+ * Download da atualização em 2º plano (Lote 18, v1.28.0): baixa o APK da
+ * release oficial com o app fechado (WorkManager), confere tamanho e
+ * SHA-256 ANTES de qualquer instalação ([AppUpdateService.downloadApk]) e
+ * marca a tag como pronta nas prefs — o usuário instala quando quiser,
+ * pelo banner ou pela página Aparência. Sem permissão de notificação, o
+ * download pronto fica só marcado (sucesso silencioso); a tela mostra.
+ *
+ * Idempotente: já pronto p/ a mesma tag = sucesso sem baixar de novo.
+ * Hash divergente = falha definitiva (o feed está errado — tentar de novo
+ * baixaria o mesmo arquivo); erro de rede = retry do WorkManager.
+ */
+class UpdateDownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+
+    override suspend fun doWork(): Result {
+        val ctx = applicationContext
+        val prefs = PlatformPrefs(ctx)
+        val tag = inputData.getString(WorkScheduler.KEY_UPDATE_TAG).orEmpty()
+        val url = inputData.getString(WorkScheduler.KEY_UPDATE_URL).orEmpty()
+        if (tag.isBlank() || url.isBlank()) return Result.success()
+        if (prefs.appUpdateReadyTag == tag) return Result.success()
+        val release = AppRelease(
+            tag = tag,
+            name = tag,
+            apkUrl = url,
+            sizeBytes = inputData.getLong(WorkScheduler.KEY_UPDATE_SIZE, 0L),
+            publishedAt = "",
+            sha256 = inputData.getString(WorkScheduler.KEY_UPDATE_SHA256).orEmpty(),
+            abi = inputData.getString(WorkScheduler.KEY_UPDATE_ABI).orEmpty(),
+        )
+        val service = AppUpdateService(prefs, OkHttpClient())
+        val downloaded = service.downloadApk(ctx, release).getOrElse { e ->
+            // Hash divergente = feed errado, não transitório: não retenta.
+            if ((e.message ?: "").contains("SHA-256")) return Result.failure()
+            return Result.retry()
+        }
+        prefs.appUpdateReadyTag = tag
+        prefs.appUpdateReadyHashVerified = downloaded.hashVerified
+        if (LocalNotifications.hasPermission(ctx)) {
+            LocalNotifications.notify(
+                ctx, LocalNotifications.CHANNEL_UPDATES,
+                WorkScheduler.UPDATE_DOWNLOAD_NOTIFICATION_ID,
+                "Atualização pronta para instalar",
+                "AOTV $tag já foi baixada${if (downloaded.hashVerified) " e conferida (SHA-256)" else ""}. Toque p/ instalar.",
+            )
+        }
+        return Result.success()
     }
 }

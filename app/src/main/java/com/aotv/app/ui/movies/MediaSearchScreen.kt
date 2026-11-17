@@ -23,7 +23,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.LocalMovies
 import androidx.compose.material3.*
@@ -54,6 +56,9 @@ import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.toMovieItem
+import com.aotv.app.data.repository.DownloadRepository
+import com.aotv.app.data.torrent.PastedLink
+import com.aotv.app.data.torrent.PastedLinkKind
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.FilterChipPill
@@ -76,6 +81,7 @@ import javax.inject.Inject
 class MediaSearchViewModel @Inject constructor(
     private val tmdb: TmdbApiService,
     private val prefs: PlatformPrefs,
+    private val downloads: DownloadRepository,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -85,6 +91,29 @@ class MediaSearchViewModel @Inject constructor(
     val query: StateFlow<String> = _query.asStateFlow()
     val results: StateFlow<List<MovieItem>> = _results.asStateFlow()
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    /**
+     * Link colado na busca (Lote 18 item 3): magnet ou link direto de
+     * vídeo, p/ tocar direto sem navegar até o título. Não-null = a tela
+     * mostra o cartão "Link colado" no lugar da busca por título (a
+     * busca TMDB nem dispara p/ ele). Null = busca normal.
+     */
+    private val _pastedLink = MutableStateFlow<PastedLink?>(null)
+    val pastedLink: StateFlow<PastedLink?> = _pastedLink.asStateFlow()
+
+    /** Descarta o link colado e limpa o campo (volta p/ a busca normal). */
+    fun clearPastedLink() {
+        _pastedLink.value = null
+        _query.value = ""
+        _results.value = emptyList()
+    }
+
+    /** Enfileira o download do link colado (só .mp4 direto é baixável). */
+    fun queuePastedDownload() {
+        val link = _pastedLink.value ?: return
+        if (!link.downloadable) return
+        viewModelScope.launch { downloads.enqueueDirectLink(link.raw, link.title) }
+    }
 
     /** Buscas anteriores, mostradas quando o campo está vazio. */
     val recents: StateFlow<List<String>> = _recents.asStateFlow()
@@ -109,6 +138,18 @@ class MediaSearchViewModel @Inject constructor(
 
     fun onQueryChange(q: String) {
         _query.value = q
+        // Link colado (Lote 18 item 3): magnet ou vídeo direto vira o
+        // cartão "Link colado" — sem busca TMDB e sem gravar no histórico.
+        val pasted = PastedLink.parse(q)
+        if (pasted != null) {
+            searchJob?.cancel()
+            _results.value = emptyList()
+            _noTmdbKey.value = false
+            _isLoading.value = false
+            _pastedLink.value = pasted
+            return
+        }
+        _pastedLink.value = null
         if (q.isBlank()) { searchJob?.cancel(); _results.value = emptyList(); _noTmdbKey.value = false; return }
         launchSearch(q, SEARCH_DEBOUNCE_MS)
     }
@@ -122,6 +163,8 @@ class MediaSearchViewModel @Inject constructor(
     fun searchNow() {
         val q = _query.value
         if (q.isBlank()) return
+        // Tecla de busca com link colado: mesmo caminho do ao vivo.
+        if (PastedLink.parse(q) != null) { onQueryChange(q); return }
         launchSearch(q, 0)
     }
 
@@ -162,6 +205,9 @@ class MediaSearchViewModel @Inject constructor(
 fun MediaSearchScreen(
     onItemClick: (MovieItem) -> Unit,
     onBack: () -> Unit,
+    // Lote 18 item 3 — tocar um magnet/link colado direto no player (sem
+    // passar pelo detalhe): a navegação entrega o (url, título).
+    onPlayUrl: (String, String) -> Unit = { _, _ -> },
     viewModel: MediaSearchViewModel = hiltViewModel(),
     // Lote 15 item 1 — Destaques da busca: a MESMA fonte do destaque da Início
     // (o ViewModel da Início + heroCandidates, só leitura). Segunda instância
@@ -220,7 +266,7 @@ fun MediaSearchScreen(
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
                 SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
-                    heroItems, homeState.heroLogos, discoverState, discoverVm)
+                    heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl)
             }
         }
         return
@@ -265,7 +311,7 @@ fun MediaSearchScreen(
             )
         }
         SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
-            heroItems, homeState.heroLogos, discoverState, discoverVm)
+            heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl)
     }
 }
 
@@ -282,7 +328,19 @@ private fun ColumnScope.SearchBody(
     heroLogos: Map<Int, String>,
     discoverState: DiscoverViewModel.UiState,
     discoverVm: DiscoverViewModel,
+    onPlayUrl: (String, String) -> Unit,
 ) {
+        // Link colado (Lote 18 item 3): o cartão fica acima de tudo — a
+        // busca por título nem aparece enquanto houver um link colado.
+        val pastedLink by viewModel.pastedLink.collectAsStateWithLifecycle()
+        pastedLink?.let { link ->
+            PastedLinkCard(
+                link = link,
+                onPlay = { onPlayUrl(link.raw, link.title) },
+                onDownload = viewModel::queuePastedDownload,
+                onDismiss = viewModel::clearPastedLink,
+            )
+        }
         // Barra fina de progresso: mantém o grid na tela enquanto rebusca (antes o spinner
         // de tela cheia apagava os resultados a cada tecla digitada).
         val noTmdbKey by viewModel.noTmdbKey.collectAsStateWithLifecycle()
@@ -384,6 +442,74 @@ private fun ColumnScope.SearchBody(
                 }
             }
         }
+}
+
+/**
+ * Cartão "Link colado" (Lote 18 item 3): magnet ou link direto de vídeo
+ * colado na busca — toca direto no player sem passar pelo detalhe. O
+ * "Baixar" só aparece p/ .mp4 direto (o DownloadManager só baixa .mp4);
+ * magnet toca via torrent e não é baixável como arquivo.
+ */
+@Composable
+private fun PastedLinkCard(
+    link: PastedLink,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var downloadQueued by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(Icons.Default.Link, null, tint = Accent, modifier = Modifier.size(22.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                link.title,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = TextPrimary,
+                maxLines = 2,
+            )
+            Text(
+                if (link.kind == PastedLinkKind.MAGNET) "Magnet — toca direto via torrent (streaming, sem baixar o arquivo)"
+                else "Link direto — toca sem buscar o título",
+                fontSize = 13.sp,
+                color = TextSecondary,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 8.dp),
+            ) {
+                Button(
+                    onClick = onPlay,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                ) {
+                    Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
+                    Text("Tocar agora", fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp))
+                }
+                if (link.downloadable) {
+                    TextButton(
+                        onClick = { onDownload(); downloadQueued = true },
+                        enabled = !downloadQueued,
+                    ) {
+                        Text(if (downloadQueued) "Na fila ✓" else "Baixar", color = Accent)
+                    }
+                }
+            }
+        }
+        Box(
+            Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Close, "Descartar", tint = TextTertiary, modifier = Modifier.size(20.dp))
+        }
+    }
 }
 
 // ── ESTADO SEM CONSULTA: Destaques + Descobrir (Lote 15 item 1) ─────────────

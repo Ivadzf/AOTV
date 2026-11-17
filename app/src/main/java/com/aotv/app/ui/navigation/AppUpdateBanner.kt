@@ -45,6 +45,9 @@ import com.aotv.app.ui.theme.TextSecondary
  * Banner no topo: "Atualização disponível" + "vX.Y.Z • NN MB" (sem tamanho
  * quando a release não informa) + botão Atualizar + X. [downloading]
  * trava o botão em "Baixando…"; [downloadError] mostra a falha real.
+ * Lote 18 (v1.28.0): [ready] = o APK já foi baixado e conferido em 2º
+ * plano — o título vira "Atualização pronta para instalar" e o botão
+ * "Instalar" (sem baixar de novo).
  */
 @Composable
 fun AppUpdateBanner(
@@ -56,6 +59,8 @@ fun AppUpdateBanner(
     onDismiss: () -> Unit,
     /** Vidro fosco (Lote 4): toggle `pref_panel_blur`. */
     frosted: Boolean = false,
+    /** APK já baixado em 2º plano, pronto p/ instalar. */
+    ready: Boolean = false,
 ) {
     val sizeText = if (sizeBytes > 0) " • " + MobileDataUsage.formatBytes(sizeBytes) else ""
     val shape = RoundedCornerShape(16.dp)
@@ -75,7 +80,7 @@ fun AppUpdateBanner(
             Icon(Icons.Default.Download, null, tint = Accent, modifier = Modifier.size(20.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
-                    "Atualização disponível", color = TextPrimary,
+                    if (ready) "Atualização pronta para instalar" else "Atualização disponível", color = TextPrimary,
                     fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
@@ -86,7 +91,7 @@ fun AppUpdateBanner(
                 )
             }
             TextButton(onClick = onUpdate, enabled = !downloading) {
-                Text(if (downloading) "Baixando…" else "Atualizar", fontWeight = FontWeight.SemiBold)
+                Text(if (downloading) "Baixando…" else if (ready) "Instalar" else "Atualizar", fontWeight = FontWeight.SemiBold)
             }
             IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Default.Close, "Dispensar", tint = TextSecondary, modifier = Modifier.size(18.dp))

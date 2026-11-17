@@ -511,6 +511,8 @@ fun MoviesNavigation(
                     MediaSearchScreen(
                         onItemClick = onSearchItem,
                         onBack = { navController.popBackStack() },
+                        // Lote 18 item 3 — magnet/link colado toca direto no player.
+                        onPlayUrl = { url, title -> navigateToPlayer(url, title, type = "MOVIE") },
                     )
                 }
             }
@@ -796,6 +798,8 @@ fun MoviesNavigation(
                         onItemClick = onSearchItem,
                         onBack = { navController.popBackStack() },
                         initialQuery = entry.arguments?.getString("query").orEmpty(),
+                        // Lote 18 item 3 — magnet/link colado toca direto no player.
+                        onPlayUrl = { url, title -> navigateToPlayer(url, title, type = "MOVIE") },
                     )
                 }
             }
@@ -993,12 +997,17 @@ fun MoviesNavigation(
     val updateDownloading by settingsVm.updateDownloading.collectAsStateWithLifecycle()
     val updateDownloadError by settingsVm.updateDownloadError.collectAsStateWithLifecycle()
     val updateNeedsPermission by settingsVm.updateNeedsPermission.collectAsStateWithLifecycle()
+    val whatsNewText by settingsVm.whatsNewText.collectAsStateWithLifecycle()
+    val whatsNewDotVisible by settingsVm.whatsNewDotVisible.collectAsStateWithLifecycle()
     var updateCheckedThisSession by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!updateCheckedThisSession) {
             updateCheckedThisSession = true
             settingsVm.maybeAutoCheckForUpdates()
         }
+        // Lote 18 (v1.28.0): "What's new" — 1ª abertura com a versão nova
+        // mostra o que mudou e acende a bolinha no avatar até o usuário ver.
+        settingsVm.checkWhatsNewOnStart()
     }
     var updateBannerDismissed by remember { mutableStateOf(false) }
     val updateAvailable =
@@ -1254,6 +1263,7 @@ fun MoviesNavigation(
                     profilesRoute = MoviesRoute.Profiles.route,
                     onProfile = { navTab(MoviesRoute.Profiles.route) },
                     frosted = panelBlurOn,
+                    showWhatsNewDot = whatsNewDotVisible,
                 )
             }
         }
@@ -1265,6 +1275,7 @@ fun MoviesNavigation(
                 settingsRoute = MoviesRoute.Settings.route,
                 profile = profile,
                 onProfile = { navController.navigate(MoviesRoute.Profiles.route) },
+                showWhatsNewDot = whatsNewDotVisible,
             )
         }
         // Banner de atualização estilo Nuvio (Lote 15, item 7): no topo,
@@ -1285,6 +1296,7 @@ fun MoviesNavigation(
                     onUpdate = { settingsVm.downloadAndInstallUpdate() },
                     onDismiss = { updateBannerDismissed = true },
                     frosted = panelBlurOn,
+                    ready = settingsVm.isUpdateReady(availableUpdate.release.tag),
                 )
             }
         }
@@ -1305,6 +1317,23 @@ fun MoviesNavigation(
                 },
             )
         }
+        // "What's new" (Lote 18, v1.28.0): o que mudou na versão instalada.
+        // Fechar apaga a bolinha do avatar (mesmo diálogo da Aparência).
+        val whatsNew = whatsNewText
+        if (whatsNew != null) {
+            AlertDialog(
+                onDismissRequest = { settingsVm.dismissWhatsNew() },
+                title = { Text("Novidades da v${settingsVm.installedAppVersion}") },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text(whatsNew)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { settingsVm.dismissWhatsNew() }) { Text("Entendi") }
+                },
+            )
+        }
     }
     }
 }
@@ -1320,6 +1349,8 @@ private fun MoviesTabletRail(
     settingsRoute: String,
     profile: com.aotv.app.data.local.Profile,
     onProfile: () -> Unit,
+    /** Bolinha "What's new" no avatar (Lote 18, v1.28.0). */
+    showWhatsNewDot: Boolean = false,
 ) {
     Column(Modifier.fillMaxHeight().width(tabletRailWidth()).background(com.aotv.app.ui.theme.BackgroundElevated)
         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical))
@@ -1329,7 +1360,7 @@ private fun MoviesTabletRail(
             TouchRailItem(item.icon, item.label, currentRoute == item.route, item.onClick)
         }
         TouchRailItem(Icons.Default.Settings, "Configurações", currentRoute == settingsRoute, onSettings)
-        TouchRailItem(Icons.Default.Bookmark, "Perfil", false, onProfile, profile)
+        TouchRailItem(Icons.Default.Bookmark, "Perfil", false, onProfile, profile, showWhatsNewDot)
     }
 }
 
@@ -1337,6 +1368,7 @@ private fun MoviesTabletRail(
 private fun TouchRailItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, selected: Boolean, onClick: () -> Unit,
     profile: com.aotv.app.data.local.Profile? = null,
+    showWhatsNewDot: Boolean = false,
 ) {
     Column(Modifier.fillMaxWidth().heightIn(min = 64.dp)
         .clip(androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
@@ -1344,7 +1376,7 @@ private fun TouchRailItem(
         .semantics { this.selected = selected }
         .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick).padding(horizontal = 5.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 28.dp)
+        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 28.dp, showDot = showWhatsNewDot)
         else Icon(icon, null, tint = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary,
             modifier = Modifier.size(26.dp))
         Text(label, color = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary,
@@ -1379,6 +1411,8 @@ private fun MoviesBottomBar(
      * da barra. Funciona em qualquer API.
      */
     frosted: Boolean = false,
+    /** Bolinha "What's new" no avatar do Perfil (Lote 18, v1.28.0). */
+    showWhatsNewDot: Boolean = false,
 ) {
     // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
     // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
@@ -1394,6 +1428,7 @@ private fun MoviesBottomBar(
         MoviesBottomBarItem(
             icon = null, label = "Perfil", selected = currentRoute == profilesRoute,
             onClick = onProfile, modifier = Modifier.weight(1f), profile = profile,
+            showWhatsNewDot = showWhatsNewDot,
         )
     }
 }
@@ -1406,6 +1441,7 @@ private fun MoviesBottomBarItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     profile: com.aotv.app.data.local.Profile? = null,
+    showWhatsNewDot: Boolean = false,
 ) {
     Column(modifier.heightIn(min = 46.dp).clip(MaterialTheme.shapes.large)
         .background(if (selected) com.aotv.app.ui.theme.Accent else androidx.compose.ui.graphics.Color.Transparent)
@@ -1414,7 +1450,7 @@ private fun MoviesBottomBarItem(
         .padding(horizontal = 2.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         val fg = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary
-        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 20.dp)
+        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 20.dp, showDot = showWhatsNewDot)
         else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(20.dp))
         Text(label, color = fg,
             fontSize = 9.sp, lineHeight = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,

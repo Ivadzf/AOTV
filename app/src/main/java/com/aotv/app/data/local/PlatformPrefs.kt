@@ -2,6 +2,8 @@ package com.aotv.app.data.local
 
 import android.content.Context
 import com.aotv.app.BuildConfig
+import com.aotv.app.data.sports.normalizeSportsName
+import com.aotv.app.data.torrent.TorrentTempCap
 import com.aotv.app.ui.theme.CustomThemeColors
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -145,7 +147,10 @@ internal val SCOPED_KEYS = listOf(
     "sports_fix_channel_v1",
     // Lote 15 — Aba de Esportes (v1.25.0, Bloco 1): ligas ligadas no seletor
     // da aba, ligas seguidas e times seguidos (listas de ids/nomes, por perfil).
+    // Lote 18 (v1.28.0): snapshot dos ids conhecidos quando a lista de ligas
+    // ligadas foi guardada (p/ as ligas novas entrarem ligadas).
     "sports_tab_leagues_v1", "sports_followed_leagues_v1", "sports_followed_teams_v1",
+    "sports_tab_leagues_known_v1",
     "record_start_early_min", "record_run_late_min", "record_keep_episodes",
     "record_low_space_mb", "record_notifications",
     "calendar_hide_spoilers",
@@ -338,6 +343,22 @@ class PlatformPrefs @Inject constructor(
 
         /** Limite mensal de dados móveis, em MB. 0 = sem limite (padrão). */
         private const val KEY_MOBILE_DATA_LIMIT_MB = "mobile_data_limit_mb"
+
+        // Lote 18 (v1.28.0) — contadores por tipo (streaming/torrent).
+        // Mesmo dia/mês dos contadores totais (KEY_MOBILE_DATA_DAY e
+        // KEY_MOBILE_DATA_MONTH_KEY): a virada zera os 3 juntos.
+
+        /** Bytes de STREAMING medidos hoje em dados móveis. */
+        private const val KEY_MOBILE_DATA_STREAMING_TODAY = "mobile_data_streaming_today_bytes"
+
+        /** Bytes de STREAMING medidos no mês em dados móveis. */
+        private const val KEY_MOBILE_DATA_STREAMING_MONTH = "mobile_data_streaming_month_bytes"
+
+        /** Bytes de TORRENT medidos hoje em dados móveis. */
+        private const val KEY_MOBILE_DATA_TORRENT_TODAY = "mobile_data_torrent_today_bytes"
+
+        /** Bytes de TORRENT medidos no mês em dados móveis. */
+        private const val KEY_MOBILE_DATA_TORRENT_MONTH = "mobile_data_torrent_month_bytes"
 
         /** URI da pasta de gravações escolhida (SAF, ACTION_OPEN_DOCUMENT_TREE). "" = pasta do app. */
         private const val KEY_RECORDINGS_FOLDER_URI = "recordings_folder_uri"
@@ -1157,9 +1178,10 @@ class PlatformPrefs @Inject constructor(
     // ── Downloads e dados móveis (Lote 5, v1.14.0) — do aparelho ──────────
     // "Só Wi-Fi", pasta SAF e contadores de dados móveis. Tudo global: a fila
     // de downloads e a rede são do aparelho, não do perfil (ver as chaves no
-    // companion). Os contadores só somam o que o app MEDIU de fato (downloads
-    // .mp4 via DownloadManager, enquanto a rede é móvel — ver MobileDataUsage);
-    // streaming do player, torrents e API/pôsteres NÃO entram na conta.
+    // companion). Os contadores só somam o que o app MEDIU de fato: downloads
+    // .mp4 via DownloadManager (Lote 5) e, desde o Lote 18 (v1.28.0),
+    // streaming do player e torrents, separados por tipo (ver o bloco
+    // "Torrent/Downloads (Lote 18)" abaixo). API/pôsteres NÃO entram na conta.
 
     private val _downloadsWifiOnly = MutableStateFlow(prefs.getBoolean(KEY_DOWNLOADS_WIFI_ONLY, false))
     /** "Só Wi-Fi" nos downloads ligado, que avisa quem observa. */
@@ -1187,6 +1209,55 @@ class PlatformPrefs @Inject constructor(
         get() = _appUpdateLastCheck.value
         set(value) { prefs.edit().putLong("app_update_last_check_v1", value).apply(); _appUpdateLastCheck.value = value }
 
+    // ── Atualizador (Lote 18) ────────────────────────────────────────────
+    // Download em 2º plano + "What's new" após atualizar (v1.28.0). Tudo
+    // GLOBAL (do aparelho, não do perfil; ver AotvBackup.GLOBAL_KEYS): a
+    // versão instalada é uma só p/ o aparelho. Nada aqui é segredo.
+    // A bolinha no avatar vive em SettingsViewModel (o que a tela observa);
+    // aqui ficam só os dados: versão vista, changelog guardado e versão
+    // cuja novidade já foi vista.
+
+    private val _appUpdateBackgroundEnabled = MutableStateFlow(prefs.getBoolean("app_update_background_enabled", true))
+    /** Download da atualização em 2º plano ligado. Padrão: ligado. */
+    val appUpdateBackgroundEnabledFlow: StateFlow<Boolean> = _appUpdateBackgroundEnabled.asStateFlow()
+    var appUpdateBackgroundEnabled: Boolean
+        get() = _appUpdateBackgroundEnabled.value
+        set(value) { prefs.edit().putBoolean("app_update_background_enabled", value).apply(); _appUpdateBackgroundEnabled.value = value }
+
+    private val _appUpdateReadyTag = MutableStateFlow(prefs.getString("app_update_ready_tag", "") ?: "")
+    /** Tag da versão cujo APK já foi baixado e conferido em 2º plano. "" = nada pronto. */
+    val appUpdateReadyTagFlow: StateFlow<String> = _appUpdateReadyTag.asStateFlow()
+    var appUpdateReadyTag: String
+        get() = _appUpdateReadyTag.value
+        set(value) { prefs.edit().putString("app_update_ready_tag", value).apply(); _appUpdateReadyTag.value = value }
+
+    private val _appUpdateReadyHashVerified = MutableStateFlow(prefs.getBoolean("app_update_ready_hash_verified", false))
+    /** O APK pronto teve o SHA-256 conferido (false = só o tamanho). */
+    val appUpdateReadyHashVerifiedFlow: StateFlow<Boolean> = _appUpdateReadyHashVerified.asStateFlow()
+    var appUpdateReadyHashVerified: Boolean
+        get() = _appUpdateReadyHashVerified.value
+        set(value) { prefs.edit().putBoolean("app_update_ready_hash_verified", value).apply(); _appUpdateReadyHashVerified.value = value }
+
+    /** Versão instalada na última abertura do app ("" = nunca registrado). */
+    var appLastSeenVersion: String
+        get() = prefs.getString("app_last_seen_version", "") ?: ""
+        set(value) { prefs.edit().putString("app_last_seen_version", value).apply() }
+
+    /** Versão do changelog guardado (sem "v", ex. "1.28.0"). */
+    var whatsNewVersion: String
+        get() = prefs.getString("app_whatsnew_version", "") ?: ""
+        set(value) { prefs.edit().putString("app_whatsnew_version", value).apply() }
+
+    /** Texto do changelog da versão nova (do feed ou do corpo da release). */
+    var whatsNewChangelog: String
+        get() = prefs.getString("app_whatsnew_changelog", "") ?: ""
+        set(value) { prefs.edit().putString("app_whatsnew_changelog", value).apply() }
+
+    /** Versão cuja novidade o usuário já viu (bolinha do avatar apagada). */
+    var whatsNewSeenVersion: String
+        get() = prefs.getString("app_whatsnew_seen_version", "") ?: ""
+        set(value) { prefs.edit().putString("app_whatsnew_seen_version", value).apply() }
+
     private val _downloadFolderUri = MutableStateFlow(prefs.getString(KEY_DOWNLOADS_FOLDER_URI, "") ?: "")
     /** URI SAF da pasta de download, que avisa quem observa. "" = pasta do app (padrão). */
     val downloadFolderUriFlow: StateFlow<String> = _downloadFolderUri.asStateFlow()
@@ -1202,6 +1273,128 @@ class PlatformPrefs @Inject constructor(
     var downloadFolderName: String
         get() = _downloadFolderName.value
         set(value) { prefs.edit().putString(KEY_DOWNLOADS_FOLDER_NAME, value).apply(); _downloadFolderName.value = value }
+
+    // ── Torrent/Downloads (Lote 18) ─────────────────────────────────────────
+    // ÂNCORA ÚNICA: "Torrent/Downloads (Lote 18)". Itens 2 e 7 do Lote 18
+    // (v1.28.0) — teto de espaço temporário do torrent com descarte do já
+    // assistido (ver TorrentTempCap) e medição de streaming/torrent no
+    // contador de dados móveis, separada por tipo (ver StreamingDataMeter).
+    // Tudo global (do aparelho, não do perfil), como o resto de Downloads:
+    // a rede e o motor de torrent são do aparelho. O backup leva estas
+    // chaves (ver AotvBackup.GLOBAL_KEYS).
+
+    private val _torrentTempLimitMb = MutableStateFlow(
+        TorrentTempCap.clampLimitMb(prefs.getInt(TorrentTempCap.KEY_TEMP_LIMIT_MB, TorrentTempCap.DEFAULT_LIMIT_MB)),
+    )
+    /** Teto do espaço temporário do torrent, em MB (32–256). Padrão 128 MB. */
+    val torrentTempLimitMbFlow: StateFlow<Int> = _torrentTempLimitMb.asStateFlow()
+    /** Teto do espaço temporário do torrent, em MB. Fora de 32–256 volta p/ dentro. */
+    var torrentTempLimitMb: Int
+        get() = _torrentTempLimitMb.value
+        set(value) {
+            val clean = TorrentTempCap.clampLimitMb(value)
+            prefs.edit().putInt(TorrentTempCap.KEY_TEMP_LIMIT_MB, clean).apply()
+            _torrentTempLimitMb.value = clean
+        }
+
+    private val _torrentDiscardWatched = MutableStateFlow(prefs.getBoolean(TorrentTempCap.KEY_DISCARD_WATCHED, true))
+    /** Descartar do disco as peças já assistidas quando passar do teto. Padrão ligado. */
+    val torrentDiscardWatchedFlow: StateFlow<Boolean> = _torrentDiscardWatched.asStateFlow()
+    /** Descartar do disco as peças já assistidas quando passar do teto. */
+    var torrentDiscardWatched: Boolean
+        get() = _torrentDiscardWatched.value
+        set(value) { prefs.edit().putBoolean(TorrentTempCap.KEY_DISCARD_WATCHED, value).apply(); _torrentDiscardWatched.value = value }
+
+    /** Lê um contador por tipo de hoje, já com a virada do dia. */
+    private fun readTypedToday(key: String): Long =
+        if (prefs.getString(KEY_MOBILE_DATA_DAY, "") == MobileDataUsage.dayKey()) prefs.getLong(key, 0L) else 0L
+
+    /** Lê um contador por tipo do mês, já com a virada do mês. */
+    private fun readTypedMonth(key: String): Long =
+        if (prefs.getString(KEY_MOBILE_DATA_MONTH_KEY, "") == MobileDataUsage.monthKey()) prefs.getLong(key, 0L) else 0L
+
+    private val _mobileStreamingToday = MutableStateFlow(readTypedToday(KEY_MOBILE_DATA_STREAMING_TODAY))
+    /** Bytes de streaming medidos hoje em dados móveis, que avisam quem observa. */
+    val mobileStreamingTodayFlow: StateFlow<Long> = _mobileStreamingToday.asStateFlow()
+
+    private val _mobileStreamingMonth = MutableStateFlow(readTypedMonth(KEY_MOBILE_DATA_STREAMING_MONTH))
+    /** Bytes de streaming medidos no mês em dados móveis, que avisam quem observa. */
+    val mobileStreamingMonthFlow: StateFlow<Long> = _mobileStreamingMonth.asStateFlow()
+
+    private val _mobileTorrentToday = MutableStateFlow(readTypedToday(KEY_MOBILE_DATA_TORRENT_TODAY))
+    /** Bytes de torrent medidos hoje em dados móveis, que avisam quem observa. */
+    val mobileTorrentTodayFlow: StateFlow<Long> = _mobileTorrentToday.asStateFlow()
+
+    private val _mobileTorrentMonth = MutableStateFlow(readTypedMonth(KEY_MOBILE_DATA_TORRENT_MONTH))
+    /** Bytes de torrent medidos no mês em dados móveis, que avisam quem observa. */
+    val mobileTorrentMonthFlow: StateFlow<Long> = _mobileTorrentMonth.asStateFlow()
+
+    /** Soma bytes a um contador por tipo (hoje + mês), com virada de dia/mês. Ignora <= 0. */
+    private fun addTypedBytes(
+        todayKey: String,
+        monthKey: String,
+        bytes: Long,
+        todayState: MutableStateFlow<Long>,
+        monthState: MutableStateFlow<Long>,
+    ) {
+        if (bytes <= 0L) return
+        val today = MobileDataUsage.dayKey()
+        val month = MobileDataUsage.monthKey()
+        val ed = prefs.edit()
+        var t = prefs.getLong(todayKey, 0L)
+        var m = prefs.getLong(monthKey, 0L)
+        if (prefs.getString(KEY_MOBILE_DATA_DAY, "") != today) {
+            t = 0L
+            ed.putString(KEY_MOBILE_DATA_DAY, today)
+        }
+        if (prefs.getString(KEY_MOBILE_DATA_MONTH_KEY, "") != month) {
+            m = 0L
+            ed.putString(KEY_MOBILE_DATA_MONTH_KEY, month)
+        }
+        t += bytes
+        m += bytes
+        ed.putLong(todayKey, t).putLong(monthKey, m).apply()
+        todayState.value = t
+        monthState.value = m
+    }
+
+    /**
+     * Soma bytes MEDIDOS de streaming em dados móveis: ao contador por
+     * tipo E ao total do mês/hoje (que o limite olha). Ignora quando a
+     * rede NÃO é móvel — diferente de [recordMobileBytes], que confia em
+     * quem chama: o medidor de streaming chama a cada flush, sem checar
+     * a rede antes. Ignora <= 0.
+     */
+    fun recordStreamingMobileBytes(bytes: Long) {
+        if (bytes <= 0L || !MobileDataUsage.isCellularActive(context)) return
+        addTypedBytes(
+            KEY_MOBILE_DATA_STREAMING_TODAY, KEY_MOBILE_DATA_STREAMING_MONTH, bytes,
+            _mobileStreamingToday, _mobileStreamingMonth,
+        )
+        recordMobileBytes(bytes)
+    }
+
+    /**
+     * Soma bytes MEDIDOS de torrent em dados móveis: ao contador por
+     * tipo E ao total do mês/hoje (que o limite olha). Mesma regra do
+     * streaming: ignora quando a rede não é móvel e quando <= 0.
+     */
+    fun recordTorrentMobileBytes(bytes: Long) {
+        if (bytes <= 0L || !MobileDataUsage.isCellularActive(context)) return
+        addTypedBytes(
+            KEY_MOBILE_DATA_TORRENT_TODAY, KEY_MOBILE_DATA_TORRENT_MONTH, bytes,
+            _mobileTorrentToday, _mobileTorrentMonth,
+        )
+        recordMobileBytes(bytes)
+    }
+
+    /** Recarrega os contadores por tipo com a virada de dia/mês (junto com os totais). */
+    fun refreshTypedMobileDataCounters() {
+        _mobileStreamingToday.value = readTypedToday(KEY_MOBILE_DATA_STREAMING_TODAY)
+        _mobileStreamingMonth.value = readTypedMonth(KEY_MOBILE_DATA_STREAMING_MONTH)
+        _mobileTorrentToday.value = readTypedToday(KEY_MOBILE_DATA_TORRENT_TODAY)
+        _mobileTorrentMonth.value = readTypedMonth(KEY_MOBILE_DATA_TORRENT_MONTH)
+    }
 
     // ── Lote 8 — Esportes, Gravações e Calendário (v1.18.0) ───────────────
     // Tudo por perfil (SCOPED_KEYS), menos a pasta de gravações, que é do
@@ -1307,7 +1500,17 @@ class PlatformPrefs @Inject constructor(
     /** Ids das ligas ligadas no seletor (só as que o app conhece). */
     fun sportsEnabledLeagueIds(allIds: List<String>): List<String> {
         val enabled = sportsTabEnabledLeagues ?: return allIds
-        return enabled.filter { it in allIds }
+        // Lote 18 (v1.28.0): lista salva antiga NÃO desliga as ligas novas
+        // em silêncio. `known` = ids que existiam quando a lista foi
+        // guardada; tudo que chegou depois entra LIGADO (o merge é na
+        // leitura, sem reescrever a lista do usuário). Sem snapshot
+        // guardado (instalação anterior à v1.28.0), o conhecido é o
+        // conjunto das 13 ligas da v1.26.0 — liga desligada pelo usuário
+        // continua desligada; só as ligas novas entram ligadas.
+        val known = sportsTabKnownLeagueIds
+            ?: com.aotv.app.data.sports.SPORTS_LEAGUE_IDS_BEFORE_V128
+        val newlyAdded = allIds.filter { it !in known }
+        return (enabled.filter { it in allIds } + newlyAdded).distinct()
     }
 
     /** Liga/desliga uma liga no seletor (volta a null = todas quando completa). */
@@ -1316,7 +1519,22 @@ class PlatformPrefs @Inject constructor(
         val current = sportsEnabledLeagueIds(allIds).toMutableSet()
         if (enabled) current += leagueId else current -= leagueId
         sportsTabEnabledLeagues = if (current.size == allIds.size) null else current.toList()
+        // Lote 18 (v1.28.0): a lista foi reescrita contra os ids atuais —
+        // eles passam a ser o conjunto conhecido (ver sportsEnabledLeagueIds).
+        sportsTabKnownLeagueIds = allIds
     }
+
+    // ── Lote 18 — Ligas novas entram ligadas (v1.28.0) ──────────────────
+    // Snapshot dos ids de SPORTS_LEAGUES conhecidos quando a lista de
+    // ligas ligadas foi guardada pela última vez ("sports_tab_leagues_known_v1").
+    // null (chave ausente) = nunca registrado — o resolver usa o conjunto
+    // das 13 ligas da v1.26.0 como conhecido. Só ids, nada de fora.
+    var sportsTabKnownLeagueIds: List<String>?
+        get() = if (prefs.contains(sk("sports_tab_leagues_known_v1"))) readStringList("sports_tab_leagues_known_v1") else null
+        set(value) {
+            if (value == null) prefs.edit().remove(sk("sports_tab_leagues_known_v1")).apply()
+            else writeStringList("sports_tab_leagues_known_v1", value.distinct())
+        }
 
     /** Ligas seguidas (ids de SPORTS_LEAGUES). Vazio = nenhuma seguida. */
     var sportsFollowedLeagues: List<String>
@@ -1335,12 +1553,36 @@ class PlatformPrefs @Inject constructor(
         sportsFollowedLeagues = if (leagueId in cur) cur - leagueId else cur + leagueId
     }
 
-    /** Seguir/deixar de seguir um time. */
+    /**
+     * Seguir/deixar de seguir um time. Membro por NOME NORMALIZADO
+     * (Lote 18, item 9): "São Paulo" e "Sao Paulo" são o mesmo time —
+     * a estrela numa variante desliga a outra, sem duplicar. Guarda a
+     * grafia de exibição (a lista Seguindo mostra o nome bonito).
+     */
     fun toggleSportsFollowedTeam(team: String) {
         val clean = team.trim()
         if (clean.isBlank()) return
+        val norm = normalizeSportsName(clean)
+        if (norm.isBlank()) return
         val cur = sportsFollowedTeams
-        sportsFollowedTeams = if (clean in cur) cur - clean else cur + clean
+        val matched = cur.filter { normalizeSportsName(it) == norm }
+        sportsFollowedTeams = if (matched.isEmpty()) cur + clean else cur - matched
+    }
+
+    // ── Lote 18 — Migração dos times seguidos (v1.28.0, item 9) ─────────
+    // Colapsa nomes guardados que só diferem por acento/maiúscula/
+    // pontuação ("São Paulo" + "Sao Paulo" → um só, mantendo a 1ª
+    // grafia). Idempotente; só escreve quando há algo p/ colapsar;
+    // nunca apaga um time distinto (grafias genuinamente diferentes,
+    // ex. "Athletico-PR" x "Athletico Paranaense", continuam 2).
+    fun migrateSportsFollowedTeams() {
+        val cur = sportsFollowedTeams
+        val seen = LinkedHashSet<String>()
+        val deduped = ArrayList<String>()
+        for (name in cur) {
+            if (seen.add(normalizeSportsName(name))) deduped += name
+        }
+        if (deduped.size != cur.size) sportsFollowedTeams = deduped
     }
 
     private val _recordStartEarlyMin = MutableStateFlow(prefs.getInt(sk("record_start_early_min"), 2))
@@ -1521,6 +1763,7 @@ class PlatformPrefs @Inject constructor(
     fun refreshMobileDataCounters() {
         _mobileDataToday.value = readMobileToday()
         _mobileDataMonth.value = readMobileMonth()
+        refreshTypedMobileDataCounters()
         refreshMobileDataLimitReached()
     }
 

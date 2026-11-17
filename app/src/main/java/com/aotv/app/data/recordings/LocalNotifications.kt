@@ -26,6 +26,9 @@ object LocalNotifications {
     /** Lembrete de episódio/jogo (1 min antes) e alerta de jogo. */
     const val CHANNEL_REMINDERS = "aotv_reminders"
 
+    /** Atualização do app pronta p/ instalar (Lote 18, v1.28.0). */
+    const val CHANNEL_UPDATES = "aotv_updates"
+
     /** O app pode postar notificações (Android 13+ pede em runtime). */
     fun hasPermission(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < 33) return true
@@ -44,6 +47,10 @@ object LocalNotifications {
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_REMINDERS, "Lembretes", NotificationManager.IMPORTANCE_DEFAULT)
                 .apply { description = "Lembretes de episódios e jogos (1 min antes)" },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_UPDATES, "Atualizações do app", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { description = "Avisa quando uma atualização já foi baixada e está pronta p/ instalar" },
         )
     }
 

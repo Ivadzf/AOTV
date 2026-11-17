@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Lock
@@ -161,8 +162,15 @@ private fun mediaSourceFactory(
         override fun newCall(request: okhttp3.Request) =
             (if (request.url.host == "127.0.0.1") localMediaClient else kodiMediaClient).newCall(request)
     }
-    val http = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(calls)
-        .setDefaultRequestProperties(STREAM_HEADERS + extraHeaders)
+    // Medição de streaming em dados móveis (Lote 18 item 7, v1.28.0): o
+    // TransferListener conta os bytes de rede do ExoPlayer (o servidor
+    // local do torrent, 127.0.0.1, é ignorado aqui — o torrent é contado
+    // pelo TorrentStreamer). Arquivo local não passa por aqui.
+    val http = com.aotv.app.data.local.StreamingDataMeter(context.applicationContext)
+        .meteredFactory(
+            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(calls)
+                .setDefaultRequestProperties(STREAM_HEADERS + extraHeaders),
+        )
     // DefaultDataSource delega file://, content:// e asset:// para as fontes locais.
     return DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(context, http))
 }
@@ -1741,6 +1749,19 @@ private fun PlayerScreenContent(s: PlayerSession) = with(s) {
                 } else emptyList(),
             )
         }
+
+        // Baixar trecho (Lote 18 item 10 — CLIPES, v1.28.0): diálogo de
+        // início/fim. Não é painel de ação (não entra no panelKind): abre por
+        // cima do player, travado não abre.
+        if (showClipDialog && !locked) {
+            ClipDownloadDialog(
+                title = title,
+                positionMs = position,
+                durationMs = duration,
+                onDismiss = { showClipDialog = false },
+                onDownload = { startMs, endMs -> startClipDownload(startMs, endMs) },
+            )
+        }
     }
 }
 
@@ -1951,6 +1972,46 @@ class PlayerSession(
         toastMsg = label
     }
     var toastMsg by run { mutableStateOf("") }          // aviso curto (ex "Abertura marcada")
+    // LOTE 18 item 10 — CLIPES (v1.28.0): diálogo "Baixar trecho" + download do
+    // trecho HLS. O downloader resolve o DAO por EntryPoint (a sessão é criada
+    // à mão, fora do Hilt) — ver ClipDownloader.
+    var showClipDialog by run { mutableStateOf(false) }
+    private val clipDownloader by lazy { com.aotv.app.data.clips.ClipDownloader(context) }
+
+    /** Toque no chip "Baixar trecho": HLS abre o seletor; o resto avisa o motivo, sem falhar em silêncio. */
+    fun onClipChipTap() {
+        val url = streamUrl
+        if (url.isNullOrBlank()) {
+            toastMsg = "A fonte ainda está carregando."
+            return
+        }
+        if (duration <= 0) {
+            toastMsg = "Ao vivo não tem trecho para baixar."
+            return
+        }
+        when (val eligibility = com.aotv.app.data.clips.ClipDownload.classifyClipSource(url)) {
+            com.aotv.app.data.clips.ClipDownload.ClipEligibility.Hls -> showClipDialog = true
+            is com.aotv.app.data.clips.ClipDownload.ClipEligibility.Unsupported -> toastMsg = eligibility.reason
+        }
+    }
+
+    /** Baixa o trecho escolhido (HLS): fecha o diálogo, roda em IO e avisa o resultado por toast. O clipe entra nos Downloads como DownloadEntity (ver ClipDownloader). */
+    fun startClipDownload(startMs: Long, endMs: Long) {
+        val url = streamUrl ?: return
+        showClipDialog = false
+        scope.launch {
+            val result = clipDownloader.downloadClip(tmdbId, type, title, posterUrl, lastEpisode, url, startMs, endMs)
+            toastMsg = when (result) {
+                is com.aotv.app.data.clips.ClipResult.Done ->
+                    "Trecho salvo em Downloads: ${result.displayTitle}"
+                is com.aotv.app.data.clips.ClipResult.Failed ->
+                    "Não deu para baixar o trecho: ${result.message}"
+                is com.aotv.app.data.clips.ClipResult.Unsupported -> result.reason
+                com.aotv.app.data.clips.ClipResult.BlockedWifi ->
+                    "“Só Wi-Fi” ligado: conecte no Wi-Fi para baixar o trecho."
+            }
+        }
+    }
     // Trocando de episódio/temporada: mostra o loading NA HORA, sem ficar preso na cena anterior.
     var switching by run { mutableStateOf(false) }
     // Torrent tocando por onde. "" ainda decidindo, "debrid" link direto do serviço, "p2p" motor do aparelho.
@@ -3917,6 +3978,12 @@ class PlayerSession(
         // seletor do sistema (VLC, MX Player…). Com a pref "Player externo"
         // ligada, nem precisa tocar aqui: abre sozinho ao resolver a fonte.
         add(PlayerChipItem(Icons.Default.OpenInNew, "Player externo", id = "external") { openExternalPlayer() })
+        // Baixar trecho (Lote 18 item 10 — CLIPES, v1.28.0): mesmo padrão dos
+        // chips "color"/"info" — id "clip" fora do catálogo canônico, vai p/
+        // o fim e NÃO pode ser desligado nas Configurações. Só aparece com
+        // fonte ativa e duração conhecida (ao vivo não tem trecho). HLS abre
+        // o seletor de início/fim; MP4/torrent avisam o motivo no toque.
+        if (streamUrl != null && duration > 0) add(PlayerChipItem(Icons.Default.ContentCut, "Baixar trecho", id = "clip") { onClipChipTap() })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource
             userLockedSource = pinnedSource

@@ -50,7 +50,10 @@ import javax.inject.Singleton
  * Uma "tabela" de 4 times com 0 pontos seria dado enganoso. Por isso
  * [SportsLeague.hasTable] = false nessas ligas e
  * [EspnSportsRepository.leagueTable] volta null p/ elas — a tela mostra
- * "sem dados", sem inventar tabela.
+ * "sem dados", sem inventar tabela. Lote 18 (v1.28.0): as 72 ligas novas
+ * também têm hasTable = false — copas e continentais são mata-mata /
+ * multi-grupo, e as 2ªs divisões ficam fora da tabela por decisão do
+ * lote (o summary delas não foi validado como tabela).
  *
  * RELÓGIO POR ESPORTE (Lote 16): o relógio é mostrado como a ESPN traz,
  * sem converter. Futebol: `displayClock` ("45'"). Americanos: o
@@ -124,7 +127,19 @@ data class SportsLeague(
     val hasTable: Boolean = true,
 )
 
-/** Ligas com tabela (8, todas de pontos corridos; slugs ESPN confirmados). */
+/** Ids das 13 ligas que existiam antes da v1.28.0 (Lote 18). Fallback do
+ * "conhecido" em [com.aotv.app.data.local.PlatformPrefs.sportsEnabledLeagueIds]:
+ * instalação anterior à v1.28.0 que salvou uma lista de ligas ligadas não
+ * tem snapshot guardado — o conhecido é este conjunto, então só as ligas
+ * novas entram ligadas; liga antiga desligada pelo usuário continua
+ * desligada. */
+val SPORTS_LEAGUE_IDS_BEFORE_V128 = listOf(
+    "bra1", "eng1", "esp1", "ita1", "ger1", "fra1", "por1", "ned1",
+    "nfl", "nba", "nhl", "mlb", "mls",
+)
+
+/** Ligas da aba Esportes (85: 8 de futebol com tabela + 77 sem tabela;
+ * slugs ESPN confirmados ao vivo — Lote 18, v1.28.0). */
 val SPORTS_LEAGUES = listOf(
     SportsLeague(
         "bra1", "Brasileirão Série A", "bra.1", 4, "Libertadores", 4,
@@ -163,7 +178,7 @@ val SPORTS_LEAGUES = listOf(
     // Sem tabela: o summary só traz o fragmento da divisão (ver o doc no
     // topo do arquivo) — hasTable = false; sem rebaixamento nem vagas
     // continentais (topSpots/relegationSpots = 0, sem uso). Sem college
-    // sports nem WNBA (fora de escopo do lote).
+    // sports (fora de escopo do lote); WNBA entrou no Lote 18.
     SportsLeague(
         "nfl", "NFL", "nfl", 0, "", 0,
         networkKeywords = listOf("espn", "disney", "sportv", "redetv", "nfl network"),
@@ -188,6 +203,382 @@ val SPORTS_LEAGUES = listOf(
         "mls", "MLS", "usa.1", 0, "", 0,
         networkKeywords = listOf("espn", "disney", "apple tv"),
         espnSport = "soccer", sportLabel = "Futebol", hasTable = false,
+    ),
+    // ── Lote 18 (v1.28.0): 1ªs divisões — scoreboard confirmado ao vivo
+    // em 2026-11-16/17 (HTTP 200 + eventos). Sem tabela (hasTable = false):
+    // a tabela só existe p/ as 8 de futebol acima, por decisão do lote.
+    SportsLeague(
+        "mex1", "Liga MX", "mex.1", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "arg1", "Campeonato Argentino", "arg.1", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "sco1", "Campeonato Escocês", "sco.1", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "aus1", "A-League (Austrália)", "aus.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ksa1", "Liga Saudita", "ksa.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "tur1", "Campeonato Turco", "tur.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "rus1", "Liga Russa", "rus.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "bel1", "Liga Belga", "bel.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "aut1", "Campeonato Austríaco", "aut.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "gre1", "Campeonato Grego", "gre.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "chn1", "Campeonato Chinês", "chn.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "swe1", "Allsvenskan (Suécia)", "swe.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "den1", "Superliga (Dinamarca)", "den.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "nor1", "Eliteserien (Noruega)", "nor.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "chi1", "Campeonato Chileno", "chi.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "uru1", "Campeonato Uruguaio", "uru.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "col1", "Campeonato Colombiano", "col.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "per1", "Liga 1 (Peru)", "per.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "par1", "Campeonato Paraguaio", "par.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ecu1", "LigaPro (Equador)", "ecu.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ven1", "Liga FUTVE (Venezuela)", "ven.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "bol1", "División Profesional (Bolívia)", "bol.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "jpn1", "J1 League (Japão)", "jpn.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "hon1", "Liga Nacional (Honduras)", "hon.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "crc1", "Primeira División (Costa Rica)", "crc.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "gua1", "Liga Nacional (Guatemala)", "gua.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "slv1", "Primeira División (El Salvador)", "slv.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ind1", "Indian Super League", "ind.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "rsa1", "Premier Soccer League (África do Sul)", "rsa.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    // ── Lote 18 (v1.28.0): 2ªs divisões (a ESPN não serve por.2 nem
+    // outras 2ªs — só estas 12 devolveram eventos ao vivo; uru.2 ficou
+    // fora: 0 eventos em 17 datas testadas). Sem tabela, como as 1ªs.
+    SportsLeague(
+        "eng2", "Championship (Inglaterra)", "eng.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "esp2", "La Liga 2", "esp.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ger2", "2. Bundesliga", "ger.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ita2", "Serie B (Itália)", "ita.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "fra2", "Ligue 2", "fra.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ned2", "Eerste Divisie (Holanda)", "ned.2", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "bra2", "Brasileirão Série B", "bra.2", 0, "", 0,
+        networkKeywords = listOf("premiere", "sportv", "globo", "record", "cazetv", "band"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "mex2", "Liga de Expansión (México)", "mex.2", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "arg2", "Primera Nacional (Argentina)", "arg.2", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "sco2", "Championship (Escócia)", "sco.2", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "ind2", "I-League (Índia)", "ind.2", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "usl1", "USL Championship", "usa.usl.1", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    // ── Lote 18 (v1.28.0): copas nacionais (mata-mata: hasTable = false).
+    // col.copa ficou fora: 0 eventos em 17 datas testadas.
+    SportsLeague(
+        "facup", "FA Cup", "eng.fa", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "eflcup", "Copa da Liga Inglesa", "eng.league_cup", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "copadelrey", "Copa del Rey", "esp.copa_del_rey", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "dfbpokal", "DFB-Pokal", "ger.dfb_pokal", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "coppaitalia", "Coppa Italia", "ita.coppa_italia", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "coupedefrance", "Copa da França", "fra.coupe_de_france", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "knvbcup", "Copa da Holanda", "ned.cup", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "tacaportugal", "Taça de Portugal", "por.taca.portugal", 0, "", 0,
+        networkKeywords = listOf("espn", "sport tv", "sporttv"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "copadobrasil", "Copa do Brasil", "bra.copa_do_brazil", 0, "", 0,
+        networkKeywords = listOf("premiere", "sportv", "globo", "amazon", "prime video"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "copaargentina", "Copa Argentina", "arg.copa", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "usopencup", "US Open Cup", "usa.open", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "copachile", "Copa do Chile", "chi.copa_chi", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "scotcup", "Copa da Escócia", "sco.tennents", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "kingscup", "Copa do Rei Saudita", "ksa.kings.cup", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "copabolivia", "Copa da Bolívia", "bol.copa", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    // ── Lote 18 (v1.28.0): continentais (fase de grupos/mata-mata: sem
+    // tabela, como decidido no Lote 13). fifa.cwc ficou fora:
+    // o Mundial de Clubes não tem edição em 2026 (próxima: 2029) — 0
+    // eventos em todas as datas testadas.
+    SportsLeague(
+        "ucl", "Champions League", "uefa.champions", 0, "", 0,
+        networkKeywords = listOf("tnt", "max", "space", "espn"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "uel", "Europa League", "uefa.europa", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "uecl", "Conference League", "uefa.europa.conf", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "libertadores", "Libertadores", "conmebol.libertadores", 0, "", 0,
+        networkKeywords = listOf("espn", "disney", "paramount", "globo"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "sudamericana", "Sul-Americana", "conmebol.sudamericana", 0, "", 0,
+        networkKeywords = listOf("espn", "disney", "paramount"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "concachampions", "Champions Cup (Concacaf)", "concacaf.champions", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "afcchampions", "Champions League (Ásia)", "afc.champions", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "cafchampions", "Champions League (África)", "caf.champions", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "leaguescup", "Leagues Cup", "concacaf.leagues.cup", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "cafconfed", "Copa das Confederações (África)", "caf.confed", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "afccup", "AFC Cup", "afc.cup", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    SportsLeague(
+        "concacentral", "Copa Centro-Americana", "concacaf.central.american.cup", 0, "", 0,
+        networkKeywords = emptyList(),
+        hasTable = false,
+    ),
+    // ── Lote 18 (v1.28.0): outros esportes. WNBA (mesmo mecanismo do
+    // basquete), NBL, G League e UFL — todos com eventos ao vivo. CFL e
+    // XFL ficaram fora: 0 eventos em todas as datas testadas (XFL nem
+    // existe mais — fundida na UFL em 2024).
+    SportsLeague(
+        "wnba", "WNBA", "wnba", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        espnSport = "basketball", sportLabel = "Basquete", hasTable = false,
+    ),
+    SportsLeague(
+        "nbl", "NBL (Austrália)", "nbl", 0, "", 0,
+        networkKeywords = emptyList(),
+        espnSport = "basketball", sportLabel = "Basquete", hasTable = false,
+    ),
+    SportsLeague(
+        "gleague", "NBA G League", "nba-development", 0, "", 0,
+        networkKeywords = listOf("espn", "disney"),
+        espnSport = "basketball", sportLabel = "Basquete", hasTable = false,
+    ),
+    SportsLeague(
+        "ufl", "UFL", "ufl", 0, "", 0,
+        networkKeywords = emptyList(),
+        espnSport = "football", sportLabel = "Futebol Americano", hasTable = false,
     ),
 )
 
@@ -763,8 +1154,9 @@ class EspnSportsRepository @Inject constructor(
      * placares recentes (campo `form` da fonte) até cobrir os times da
      * tabela (no máximo 7 dias). Fora de temporada, null.
      * Ligas sem tabela de verdade no summary ([SportsLeague.hasTable] =
-     * false — as 5 americanas, Lote 16) voltam null direto: a tela mostra
-     * "sem dados", sem inventar tabela de fragmento de divisão.
+     * false — as 5 americanas do Lote 16 + as 72 do Lote 18) voltam null
+     * direto: a tela mostra "sem dados", sem inventar tabela de fragmento
+     * de divisão.
      */
     suspend fun leagueTable(league: SportsLeague): LeagueTable? {
         if (!league.hasTable) return null

@@ -90,11 +90,12 @@ import javax.inject.Inject
  * v1.26.0): 6ª aba da pílula, SÓ no celular. Na TV, esportes ficam dentro
  * do hub do Ao vivo, como hoje.
  *
- * COBERTURA HONESTA: o app conhece 13 ligas da ESPN ([SPORTS_LEAGUES]) —
- * 8 de futebol + NFL, NBA, NHL, MLB e MLS (Lote 16; slugs confirmados ao
- * vivo em 2026-11-16). Sem prometer centenas de ligas que o app não
- * conhece. O seletor mostra "N de 13 ligas ligadas" e o total disponível
- * é 13. Todos os jogos vêm do scoreboard da ESPN
+ * COBERTURA HONESTA: o app conhece 85 ligas da ESPN ([SPORTS_LEAGUES]) —
+ * 8 de futebol com tabela + 77 sem tabela (29 1ªs divisões, 12 2ªs, 15
+ * copas nacionais, 12 continentais, WNBA, NBL, G League e UFL — Lote 18;
+ * slugs confirmados ao vivo em 2026-11-16/17). Sem prometer centenas de
+ * ligas que o app não conhece. O seletor mostra "N de 85 ligas ligadas"
+ * e o total disponível é 85. Todos os jogos vêm do scoreboard da ESPN
  * ([EspnSportsRepository.gamesOn]); sem resposta da fonte, estado vazio —
  * nunca placar, período, liga ou canal inventado. O filtro por esporte é
  * montado a partir dos dados ([SportsLeague.sportLabel]): Futebol,
@@ -181,7 +182,7 @@ class SportsTabViewModel @Inject constructor(
     private val _ui = MutableStateFlow(Ui())
     val ui: StateFlow<Ui> = _ui.asStateFlow()
 
-    /** Ligas ligadas no seletor (só as que o app conhece — 13). */
+    /** Ligas ligadas no seletor (só as que o app conhece — 85). */
     fun enabledLeagues(): List<SportsLeague> {
         val ids = prefs.sportsEnabledLeagueIds(SPORTS_LEAGUES.map { it.id })
         return SPORTS_LEAGUES.filter { it.id in ids }
@@ -217,6 +218,10 @@ class SportsTabViewModel @Inject constructor(
     fun refresh() = load()
 
     private fun load() {
+        // Migração 1x (Lote 18, item 9): colapsa variantes do mesmo time
+        // seguido ("São Paulo" + "Sao Paulo") sem apagar time distinto;
+        // idempotente, só escreve quando há algo p/ colapsar.
+        prefs.migrateSportsFollowedTeams()
         val offset = _ui.value.dateOffset
         val dayMs = System.currentTimeMillis() + offset * SPORTS_TAB_DAY_MS
         val leagues = enabledLeagues()
@@ -346,9 +351,17 @@ fun SportsTabScreen(
     val finishedGames = remember(sportFiltered) {
         sportFiltered.filter { it.second.isFinished }.sortedBy { it.second.dateMs }
     }
-    val mineGames = remember(sportFiltered, followedLeagues, followedTeams) {
+    // Times seguidos, normalizados 1x (Lote 18, item 9): acento, case e
+    // pontuação não quebram o casamento — "Grêmio" seguido casa com
+    // "Gremio" do placar, e a estrela mostra o mesmo estado que o filtro.
+    val followedTeamsNorm = remember(followedTeams) {
+        followedTeams.map { normalizeSportsName(it) }.toSet()
+    }
+    val mineGames = remember(sportFiltered, followedLeagues, followedTeamsNorm) {
         sportFiltered.filter { (league, game) ->
-            league.id in followedLeagues || game.homeTeam in followedTeams || game.awayTeam in followedTeams
+            league.id in followedLeagues ||
+                normalizeSportsName(game.homeTeam) in followedTeamsNorm ||
+                normalizeSportsName(game.awayTeam) in followedTeamsNorm
         }.sortedBy { it.second.dateMs }
     }
     val query = ui.query
@@ -468,7 +481,7 @@ fun SportsTabScreen(
                 emptyMessage = "Siga ligas ou times p/ ver só os seus jogos aqui — toque na estrela de um time ou siga uma liga.",
                 emptyActionLabel = "Escolher ligas",
                 onEmptyAction = { showLeaguePicker = true },
-                followedTeams = followedTeams,
+                followedTeamsNorm = followedTeamsNorm,
                 viewModel = viewModel,
                 onOpenGame = onOpenGame,
                 onPlayChannel = onPlayChannel,
@@ -483,7 +496,7 @@ fun SportsTabScreen(
                 emptyMessage = "Nenhum jogo nas ligas ligadas neste dia.",
                 emptyActionLabel = null,
                 onEmptyAction = null,
-                followedTeams = followedTeams,
+                followedTeamsNorm = followedTeamsNorm,
                 viewModel = viewModel,
                 onOpenGame = onOpenGame,
                 onPlayChannel = onPlayChannel,
@@ -515,7 +528,7 @@ fun SportsTabScreen(
                     else "Nenhum jogo do dia combina com \"$query\".",
                     emptyActionLabel = null,
                     onEmptyAction = null,
-                    followedTeams = followedTeams,
+                    followedTeamsNorm = followedTeamsNorm,
                     viewModel = viewModel,
                     onOpenGame = onOpenGame,
                     onPlayChannel = onPlayChannel,
@@ -540,7 +553,9 @@ fun SportsTabScreen(
     if (showLeaguePicker) {
         SportsLeaguePickerDialog(
             enabledIds = ui.enabledLeagueIds,
+            followedIds = followedLeagues,
             onToggle = { league, enabled -> viewModel.setLeagueEnabled(league, enabled) },
+            onToggleFollow = { league -> viewModel.toggleFollowLeague(league.id) },
             onToggleAll = { viewModel.setAllLeaguesEnabled(it) },
             onDismiss = { showLeaguePicker = false },
         )
@@ -576,7 +591,7 @@ private fun SportsTabGamesList(
     emptyMessage: String,
     emptyActionLabel: String?,
     onEmptyAction: (() -> Unit)?,
-    followedTeams: List<String>,
+    followedTeamsNorm: Set<String>,
     viewModel: SportsTabViewModel,
     onOpenGame: (String, String) -> Unit,
     onPlayChannel: (String) -> Unit,
@@ -626,7 +641,7 @@ private fun SportsTabGamesList(
                     )
                 }
                 SportsTabGameCard(
-                    league = league, game = game, followedTeams = followedTeams,
+                    league = league, game = game, followedTeamsNorm = followedTeamsNorm,
                     viewModel = viewModel, onOpenGame = onOpenGame,
                     onPlayChannel = onPlayChannel, onFixChannel = onFixChannel,
                 )
@@ -640,7 +655,7 @@ private fun SportsTabGamesList(
 private fun SportsTabGameCard(
     league: SportsLeague,
     game: LeagueGame,
-    followedTeams: List<String>,
+    followedTeamsNorm: Set<String>,
     viewModel: SportsTabViewModel,
     onOpenGame: (String, String) -> Unit,
     onPlayChannel: (String) -> Unit,
@@ -681,12 +696,12 @@ private fun SportsTabGameCard(
         }
         SportsTabTeamRow(
             team = game.homeTeam, logo = game.homeLogo, score = game.homeScore,
-            followed = game.homeTeam in followedTeams,
+            followed = normalizeSportsName(game.homeTeam) in followedTeamsNorm,
             onToggleFollow = { viewModel.toggleFollowTeam(game.homeTeam) },
         )
         SportsTabTeamRow(
             team = game.awayTeam, logo = game.awayLogo, score = game.awayScore,
-            followed = game.awayTeam in followedTeams,
+            followed = normalizeSportsName(game.awayTeam) in followedTeamsNorm,
             onToggleFollow = { viewModel.toggleFollowTeam(game.awayTeam) },
         )
         // Barra de progresso: minuto do relógio / 90 — SÓ futebol. NFL/NBA/
@@ -889,11 +904,15 @@ private fun SportsTabNetworkRow(channel: LiveChannel, onPlay: () -> Unit) {
  * "Escolher ligas": as ligas que o app REALMENTE conhece (13, da ESPN), com
  * busca dentro do seletor e ligar/desligar em massa. Persistido em
  * PlatformPrefs (`sports_tab_leagues_v1` — null = todas ligadas).
+ * A estrela de cada linha SEGUE a liga (Lote 18, item 9 — antes não
+ * havia como seguir liga nenhuma: alimenta "Meus esportes" e "Seguindo").
  */
 @Composable
 private fun SportsLeaguePickerDialog(
     enabledIds: List<String>,
+    followedIds: List<String>,
     onToggle: (SportsLeague, Boolean) -> Unit,
+    onToggleFollow: (SportsLeague) -> Unit,
     onToggleAll: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -952,6 +971,14 @@ private fun SportsLeaguePickerDialog(
                                 onCheckedChange = { checked -> onToggle(league, checked) },
                             )
                             Text(league.name, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            IconButton(onClick = { onToggleFollow(league) }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    if (league.id in followedIds) Icons.Default.Star else Icons.Default.StarBorder,
+                                    if (league.id in followedIds) "Deixar de seguir ${league.name}" else "Seguir ${league.name}",
+                                    tint = if (league.id in followedIds) Accent else TextTertiary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
                         }
                     }
                     if (filtered.isEmpty()) {

@@ -23,9 +23,21 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * Resto de arquivo na pasta de downloads (Lote 18 item 4): .mp4 que nenhum
+ * DownloadEntity referencia. [path] é absoluto, dentro da pasta do app.
+ */
+data class OrphanFile(val name: String, val sizeBytes: Long, val path: String)
+
+/**
  * Baixa filmes/episódios de fontes .mp4 diretas via DownloadManager do sistema
  * (gerencia notificação, rede e retomada). Arquivo vai p/ a pasta privada do app
  * (sem permissão de storage). O player toca o arquivo local depois.
+ *
+ * Lote 18 (v1.28.0) — retomada, link colado e restos: [resumeDownload]
+ * retoma um download "failed"/"queued" (re-download do zero — o
+ * DownloadManager não retoma um id falhado); [enqueueDirectLink] baixa
+ * um .mp4 colado na busca (sem tmdbId); [findOrphans]/[deleteOrphan]
+ * acham e limpam .mp4 sem dono na pasta de downloads.
  *
  * Lote 5 (v1.14.0) — downloads e dados móveis:
  * - "Só Wi-Fi" ([PlatformPrefs.downloadsWifiOnly]): ligado, download novo em
@@ -145,6 +157,86 @@ class DownloadRepository @Inject constructor(
             if (startDownload(d.tmdbId, d.type, d.title, d.posterUrl, d.sourceUrl, d.lastEpisode, d.id, d.createdAt)) resumed++
         }
         return resumed
+    }
+
+    /**
+     * Retoma um download parado (Lote 18 item 4): "failed" ou "queued"
+     * começam de novo no DownloadManager (o registro antigo é cancelado
+     * antes — o DownloadManager não retoma um "failed" sozinho). Honesto:
+     * é um re-download do zero, não uma retomada do byte parado — o
+     * DownloadManager não expõe continuar de onde parou p/ um id
+     * falhado. "downloading" e "done" não fazem nada (devolvem true).
+     * Com "Só Wi-Fi" ligado e sem Wi-Fi, volta p/ a fila ("queued").
+     */
+    suspend fun resumeDownload(entity: DownloadEntity): Boolean {
+        if (entity.status == "done" || entity.status == "downloading") return true
+        if (entity.downloadId > 0L) runCatching { dm.remove(entity.downloadId) }
+        if (prefs.downloadsWifiOnly && !MobileDataUsage.isWifiActive(context)) {
+            dao.updateStatus(entity.id, "queued", "")
+            return true
+        }
+        return startDownload(
+            entity.tmdbId, entity.type, entity.title, entity.posterUrl,
+            entity.sourceUrl, entity.lastEpisode, entity.id, entity.createdAt,
+        )
+    }
+
+    /**
+     * Enfileira um link .mp4 direto colado na busca (Lote 18 item 3):
+     * sem tmdbId (não veio de um título) — o id é "link:<hash da URL>",
+     * um por URL colada. Mesma regra de "Só Wi-Fi" do [enqueue]
+     * (fila quando ligado e sem Wi-Fi) e mesma pasta de destino.
+     */
+    suspend fun enqueueDirectLink(url: String, title: String): Boolean {
+        if (!isDownloadable(url)) return false
+        val cleanTitle = title.takeIf { it.isNotBlank() } ?: "Link direto"
+        val id = "link:${url.hashCode()}"
+        val existingStatus = dao.get(id)?.status
+        if (existingStatus == "done" || existingStatus == "downloading" || existingStatus == "queued") return true
+        if (prefs.downloadsWifiOnly && !MobileDataUsage.isWifiActive(context)) {
+            dao.upsert(
+                DownloadEntity(
+                    id = id, tmdbId = 0, type = "MOVIE", title = cleanTitle, posterUrl = "",
+                    sourceUrl = url, lastEpisode = "", downloadId = 0,
+                    status = "queued", createdAt = System.currentTimeMillis(),
+                ),
+            )
+            return true
+        }
+        return startDownload(0, "MOVIE", cleanTitle, "", url, "", id)
+    }
+
+    /**
+     * Restos de arquivos (Lote 18 item 4): .mp4 na pasta de downloads do
+     * app que NENHUM DownloadEntity referencia — download apagado da
+     * lista sem apagar o arquivo, download interrompido fora do app, ou
+     * arquivo parcial que o DownloadManager deixou p/ trás. A comparação
+     * é pelo nome do arquivo (o localUri pode ser file:// ou content://
+     * depois de movido p/ a pasta SAF — o que foi movido não é resto).
+     * Devolve ordenado por nome. Vazio = nada p/ limpar.
+     */
+    suspend fun findOrphans(): List<OrphanFile> = withContext(Dispatchers.IO) {
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: return@withContext emptyList()
+        val knownNames = dao.getAllOnce().mapNotNull { entity ->
+            entity.localUri.takeIf { it.isNotBlank() }?.let { Uri.parse(it).lastPathSegment }
+        }.toSet()
+        dir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".mp4", ignoreCase = true) && it.name !in knownNames }
+            ?.map { OrphanFile(name = it.name, sizeBytes = it.length(), path = it.absolutePath) }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+    }
+
+    /**
+     * Apaga um resto de arquivo ([findOrphans]). Só apaga dentro da pasta
+     * de downloads do app — caminho fora dela é recusado (nunca apaga
+     * arquivo de outro lugar por engano).
+     */
+    suspend fun deleteOrphan(path: String): Boolean = withContext(Dispatchers.IO) {
+        val dir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: return@withContext false
+        val file = java.io.File(path)
+        if (!file.absolutePath.startsWith(dir.absolutePath)) return@withContext false
+        runCatching { file.isFile && file.delete() }.getOrDefault(false)
     }
 
     /** Consulta o DownloadManager e atualiza status/localUri dos downloads em andamento. */

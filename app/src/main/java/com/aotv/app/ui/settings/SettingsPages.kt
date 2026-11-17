@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -73,6 +75,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Timer
@@ -455,6 +458,11 @@ private fun DownloadsPage(
     val month by viewModel.mobileDataMonth.collectAsStateWithLifecycle()
     val limitMb by viewModel.mobileDataLimitMb.collectAsStateWithLifecycle()
     val limitReached by viewModel.mobileDataLimitReached.collectAsStateWithLifecycle()
+    // Lote 18 (v1.28.0): streaming/torrent medidos, separados por tipo + teto do torrent.
+    val streamingMonth by viewModel.mobileStreamingMonth.collectAsStateWithLifecycle()
+    val torrentMonth by viewModel.mobileTorrentMonth.collectAsStateWithLifecycle()
+    val torrentTempLimitMb by viewModel.torrentTempLimitMb.collectAsStateWithLifecycle()
+    val torrentDiscardWatched by viewModel.torrentDiscardWatched.collectAsStateWithLifecycle()
     // Gravações (Lote 8): pasta, janelas, retenção, espaço e a lista.
     val recFolderUri by viewModel.recordingsFolderUri.collectAsStateWithLifecycle()
     val recFolderName by viewModel.recordingsFolderName.collectAsStateWithLifecycle()
@@ -520,8 +528,11 @@ private fun DownloadsPage(
         SettingsCard {
             Text("Hoje: ${MobileDataUsage.formatBytes(today)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Text("Este mês: ${MobileDataUsage.formatBytes(month)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            // Lote 18 (v1.28.0): streaming e torrent medidos, separados por tipo.
+            Text("Streaming este mês: ${MobileDataUsage.formatBytes(streamingMonth)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+            Text("Torrent este mês: ${MobileDataUsage.formatBytes(torrentMonth)}", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
             Text(
-                "Conta só o que o app mediu: downloads .mp4 enquanto a rede é móvel. O streaming do player, torrents e pôsteres/APIs não entram na conta.",
+                "Conta só o que o app mediu em dados móveis: downloads .mp4, streaming do player e torrents — separados acima. Pôsteres e chamadas de API não entram na conta.",
                 fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
         }
@@ -575,6 +586,32 @@ private fun DownloadsPage(
                     Text("Voltar para a pasta do app", color = Accent)
                 }
             }
+        }
+        // Torrent — espaço temporário (Lote 18 item 2, v1.28.0): teto de
+        // 32–256 MB + descarte do já assistido. Não é um ajuste do cache
+        // interno do motor (o libtorrent 2.x não expõe esse ajuste — ver TorrentTempCap).
+        SettingsSection("Torrent (espaço temporário)", anchor = SettingsAnchors.DL_TORRENT)
+        SettingsCard {
+            PrefRow(
+                "Teto do espaço temporário",
+                listOf(32 to "32 MB", 64 to "64 MB", 128 to "128 MB", 256 to "256 MB"),
+                torrentTempLimitMb, viewModel::setTorrentTempLimitMb,
+            )
+            Text(
+                "O torrent baixa em arquivos temporários e apaga tudo ao parar. O teto limita o quanto fica no disco enquanto assiste.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Storage,
+                title = "Descartar o que já foi assistido",
+                sub = if (torrentDiscardWatched) "Ligado: ao passar do teto, o app apaga do disco as peças já assistidas (volta a baixar se você voltar nelas)"
+                    else "Desligado: sem descarte o teto não é cumprido — o arquivo temporário cresce até o fim da reprodução",
+                trailing = { Switch(checked = torrentDiscardWatched, onCheckedChange = { viewModel.setTorrentDiscardWatched(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setTorrentDiscardWatched(!torrentDiscardWatched) },
+                grouped = true,
+            )
         }
         // Gravações (Lote 8, v1.18.0): pasta SAF, janelas, retenção, espaço e a lista.
         SettingsSection("Gravações", anchor = SettingsAnchors.DL_RECORD)
@@ -2025,6 +2062,10 @@ private fun AparenciaPage(
         val updateDownloadError by viewModel.updateDownloadError.collectAsStateWithLifecycle()
         val updateNeedsPermission by viewModel.updateNeedsPermission.collectAsStateWithLifecycle()
         val updateCheckEnabled by viewModel.appUpdateCheckEnabled.collectAsStateWithLifecycle()
+        val updateBackgroundEnabled by viewModel.appUpdateBackgroundEnabled.collectAsStateWithLifecycle()
+        val updateReadyTag by viewModel.updateReadyTag.collectAsStateWithLifecycle()
+        val updateReadyHashVerified by viewModel.updateReadyHashVerified.collectAsStateWithLifecycle()
+        val whatsNewText by viewModel.whatsNewText.collectAsStateWithLifecycle()
         LaunchedEffect(Unit) { viewModel.maybeAutoCheckForUpdates() }
         val updateStatus = when (val s = updateState) {
             null -> "Ainda não verificado nesta sessão."
@@ -2051,6 +2092,19 @@ private fun AparenciaPage(
                 grouped = true,
                 divider = true,
             )
+            // Lote 18 (v1.28.0): download em 2º plano — com a opção ligada,
+            // a versão nova baixa sozinha (WorkManager) e avisa quando está
+            // pronta p/ instalar; respeita o "Só Wi-Fi" dos downloads.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Download,
+                title = "Atualização em 2º plano",
+                sub = if (updateBackgroundEnabled) "Baixa a versão nova sozinha e avisa quando estiver pronta"
+                    else "Só baixa quando você tocar em \"Baixar e instalar\"",
+                trailing = { Switch(checked = updateBackgroundEnabled, onCheckedChange = { viewModel.setAppUpdateBackgroundEnabled(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setAppUpdateBackgroundEnabled(!updateBackgroundEnabled) },
+                grouped = true,
+                divider = true,
+            )
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Refresh,
                 title = "Verificar atualizações",
@@ -2062,15 +2116,48 @@ private fun AparenciaPage(
             )
             val available = updateState as? com.aotv.app.data.remote.UpdateCheckResult.Available
             if (available != null) {
+                val ready = viewModel.isUpdateReady(available.release.tag)
+                val abiLabel = if (available.release.abi.isNotBlank()) "APK ${available.release.abi}" else "APK universal"
+                val shaLabel = if (available.release.sha256.isNotBlank()) "SHA-256 conferido no feed" else "sem SHA-256 no feed — só o tamanho será conferido"
+                val readyLabel = if (ready) {
+                    if (updateReadyHashVerified) "Baixado em 2º plano • SHA-256 conferido ✓" else "Baixado em 2º plano • só o tamanho conferido"
+                } else "$abiLabel • $shaLabel"
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.FiberManualRecord,
-                    title = if (updateDownloading) "Baixando atualização…" else "Baixar e instalar ${available.release.tag}",
-                    sub = "Baixa o APK da release oficial e pede p/ instalar",
+                    title = if (updateDownloading) "Baixando atualização…" else if (ready) "Instalar atualização pronta ${available.release.tag}" else "Baixar e instalar ${available.release.tag}",
+                    sub = if (ready) readyLabel else "Baixa o $abiLabel da release oficial e pede p/ instalar. $shaLabel.",
                     onClick = { viewModel.downloadAndInstallUpdate() },
                     grouped = true,
                     divider = true,
                 )
             }
+            // Lote 18 (v1.28.0): "What's new" — reabre as novidades da
+            // versão instalada (do feed/release ou embutidas no app).
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.NewReleases,
+                title = "Novidades da versão",
+                sub = if (viewModel.hasWhatsNew()) "O que mudou na v${viewModel.installedAppVersion}"
+                    else "Sem notas salvas p/ esta versão",
+                onClick = { viewModel.showWhatsNew() },
+                grouped = true,
+            )
+        }
+        // Diálogo "What's new" (Lote 18, v1.28.0): mostra o changelog da
+        // versão instalada; fechar apaga a bolinha do avatar.
+        val whatsNew = whatsNewText
+        if (whatsNew != null) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissWhatsNew() },
+                title = { Text("Novidades da v${viewModel.installedAppVersion}") },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text(whatsNew, fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissWhatsNew() }) { Text("Entendi") }
+                },
+            )
         }
         if (updateDownloadError != null) {
             SettingsCard {

@@ -2,13 +2,16 @@ package com.aotv.app.data.recordings
 
 import android.content.Context
 import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.remote.AppRelease
 import com.aotv.app.data.sports.SportsGame
 import com.aotv.app.ui.movies.CalendarEntry
 import java.util.concurrent.TimeUnit
@@ -64,6 +67,18 @@ object WorkScheduler {
 
     /** Nome do trabalho periódico de fim de jogo / placar. */
     const val UNIQUE_GAME_SCORES = "aotv-game-scores"
+
+    /** Nome do trabalho único de download da atualização em 2º plano. */
+    const val UNIQUE_UPDATE_DOWNLOAD = "aotv-update-download"
+
+    /** Id da notificação "atualização pronta p/ instalar". */
+    const val UPDATE_DOWNLOAD_NOTIFICATION_ID = 9105
+
+    const val KEY_UPDATE_URL = "update_url"
+    const val KEY_UPDATE_TAG = "update_tag"
+    const val KEY_UPDATE_SHA256 = "update_sha256"
+    const val KEY_UPDATE_SIZE = "update_size"
+    const val KEY_UPDATE_ABI = "update_abi"
 
     /** Intervalo do [GameScoreWorker]: 15 min, o mínimo do WorkManager. */
     const val GAME_SCORE_INTERVAL_MIN = 15L
@@ -214,6 +229,43 @@ object WorkScheduler {
                 .build()
             wm.enqueueUniquePeriodicWork(UNIQUE_GAME_SCORES, ExistingPeriodicWorkPolicy.KEEP, req)
         }
+        true
+    }.getOrDefault(false)
+
+    /**
+     * Download da atualização em 2º plano (Lote 18, v1.28.0): enfileira um
+     * [UpdateDownloadWorker] único (KEEP — enfileirar 2x não duplica) que
+     * baixa o APK da release oficial, confere tamanho e SHA-256 e marca a
+     * tag como pronta. [wifiOnly] = true usa rede sem medição (o "Só
+     * Wi-Fi" dos downloads); false aceita qualquer rede. false = não
+     * conseguiu enfileirar (o download manual continua valendo).
+     */
+    fun scheduleUpdateDownload(context: Context, release: AppRelease, wifiOnly: Boolean): Boolean = runCatching {
+        val wm = WorkManager.getInstance(context.applicationContext)
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .build()
+        val req = OneTimeWorkRequestBuilder<UpdateDownloadWorker>()
+            .setConstraints(constraints)
+            .setInputData(
+                workDataOf(
+                    KEY_UPDATE_URL to release.apkUrl,
+                    KEY_UPDATE_TAG to release.tag,
+                    KEY_UPDATE_SHA256 to release.sha256,
+                    KEY_UPDATE_SIZE to release.sizeBytes,
+                    KEY_UPDATE_ABI to release.abi,
+                ),
+            )
+            .addTag("aotv-update-download")
+            .build()
+        wm.enqueueUniqueWork(UNIQUE_UPDATE_DOWNLOAD, ExistingWorkPolicy.KEEP, req)
+        true
+    }.getOrDefault(false)
+
+    /** Cancela o download em 2º plano (e limpa a tag pronta, se houver). */
+    fun cancelUpdateDownload(context: Context): Boolean = runCatching {
+        WorkManager.getInstance(context.applicationContext).cancelUniqueWork(UNIQUE_UPDATE_DOWNLOAD)
+        PlatformPrefs(context.applicationContext).appUpdateReadyTag = ""
         true
     }.getOrDefault(false)
 

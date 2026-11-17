@@ -153,6 +153,17 @@ class MainActivity : ComponentActivity() {
         com.aotv.app.ui.movies.PipState.enter?.invoke()
     }
 
+    // Aviso ao sair do app com um torrent baixando (Lote 18 item 4,
+    // v1.28.0): notificação local — o app em 2º plano não pode abrir
+    // diálogo. Não dispara ao girar a tela (troca de configuração) nem
+    // ao entrar em PiP (o onStop não é chamado no PiP).
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) {
+            com.aotv.app.data.torrent.TorrentExitWarning.notifyIfTorrentDownloading(this)
+        }
+    }
+
     override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPip, newConfig)
         com.aotv.app.ui.movies.PipState.inPip.value = isInPip

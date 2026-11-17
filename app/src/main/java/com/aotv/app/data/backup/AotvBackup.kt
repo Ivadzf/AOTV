@@ -103,6 +103,18 @@ object AotvBackup {
         // Lote 12 — Frente 3 (Notas e atualizador, v1.22.0): checagem de
         // atualização ligada + data da última checagem. Nada é segredo.
         "app_update_check_enabled", "app_update_last_check_v1",
+        // Lote 18 (v1.28.0): download em 2º plano + "What's new". Nada é
+        // segredo: tag pronta, se o hash foi conferido, versão vista e o
+        // texto do changelog guardado.
+        "app_update_background_enabled", "app_update_ready_tag",
+        "app_update_ready_hash_verified", "app_last_seen_version",
+        // Lote 18 (v1.28.0) — torrent/Downloads: teto de espaço temporário
+        // do torrent + contadores de streaming/torrent. Nada é segredo.
+        "torrent_temp_limit_mb", "torrent_discard_watched",
+        "mobile_data_streaming_today_bytes", "mobile_data_streaming_month_bytes",
+        "mobile_data_torrent_today_bytes", "mobile_data_torrent_month_bytes",
+        "app_whatsnew_version", "app_whatsnew_changelog",
+        "app_whatsnew_seen_version",
     )
 
     /** Contagens p/ o resumo antes de restaurar ("3 addons · 12 na lista…"). */

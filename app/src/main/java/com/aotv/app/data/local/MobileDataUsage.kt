@@ -8,20 +8,21 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Rede e contagem de dados móveis (Lote 5, v1.14.0).
+ * Rede e contagem de dados móveis (Lote 5, v1.14.0; streaming/torrent no Lote 18, v1.28.0).
  *
  * REGRA DE HONESTIDADE — o que entra na conta e o que NÃO entra:
  * - ENTRA: bytes de downloads .mp4 medidos pelo DownloadManager
  *   ([com.aotv.app.data.repository.DownloadRepository] lê
  *   COLUMN_BYTES_DOWNLOADED_SO_FAR e soma só o delta observado enquanto a
  *   rede ativa é móvel). É um número medido, não estimado.
- * - NÃO ENTRA (v1.14.0): o streaming do player (HLS/.mp4 no ExoPlayer),
- *   torrents (TorrentStreamer), pôsteres, catálogos e chamadas de API.
- *   Medir o player exigiria um AnalyticsListener/TransferListener no motor
- *   do player (PlayerEngine.kt) — fora do escopo desta frente. O que não é
- *   mensurável fica FORA da conta e documentado aqui, em vez de somar
- *   estimativa. Follow-up: ligar o contador ao player (TransferListener do
- *   Media3) e ao TorrentStreamer no próximo lote.
+ * - ENTRA (Lote 18, v1.28.0): bytes de STREAMING do player, medidos pelo
+ *   TransferListener do Media3 ([StreamingDataMeter]), e bytes de TORRENT,
+ *   medidos pelo [com.aotv.app.data.torrent.TorrentStreamer] via
+ *   `totalDownload()` do libtorrent — separados por tipo nos contadores
+ *   de [PlatformPrefs] e somados no mesmo total mensal que o limite olha.
+ * - NÃO ENTRA: pôsteres/backdrops (Coil), catálogos e chamadas de API.
+ *   O que não é mensurável fica FORA da conta e documentado aqui, em vez
+ *   de somar estimativa.
  *
  * A contagem de downloads só observa enquanto o app está vivo: deltas são
  * somados quando o [com.aotv.app.data.repository.DownloadRepository]
@@ -30,6 +31,8 @@ import java.util.Locale
  * o app volta a observá-lo, com o total real do DownloadManager, atribuído
  * à rede daquele momento — o valor em bytes é real; só a atribuição à rede
  * é pela observação. Ver [com.aotv.app.data.repository.DownloadRepository.countMobileBytes].
+ * O mesmo vale p/ streaming/torrent: o medidor só soma enquanto o app está
+ * vivo, e a atribuição à rede é a do momento do flush.
  */
 object MobileDataUsage {
 

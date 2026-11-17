@@ -307,9 +307,14 @@ fun LivePlayerScreen(
                 c.url
             } else resolved
         } else c.url
-        val http = OkHttpDataSource.Factory(com.aotv.app.data.remote.AppDns.mediaClient)
-            .setDefaultRequestProperties(c.headers)
-            .setUserAgent(c.headers["User-Agent"] ?: "Mozilla/5.0 (Linux; Android) AOTV")
+        // Medição de streaming em dados móveis (Lote 18 item 7, v1.28.0):
+        // mesmo medidor do player de filmes (ver StreamingDataMeter).
+        val http = com.aotv.app.data.local.StreamingDataMeter(context.applicationContext)
+            .meteredFactory(
+                OkHttpDataSource.Factory(com.aotv.app.data.remote.AppDns.mediaClient)
+                    .setDefaultRequestProperties(c.headers)
+                    .setUserAgent(c.headers["User-Agent"] ?: "Mozilla/5.0 (Linux; Android) AOTV"),
+            )
         val item = MediaItem.Builder().setUri(targetUrl).apply {
             val path = targetUrl.substringBefore('?').lowercase()
             if (path.endsWith(".m3u8") || path.endsWith(".m3u")) setMimeType(MimeTypes.APPLICATION_M3U8)

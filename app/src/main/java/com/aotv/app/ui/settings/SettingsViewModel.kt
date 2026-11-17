@@ -123,6 +123,15 @@ class SettingsViewModel @Inject constructor(
     fun setMobileDataLimitMb(v: Long) { platformPrefs.mobileDataLimitMb = v }
     fun refreshMobileData() { platformPrefs.refreshMobileDataCounters() }
 
+    // ── Torrent/Downloads (Lote 18, v1.28.0) ──
+    // Teto de espaço temporário do torrent + medição por tipo (ver PlatformPrefs).
+    val mobileStreamingMonth: StateFlow<Long> = platformPrefs.mobileStreamingMonthFlow
+    val mobileTorrentMonth: StateFlow<Long> = platformPrefs.mobileTorrentMonthFlow
+    val torrentTempLimitMb: StateFlow<Int> = platformPrefs.torrentTempLimitMbFlow
+    fun setTorrentTempLimitMb(v: Int) { platformPrefs.torrentTempLimitMb = v }
+    val torrentDiscardWatched: StateFlow<Boolean> = platformPrefs.torrentDiscardWatchedFlow
+    fun setTorrentDiscardWatched(v: Boolean) { platformPrefs.torrentDiscardWatched = v }
+
     // ── Esportes, Gravações e Calendário (Lote 8, v1.18.0) ───────────────
     // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
     val sportsShow: StateFlow<Boolean> = platformPrefs.sportsShowFlow
@@ -265,12 +274,22 @@ class SettingsViewModel @Inject constructor(
     val ratingsSource: StateFlow<String> = platformPrefs.ratingsSourceFlow
     fun setRatingsSource(v: String) { platformPrefs.ratingsSource = v }
 
-    // ── Atualizador dentro do app (Lote 12 — Frente 3, v1.22.0) ──────────
+    // ── Atualizador dentro do app (Lote 12 — Frente 3, v1.22.0; Lote 18, v1.28.0) ──
     // Consulta a release mais recente do repo público no GitHub (sem login).
     // Sem releases publicadas, o estado é NoReleases — nunca "atualizado".
+    // Lote 18: feed updates.json com SHA-256 + APK da ABI do aparelho,
+    // download em 2º plano (WorkManager) e "What's new" após atualizar.
     val installedAppVersion: String get() = updateService.installedVersionName
     val appUpdateCheckEnabled: StateFlow<Boolean> = platformPrefs.appUpdateCheckEnabledFlow
     fun setAppUpdateCheckEnabled(v: Boolean) { platformPrefs.appUpdateCheckEnabled = v }
+
+    val appUpdateBackgroundEnabled: StateFlow<Boolean> = platformPrefs.appUpdateBackgroundEnabledFlow
+    fun setAppUpdateBackgroundEnabled(v: Boolean) { platformPrefs.appUpdateBackgroundEnabled = v }
+
+    /** Tag da versão cujo APK já foi baixado e conferido em 2º plano ("" = nada pronto). */
+    val updateReadyTag: StateFlow<String> = platformPrefs.appUpdateReadyTagFlow
+    /** O APK pronto teve o SHA-256 conferido (false = só o tamanho). */
+    val updateReadyHashVerified: StateFlow<Boolean> = platformPrefs.appUpdateReadyHashVerifiedFlow
 
     private val _updateState = MutableStateFlow<com.aotv.app.data.remote.UpdateCheckResult?>(null)
     /** Último resultado da checagem. null = ainda não checado nesta sessão. */
@@ -282,9 +301,33 @@ class SettingsViewModel @Inject constructor(
     private val _updateNeedsPermission = MutableStateFlow(false)
     /** O sistema ainda não permite instalar apps desconhecidos do AOTV. */
     val updateNeedsPermission: StateFlow<Boolean> = _updateNeedsPermission.asStateFlow()
+    private val _updateHashVerified = MutableStateFlow<Boolean?>(null)
+    /** O download manual teve o SHA-256 conferido (null = nada baixado nesta sessão). */
+    val updateHashVerified: StateFlow<Boolean?> = _updateHashVerified.asStateFlow()
+
+    /** A versão disponível já está baixada e conferida em 2º plano. */
+    fun isUpdateReady(tag: String): Boolean =
+        tag.isNotBlank() && platformPrefs.appUpdateReadyTag == tag &&
+            updateService.cachedApkFile(appContext) != null
 
     fun checkForUpdates() {
-        viewModelScope.launch { _updateState.value = updateService.checkLatest() }
+        viewModelScope.launch {
+            val result = updateService.checkLatest()
+            _updateState.value = result
+            val release = (result as? com.aotv.app.data.remote.UpdateCheckResult.Available)?.release
+            if (release != null) {
+                // Tag nova invalida o pronto anterior (o arquivo é outro).
+                if (platformPrefs.appUpdateReadyTag.isNotBlank() && platformPrefs.appUpdateReadyTag != release.tag) {
+                    platformPrefs.appUpdateReadyTag = ""
+                }
+                // 2º plano ligado e nada pronto p/ esta tag: baixa sozinho.
+                if (platformPrefs.appUpdateBackgroundEnabled && platformPrefs.appUpdateReadyTag != release.tag) {
+                    com.aotv.app.data.recordings.WorkScheduler.scheduleUpdateDownload(
+                        appContext, release, platformPrefs.downloadsWifiOnly,
+                    )
+                }
+            }
+        }
     }
 
     /** Checa sozinho quando ligada a checagem automática e já passou 24 h. */
@@ -292,16 +335,31 @@ class SettingsViewModel @Inject constructor(
         if (updateService.shouldAutoCheck()) checkForUpdates()
     }
 
-    /** Baixa o APK da release oficial e pede a instalação (ou a permissão). */
+    /**
+     * Baixa o APK da release oficial e pede a instalação (ou a permissão).
+     * Se o APK já está pronto (2º plano), instala direto, sem baixar de novo.
+     */
     fun downloadAndInstallUpdate() {
         if (_updateDownloading.value) return
         val release = (_updateState.value as? com.aotv.app.data.remote.UpdateCheckResult.Available)?.release ?: return
+        if (isUpdateReady(release.tag)) {
+            updateService.cachedApkFile(appContext)?.let { file ->
+                when (val req = updateService.installApk(appContext, file)) {
+                    is com.aotv.app.data.remote.InstallRequest.Ready -> appContext.startActivity(req.intent)
+                    com.aotv.app.data.remote.InstallRequest.NeedsPermission -> _updateNeedsPermission.value = true
+                }
+            }
+            return
+        }
         viewModelScope.launch {
             _updateDownloading.value = true
             _updateDownloadError.value = null
             updateService.downloadApk(appContext, release)
-                .onSuccess { file ->
-                    when (val req = updateService.installApk(appContext, file)) {
+                .onSuccess { downloaded ->
+                    _updateHashVerified.value = downloaded.hashVerified
+                    platformPrefs.appUpdateReadyTag = release.tag
+                    platformPrefs.appUpdateReadyHashVerified = downloaded.hashVerified
+                    when (val req = updateService.installApk(appContext, downloaded.file)) {
                         is com.aotv.app.data.remote.InstallRequest.Ready -> appContext.startActivity(req.intent)
                         com.aotv.app.data.remote.InstallRequest.NeedsPermission -> _updateNeedsPermission.value = true
                     }
@@ -309,6 +367,58 @@ class SettingsViewModel @Inject constructor(
                 .onFailure { e -> _updateDownloadError.value = e.message ?: e.javaClass.simpleName }
             _updateDownloading.value = false
         }
+    }
+
+    // ── "What's new" após atualizar (Lote 18, v1.28.0) ───────────────────
+    // O changelog da versão nova é guardado quando a checagem a encontra
+    // (feed ou corpo da release); quem atualiza por sideload usa o texto
+    // embutido no app. Na 1ª abertura com a versão nova, o diálogo aparece
+    // e a bolinha fica no avatar até o usuário ver (dismiss).
+    private val _whatsNewText = MutableStateFlow<String?>(null)
+    /** Texto do "What's new" a mostrar (null = nada a mostrar). */
+    val whatsNewText: StateFlow<String?> = _whatsNewText.asStateFlow()
+    private val _whatsNewDotVisible = MutableStateFlow(false)
+    /** Bolinha no avatar: há novidade não vista da versão instalada. */
+    val whatsNewDotVisible: StateFlow<Boolean> = _whatsNewDotVisible.asStateFlow()
+
+    /** Há changelog p/ a versão instalada (guardado ou embutido). */
+    fun hasWhatsNew(): Boolean = whatsNewTextForInstalled().isNotBlank()
+
+    private fun whatsNewTextForInstalled(): String {
+        val installed = installedAppVersion
+        if (platformPrefs.whatsNewVersion == installed && platformPrefs.whatsNewChangelog.isNotBlank()) {
+            return platformPrefs.whatsNewChangelog
+        }
+        return com.aotv.app.data.remote.embeddedChangelogFor(installed)
+    }
+
+    /** 1ª abertura com a versão nova: mostra o "What's new" (se houver texto). */
+    fun checkWhatsNewOnStart() {
+        val installed = installedAppVersion
+        if (platformPrefs.appLastSeenVersion == installed) {
+            // Mesma versão, mas a bolinha pode estar pendente de antes.
+            _whatsNewDotVisible.value = platformPrefs.whatsNewSeenVersion != installed && hasWhatsNew()
+            return
+        }
+        platformPrefs.appLastSeenVersion = installed
+        val text = whatsNewTextForInstalled()
+        if (text.isNotBlank() && platformPrefs.whatsNewSeenVersion != installed) {
+            _whatsNewText.value = text
+            _whatsNewDotVisible.value = true
+        }
+    }
+
+    /** Reabre o "What's new" da versão instalada (linha nas Configurações). */
+    fun showWhatsNew() {
+        val text = whatsNewTextForInstalled()
+        if (text.isNotBlank()) _whatsNewText.value = text
+    }
+
+    /** Fecha o diálogo e apaga a bolinha do avatar. */
+    fun dismissWhatsNew() {
+        _whatsNewText.value = null
+        _whatsNewDotVisible.value = false
+        platformPrefs.whatsNewSeenVersion = installedAppVersion
     }
 
     fun openUnknownSourcesSettings() {

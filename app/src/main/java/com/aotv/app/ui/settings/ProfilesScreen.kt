@@ -89,7 +89,7 @@ class ProfilesViewModel @Inject constructor(
  * Usado na grade, na barra e nas Configurações (mesma assinatura de antes).
  */
 @Composable
-fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
+fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier, showDot: Boolean = false) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val initialSize = with(density) { (size * 0.44f).toSp() }
     val kidsSize = with(density) { (size * 0.13f).coerceAtLeast(7.dp).toSp() }
@@ -140,6 +140,15 @@ fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier) {
                     .background(Color(0xCC000000)),
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Default.Lock, "Perfil com PIN", tint = Color.White, modifier = Modifier.size(12.dp)) }
+        }
+        // Bolinha "What's new" (Lote 18, v1.28.0): novidade não vista da
+        // versão instalada — some quando o usuário vê o diálogo.
+        if (showDot) {
+            Box(
+                Modifier.align(Alignment.TopEnd).size((size * 0.34f).coerceAtLeast(8.dp)).clip(CircleShape)
+                    .background(com.aotv.app.ui.theme.Accent)
+                    .border(1.5.dp, Color.White, CircleShape),
+            )
         }
     }
 }

@@ -9,6 +9,10 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
     fun getAll(): Flow<List<DownloadEntity>>
 
+    /** Todos os downloads de uma vez (p/ achar restos de arquivos — Lote 18 item 4). */
+    @Query("SELECT * FROM downloads")
+    suspend fun getAllOnce(): List<DownloadEntity>
+
     @Query("SELECT * FROM downloads WHERE status = 'downloading'")
     suspend fun getDownloading(): List<DownloadEntity>
 
