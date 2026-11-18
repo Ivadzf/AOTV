@@ -238,13 +238,22 @@ fun MoviesNavigation(
         com.aotv.app.data.remote.WatchNextDeepLink.consume()
     }
 
+    // Navegação da barra inferior (mantém único topo e restaura estado).
+    // Declarada AQUI (antes dos LaunchedEffect abaixo): função local só é
+    // visível depois da declaração, e os registros do controle remoto a usam.
+    fun navTab(route: String) = navController.navigate(route) {
+        popUpTo(MoviesRoute.Home.route) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+
     // Controle remoto (Lote 22, item 1): a tela atual vai p/ o servidor
     // (o cliente remoto mostra "você está em…") e as ações globais ficam
     // registradas. O servidor chama de thread própria — tudo o que toca
     // navegação é postado p/ a main; a resposta volta na hora ("Voltou.")
     // sem esperar a navegação acontecer.
     LaunchedEffect(currentRoute) {
-        com.aotv.app.data.remote.RemoteNav.currentRoute = currentRoute
+        com.aotv.app.data.remote.RemoteNav.currentRoute = currentRoute ?: ""
     }
     LaunchedEffect(Unit) {
         val main = android.os.Handler(android.os.Looper.getMainLooper())
@@ -317,13 +326,6 @@ fun MoviesNavigation(
             season, episode, episodeTotal, sources, kodiDiag, lockedSource,
         )
         navController.navigate(MoviesRoute.Player.create(playId))
-    }
-
-    // Navegação da barra inferior (mantém único topo e restaura estado)
-    fun navTab(route: String) = navController.navigate(route) {
-        popUpTo(MoviesRoute.Home.route) { saveState = true }
-        launchSingleTop = true
-        restoreState = true
     }
 
     var menuOpen by remember { mutableStateOf(false) }

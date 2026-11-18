@@ -160,14 +160,24 @@ object GamepadCapture {
 class GamepadManager(private val prefs: PlatformPrefs) {
 
     /** Controles conectados agora (gamepad ou joystick). */
-    fun connectedGamepads(): List<InputDevice> =
-        InputDevice.getDeviceIds().mapNotNull { id ->
-            InputDevice.getDevice(id)
-        }.filter { device ->
-            val sources = device.sources
-            sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD ||
-                sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
+    fun connectedGamepads(): List<InputDevice> {
+        // Laço explícito com tipos explícitos: a cadeia
+        // `getDeviceIds().mapNotNull { ... }.filter { ... }` quebrava a
+        // inferência do compilador (os parâmetros das lambdas não eram
+        // inferidos e o resto virava cascata). O `and` aqui tem parênteses
+        // p/ o teste de bit não depender de precedência de infix.
+        val result = mutableListOf<InputDevice>()
+        for (id in InputDevice.getDeviceIds()) {
+            val device: InputDevice = InputDevice.getDevice(id) ?: continue
+            val sources: Int = device.sources
+            if ((sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+            ) {
+                result.add(device)
+            }
         }
+        return result
+    }
 
     fun isGamepadEvent(event: KeyEvent): Boolean {
         val sources = event.source

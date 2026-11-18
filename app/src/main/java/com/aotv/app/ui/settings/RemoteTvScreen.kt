@@ -32,6 +32,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -529,6 +530,9 @@ fun RemoteTvScreen(
                 }
             }
             val session = activeSession
+            // Lê p/ val local antes do teste: smart cast não funciona em
+            // propriedade delegada (`nowPlaying` é `by remember`).
+            val playing = nowPlaying
             if (session != null) {
                 Spacer(Modifier.height(12.dp))
                 Text("Tocando na TV", fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
@@ -563,10 +567,10 @@ fun RemoteTvScreen(
                     "Pause/Stop também estão na notificação do celular.",
                     fontSize = 13.sp, color = TextSecondary, modifier = Modifier.padding(top = 8.dp),
                 )
-            } else if (nowPlaying != null) {
+            } else if (playing != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Tocando agora: \"${nowPlaying.title}\". Procure a TV acima p/ enviar.",
+                    "Tocando agora: \"${playing.title}\". Procure a TV acima p/ enviar.",
                     fontSize = 13.sp, color = TextSecondary,
                 )
             }

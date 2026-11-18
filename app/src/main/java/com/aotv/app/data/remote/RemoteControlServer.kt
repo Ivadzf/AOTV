@@ -209,7 +209,7 @@ class RemoteControlServer(
         override fun serve(s: IHTTPSession): Response {
             return try {
                 val resp = route(s)
-                RemoteLog.add("${s.method} ${s.uri} -> ${resp.status.statusCode}")
+                RemoteLog.add("${s.method} ${s.uri} -> ${resp.status.requestStatus}")
                 resp
             } catch (e: Exception) {
                 RemoteLog.add("${s.method} ${s.uri} -> erro: ${e.message}")

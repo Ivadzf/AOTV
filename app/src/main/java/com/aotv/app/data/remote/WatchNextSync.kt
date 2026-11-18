@@ -1,6 +1,5 @@
 package com.aotv.app.data.remote
 
-import android.app.PendingIntent
 import android.app.UiModeManager
 import android.content.ContentValues
 import android.content.Context
@@ -210,32 +209,28 @@ object WatchNextSync {
             putExtra(EXTRA_TYPE, item.type)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
-        // O requestCode distingue filme de série com o mesmo tmdbId: os
-        // extras NÃO entram na igualdade do PendingIntent, então sem isso
-        // um sobrescreveria o outro (FLAG_UPDATE_CURRENT).
-        val requestCode = (item.tmdbId shl 1) or (if (isSeries(item.type)) 1 else 0)
-        val pending = PendingIntent.getActivity(
-            context, requestCode,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
         val values = ContentValues().apply {
             put(TvContract.WatchNextPrograms.COLUMN_INTERNAL_PROVIDER_ID, providerId(item.tmdbId, item.type))
             put(TvContract.WatchNextPrograms.COLUMN_PACKAGE_NAME, context.packageName)
             put(TvContract.WatchNextPrograms.COLUMN_TITLE, item.title)
             put(TvContract.WatchNextPrograms.COLUMN_TYPE, watchNextType(item.type))
-            put(TvContract.WatchNextPrograms.COLUMN_WATCH_NEXT_TYPE, TvContract.WatchNextPrograms.TYPE_CONTINUE)
+            put(TvContract.WatchNextPrograms.COLUMN_WATCH_NEXT_TYPE, TvContract.WatchNextPrograms.WATCH_NEXT_TYPE_CONTINUE)
             put(TvContract.WatchNextPrograms.COLUMN_DURATION_MILLIS, item.durationMs)
             put(TvContract.WatchNextPrograms.COLUMN_LAST_PLAYBACK_POSITION_MILLIS, item.positionMs)
             put(TvContract.WatchNextPrograms.COLUMN_LAST_ENGAGEMENT_TIME_UTC_MILLIS, item.lastWatchedAt)
             put(TvContract.WatchNextPrograms.COLUMN_TRANSIENT, 0)
-            put(TvContract.WatchNextPrograms.COLUMN_INTENT, pending)
+            // O programa guarda a intent como URI (PreviewProgramColumns):
+            // não há coluna p/ PendingIntent e ContentValues nem aceita um.
+            put(TvContract.WatchNextPrograms.COLUMN_INTENT_URI, intent.toUri(Intent.URI_INTENT_SCHEME))
             if (item.posterUrl.isNotBlank()) {
                 put(TvContract.WatchNextPrograms.COLUMN_POSTER_ART_URI, item.posterUrl)
             }
             parseEpisode(item.lastEpisode)?.let { (season, episode) ->
-                put(TvContract.WatchNextPrograms.COLUMN_SEASON_NUMBER, season)
-                put(TvContract.WatchNextPrograms.COLUMN_EPISODE_NUMBER, episode)
+                // COLUMN_SEASON_NUMBER/EPISODE_NUMBER vivem na classe
+                // TvContract.Programs — WatchNextPrograms não a estende
+                // (só implementa ProgramColumns), então não resolvem por ela.
+                put(TvContract.Programs.COLUMN_SEASON_NUMBER, season)
+                put(TvContract.Programs.COLUMN_EPISODE_NUMBER, episode)
                 put(TvContract.WatchNextPrograms.COLUMN_EPISODE_TITLE, "T${season} E$episode")
             }
         }
