@@ -1,6 +1,8 @@
 package com.aotv.app.ui.movies
 
 import android.view.KeyEvent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -91,6 +93,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.aotv.app.data.kodi.kodiProxyHostnameVerifier
+import com.aotv.app.data.local.ExternalPlayerLaunch
+import com.aotv.app.data.local.ExternalPlayerStore
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.data.party.PartyPlayer
 import com.aotv.app.data.torrent.TorrentMagnet
@@ -329,6 +333,102 @@ fun MoviePlayerScreen(
     // Watch Party (Lote 19, v1.29.0): com sessão ativa, a sala comanda
     // este player (posição/play/pause/velocidade) e mostra o overlay.
     // O adaptador delega p/ o player atual da sessão (ExoPlayer ou cast).
+    // ── Player externo com progresso (Lote 22, item 6) ──────────────────
+    // O lançador fica na tela (não na sessão): ao voltar do player externo,
+    // a posição vem do resultado (MX Player devolve `position`) ou do tempo
+    // decorrido, é salva no Continuar assistindo e a tela volta p/ o
+    // detalhe. Enquanto o externo está aberto, a tela fica pausada atrás
+    // dele — NÃO volta antes, senão o lançador morre e o retorno se perde.
+    var externalLaunch by remember { mutableStateOf<ExternalPlayerLaunch?>(null) }
+    val externalPlayerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val launch = externalLaunch ?: return@rememberLauncherForActivityResult
+        externalLaunch = null
+        s.externalResultPending = false
+        val position = ExternalPlayerStore.positionFromResult(result.data, launch)
+        progressVm.save(
+            tmdbId = launch.tmdbId, type = launch.type, title = launch.title,
+            posterUrl = launch.posterUrl, positionMs = position, durationMs = launch.durationMs,
+            lastEpisode = launch.lastEpisode, sourceUrl = launch.sourceUrl,
+        )
+        s.toastMsg = "Progresso salvo no Continuar assistindo."
+        onBack()
+    }
+    SideEffect {
+        s.externalLauncher = { intent, launch ->
+            externalLaunch = launch
+            externalPlayerLauncher.launch(intent)
+        }
+    }
+    // Controle remoto (Lote 22, item 1): com o player aberto, o celular
+    // manda play/pause e pulo de 10 s e fecha o player. O servidor chama
+    // de thread própria — tudo é postado p/ a main (o ExoPlayer é de UI).
+    // Ao sair do player as ações somem do controle (onDispose).
+    DisposableEffect(s) {
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        val registry = com.aotv.app.data.remote.RemoteActionRegistry
+        registry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "play_pause", description = "Play/Pause",
+                run = {
+                    main.post {
+                        runCatching {
+                            val p = s.currentPlayer()
+                            p.playWhenReady = !p.playWhenReady
+                        }
+                    }
+                    "Play/Pause alternado."
+                },
+            ),
+        )
+        registry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "avancar_10s", description = "Avançar 10 s",
+                run = {
+                    main.post {
+                        runCatching {
+                            val p = s.currentPlayer()
+                            val target = p.currentPosition + 10_000
+                            // Duração desconhecida (ao vivo/sem metadado) não
+                            // trava o avanço: só limita quando a duração é > 0.
+                            p.seekTo(if (p.duration > 0) target.coerceAtMost(p.duration) else target)
+                        }
+                    }
+                    "Avançou 10 s."
+                },
+            ),
+        )
+        registry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "voltar_10s", description = "Voltar 10 s",
+                run = {
+                    main.post {
+                        runCatching {
+                            val p = s.currentPlayer()
+                            p.seekTo((p.currentPosition - 10_000).coerceAtLeast(0))
+                        }
+                    }
+                    "Voltou 10 s."
+                },
+            ),
+        )
+        registry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "parar", description = "Fechar o player",
+                run = {
+                    main.post { onBack() }
+                    "Fechando o player."
+                },
+            ),
+        )
+        onDispose {
+            registry.unregister("play_pause")
+            registry.unregister("avancar_10s")
+            registry.unregister("voltar_10s")
+            registry.unregister("parar")
+        }
+    }
     val partyUiState by partyVm.ui.collectAsState()
     val partyPlayer = remember(s) {
         object : PartyPlayer {
@@ -522,7 +622,7 @@ fun MoviePlayerScreen(
         if (s.readyUrl == null) return@LaunchedEffect
         s.externalOpened = true
         runCatching { s.exoPlayer.playWhenReady = false }
-        if (s.openExternalPlayer()) onBack()
+        if (s.openExternalPlayer() && !s.externalResultPending) onBack()
     }
     SideEffect { s.isTv = forceTv }
     s.onBack = onBack
@@ -2695,16 +2795,37 @@ class PlayerSession(
         if (casting && castPlayer != null) castPlayer else exoPlayer
 
     // ── Player externo (Lote 4 item 1 — v1.12.0) ──────────────────────────
-    /** true depois que o "Player externo" automático já disparou 1x nesta sessão. */
+    /** true depois que o \"Player externo\" automático já disparou 1x nesta sessão. */
     var externalOpened by run { mutableStateOf(false) }
+
+    /** Escolha de player externo por título/tipo (Lote 22, item 6). */
+    val externalPlayerStore: com.aotv.app.data.local.ExternalPlayerStore by lazy {
+        com.aotv.app.data.local.ExternalPlayerStore(progressVm.platformPrefs)
+    }
+
+    /** Lançador do player externo, registrado pela tela (ActivityResultLauncher).
+     * Sem ele, a abertura é fogo-e-esquece como antes (sem progresso ao voltar). */
+    var externalLauncher: ((android.content.Intent, com.aotv.app.data.local.ExternalPlayerLaunch) -> Unit)? = null
+
+    /** true enquanto a abertura externa aguarda o retorno (a tela NÃO volta
+     * p/ o detalhe ainda — o retorno salva o progresso e volta depois). */
+    var externalResultPending by run { mutableStateOf(false) }
 
     /**
      * Abre a fonte atual num player externo instalado (VLC, MX Player…).
-     * Devolve true quando o seletor do sistema abriu. Mesma guarda do Cast:
+     * Devolve true quando o player abriu. Mesma guarda do Cast:
      * torrent só sai do app pelo link do debrid (o motor P2P mora aqui);
      * transmitindo p/ TV, não abre fora (senão toca nos dois lugares).
      * A URL que vai é a fonte atual limpa do sufixo Kodi `|...` (headers
      * não viajam no intent — ver [openInExternalPlayer]).
+     *
+     * Lote 22 (v1.32.0, item 6): o pacote vem da escolha por título/tipo
+     * ([ExternalPlayerStore.resolvePlayer]); sem escolha e com um só player
+     * instalado, abre direto nele; sem escolha e com vários, mostra o
+     * seletor. Com o lançador da tela, o retorno salva o progresso no
+     * Continuar assistindo (posição do MX Player, ou tempo decorrido) e a
+     * tela volta p/ o detalhe depois — sem o lançador, volta na hora como
+     * antes (fogo-e-esquece, sem progresso).
      */
     fun openExternalPlayer(): Boolean {
         if (casting) {
@@ -2722,7 +2843,42 @@ class PlayerSession(
             return false
         }
         val clean = splitKodiStreamHeaders(url).first
-        val err = openInExternalPlayer(context, clean, displayTitle)
+        val installed = externalPlayerStore.installedPlayers(context)
+        // Resolução do pacote (Lote 22, item 6): por título, depois por
+        // tipo; sem escolha, um só instalado abre direto; com vários, o
+        // seletor aparece quando "Perguntar sempre" está ligado, senão
+        // abre no primeiro instalado (lista ordenada por nome).
+        val resolvedPackage = externalPlayerStore.resolvePlayer(tmdbId, type)
+            ?: installed.takeIf { it.size == 1 }?.first()?.packageName
+            ?: if (!progressVm.platformPrefs.externalPlayerAsk) installed.firstOrNull()?.packageName else null
+        val baseIntent = externalPlayerIntent(context, clean, displayTitle, resolvedPackage)
+        if (baseIntent == null) {
+            toastMsg = "Esse link não abre num player externo."
+            return false
+        }
+        val intent = if (resolvedPackage == null) {
+            android.content.Intent.createChooser(baseIntent, "Abrir com")
+        } else {
+            baseIntent
+        }
+        val launcher = externalLauncher
+        if (launcher != null) {
+            val launch = com.aotv.app.data.local.ExternalPlayerLaunch(
+                tmdbId = tmdbId, type = type, title = displayTitle, posterUrl = posterUrl,
+                lastEpisode = lastEpisode, sourceUrl = clean,
+                startPositionMs = exoPlayer.currentPosition,
+                durationMs = exoPlayer.duration.takeIf { it > 0 } ?: 0L,
+            )
+            return runCatching {
+                externalResultPending = true
+                launcher(intent, launch)
+                true
+            }.onFailure {
+                externalResultPending = false
+                toastMsg = "Não foi possível abrir no player externo."
+            }.getOrDefault(false)
+        }
+        val err = openInExternalPlayer(context, clean, displayTitle, resolvedPackage)
         if (err != null) {
             toastMsg = err
             return false

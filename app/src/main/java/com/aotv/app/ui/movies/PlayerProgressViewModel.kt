@@ -33,6 +33,9 @@ class PlayerProgressViewModel @Inject constructor(
     private val aniList: com.aotv.app.data.remote.AniListService,
 ) : ViewModel() {
 
+    /** Prefs do perfil (p/ o player externo por título/tipo — Lote 22, item 6). */
+    val platformPrefs: PlatformPrefs get() = prefs
+
     /**
      * Pedido de avaliação pós-filme (v1.17.0): [markWatched] preenche quando
      * o título passa de 90% e a avaliação está ligada
@@ -186,6 +189,15 @@ class PlayerProgressViewModel @Inject constructor(
         // Modo privado: o poll de 10s, a saída e o ON_STOP passam todos por aqui.
         if (privateMode) return
         if (tmdbId <= 0 || sourceUrl.isBlank() || positionMs <= 0) return
+        // Lote 22 item 1: o controle remoto lê daqui o que está tocando
+        // (o poll de 10 s mantém o estado fresco; a saída grava o final).
+        com.aotv.app.data.remote.RemotePlaybackState.update(
+            com.aotv.app.data.remote.PlaybackHandoff(
+                tmdbId = tmdbId, type = type, title = title, posterUrl = posterUrl,
+                positionMs = positionMs, durationMs = durationMs,
+                lastEpisode = lastEpisode, sourceUrl = sourceUrl,
+            ),
+        )
         viewModelScope.launch {
             library.saveProgress(
                 tmdbId = tmdbId, type = type, title = title, posterUrl = posterUrl,

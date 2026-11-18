@@ -238,6 +238,12 @@ internal val SCOPED_KEYS = listOf(
     // Lote 14 (v1.24.0) — Descobrir com catálogos dos addons: o catálogo escolhido
     // ("addonId|type|id", vazio = TMDB). Só a escolha, sem credencial.
     "pref_discover_catalog_v1",
+    // Lote 22 (v1.32.0, item 6) — Player externo por título/tipo (por
+    // perfil): pacote escolhido p/ filmes e p/ séries ("" = interno),
+    // mapa JSON "tmdbId:TIPO" -> pacote p/ um título específico, e se
+    // pergunta toda vez. Sem credencial: só nomes de pacote.
+    "external_player_default_movie", "external_player_default_series",
+    "external_player_by_title", "external_player_ask",
 )
 
 /**
@@ -925,14 +931,73 @@ class PlatformPrefs @Inject constructor(
 
     // Lote 21 — Trailers (v1.31.0): autoplay no topo do detalhe, só no
     // Wi-Fi por padrão. Desligado, o trailer só toca no botão ▷ Trailer.
-    /** Trailer toca sozinho no detalhe, alguns segundos após abrir (padrão: ligado). */
+    // Lote 22 (v1.32.0, item 7 — teste do Davi na v1.31.0): o default era
+    // `true` e o trailer autoplayava ao entrar no conteúdo — o Davi não
+    // quer. Default agora é `false`: só toca sozinho quem LIGAR o
+    // interruptor em Reprodução. Quem já ligou não muda nada (só o default
+    // de quem nunca mexeu).
+    /** Trailer toca sozinho no detalhe, alguns segundos após abrir (padrão: desligado). */
     var trailerAutoplay: Boolean
-        get() = prefs.getBoolean(sk("pref_trailer_autoplay"), true)
+        get() = prefs.getBoolean(sk("pref_trailer_autoplay"), false)
         set(value) { prefs.edit().putBoolean(sk("pref_trailer_autoplay"), value).apply() }
     /** Autoplay do trailer só no Wi-Fi (padrão: ligado). */
     var trailerAutoplayWifiOnly: Boolean
         get() = prefs.getBoolean(sk("pref_trailer_autoplay_wifi_only"), true)
         set(value) { prefs.edit().putBoolean(sk("pref_trailer_autoplay_wifi_only"), value).apply() }
+
+    // ── Lote 22 (v1.32.0) — Controle remoto, Send to TV, Watch Next,
+    // gamepad e player externo ───────────────────────────────────────────
+    // Watch Next e gamepad são do APARELHO (não do perfil): o launcher da
+    // TV e o controle físico não mudam com o perfil. O player externo é
+    // POR PERFIL (entra no SCOPED_KEYS, acima) — cada perfil escolhe o seu.
+    private val _watchNextEnabled = MutableStateFlow(prefs.getBoolean("watch_next_enabled_v1", true))
+    /** "Continuar assistindo" no launcher da TV (Watch Next). Padrão: ligado. */
+    val watchNextEnabledFlow: StateFlow<Boolean> = _watchNextEnabled.asStateFlow()
+    var watchNextEnabled: Boolean
+        get() = _watchNextEnabled.value
+        set(value) { prefs.edit().putBoolean("watch_next_enabled_v1", value).apply(); _watchNextEnabled.value = value }
+
+    private val _gamepadPreset = MutableStateFlow(prefs.getString("gamepad_preset_v1", "auto") ?: "auto")
+    /** Preset de gamepad ("auto" = pelo modelo do aparelho, ou o id do preset). */
+    val gamepadPresetFlow: StateFlow<String> = _gamepadPreset.asStateFlow()
+    var gamepadPreset: String
+        get() = _gamepadPreset.value
+        set(value) { prefs.edit().putString("gamepad_preset_v1", value).apply(); _gamepadPreset.value = value }
+
+    private val _gamepadMappingJson = MutableStateFlow(prefs.getString("gamepad_mapping_v1", "") ?: "")
+    /** Mapeamento manual de botões do gamepad (JSON ação -> keyCode). Vazio = só o preset. */
+    val gamepadMappingJsonFlow: StateFlow<String> = _gamepadMappingJson.asStateFlow()
+    var gamepadMappingJson: String
+        get() = _gamepadMappingJson.value
+        set(value) { prefs.edit().putString("gamepad_mapping_v1", value).apply(); _gamepadMappingJson.value = value }
+
+    private val _externalPlayerDefaultMovie = MutableStateFlow(prefs.getString(sk("external_player_default_movie"), "") ?: "")
+    /** Pacote do player externo padrão p/ filmes ("" = sem padrão: pergunta ou usa o primeiro instalado). */
+    val externalPlayerDefaultMovieFlow: StateFlow<String> = _externalPlayerDefaultMovie.asStateFlow()
+    var externalPlayerDefaultMovie: String
+        get() = _externalPlayerDefaultMovie.value
+        set(value) { prefs.edit().putString(sk("external_player_default_movie"), value).apply(); _externalPlayerDefaultMovie.value = value }
+
+    private val _externalPlayerDefaultSeries = MutableStateFlow(prefs.getString(sk("external_player_default_series"), "") ?: "")
+    /** Pacote do player externo padrão p/ séries ("" = sem padrão: pergunta ou usa o primeiro instalado). */
+    val externalPlayerDefaultSeriesFlow: StateFlow<String> = _externalPlayerDefaultSeries.asStateFlow()
+    var externalPlayerDefaultSeries: String
+        get() = _externalPlayerDefaultSeries.value
+        set(value) { prefs.edit().putString(sk("external_player_default_series"), value).apply(); _externalPlayerDefaultSeries.value = value }
+
+    private val _externalPlayerByTitle = MutableStateFlow(prefs.getString(sk("external_player_by_title"), "") ?: "")
+    /** Player externo por título (JSON "tmdbId:TIPO" -> pacote). "" = nenhum título fixado. */
+    val externalPlayerByTitleFlow: StateFlow<String> = _externalPlayerByTitle.asStateFlow()
+    var externalPlayerByTitle: String
+        get() = _externalPlayerByTitle.value
+        set(value) { prefs.edit().putString(sk("external_player_by_title"), value).apply(); _externalPlayerByTitle.value = value }
+
+    private val _externalPlayerAsk = MutableStateFlow(prefs.getBoolean(sk("external_player_ask"), true))
+    /** Perguntar qual player externo usar quando houver mais de um instalado (padrão: sim). */
+    val externalPlayerAskFlow: StateFlow<Boolean> = _externalPlayerAsk.asStateFlow()
+    var externalPlayerAsk: Boolean
+        get() = _externalPlayerAsk.value
+        set(value) { prefs.edit().putBoolean(sk("external_player_ask"), value).apply(); _externalPlayerAsk.value = value }
 
     /** Client ID do AniList, colado pelo usuário. Vazio = desligado. */
     var anilistClientId: String
@@ -1315,12 +1380,12 @@ class PlatformPrefs @Inject constructor(
         get() = _appUpdateLastCheck.value
         set(value) { prefs.edit().putLong("app_update_last_check_v1", value).apply(); _appUpdateLastCheck.value = value }
 
-    /** Versão instalada no último check automático (Lote 20, v1.30.0): o
-     * gate de 24 h é ignorado quando a versão mudou — sem isso, atualizar
-     * o app não disparava o check automático ao abrir, porque a v1.29.0
-     * tinha checado recentemente (bug reportado pelo Davi, 2026-11-17).
-     * Chave do aparelho (não entra no SCOPED_KEYS), como as outras
-     * `app_update_*`. */
+    /** Versão instalada no último check automático. Lote 20 (v1.30.0)
+     * usava essa chave p/ ignorar o gate de 24 h quando a versão mudava;
+     * o Lote 22 (v1.32.0) removeu o gate (checa em todo cold start) e a
+     * chave virou só registro — [AppUpdateService.checkLatest] continua
+     * gravando. Chave do aparelho (não entra no SCOPED_KEYS), como as
+     * outras `app_update_*`. */
     var appUpdateLastCheckVersion: String
         get() = prefs.getString("app_update_last_check_version_v1", "") ?: ""
         set(value) { prefs.edit().putString("app_update_last_check_version_v1", value).apply() }

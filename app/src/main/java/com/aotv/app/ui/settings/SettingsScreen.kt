@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
@@ -287,7 +288,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 14 páginas. Os ids são as rotas `movies_settings/{id}`. */
+/** As 15 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -404,6 +405,14 @@ private val hubEntries = listOf(
         keywords = listOf("Social Hub", "amigos", "film night", "couch match", "assistir junto", "grupo", "noite de filme"),
         kidsHidden = true,
     ),
+    HubEntry(
+        id = SettingsPageIds.RemoteTv,
+        title = "Controle remoto e TV",
+        sub = "QR, Send to TV, Watch Next, gamepad e player externo",
+        icon = Icons.Default.Cast,
+        keywords = listOf("Controle remoto", "QR", "TV", "Send to TV", "Chromecast", "DLNA", "AirPlay", "Watch Next", "gamepad", "controle", "player externo", "handoff", "pareamento"),
+        kidsHidden = true,
+    ),
 )
 
 private val hubEntriesById = hubEntries.associateBy { it.id }
@@ -426,7 +435,7 @@ private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),
     listOf(SettingsPageIds.Integracoes),
     listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
-    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub),
+    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub, SettingsPageIds.RemoteTv),
 )
 
 /** Resumo das configurações (.set-summary). Logo, versão e o estado do que importa. */

@@ -17,6 +17,19 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Send to TV (Lote 22, item 2): a descoberta SSDP/mDNS usa multicast
+         (MulticastLock) — permissão normal, concedida na instalação, sem
+         pedido em runtime. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Player externo (Lote 22, item 6): no Android 11+, listar os players
+         instalados (queryIntentActivities p/ ACTION_VIEW video/*) exige o
+         bloco <queries> — sem ele a lista vem vazia e o seletor não aparece. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+    </queries>
     <!-- Microfone opcional: aparelho sem ele instala normal e a busca por voz some. -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- Câmera opcional (Watch Party, Lote 19): aparelho sem ela (TV) instala
@@ -350,5 +363,18 @@
             android:name=".data.recordings.RecordingService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <!-- Send to TV (Lote 22, item 2): as ações Pause/Continuar/Parar da
+             notificação. Só o próprio app envia (exported=false); o receiver
+             lê o ID da sessão do extra e chama o SendToTvSessionManager. -->
+        <receiver
+            android:name=".data.remote.SendToTvActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.aotv.app.SEND_TO_TV_PAUSE" />
+                <action android:name="com.aotv.app.SEND_TO_TV_RESUME" />
+                <action android:name="com.aotv.app.SEND_TO_TV_STOP" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

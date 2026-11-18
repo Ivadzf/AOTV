@@ -114,6 +114,13 @@ object SettingsAnchors {
     const val DIAG_SUGGESTION = "diagnostico-sugestao"
     // Último crash (Lote 13, v1.23.0 — Frente 3, Bug 1 da TV).
     const val DIAG_CRASH = "diagnostico-ultimo-crash"
+    // Controle remoto e TV (Lote 22, v1.32.0).
+    const val REMOTE_SERVER = "remotetv-servidor"
+    const val REMOTE_CLIENT = "remotetv-cliente"
+    const val REMOTE_TV = "remotetv-tv"
+    const val REMOTE_WATCHNEXT = "remotetv-watchnext"
+    const val REMOTE_GAMEPAD = "remotetv-gamepad"
+    const val REMOTE_EXTERNAL = "remotetv-player-externo"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -1604,6 +1611,55 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("crash", "erro", "fechou", "travou", "registro", "stack trace"),
         pageId = SettingsPageIds.Diagnostico,
         anchor = SettingsAnchors.DIAG_CRASH,
+        kidsHidden = true,
+    ),
+    // ── Controle remoto e TV (Lote 22, v1.32.0) ──────────────────────────
+    SettingOptionEntry(
+        title = "Servidor do controle remoto",
+        sub = "QR p/ parear o celular com a TV, log ao vivo e botões",
+        keywords = listOf("controle remoto", "QR", "pareamento", "servidor", "log", "botões"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_SERVER,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Enviar chaves e addons p/ a TV",
+        sub = "Cola as chaves de contas e o link do addon no celular e envia tudo de uma vez",
+        keywords = listOf("chaves", "TMDB", "Trakt", "Simkl", "MDBList", "TVDB", "SubDL", "addon", "instalar", "pareamento"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_CLIENT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Enviar p/ a TV",
+        sub = "Chromecast, DLNA e AirPlay — sem depender do Google Cast SDK",
+        keywords = listOf("Send to TV", "Chromecast", "DLNA", "AirPlay", "transmitir", "TV", "DIAL"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_TV,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Watch Next no launcher",
+        sub = "O Continuar assistindo vira canal de recomendações na tela inicial da Google TV",
+        keywords = listOf("Watch Next", "launcher", "Continuar assistindo", "Google TV", "canal", "recomendações"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_WATCHNEXT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Gamepad",
+        sub = "Presets por marca e mapeamento manual dos botões",
+        keywords = listOf("gamepad", "controle", "joystick", "botões", "mapear", "Xbox", "PlayStation", "8BitDo"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_GAMEPAD,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Player externo",
+        sub = "Escolher o player por título ou por tipo e salvar o progresso ao voltar",
+        keywords = listOf("player externo", "VLC", "MX Player", "progresso", "Continuar assistindo", "padrão"),
+        pageId = SettingsPageIds.RemoteTv,
+        anchor = SettingsAnchors.REMOTE_EXTERNAL,
         kidsHidden = true,
     ),
 )

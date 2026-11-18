@@ -222,6 +222,61 @@ fun MoviesNavigation(
         }
     }
 
+    // Deep link do Watch Next do launcher (Lote 22, item 4): a MainActivity
+    // oferece o título (PendingIntent do programa do TvContract) e aqui a
+    // navegação abre o detalhe — o usuário dá play de lá (o programa não
+    // guarda a fonte, só o título).
+    val watchNextTarget by com.aotv.app.data.remote.WatchNextDeepLink.target.collectAsStateWithLifecycle()
+    LaunchedEffect(watchNextTarget) {
+        val target = watchNextTarget ?: return@LaunchedEffect
+        val mediaType = runCatching {
+            com.aotv.app.domain.model.MediaType.valueOf(target.type)
+        }.getOrDefault(com.aotv.app.domain.model.MediaType.MOVIE)
+        navController.navigate(
+            MoviesRoute.Detail.create(target.tmdbId.toString(), target.tmdbId, mediaType)
+        ) { launchSingleTop = true }
+        com.aotv.app.data.remote.WatchNextDeepLink.consume()
+    }
+
+    // Controle remoto (Lote 22, item 1): a tela atual vai p/ o servidor
+    // (o cliente remoto mostra "você está em…") e as ações globais ficam
+    // registradas. O servidor chama de thread própria — tudo o que toca
+    // navegação é postado p/ a main; a resposta volta na hora ("Voltou.")
+    // sem esperar a navegação acontecer.
+    LaunchedEffect(currentRoute) {
+        com.aotv.app.data.remote.RemoteNav.currentRoute = currentRoute
+    }
+    LaunchedEffect(Unit) {
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        com.aotv.app.data.remote.RemoteActionRegistry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "voltar", description = "Voltar",
+                run = {
+                    main.post { navController.popBackStack() }
+                    "Voltou."
+                },
+            ),
+        )
+        com.aotv.app.data.remote.RemoteActionRegistry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "inicio", description = "Início",
+                run = {
+                    main.post { navTab(MoviesRoute.Home.route) }
+                    "Indo p/ a Início."
+                },
+            ),
+        )
+        com.aotv.app.data.remote.RemoteActionRegistry.register(
+            com.aotv.app.data.remote.RemoteAction(
+                name = "buscar", description = "Buscar",
+                run = {
+                    main.post { navTab(MoviesRoute.Search.route) }
+                    "Indo p/ a Busca."
+                },
+            ),
+        )
+    }
+
     // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
     // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
     // Configurações cobre o hub e as páginas (movies_settings/*).
@@ -989,12 +1044,11 @@ fun MoviesNavigation(
 
     // ── Lote 15 (v1.25.0 — Bloco 4, itens 6 e 7) ──────────────────────────
     // Atualizador estilo Nuvio (item 7): checa na abertura do app (cold
-    // start, no máx. 1x/dia — o gate de 24 h vive em
-    // SettingsViewModel.maybeAutoCheckForUpdates()) e mostra o banner no
-    // topo quando há versão nova. A checagem manual da página Aparência
-    // continua como está. A flag da sessão evita um 2º check se a
-    // navegação recompor (o gate de 24 h já barraria, mas a flag deixa
-    // explícito que é 1x por abertura — nunca a cada recomposição).
+    // start, em TODO cold start desde o Lote 22, v1.32.0 — o gate de 24 h
+    // foi removido porque a release do dia só aparecia no dia seguinte) e
+    // mostra o banner no topo quando há versão nova. A checagem manual da
+    // página Aparência continua como está. A flag da sessão evita um 2º
+    // check se a navegação recompor — é ela que garante o 1x por abertura.
     val settingsVm: com.aotv.app.ui.settings.SettingsViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
     val updateState by settingsVm.updateState.collectAsStateWithLifecycle()

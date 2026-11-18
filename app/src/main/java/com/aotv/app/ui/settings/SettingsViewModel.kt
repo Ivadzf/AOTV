@@ -13,6 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -32,7 +33,14 @@ class SettingsViewModel @Inject constructor(
     private val recordings: RecordingStore,
     private val updateService: com.aotv.app.data.remote.AppUpdateService,
     @ApplicationContext private val appContext: Context,
+    /** Addons Kodi (Lote 22, item 3): instalar por pareamento local. */
+    private val kodiAddonStore: com.aotv.app.data.kodi.KodiAddonStore,
+    /** Histórico p/ o handoff recebido (Lote 22, item 1). */
+    private val library: com.aotv.app.data.repository.LibraryRepository,
 ) : ViewModel() {
+
+    /** Prefs (p/ a página "Controle remoto e TV" montar servidor/cliente). */
+    val prefs: PlatformPrefs get() = platformPrefs
 
     // ── Trakt (v1.17.0: Client ID/Secret do usuário, por perfil, na tela de Trackers) ──
     val traktConfigured = trakt.configured
@@ -353,7 +361,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Checa sozinho quando ligada a checagem automática e já passou 24 h. */
+    /** Checa sozinho em todo cold start, quando a checagem automática está ligada (Lote 22, v1.32.0: sem gate de 24 h). */
     fun maybeAutoCheckForUpdates() {
         if (updateService.shouldAutoCheck()) checkForUpdates()
     }
@@ -557,5 +565,67 @@ class SettingsViewModel @Inject constructor(
         platformPrefs.customTmdbApiKey = key
         _customTmdbApiKey.value = platformPrefs.customTmdbApiKey
         _hasTmdbKey.value = platformPrefs.tmdbApiKey.isNotBlank()
+    }
+
+    // ── Lote 22 (v1.32.0) — Controle remoto, Send to TV, Watch Next,
+    // gamepad e player externo ────────────────────────────────────────────
+    // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
+    val watchNextEnabled: StateFlow<Boolean> = platformPrefs.watchNextEnabledFlow
+    fun setWatchNextEnabled(v: Boolean) {
+        platformPrefs.watchNextEnabled = v
+        if (!v) viewModelScope.launch { com.aotv.app.data.remote.WatchNextSync.clear(appContext) }
+    }
+
+    val gamepadPreset: StateFlow<String> = platformPrefs.gamepadPresetFlow
+    fun setGamepadPreset(v: String) { platformPrefs.gamepadPreset = v }
+    val gamepadMappingJson: StateFlow<String> = platformPrefs.gamepadMappingJsonFlow
+    fun setGamepadMappingJson(v: String) { platformPrefs.gamepadMappingJson = v }
+
+    val externalPlayerDefaultMovie: StateFlow<String> = platformPrefs.externalPlayerDefaultMovieFlow
+    fun setExternalPlayerDefaultMovie(v: String) { platformPrefs.externalPlayerDefaultMovie = v }
+    val externalPlayerDefaultSeries: StateFlow<String> = platformPrefs.externalPlayerDefaultSeriesFlow
+    fun setExternalPlayerDefaultSeries(v: String) { platformPrefs.externalPlayerDefaultSeries = v }
+    val externalPlayerByTitle: StateFlow<String> = platformPrefs.externalPlayerByTitleFlow
+    fun setExternalPlayerByTitle(v: String) { platformPrefs.externalPlayerByTitle = v }
+    val externalPlayerAsk: StateFlow<Boolean> = platformPrefs.externalPlayerAskFlow
+    fun setExternalPlayerAsk(v: Boolean) { platformPrefs.externalPlayerAsk = v }
+
+    /** Instala um addon Kodi por URL (ZIP direto instala na hora; índice
+     * volta NeedsChoice p/ a UI escolher — aqui vira mensagem). Roda em IO. */
+    suspend fun installKodiAddonByUrl(url: String): Result<String> {
+        val resolved = kodiAddonStore.resolveInstallUrl(url)
+        return resolved.map { result ->
+            when (result) {
+                is com.aotv.app.data.kodi.KodiAddonStore.UrlResolution.Installed ->
+                    "Addon ${result.addon.name} instalado."
+                is com.aotv.app.data.kodi.KodiAddonStore.UrlResolution.NeedsChoice ->
+                    "O link é um repositório com ${result.index.addons.size} addons — escolha um na tela de Addons Kodi."
+            }
+        }
+    }
+
+    /** Salva o progresso de um handoff recebido (vira Continuar assistindo). */
+    fun saveHandoffProgress(handoff: com.aotv.app.data.remote.PlaybackHandoff) {
+        viewModelScope.launch {
+            runCatching {
+                library.saveProgress(
+                    tmdbId = handoff.tmdbId, type = handoff.type, title = handoff.title,
+                    posterUrl = handoff.posterUrl, positionMs = handoff.positionMs,
+                    durationMs = handoff.durationMs, lastEpisode = handoff.lastEpisode,
+                    lastSourceUrl = handoff.sourceUrl,
+                )
+            }
+        }
+    }
+
+    /** Sincroniza o Watch Next do launcher agora (sem throttle). Devolve
+     * quantos itens foram escritos no canal. Itens de ao vivo ficam fora. */
+    suspend fun syncWatchNextNow(): Int {
+        val pid = platformPrefs.profileId.value
+        val items = history.getAll(pid).first()
+            .filter { it.type != com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE }
+            .map { com.aotv.app.data.remote.WatchNextSync.toItem(it) }
+        com.aotv.app.data.remote.WatchNextSync.sync(appContext, platformPrefs, items)
+        return items.size
     }
 }

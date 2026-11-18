@@ -313,8 +313,6 @@ class AppUpdateService @Inject constructor(
         const val UPDATE_FEED_URL = "https://raw.githubusercontent.com/Ivadzf/AOTV/main/updates.json"
         const val FILE_PROVIDER_AUTHORITY = "com.aotv.app.fileprovider"
         private const val APK_FILE_NAME = "aotv-update.apk"
-        /** Intervalo mínimo entre checagens automáticas (24 h). */
-        const val AUTO_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
         /** Lote 21 (v1.31.0): download com retomada — tentativas e timeouts. */
         private const val MAX_DOWNLOAD_ATTEMPTS = 3
         private const val DOWNLOAD_RETRY_DELAY_MS = 1000L
@@ -330,13 +328,20 @@ class AppUpdateService @Inject constructor(
     /** Checagem automática ligada (global, padrão: ligada). */
     val autoCheckEnabled: Boolean get() = prefs.appUpdateCheckEnabled
 
-    /** Já passou o intervalo p/ checar de novo sozinho (24 h desde a última).
-     * Lote 20 (v1.30.0): o gate é ignorado quando a versão instalada mudou
-     * desde o último check — atualizar o app dispara o check no próximo
-     * cold start, mesmo que a versão anterior tenha checado há pouco. */
+    /**
+     * Checa sozinho em todo cold start, quando a checagem automática está
+     * ligada. Lote 22 (v1.32.0, item 9 — teste do Davi na v1.31.0): o gate
+     * de 24 h fazia uma release publicada horas depois do último check só
+     * aparecer no dia seguinte — foi o que aconteceu com a v1.31.0 na
+     * v1.30.0. O feed `updates.json` é um JSON pequeno, então checar a cada
+     * abertura não pesa. O 1x por sessão continua valendo (a flag
+     * `updateCheckedThisSession` em MoviesNavigation evita um 2º check se
+     * a navegação recompor). `appUpdateLastCheck` continua sendo gravado
+     * em [checkLatest] p/ a tela mostrar quando foi a última checagem; o
+     * gate que usava esse valor não existe mais.
+     */
     fun shouldAutoCheck(nowMs: Long = System.currentTimeMillis()): Boolean =
-        autoCheckEnabled && (prefs.appUpdateLastCheckVersion != installedVersionName ||
-            nowMs - prefs.appUpdateLastCheck >= AUTO_CHECK_INTERVAL_MS)
+        autoCheckEnabled
 
     /**
      * Consulta a release mais recente. Ordem (Lote 18, v1.28.0): 1º o feed

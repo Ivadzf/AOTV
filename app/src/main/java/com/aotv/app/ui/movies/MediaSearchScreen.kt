@@ -251,9 +251,21 @@ fun MediaSearchScreen(
     val discoverState by discoverVm.uiState.collectAsStateWithLifecycle()
 
     // TV. Teclado do controle à esquerda e resultados à direita, como o search.js do webOS.
+    // Lote 22 (v1.32.0, item 8 — teste da faixa bege, reportada pelo Davi
+    // na v1.31.0): NÃO há mais foco automático ao entrar na busca. Antes,
+    // um LaunchedEffect pedia o foco 150 ms depois de entrar (e o teclado
+    // — na TV, o teclado de tela — abria sozinho). A hipótese é que a faixa
+    // bege (#FFEEE7, ~35 dp, 2–3 s, um overlay que cobre o conteúdo) seja
+    // um artefato transitório dessa abertura. O teclado continua alcançável
+    // pelo controle (a primeira tecla guarda o FocusRequester e o DPAD chega
+    // nela por navegação normal) e, no celular, o campo continua focável:
+    // o teclado só abre quando o usuário TOCAR no campo — o ramo do celular
+    // nunca pediu foco sozinho (a pílula é um BasicTextField sem
+    // FocusRequester). Se a faixa continuar na v1.32.0, a hipótese do
+    // teclado está refutada e o próximo suspeito é o carregamento do
+    // backdrop do herói (a outra coisa transitória de ~2–3 s na busca).
     if (tv) {
         val firstKey = remember { androidx.compose.ui.focus.FocusRequester() }
-        androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(150); runCatching { firstKey.requestFocus() } }
         Row(Modifier.fillMaxSize().background(Background).padding(top = 28.dp)) {
             Column(Modifier.width(400.dp).padding(start = 28.dp, end = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = true, onSearch = viewModel::searchNow)

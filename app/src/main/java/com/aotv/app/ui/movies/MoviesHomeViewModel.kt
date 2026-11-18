@@ -52,6 +52,8 @@ class MoviesHomeViewModel @Inject constructor(
     private val tvCatalogs: com.aotv.app.data.remote.AddonTvCatalogLoader,
     /** Séries acompanhadas nos trackers, p/ o auto-add do calendário (Lote 13, v1.23.0). */
     private val trackerShows: com.aotv.app.data.remote.TrackerShowsCache,
+    /** Contexto p/ o Watch Next do launcher (Lote 22, item 4). */
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
     /** Coleções do perfil, para as fileiras de pastas da Início. */
     val collectionsFlow: StateFlow<List<com.aotv.app.data.collections.MediaCollection>> = collections.flow
@@ -1252,6 +1254,18 @@ class MoviesHomeViewModel @Inject constructor(
                 // visto) — o próximo episódio pode ter andado. O throttle de
                 // 15 min dentro de loadTraktUpNext segura a frequência.
                 loadTraktUpNext()
+                // Watch Next do launcher (Lote 22, item 4): o Continuar mudou —
+                // o canal do launcher acompanha. O throttle de 60 s dentro de
+                // syncThrottled segura a frequência (o histórico emite a cada
+                // mudança). Itens de ao vivo (tmdbId sintético) ficam de fora.
+                viewModelScope.launch {
+                    com.aotv.app.data.remote.WatchNextSync.syncThrottled(
+                        appContext, prefs,
+                        continueList.filter {
+                            it.type != com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE
+                        }.map { com.aotv.app.data.remote.WatchNextSync.toItem(it) },
+                    )
+                }
                 coroutineScope {
                     continueList.take(20).map { h -> async {
                         // Ao vivo (Lote 8, v1.18.0): o tmdbId do canal é

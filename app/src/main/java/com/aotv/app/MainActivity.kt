@@ -42,6 +42,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         offerPartyDeepLink(intent)
         offerAddonDeepLink(intent)
+        offerWatchNextDeepLink(intent)
         enableEdgeToEdge()
         hideSystemBars()
 
@@ -106,6 +107,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         offerPartyDeepLink(intent)
         offerAddonDeepLink(intent)
+        offerWatchNextDeepLink(intent)
     }
 
     // Extrai o código de `aotv://party/?code=XXXXXX` e oferece p/ navegação
@@ -122,6 +124,52 @@ class MainActivity : ComponentActivity() {
     private fun offerAddonDeepLink(intent: Intent?) {
         val url = com.aotv.app.data.party.AddonDeepLink.parse(intent?.data) ?: return
         com.aotv.app.data.party.AddonDeepLink.offer(url)
+    }
+
+    // Deep link do Watch Next do launcher (Lote 22, item 4): o PendingIntent
+    // do programa (TvContract) abre a MainActivity com os extras do título —
+    // MoviesNavigation consome e abre o detalhe. Sem extras, nada.
+    private fun offerWatchNextDeepLink(intent: Intent?) {
+        val tmdbId = intent?.getIntExtra(EXTRA_WATCH_NEXT_TMDBID, 0) ?: 0
+        val type = intent?.getStringExtra(EXTRA_WATCH_NEXT_TYPE) ?: return
+        if (tmdbId <= 0) return
+        com.aotv.app.data.remote.WatchNextDeepLink.offer(tmdbId, type)
+    }
+
+    // ── Gamepad (Lote 22, item 5) ─────────────────────────────────────────
+    // O gamepad fala em keyCodes próprios (BOTÃO_A, BOTÃO_X…); o app fala em
+    // DPAD/teclas de mídia. A tradução acontece aqui, no dispatchKeyEvent,
+    // antes do Compose — assim vale p/ TODAS as telas, sem tocar em cada uma.
+    // O botão mapeado p/ uma ação vira o KeyEvent padrão da ação (ex.:
+    // BOTÃO_A → DPAD_CENTER p/ confirmar; BOTÃO_Y → MEDIA_PLAY_PAUSE).
+    // O DPAD e as teclas de mídia que o controle JÁ manda passam direto
+    // (são os KeyEvents padrão) — só o mapeado é reescrito. O botão PS/Home
+    // (KEYCODE_HOME) nunca chega aqui: o sistema o reserva. O modo de
+    // captura (remapeamento manual) consome a tecla e NÃO a repassa.
+    private val gamepadManager by lazy {
+        com.aotv.app.data.local.GamepadManager(platformPrefs)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (gamepadManager.isGamepadEvent(event)) {
+            if (com.aotv.app.data.local.GamepadCapture.capturing) {
+                com.aotv.app.data.local.GamepadCapture.offer(event.keyCode)
+                return true
+            }
+            val action = gamepadManager.actionFor(event)
+            if (action != null) {
+                val standardKeyCode = com.aotv.app.data.local.GamepadManager.toAndroidKeyCode(action)
+                if (standardKeyCode != event.keyCode) {
+                    val translated = android.view.KeyEvent(
+                        event.downTime, event.eventTime, event.action, standardKeyCode,
+                        event.repeatCount, event.metaState, event.deviceId, event.scanCode,
+                        event.flags, event.source,
+                    )
+                    return super.dispatchKeyEvent(translated)
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     // Coleta ranks/quality isolada: cada emissão só recompõe este wrapper.
@@ -187,5 +235,9 @@ class MainActivity : ComponentActivity() {
     private companion object {
         /** Reabertura depois de escolher o perfil. Não pergunta de novo quem está assistindo. */
         const val EXTRA_PICKED = "profile_picked"
+
+        /** Watch Next (Lote 22, item 4): o PendingIntent do programa do launcher. */
+        const val EXTRA_WATCH_NEXT_TMDBID = "watch_next_tmdb_id"
+        const val EXTRA_WATCH_NEXT_TYPE = "watch_next_type"
     }
 }

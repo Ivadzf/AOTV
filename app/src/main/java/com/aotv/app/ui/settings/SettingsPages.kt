@@ -197,9 +197,11 @@ object SettingsPageIds {
     const val WatchParty = "watchparty"
     const val SocialHub = "social"
     const val Diagnostico = "diagnostico"
+    /** Controle remoto + Send to TV + Watch Next + gamepad + player externo (Lote 22, v1.32.0). */
+    const val RemoteTv = "remotetv"
 
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, SocialHub, Diagnostico)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, SocialHub, Diagnostico, RemoteTv)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -217,6 +219,7 @@ object SettingsPageIds {
         WatchParty -> "Watch Party"
         SocialHub -> "Social Hub"
         Diagnostico -> "Diagnóstico"
+        RemoteTv -> "Controle remoto e TV"
         else -> "Configurações"
     }
 }
@@ -268,6 +271,7 @@ fun SettingsPageScreen(
         SettingsPageIds.WatchParty -> WatchPartyScreen(onBack, highlightAnchor)
         SettingsPageIds.SocialHub -> SocialHubScreen(onBack, highlightAnchor, onOpenWatchParty = onOpenWatchParty)
         SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor)
+        SettingsPageIds.RemoteTv -> RemoteTvScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
             sub = null,

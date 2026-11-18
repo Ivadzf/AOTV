@@ -462,7 +462,26 @@ fun externalPlayerMime(url: String): String {
 }
 
 /**
- * Abre [url] num player externo instalado (ACTION_VIEW + seletor do sistema).
+ * Intent p/ abrir [url] num player externo (ACTION_VIEW). Com [packageName],
+ * abre direto naquele player (sem seletor); sem ele, o chamador mostra o
+ * seletor do sistema. null = URL inválida p/ abrir fora. Sem FLAG_NEW_TASK
+ * aqui: quem lança com `ActivityResultLauncher` precisa do intent cru (o
+ * launcher põe a task certa); quem lança com `startActivity` direto põe a
+ * flag (ver [openInExternalPlayer]).
+ */
+fun externalPlayerIntent(context: Context, url: String, title: String, packageName: String? = null): Intent? {
+    if (url.isBlank()) return null
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return null
+    return Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(Uri.parse(url), externalPlayerMime(url))
+        putExtra(Intent.EXTRA_TITLE, title)
+        if (!packageName.isNullOrBlank()) setPackage(packageName)
+    }
+}
+
+/**
+ * Abre [url] num player externo instalado (ACTION_VIEW + seletor do sistema,
+ * ou direto no [packageName] quando dado).
  * Devolve null quando o intent foi disparado, ou a mensagem p/ o toast quando não dá:
  * link vazio, nenhum player instalado, ou o sistema recusou.
  *
@@ -475,19 +494,18 @@ fun externalPlayerMime(url: String): String {
  *   [PlayerSession.openExternalPlayer]).
  * - Legenda externa, som de outra fonte e correção de cor ficam no app:
  *   o externo toca só o vídeo, com os próprios controles dele.
+ * - O progresso ao voltar só é salvo quando a abertura usa o
+ *   `ActivityResultLauncher` (ver MoviePlayerScreen): aqui, sem launcher,
+ *   é fogo-e-esquece como antes.
  */
-fun openInExternalPlayer(context: Context, url: String, title: String): String? {
-    if (url.isBlank()) return "Sem link para abrir no player externo."
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-        return "Esse link não abre num player externo."
-    }
-    val intent = Intent(Intent.ACTION_VIEW).apply {
-        setDataAndType(Uri.parse(url), externalPlayerMime(url))
-        putExtra(Intent.EXTRA_TITLE, title)
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
+fun openInExternalPlayer(context: Context, url: String, title: String, packageName: String? = null): String? {
+    val intent = externalPlayerIntent(context, url, title, packageName)
+        ?: return "Esse link não abre num player externo."
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     return try {
-        context.startActivity(Intent.createChooser(intent, "Abrir com"))
+        context.startActivity(
+            if (packageName.isNullOrBlank()) Intent.createChooser(intent, "Abrir com") else intent,
+        )
         null
     } catch (_: android.content.ActivityNotFoundException) {
         "Nenhum player de vídeo instalado para abrir esse link."
