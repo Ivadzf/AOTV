@@ -1,1 +1,74 @@
-{"latest":{"assets":{"universal":{"sha256":"a4cfdc6db8073fcb934d04ede6726fa022eaca9e7868d37a5a3e6873ffa446e1","size":81040835,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.30.0/AOTV-v1.30.0.apk"}},"changelog":"v1.30.0 — Lote 20: Live TV parte 3 + esportes: gravações em rede/USB com miniaturas, dicionário de esportes, Multiview com placares, logos de canais, catch-up Xtream, tabelas multi-grupo (Champions/Libertadores), alertas do Seguindo e placar por período. Fixes: atualizador automático, Testar chave do MDBList, olho nas chaves de API, packs de selos formato Fusion do Nuvio.","published_at":"2026-11-17T22:44:00Z","tag":"v1.30.0","version":"1.30.0","versionCode":67},"versions":[{"assets":{"universal":{"sha256":"a4cfdc6db8073fcb934d04ede6726fa022eaca9e7868d37a5a3e6873ffa446e1","size":81040835,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.30.0/AOTV-v1.30.0.apk"}},"changelog":"v1.30.0 — Lote 20: Live TV parte 3 + esportes: gravações em rede/USB com miniaturas, dicionário de esportes, Multiview com placares, logos de canais, catch-up Xtream, tabelas multi-grupo (Champions/Libertadores), alertas do Seguindo e placar por período. Fixes: atualizador automático, Testar chave do MDBList, olho nas chaves de API, packs de selos formato Fusion do Nuvio.","published_at":"2026-11-17T22:44:00Z","tag":"v1.30.0","version":"1.30.0","versionCode":67},{"assets":{"universal":{"sha256":"674568a439937a328e0e48d0e46270cdf5c8c641517b2152d283597c233897df","size":80958695,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.29.0/AOTV-v1.29.0.apk"}},"changelog":"v1.29.0 — Lote 19: Watch Party real via WebRTC (sincronia, voz e chat), Social Hub, Hear it in your language, comentários do Trakt + Up Next, 'Ver todos' em cada fileira da Início, fix do MDBList, opções de Reprodução do JOTV (espera personalizável, subir a qualidade sozinho, debrid só com arquivo pronto), guia de canais na aba Ao vivo e selos com logo na folha de fontes.","published_at":"2026-11-17T20:48:00Z","tag":"v1.29.0","version":"1.29.0","versionCode":66},{"assets":{"universal":{"sha256":"d90ca41e4a0c2cae65976289b4586efdf3f80b0b61787dd2a27d4842de9594fb","size":69811549,"url":"https://github.com/Ivadzf/AOTV/releases/download/v1.28.0/AOTV-v1.28.0.apk"}},"changelog":"v1.28.0 — Lote 18: atualizador com SHA-256, torrent/downloads, todas as ligas, fix do 'Meus esportes' e clipes. Atualizador dentro do app (feed com SHA-256, APK da ABI do aparelho, download em 2º plano). 'What's new' com bolinha no avatar. Torrent/downloads: teto de espaço 32–256 MB (pausa ao passar do teto), magnet/link na busca, abas Completos/Restos, retomada, aviso ao sair. Dados móveis medem streaming e torrent. Aba Esportes: 85 ligas, todas ligadas. Fix do bug 'Meus esportes' (seguir liga no seletor + comparação normalizada). Clipes: 'Baixar trecho' no player (HLS).","published_at":"2026-11-17T18:16:00Z","tag":"v1.28.0","version":"1.28.0","versionCode":65}]}
+{
+  "latest": {
+    "assets": {
+      "universal": {
+        "sha256": "b4ba2301700a1053081f3fd7be297edb817cc23798bbfeb8ee429d808dd0fb15",
+        "size": 81125291,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.31.0/AOTV-v1.31.0.apk"
+      }
+    },
+    "changelog": "v1.31.0 — Lote 21: Descobrir e recomendações explicáveis (\"Picked for you\" com curtir/não curtir/favorito), X-Ray no player, trailers com autoplay, página de pessoa com bio, listas MDBList no Descobrir, ERS na loja de addons, pôsteres do elenco na TV. Fixes: download do atualizador com retomada, travamento do Ao vivo/Esportes, chave duplicada nas tabelas de esportes, e o fix do MDBList (ratings como lista, busca por ID TMDB).",
+    "published_at": "2026-11-18T18:37:00Z",
+    "tag": "v1.31.0",
+    "version": "1.31.0",
+    "versionCode": 68
+  },
+  "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "b4ba2301700a1053081f3fd7be297edb817cc23798bbfeb8ee429d808dd0fb15",
+          "size": 81125291,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.31.0/AOTV-v1.31.0.apk"
+        }
+      },
+      "changelog": "v1.31.0 — Lote 21: Descobrir e recomendações explicáveis (\"Picked for you\" com curtir/não curtir/favorito), X-Ray no player, trailers com autoplay, página de pessoa com bio, listas MDBList no Descobrir, ERS na loja de addons, pôsteres do elenco na TV. Fixes: download do atualizador com retomada, travamento do Ao vivo/Esportes, chave duplicada nas tabelas de esportes, e o fix do MDBList (ratings como lista, busca por ID TMDB).",
+      "published_at": "2026-11-18T18:37:00Z",
+      "tag": "v1.31.0",
+      "version": "1.31.0",
+      "versionCode": 68
+    },
+    {
+      "assets": {
+        "universal": {
+          "sha256": "a4cfdc6db8073fcb934d04ede6726fa022eaca9e7868d37a5a3e6873ffa446e1",
+          "size": 81040835,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.30.0/AOTV-v1.30.0.apk"
+        }
+      },
+      "changelog": "v1.30.0 — Lote 20: Live TV parte 3 + esportes: gravações em rede/USB com miniaturas, dicionário de esportes, Multiview com placares, logos de canais, catch-up Xtream, tabelas multi-grupo (Champions/Libertadores), alertas do Seguindo e placar por período. Fixes: atualizador automático, Testar chave do MDBList, olho nas chaves de API, packs de selos formato Fusion do Nuvio.",
+      "published_at": "2026-11-17T22:44:00Z",
+      "tag": "v1.30.0",
+      "version": "1.30.0",
+      "versionCode": 67
+    },
+    {
+      "assets": {
+        "universal": {
+          "sha256": "674568a439937a328e0e48d0e46270cdf5c8c641517b2152d283597c233897df",
+          "size": 80958695,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.29.0/AOTV-v1.29.0.apk"
+        }
+      },
+      "changelog": "v1.29.0 — Lote 19: Watch Party real via WebRTC (sincronia, voz e chat), Social Hub, Hear it in your language, comentários do Trakt + Up Next, 'Ver todos' em cada fileira da Início, fix do MDBList, opções de Reprodução do JOTV (espera personalizável, subir a qualidade sozinho, debrid só com arquivo pronto), guia de canais na aba Ao vivo e selos com logo na folha de fontes.",
+      "published_at": "2026-11-17T20:48:00Z",
+      "tag": "v1.29.0",
+      "version": "1.29.0",
+      "versionCode": 66
+    },
+    {
+      "assets": {
+        "universal": {
+          "sha256": "d90ca41e4a0c2cae65976289b4586efdf3f80b0b61787dd2a27d4842de9594fb",
+          "size": 69811549,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.28.0/AOTV-v1.28.0.apk"
+        }
+      },
+      "changelog": "v1.28.0 — Lote 18: atualizador com SHA-256, torrent/downloads, todas as ligas, fix do 'Meus esportes' e clipes. Atualizador dentro do app (feed com SHA-256, APK da ABI do aparelho, download em 2º plano). 'What's new' com bolinha no avatar. Torrent/downloads: teto de espaço 32–256 MB (pausa ao passar do teto), magnet/link na busca, abas Completos/Restos, retomada, aviso ao sair. Dados móveis medem streaming e torrent. Aba Esportes: 85 ligas, todas ligadas. Fix do bug 'Meus esportes' (seguir liga no seletor + comparação normalizada). Clipes: 'Baixar trecho' no player (HLS).",
+      "published_at": "2026-11-17T18:16:00Z",
+      "tag": "v1.28.0",
+      "version": "1.28.0",
+      "versionCode": 65
+    }
+  ]
+}
