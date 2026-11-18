@@ -27,6 +27,11 @@ data class TmdbPersonDto(
     val name: String = "",
     @SerializedName("profile_path") val profilePath: String? = null,
     @SerializedName("known_for_department") val department: String? = null,
+    // Lote 21 (v1.31.0): ficha da página de pessoa — biografia, nascimento
+    // e local (o endpoint /person/{id} já devolve; antes o DTO descartava).
+    val biography: String? = null,
+    val birthday: String? = null,
+    @SerializedName("place_of_birth") val placeOfBirth: String? = null,
 )
 
 /** Palavra-chave (/search/keyword). */

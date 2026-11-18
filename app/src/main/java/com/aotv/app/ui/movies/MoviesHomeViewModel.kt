@@ -17,6 +17,7 @@ import com.aotv.app.data.sports.upcomingSportsGames
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -27,6 +28,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -188,6 +190,15 @@ class MoviesHomeViewModel @Inject constructor(
         val recommended: List<MovieItem> = emptyList(),
         /** Título que puxou a recomendação, pro cabeçalho da fileira. "" = esconde a fileira. */
         val recommendedBecause: String = "",
+        /** Lote 21 (v1.31.0): títulos-semente das recomendações (histórico +
+         * favoritos), p/ a tela "O que molda suas recomendações". */
+        val tasteSeedTitles: List<String> = emptyList(),
+        /** Lote 21 (v1.31.0): contagem de 👍/👎/favoritos do perfil. */
+        val tasteLikesCount: Int = 0,
+        val tasteDislikesCount: Int = 0,
+        val tasteFavoritesCount: Int = 0,
+        /** Lote 21 (v1.31.0): sinais de gosto com título resolvido. */
+        val tasteEntries: List<TasteEntry> = emptyList(),
         // ── Fileiras de catálogo de addon, marcadas em Addons > Na Início ──
         val addonRows: List<AddonRow> = emptyList(),
         /**
@@ -450,6 +461,12 @@ class MoviesHomeViewModel @Inject constructor(
      * Pega os títulos mais recentes do histórico e junta as recomendações do TMDB de cada um.
      * O que aparece em MAIS de uma origem sobe (gostou de dois filmes que apontam pro mesmo
      * título = sinal forte), e tudo que ele já viu sai da lista.
+     *
+     * Lote 21 (v1.31.0) — "Picked for you" explicável: os favoritos do gosto
+     * (3+, [TASTE_MIN_FAVORITES]) viram sementes junto com o histórico, e o
+     * 👎 tira o título da lista. A chave inclui os sinais de gosto, então
+     * marcar 👍/👎 no detalhe reconstrói a fileira ao voltar p/ a Início
+     * (ver [refreshRecommendations]).
      */
     private fun buildRecommendations(history: List<com.aotv.app.data.local.entity.MovieHistoryEntity>) {
         lastHistory = history
@@ -461,24 +478,39 @@ class MoviesHomeViewModel @Inject constructor(
         // Fileira desligada não busca na rede (ao religar, o applyLayout repõe).
         if (!sysRowOn(com.aotv.app.data.local.SystemRow.RECOMMENDED.key)) return
         val apiKey = prefs.tmdbApiKey
+        val likes = parseTasteCsv(prefs.tasteLikes)
+        val dislikes = parseTasteCsv(prefs.tasteDislikes)
+        val favorites = parseTasteCsv(prefs.tasteFavorites)
+        val dislikedIds = dislikes.mapNotNull { tasteIdOf(it) }.toSet()
         if (apiKey.isBlank() || history.isEmpty()) {
             if (history.isEmpty()) _uiState.update { it.copy(recommended = emptyList(), recommendedBecause = "") }
             return
         }
-        // Base: os 5 mais recentes. Chave evita refazer quando só o progresso mudou.
+        // Base: os 5 mais recentes + favoritos do gosto (3+). Chave evita
+        // refazer quando só o progresso mudou.
         val seeds = history.take(5)
-        val key = seeds.joinToString(",") { "${it.tmdbId}:${it.type}" }
+        val favSeeds = if (favorites.size >= TASTE_MIN_FAVORITES) {
+            favorites.mapNotNull { key ->
+                val id = tasteIdOf(key) ?: return@mapNotNull null
+                val type = tasteTypeOf(key)
+                if (id in seeds.map { it.tmdbId }) return@mapNotNull null
+                id to type
+            }
+        } else emptyList()
+        val key = (seeds.joinToString(",") { "${it.tmdbId}:${it.type}" } +
+            "|fav:" + favSeeds.joinToString(",") { "${it.first}:${it.second}" } +
+            "|no:" + dislikes.sorted().joinToString(","))
         if (key == lastRecKey) return
         lastRecKey = key
 
         viewModelScope.launch {
             val watched = history.mapTo(HashSet()) { it.tmdbId }
-            val lists = seeds.map { h ->
+            val lists = (seeds.map { it.tmdbId to it.type } + favSeeds).map { (id, type) ->
                 async {
-                    val isSeries = h.type == MediaType.SERIES.name
+                    val isSeries = type == MediaType.SERIES.name
                     runCatching {
-                        if (isSeries) tmdb.getTvRecommendations(h.tmdbId, apiKey = apiKey).results
-                        else tmdb.getMovieRecommendations(h.tmdbId, apiKey = apiKey).results
+                        if (isSeries) tmdb.getTvRecommendations(id, apiKey = apiKey).results
+                        else tmdb.getMovieRecommendations(id, apiKey = apiKey).results
                     }.getOrDefault(emptyList())
                 }
             }.awaitAll()
@@ -491,7 +523,7 @@ class MoviesHomeViewModel @Inject constructor(
                     .filterNot { it.adult }
                     .filter { !it.posterPath.isNullOrBlank() }
                     .map { it.toMovieItem() }
-                    .filter { it.tmdbId !in watched && it.title.isNotBlank() }
+                    .filter { it.tmdbId !in watched && it.tmdbId !in dislikedIds && it.title.isNotBlank() }
                     .forEach { item ->
                         hits[item.tmdbId] = (hits[item.tmdbId] ?: 0) + 1
                         byId.putIfAbsent(item.tmdbId, item)
@@ -501,13 +533,89 @@ class MoviesHomeViewModel @Inject constructor(
                 .sortedWith(compareByDescending<MovieItem> { hits[it.tmdbId] ?: 0 }.thenByDescending { it.rating })
                 .take(20)
 
+            // Títulos-semente p/ a explicação ("O que molda suas
+            // recomendações"): os do histórico + os favoritos que viraram
+            // semente (título do histórico quando houver, senão o id).
+            val byIdTitle = history.associate { it.tmdbId to it.title }
+            val seedTitles = (seeds.map { it.title } + favSeeds.map { (id, _) -> byIdTitle[id] ?: "Título $id" })
+                .distinct().take(8)
             _uiState.update {
                 it.copy(
                     recommended = ranked,
                     recommendedBecause = if (ranked.isEmpty()) "" else seeds.first().title,
+                    tasteSeedTitles = seedTitles,
+                    tasteLikesCount = likes.size,
+                    tasteDislikesCount = dislikes.size,
+                    tasteFavoritesCount = favorites.size,
+                    tasteEntries = buildTasteEntries(byIdTitle, ranked),
                 )
             }
         }
+    }
+
+    /**
+     * Sinais de gosto com título resolvido (p/ a tela de explicação):
+     * título do histórico, senão dos recomendados, senão "Título {id}".
+     */
+    private fun buildTasteEntries(byIdTitle: Map<Int, String>, recommended: List<MovieItem> = emptyList()): List<TasteEntry> {
+        val recTitles = recommended.associate { it.tmdbId to it.title }
+        fun titleOf(key: String): String {
+            val id = tasteIdOf(key) ?: return key
+            return byIdTitle[id] ?: recTitles[id] ?: "Título $id"
+        }
+        val out = ArrayList<TasteEntry>()
+        parseTasteCsv(prefs.tasteLikes).forEach { out += TasteEntry(it, titleOf(it), "like") }
+        parseTasteCsv(prefs.tasteDislikes).forEach { out += TasteEntry(it, titleOf(it), "dislike") }
+        parseTasteCsv(prefs.tasteFavorites).forEach { out += TasteEntry(it, titleOf(it), "favorite") }
+        return out.sortedBy { it.title.lowercase() }
+    }
+
+    /** Atualiza as entradas de gosto com o que já se sabe (sem rede). */
+    private fun refreshTasteEntries() {
+        val byIdTitle = lastHistory.associate { it.tmdbId to it.title }
+        _uiState.update {
+            it.copy(
+                tasteEntries = buildTasteEntries(byIdTitle, it.recommended),
+                tasteLikesCount = parseTasteCsv(prefs.tasteLikes).size,
+                tasteDislikesCount = parseTasteCsv(prefs.tasteDislikes).size,
+                tasteFavoritesCount = parseTasteCsv(prefs.tasteFavorites).size,
+            )
+        }
+    }
+
+    /** Revalida as recomendações (a chave interna evita rede sem mudança). */
+    fun refreshRecommendations() = buildRecommendations(lastHistory)
+
+    /** 👍/👎/favorito do gosto p/ um título (o 👎 some das recomendações). */
+    fun toggleTasteLike(tmdbId: Int, type: String) {
+        val key = tasteKey(tmdbId, type)
+        val likes = parseTasteCsv(prefs.tasteLikes).toMutableSet()
+        val dislikes = parseTasteCsv(prefs.tasteDislikes).toMutableSet()
+        if (key in likes) likes.remove(key) else { likes.add(key); dislikes.remove(key) }
+        prefs.tasteLikes = tasteCsvOf(likes)
+        prefs.tasteDislikes = tasteCsvOf(dislikes)
+        refreshTasteEntries()
+        refreshRecommendations()
+    }
+
+    fun toggleTasteDislike(tmdbId: Int, type: String) {
+        val key = tasteKey(tmdbId, type)
+        val likes = parseTasteCsv(prefs.tasteLikes).toMutableSet()
+        val dislikes = parseTasteCsv(prefs.tasteDislikes).toMutableSet()
+        if (key in dislikes) dislikes.remove(key) else { dislikes.add(key); likes.remove(key) }
+        prefs.tasteLikes = tasteCsvOf(likes)
+        prefs.tasteDislikes = tasteCsvOf(dislikes)
+        refreshTasteEntries()
+        refreshRecommendations()
+    }
+
+    fun toggleTasteFavorite(tmdbId: Int, type: String) {
+        val key = tasteKey(tmdbId, type)
+        val favorites = parseTasteCsv(prefs.tasteFavorites).toMutableSet()
+        if (key in favorites) favorites.remove(key) else favorites.add(key)
+        prefs.tasteFavorites = tasteCsvOf(favorites)
+        refreshTasteEntries()
+        refreshRecommendations()
     }
 
     /**
@@ -1078,8 +1186,15 @@ class MoviesHomeViewModel @Inject constructor(
         }
         viewModelScope.launch {
             liveTv.state.collect { st ->
+                // Lote 21 (v1.31.0) — fix do travamento da v1.30.0: a
+                // varredura do EPG NÃO roda na Main (viewModelScope é Main)
+                // — Dispatchers.Default, com a classificação em cache
+                // (SportsScores). Antes, cada emissão do estado do Ao vivo
+                // revarria todo o EPG na thread principal (ANR).
                 val games = if (prefs.sportsShow) {
-                    upcomingSportsGames(st.channels, st.epg, System.currentTimeMillis())
+                    withContext(Dispatchers.Default) {
+                        upcomingSportsGames(st.channels, st.epg, System.currentTimeMillis())
+                    }
                 } else {
                     emptyList()
                 }

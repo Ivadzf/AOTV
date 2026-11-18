@@ -413,7 +413,10 @@ fun SportsTablesScreen(
                     )
                 }
             } else {
-                items(networks, key = { "net:${it.id}" }) { channel ->
+                // Lote 21 (v1.31.0): dedup por id — mesmo fix da aba
+                // Esportes (crash "Key net:... was already used").
+                val uniqueNetworks = networks.distinctBy { it.id }
+                items(uniqueNetworks, key = { "net:${it.id}" }) { channel ->
                     NetworkChannelRow(channel, onPlay = { onPlayChannel(channel.id) })
                 }
             }

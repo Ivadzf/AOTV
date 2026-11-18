@@ -92,10 +92,16 @@ class AddonStoreViewModel @Inject constructor(
         viewModelScope.launch {
             val list = stremio.communityCatalog(force)
             _ui.update {
+                // Sugeridos (Lote 21, v1.31.0): entram no topo mesmo quando o
+                // catálogo da comunidade falha — a lista é local; só a
+                // instalação precisa de rede (o install lê o manifest antes).
+                val remote = list ?: it.all
+                val have = remote.map { a -> a.url.lowercase() }.toSet()
+                val merged = SUGGESTED_ADDONS.filter { a -> a.url.lowercase() !in have } + remote
                 it.copy(
                     loading = false,
                     failed = list == null,
-                    all = list ?: it.all,
+                    all = merged,
                 )
             }
         }
@@ -132,5 +138,35 @@ class AddonStoreViewModel @Inject constructor(
     companion object {
         /** O que funciona no AOTV: fontes, legendas e catálogos (viram fileira na Início). */
         fun worksHere(a: CommunityAddon) = "stream" in a.resources || "subtitles" in a.resources || "catalog" in a.resources
+
+        /**
+         * Addons sugeridos (Lote 21, v1.31.0): lista local, no topo da loja
+         * mesmo sem o catálogo da comunidade. O id fica vazio — o install lê
+         * o manifest antes de gravar e usa o id de lá.
+         * ERS ("Streaming Catalogs", catalog.ers.pw): catálogos dos grandes
+         * streamings — as linhas aparecem no Descobrir e na Início pela
+         * maquinaria existente de catálogos de addon. Testado: manifest 200.
+         */
+        val SUGGESTED_ADDONS: List<CommunityAddon> = listOf(
+            CommunityAddon(
+                rank = 0,
+                url = "https://catalog.ers.pw/manifest.json",
+                id = "",
+                name = "Streaming Catalogs (ERS)",
+                version = "",
+                description = "Catálogos dos grandes streamings (Netflix, Disney+…) — as linhas aparecem no Descobrir e na Início.",
+                logo = "",
+                types = listOf("movie", "series"),
+                resources = listOf("catalog"),
+                config = emptyList(),
+                configurable = false,
+                configRequired = false,
+                p2p = false,
+                adult = false,
+            ),
+        )
+
+        /** URLs dos sugeridos (p/ a seção "Sugeridos" da loja). */
+        val SUGGESTED_URLS: Set<String> get() = SUGGESTED_ADDONS.map { it.url.lowercase() }.toSet()
     }
 }

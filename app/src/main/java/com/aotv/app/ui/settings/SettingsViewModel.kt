@@ -16,6 +16,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Progresso do download manual da atualização (Lote 21, v1.31.0). */
+data class UpdateDownloadProgress(val downloadedBytes: Long, val totalBytes: Long) {
+    /** 0..1 (0 quando o total é desconhecido). */
+    val fraction: Float get() = if (totalBytes > 0) (downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 1f) else 0f
+    val percent: Int get() = (fraction * 100).toInt()
+}
+
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val platformPrefs: PlatformPrefs,
@@ -221,6 +228,15 @@ class SettingsViewModel @Inject constructor(
     val heroTrailer: StateFlow<Boolean> = _heroTrailer.asStateFlow()
     fun setHeroTrailer(v: Boolean) { platformPrefs.heroTrailer = v; _heroTrailer.value = v }
 
+    // Autoplay do trailer no detalhe (Lote 21, v1.31.0): toca no topo do
+    // detalhe depois de alguns segundos; só no Wi-Fi por padrão.
+    private val _trailerAutoplay = MutableStateFlow(platformPrefs.trailerAutoplay)
+    val trailerAutoplay: StateFlow<Boolean> = _trailerAutoplay.asStateFlow()
+    fun setTrailerAutoplay(v: Boolean) { platformPrefs.trailerAutoplay = v; _trailerAutoplay.value = v }
+    private val _trailerAutoplayWifiOnly = MutableStateFlow(platformPrefs.trailerAutoplayWifiOnly)
+    val trailerAutoplayWifiOnly: StateFlow<Boolean> = _trailerAutoplayWifiOnly.asStateFlow()
+    fun setTrailerAutoplayWifiOnly(v: Boolean) { platformPrefs.trailerAutoplayWifiOnly = v; _trailerAutoplayWifiOnly.value = v }
+
     // ── Página de detalhes (Fase B, por perfil) ──
     // Os fluxos vivem no PlatformPrefs (fonte única); aqui só o atalho + setter.
     val detailCinematic: StateFlow<Boolean> = platformPrefs.detailCinematicFlow
@@ -300,6 +316,9 @@ class SettingsViewModel @Inject constructor(
     val updateState: StateFlow<com.aotv.app.data.remote.UpdateCheckResult?> = _updateState.asStateFlow()
     private val _updateDownloading = MutableStateFlow(false)
     val updateDownloading: StateFlow<Boolean> = _updateDownloading.asStateFlow()
+    /** Progresso do download manual (Lote 21, v1.31.0): null = sem download em curso. */
+    private val _updateDownloadProgress = MutableStateFlow<UpdateDownloadProgress?>(null)
+    val updateDownloadProgress: StateFlow<UpdateDownloadProgress?> = _updateDownloadProgress.asStateFlow()
     private val _updateDownloadError = MutableStateFlow<String?>(null)
     val updateDownloadError: StateFlow<String?> = _updateDownloadError.asStateFlow()
     private val _updateNeedsPermission = MutableStateFlow(false)
@@ -358,9 +377,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             _updateDownloading.value = true
             _updateDownloadError.value = null
-            updateService.downloadApk(appContext, release)
+            _updateDownloadProgress.value = null
+            updateService.downloadApk(appContext, release) { downloaded, total ->
+                _updateDownloadProgress.value = UpdateDownloadProgress(downloaded, total)
+            }
                 .onSuccess { downloaded ->
                     _updateHashVerified.value = downloaded.hashVerified
+                    _updateDownloadProgress.value = null
                     platformPrefs.appUpdateReadyTag = release.tag
                     platformPrefs.appUpdateReadyHashVerified = downloaded.hashVerified
                     when (val req = updateService.installApk(appContext, downloaded.file)) {

@@ -885,7 +885,11 @@ private fun SportsTabNetworksList(
                     Text("Sem canal mapeado — nenhum canal das suas listas passa esta liga.", color = TextTertiary, fontSize = 14.sp)
                 }
             } else {
-                items(channels, key = { "net:${it.id}" }) { channel ->
+                // Lote 21 (v1.31.0): dedup por id — dois canais com o mesmo
+                // id (listas sobrepostas) quebravam a LazyColumn com
+                // "Key net:... was already used" (crash da v1.25.0).
+                val uniqueChannels = channels.distinctBy { it.id }
+                items(uniqueChannels, key = { "net:${it.id}" }) { channel ->
                     SportsTabNetworkRow(channel, onPlay = { onPlayChannel(channel.id) })
                 }
             }

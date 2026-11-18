@@ -841,7 +841,11 @@ private fun mdbSourceLabel(source: String): String = when (source) {
     "trakt" -> "Trakt"
     "letterboxd" -> "Letterboxd"
     "tomatoes" -> "Rotten Tomatoes"
+    "tomatoesaudience" -> "RT Audiência"
     "metacritic" -> "Metacritic"
+    "metacriticuser" -> "Metacritic (usuários)"
+    "myanimelist" -> "MyAnimeList"
+    "mdb" -> "MDBList"
     "rogerebert" -> "RogerEbert"
     else -> source.replaceFirstChar { it.titlecase() }
 }

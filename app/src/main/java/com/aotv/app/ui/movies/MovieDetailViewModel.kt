@@ -256,6 +256,10 @@ class MovieDetailViewModel @Inject constructor(
         val selectedSeason: Int = 1,
         // (B) Minha Lista — item salvo? (reativo via LibraryRepository.isSaved)
         val isSaved: Boolean = false,
+        // ── Lote 21 (v1.31.0) — 👍/👎/favorito do gosto neste perfil ──
+        val tasteLiked: Boolean = false,
+        val tasteDisliked: Boolean = false,
+        val tasteFavorite: Boolean = false,
         // (D) Episódios já vistos desta série, como Set "season:episode" (ex "1:3")
         val watchedEpisodes: Set<String> = emptySet(),
         // Episódio EM ANDAMENTO (< 90%) — estado "vendo" no card. "" se nenhum.
@@ -312,6 +316,10 @@ class MovieDetailViewModel @Inject constructor(
         val personName: String? = null,
         val personCredits: List<MovieItem> = emptyList(),
         val personLoading: Boolean = false,
+        /** Lote 21 (v1.31.0): ficha da pessoa — bio (TMDB, senão Wikipédia),
+         * linha de detalhes ("Direção · Nascido em 12/03/1975 · Rio de Janeiro"). */
+        val personBio: String? = null,
+        val personDetails: String? = null,
         val isLoading: Boolean = true,
         val error: String? = null,
         /** Duração do filme no TMDB, em minutos. 0 = desconhecida. */
@@ -406,6 +414,7 @@ class MovieDetailViewModel @Inject constructor(
     fun load(stub: MovieItem) {
         stubItem = stub
         startLibraryObservers(stub.tmdbId, stub.type)
+        refreshTaste()
         // Addons Kodi de vídeo (v1.4, Fase 4) — p/ o grupo "Addons Kodi"
         // na folha de fontes. Disco local, nunca trava a tela.
         viewModelScope.launch(Dispatchers.IO) {
@@ -731,14 +740,13 @@ class MovieDetailViewModel @Inject constructor(
     // some quando não há dado real; erro real vai p/ o campo de erro da
     // seção, nunca "não respondeu" genérico.
 
-    /** Normaliza a nota de uma fonte do MDBList para 0–100 (ver DetailSourceRating). */
+    /** Normaliza a nota de uma fonte do MDBList para 0–100 (ver DetailSourceRating).
+     * Escalas (Lote 21, v1.31.0 — ver MDBListService.sourceScale100): o array
+     * `ratings` da API traz imdb 0–10, letterboxd 0–5, rogerebert 0–4 e o
+     * resto (RT, Metacritic, Trakt, TMDB, MDBList) já em 0–100. ATENÇÃO: o
+     * tmdb do MDBList é 0–100 — NÃO é o vote_average 0–10 do TMDB. */
     fun normalizeSourceScore(source: String, value: Double): Int {
-        val scaled = when (source) {
-            "RT", "Metacritic" -> value
-            "Letterboxd" -> value * 20.0
-            "RogerEbert" -> value * 25.0
-            else -> value * 10.0
-        }
+        val scaled = value * com.aotv.app.data.remote.MDBListService.sourceScale100(source)
         return scaled.roundToInt().coerceIn(0, 100)
     }
 
@@ -794,7 +802,9 @@ class MovieDetailViewModel @Inject constructor(
                 // Lote 19 (v1.29.0): getRatingsWithFallback tenta o título
                 // localizado e depois o original; sem nota, o motivo vai p/
                 // aggregateError e a seção o mostra em vez de sumir.
-                mdbList.getRatingsWithFallback(title, originalTitle, year, isMovie).onSuccess { lookup ->
+                // Lote 21 (v1.31.0): busca POR ID TMDB primeiro (o detalhe
+                // já tem o tmdbId) — título só como fallback.
+                mdbList.getRatingsWithFallback(title, originalTitle, year, isMovie, tmdbId).onSuccess { lookup ->
                     val ratings = lookup.ratings
                     val sources = ratings.mapNotNull { (source, value) ->
                         if (value == null) null else DetailSourceRating(source, normalizeSourceScore(source, value))
@@ -895,6 +905,61 @@ class MovieDetailViewModel @Inject constructor(
         }
     }
 
+    // ───────────────────────── LOTE 21 — GOSTO (👍/👎/⭐) ─────────────────────────
+
+    /** Lê os sinais de gosto do título atual (chamado ao carregar o detalhe). */
+    fun refreshTaste() {
+        val item = stubItem ?: return
+        val key = tasteKey(item.tmdbId, item.type.name)
+        _uiState.update {
+            it.copy(
+                tasteLiked = key in parseTasteCsv(prefs.tasteLikes),
+                tasteDisliked = key in parseTasteCsv(prefs.tasteDislikes),
+                tasteFavorite = key in parseTasteCsv(prefs.tasteFavorites),
+            )
+        }
+    }
+
+    /** Autoplay do trailer ligado neste perfil (Lote 21, item 3). */
+    fun trailerAutoplayOn(): Boolean = prefs.trailerAutoplay
+
+    /** Autoplay do trailer só no Wi-Fi (padrão: sim). */
+    fun trailerAutoplayWifiOnly(): Boolean = prefs.trailerAutoplayWifiOnly
+
+    /** 👍 neste título (tira o 👎 se houver). */
+    fun toggleTasteLike() {
+        val item = stubItem ?: return
+        val key = tasteKey(item.tmdbId, item.type.name)
+        val likes = parseTasteCsv(prefs.tasteLikes).toMutableSet()
+        val dislikes = parseTasteCsv(prefs.tasteDislikes).toMutableSet()
+        if (key in likes) likes.remove(key) else { likes.add(key); dislikes.remove(key) }
+        prefs.tasteLikes = tasteCsvOf(likes)
+        prefs.tasteDislikes = tasteCsvOf(dislikes)
+        refreshTaste()
+    }
+
+    /** 👎 neste título (tira o 👍 se houver; o título some das recomendações). */
+    fun toggleTasteDislike() {
+        val item = stubItem ?: return
+        val key = tasteKey(item.tmdbId, item.type.name)
+        val likes = parseTasteCsv(prefs.tasteLikes).toMutableSet()
+        val dislikes = parseTasteCsv(prefs.tasteDislikes).toMutableSet()
+        if (key in dislikes) dislikes.remove(key) else { dislikes.add(key); likes.remove(key) }
+        prefs.tasteLikes = tasteCsvOf(likes)
+        prefs.tasteDislikes = tasteCsvOf(dislikes)
+        refreshTaste()
+    }
+
+    /** ⭐ favorito do gosto (3+ viram sementes das recomendações). */
+    fun toggleTasteFavorite() {
+        val item = stubItem ?: return
+        val key = tasteKey(item.tmdbId, item.type.name)
+        val favorites = parseTasteCsv(prefs.tasteFavorites).toMutableSet()
+        if (key in favorites) favorites.remove(key) else favorites.add(key)
+        prefs.tasteFavorites = tasteCsvOf(favorites)
+        refreshTaste()
+    }
+
     // ───────────────────────── (C) CONTINUAR ASSISTINDO ─────────────────────────
 
     /**
@@ -914,9 +979,16 @@ class MovieDetailViewModel @Inject constructor(
 
     // ───────────────────────── FILMOGRAFIA DO ATOR ─────────────────────────
 
-    /** Abre a filmografia do ator (combined_credits do TMDB), ordenada por popularidade/ano. */
+    /**
+     * Abre a página da pessoa (Lote 21, v1.31.0): filmografia (combined_credits
+     * do TMDB, ordenada por popularidade/ano) + ficha (bio do TMDB, senão da
+     * Wikipédia em PT-BR, + departamento/nascimento/local). Sem dado, a seção
+     * some — nunca inventa bio.
+     */
     fun openPerson(personId: Int, name: String) {
-        _uiState.update { it.copy(personName = name, personCredits = emptyList(), personLoading = true) }
+        _uiState.update {
+            it.copy(personName = name, personCredits = emptyList(), personLoading = true, personBio = null, personDetails = null)
+        }
         viewModelScope.launch {
             val apiKey = prefs.tmdbApiKey
             val credits = if (apiKey.isNotBlank() && personId > 0) {
@@ -928,15 +1000,35 @@ class MovieDetailViewModel @Inject constructor(
                 .map { it.toMovieItem() }
                 .distinctBy { it.tmdbId }
                 .sortedByDescending { it.year }
+            // Ficha: TMDB primeiro (bio PT-BR quando houver), Wikipédia como
+            // fallback p/ a bio. Depois da filmografia, sem travar a tela.
+            val person = if (apiKey.isNotBlank() && personId > 0) {
+                runCatching { tmdb.getPerson(personId, apiKey = apiKey) }.getOrNull()
+            } else null
+            val wikiBio = if (person?.biography.isNullOrBlank()) {
+                runCatching { wiki.getSummary(name) }.getOrNull()?.extract?.takeIf { it.isNotBlank() }
+            } else null
+            val bio = person?.biography?.trim()?.takeIf { it.isNotBlank() } ?: wikiBio
+            val details = buildList {
+                person?.department?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
+                person?.birthday?.trim()?.takeIf { it.isNotBlank() }?.let { add("Nascido em ${formatBrDate(it)}") }
+                person?.placeOfBirth?.trim()?.takeIf { it.isNotBlank() }?.let { add(it) }
+            }.joinToString(" · ").takeIf { it.isNotBlank() }
             _uiState.update {
                 if (it.personName != name) it // outro ator/foi fechado
-                else it.copy(personCredits = items, personLoading = false)
+                else it.copy(personCredits = items, personLoading = false, personBio = bio, personDetails = details)
             }
         }
     }
 
+    /** "1975-03-12" → "12/03/1975" (best-effort; sem data válida, volta cru). */
+    private fun formatBrDate(iso: String): String {
+        val parts = iso.trim().split("-")
+        return if (parts.size == 3) "${parts[2]}/${parts[1]}/${parts[0]}" else iso
+    }
+
     fun closePerson() {
-        _uiState.update { it.copy(personName = null, personCredits = emptyList(), personLoading = false) }
+        _uiState.update { it.copy(personName = null, personCredits = emptyList(), personLoading = false, personBio = null, personDetails = null) }
     }
 
     // ───────────────────────── (D) EPISÓDIOS VISTOS ─────────────────────────

@@ -942,6 +942,21 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_MAIN,
     ),
+    // Lote 21 (v1.31.0): autoplay do trailer no topo do detalhe.
+    SettingOptionEntry(
+        title = "Autoplay do trailer no detalhe",
+        sub = "Toca no topo do detalhe depois de alguns segundos",
+        keywords = listOf("trailer", "detalhe", "autoplay", "mini-player"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    SettingOptionEntry(
+        title = "Autoplay do trailer só no Wi-Fi",
+        sub = "No dados móveis, o trailer só toca no botão",
+        keywords = listOf("trailer", "wifi", "dados móveis", "autoplay"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
     SettingOptionEntry(
         title = "Legenda ao abrir",
         sub = "Liga sozinha no idioma escolhido quando o título tiver",

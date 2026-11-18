@@ -64,6 +64,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import com.aotv.app.data.sports.SportsGame
 import kotlinx.coroutines.delay
@@ -165,7 +166,7 @@ fun MoviesHomeScreen(
             }
             state.localGrid != null -> {
                 androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
-                LocalGridView(state, state.localGrid, today, onItemClick, onBack = { viewModel.closeCatalog() })
+                LocalGridView(state, viewModel, state.localGrid, today, onItemClick, onBack = { viewModel.closeCatalog() })
             }
             state.trailersGrid -> {
                 androidx.activity.compose.BackHandler { viewModel.closeCatalog() }
@@ -630,7 +631,11 @@ private fun HomeSectionsTab(
     }
     // On Demand do Xtream (acréscimo v1.26.0): 1x por sessão; sem fonte
     // Xtream, sem VOD ou com falha, as fileiras somem em silêncio.
-    LaunchedEffect(Unit) { viewModel.loadVodRows() }
+    // Lote 21 (v1.31.0): revalida as recomendações ao voltar p/ a Início
+    // (o 👍/👎 marcado no detalhe muda as sementes — a chave de
+    // buildRecommendations inclui os sinais de gosto, então sem mudança
+    // não há nova chamada de rede).
+    LaunchedEffect(Unit) { viewModel.loadVodRows(); viewModel.refreshRecommendations() }
     // Listas derivadas estáveis: map/associate novos a cada composição tornavam
     // a fileira não-pulável (o LazyColumn recompunha a fileira inteira a cada
     // emissão do UiState, mesmo sem nada mudar nela).
@@ -1654,6 +1659,7 @@ private fun TvGridView(
 @Composable
 private fun LocalGridView(
     state: MoviesHomeViewModel.UiState,
+    viewModel: MoviesHomeViewModel,
     kind: String?,
     today: String,
     onItemClick: (MovieItem) -> Unit,
@@ -1666,6 +1672,10 @@ private fun LocalGridView(
     val remaining: Map<Int, Int>?
     val badges: Map<Int, String>?
     val subs: Map<Int, String>?
+    val isRecommended = kind != MoviesHomeViewModel.LOCAL_CONTINUE &&
+        kind != MoviesHomeViewModel.LOCAL_NEW_EPISODES &&
+        kind != MoviesHomeViewModel.LOCAL_UP_NEXT
+    var tasteOpen by rememberSaveable { mutableStateOf(false) }
     when (kind) {
         MoviesHomeViewModel.LOCAL_CONTINUE -> {
             items = state.continueWatching
@@ -1699,6 +1709,21 @@ private fun LocalGridView(
     }
     Column(Modifier.fillMaxSize()) {
         SeeAllGridHeader(title, onBack)
+        // Lote 21 (v1.31.0): na grade de recomendados, o botão que explica
+        // o motor ("O que molda suas recomendações") — regras, sementes e
+        // os sinais de gosto com remoção.
+        if (isRecommended) {
+            TextButton(
+                onClick = { tasteOpen = true },
+                modifier = Modifier.padding(start = com.aotv.app.ui.common.pagePadding()),
+            ) {
+                Text(
+                    "Por que estas recomendações?",
+                    color = Accent, fontFamily = ManropeFontFamily, fontSize = 13.sp,
+                )
+            }
+        }
+        if (tasteOpen) TasteDialog(state = state, viewModel = viewModel, onDismiss = { tasteOpen = false })
         if (items.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 AotvEmptyState(Icons.Default.MovieFilter, "Nada encontrado", "Essa lista está vazia agora.")

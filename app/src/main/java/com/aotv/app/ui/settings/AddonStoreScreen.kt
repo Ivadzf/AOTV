@@ -112,12 +112,47 @@ fun AddonStoreScreen(onBack: () -> Unit, onOpenHome: () -> Unit = {}, vm: AddonS
                             if (list.isEmpty()) item {
                                 Text("Nenhum addon com esses filtros.", color = TextTertiary, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                             }
-                            items(list, key = { it.url + "#" + it.rank }) { a ->
-                                val selected = st.selectedUrl == a.url
-                                StoreCard(a, st.isInstalled(a), selected) { vm.select(a) }
-                                if (selected && !wide) {
-                                    AddonDetail(a, st.isInstalled(a), st.busy == a.url, st.busy != null, actions, rowsFocus,
-                                        Modifier.padding(top = 2.dp))
+                            // Sugeridos (Lote 21, v1.31.0): seção no topo, sem
+                            // busca e no filtro "Todos" — o resto segue abaixo.
+                            val suggested = if (st.query.isBlank() && st.show == AddonStoreViewModel.Show.ALL) {
+                                list.filter { it.url.lowercase() in AddonStoreViewModel.SUGGESTED_URLS }
+                            } else emptyList()
+                            val rest = list - suggested.toSet()
+                            val display: List<Any> = buildList {
+                                if (suggested.isNotEmpty()) {
+                                    add("header-sugeridos")
+                                    addAll(suggested)
+                                    if (rest.isNotEmpty()) add("header-todos")
+                                }
+                                addAll(rest)
+                            }
+                            items(display, key = {
+                                when (it) {
+                                    is String -> it
+                                    is CommunityAddon -> it.url + "#" + it.rank
+                                    else -> it.toString()
+                                }
+                            }) { entry ->
+                                when (entry) {
+                                    "header-sugeridos" -> Text(
+                                        "Sugeridos — testados no AOTV",
+                                        color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(top = 14.dp, bottom = 2.dp),
+                                    )
+                                    "header-todos" -> Text(
+                                        "Todos os addons",
+                                        color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(top = 14.dp, bottom = 2.dp),
+                                    )
+                                    is CommunityAddon -> {
+                                        val a = entry
+                                        val selected = st.selectedUrl == a.url
+                                        StoreCard(a, st.isInstalled(a), selected) { vm.select(a) }
+                                        if (selected && !wide) {
+                                            AddonDetail(a, st.isInstalled(a), st.busy == a.url, st.busy != null, actions, rowsFocus,
+                                                Modifier.padding(top = 2.dp))
+                                        }
+                                    }
                                 }
                             }
                         }

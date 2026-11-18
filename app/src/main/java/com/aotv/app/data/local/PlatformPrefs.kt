@@ -177,6 +177,9 @@ internal val SCOPED_KEYS = listOf(
     // As chaves de conta (API key / client ID / token) são DO APARELHO e
     // vivem nas listas do AotvBackup, não aqui — ver o comentário lá.
     "mdblist_enabled", "mdblist_rating_sources",
+    // Lote 21 (v1.31.0): 👍/👎 e favoritos do gosto + autoplay de trailer.
+    "taste_likes_v1", "taste_dislikes_v1", "taste_favorites_v1",
+    "pref_trailer_autoplay", "pref_trailer_autoplay_wifi_only",
     "anilist_access_token", "anilist_enabled",
     "tvdb_episode_ordering", "tvdb_ordering_enabled",
     "post_play_rating_enabled",
@@ -901,6 +904,35 @@ class PlatformPrefs @Inject constructor(
     var mdbListRatingSources: String
         get() = prefs.getString(sk("mdblist_rating_sources"), "") ?: ""
         set(value) { prefs.edit().putString(sk("mdblist_rating_sources"), value).apply() }
+
+    // Lote 21 — "Picked for you" explicável (v1.31.0): 👍/👎 por título e
+    // favoritos do gosto ("tastePick"), por perfil, em CSV "tmdbId:TIPO"
+    // (ex.: "123:MOVIE,456:SERIES"). Vazio = sem sinal. O 👍/👎 alimenta
+    // as recomendações (👎 some da lista, 👍 e favoritos viram sementes) e
+    // a tela "O que molda suas recomendações" explica as regras.
+    /** Títulos com 👍 neste perfil (CSV "tmdbId:TIPO"). */
+    var tasteLikes: String
+        get() = prefs.getString(sk("taste_likes_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("taste_likes_v1"), value).apply() }
+    /** Títulos com 👎 neste perfil (CSV "tmdbId:TIPO") — nunca recomendados. */
+    var tasteDislikes: String
+        get() = prefs.getString(sk("taste_dislikes_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("taste_dislikes_v1"), value).apply() }
+    /** Favoritos do gosto neste perfil (CSV "tmdbId:TIPO", 3+ p/ valer). */
+    var tasteFavorites: String
+        get() = prefs.getString(sk("taste_favorites_v1"), "") ?: ""
+        set(value) { prefs.edit().putString(sk("taste_favorites_v1"), value).apply() }
+
+    // Lote 21 — Trailers (v1.31.0): autoplay no topo do detalhe, só no
+    // Wi-Fi por padrão. Desligado, o trailer só toca no botão ▷ Trailer.
+    /** Trailer toca sozinho no detalhe, alguns segundos após abrir (padrão: ligado). */
+    var trailerAutoplay: Boolean
+        get() = prefs.getBoolean(sk("pref_trailer_autoplay"), true)
+        set(value) { prefs.edit().putBoolean(sk("pref_trailer_autoplay"), value).apply() }
+    /** Autoplay do trailer só no Wi-Fi (padrão: ligado). */
+    var trailerAutoplayWifiOnly: Boolean
+        get() = prefs.getBoolean(sk("pref_trailer_autoplay_wifi_only"), true)
+        set(value) { prefs.edit().putBoolean(sk("pref_trailer_autoplay_wifi_only"), value).apply() }
 
     /** Client ID do AniList, colado pelo usuário. Vazio = desligado. */
     var anilistClientId: String

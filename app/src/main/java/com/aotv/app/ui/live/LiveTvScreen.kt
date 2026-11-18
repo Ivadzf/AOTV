@@ -237,9 +237,21 @@ fun LiveTvScreen(
 
         // Lote 8 (v1.18.0): seção de esportes ao vivo (Frente 2) — depois das
         // pílulas de filtro, só na vista de canais. Sem linhas, não desenha nada.
+        // Lote 21 (v1.31.0): a classificação do EPG NÃO roda na composição
+        // (thread principal) — produceState + Dispatchers.Default, com a
+        // classificação em cache (SportsScores). Antes, cada recomposição
+        // revarria o dicionário de 607 times p/ cada canal na Main (ANR).
         if (!guide && sportsShow) {
+            val liveSportsRows by produceState(
+                initialValue = emptyList<Pair<com.aotv.app.data.live.LiveChannel, com.aotv.app.data.live.LiveProgram?>>(),
+                key1 = v.rows, key2 = v.epg, key3 = v.now,
+            ) {
+                value = withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    liveSportsNow(v.rows.map { it.channel }, v.epg, v.now)
+                }
+            }
             SportsSection(
-                rows = liveSportsNow(v.rows.map { it.channel }, v.epg, v.now),
+                rows = liveSportsRows,
                 now = v.now,
                 hideScores = sportsHideScores,
                 scoreDelaySec = sportsScoreDelaySec,

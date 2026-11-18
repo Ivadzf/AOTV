@@ -454,7 +454,9 @@ fun TvCastCard(name: String, role: String, photo: String, onClick: () -> Unit) {
                 .then(if (focused) Modifier.border(0.22.r, FocusRing, CircleShape) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
-            if (photo.isNotBlank()) AsyncImage(photo, name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            // Lote 21 (v1.31.0): a foto do elenco usa w500 em vez de w342
+            // (tvPosterUrl) — o cartão é grande na TV e o w342 borrava.
+            if (photo.isNotBlank()) AsyncImage(tvPosterUrl(photo), name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Icon(Icons.Default.Person, null, tint = TextTertiary, modifier = Modifier.size(3.r))
         }
         Text(name, color = TextPrimary, fontSize = 1.rs, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 0.75.r))

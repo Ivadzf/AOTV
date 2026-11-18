@@ -7,6 +7,7 @@ import com.aotv.app.data.remote.AddonCatalogExtra
 import com.aotv.app.data.remote.AddonDiscoverCatalog
 import com.aotv.app.data.remote.AddonMetaResolver
 import com.aotv.app.data.remote.DiscoverCatalogMatcher
+import com.aotv.app.data.remote.MDBListService
 import com.aotv.app.data.remote.StremioAddonService
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.TmdbGenreDto
@@ -54,6 +55,7 @@ class DiscoverViewModel @Inject constructor(
     private val stremio: StremioAddonService,
     private val addonMetas: AddonMetaResolver,
     private val matcher: DiscoverCatalogMatcher,
+    private val mdbList: MDBListService,
 ) : ViewModel() {
 
     enum class Kind { MOVIE, SERIES }
@@ -144,13 +146,39 @@ class DiscoverViewModel @Inject constructor(
                 prefs.addons.value.filter { it.enabled }.map { e ->
                     async { stremio.discoverCatalogs(e.url) }
                 }.awaitAll().flatten()
-            }
+            } + mdbListCatalogs()
             _uiState.update { it.copy(catalogs = found, catalogLoading = false) }
             // Restaura o catálogo escolhido na sessão anterior, se ele ainda existir.
             val saved = prefs.discoverCatalog
             if (saved.isNotBlank()) {
                 val match = found.firstOrNull { it.key == saved }
                 if (match != null) selectCatalog(match)
+            }
+        }
+    }
+
+    /**
+     * Listas do usuário no MDBList como pseudo-catálogos (Lote 21, v1.31.0):
+     * aparecem no seletor do Descobrir como "MDBList — Nome da lista", uma por
+     * tipo (filme/série; lista mista aparece nas duas abas). Sem chave
+     * configurada, não há lista — o Descobrir segue só com os addons.
+     */
+    private suspend fun mdbListCatalogs(): List<AddonDiscoverCatalog> {
+        if (!mdbList.isConnected) return emptyList()
+        return mdbList.getUserLists().getOrDefault(emptyList()).flatMap { list ->
+            val types = when (list.mediatype.lowercase()) {
+                "movie" -> listOf("movie")
+                "series", "show", "tv" -> listOf("series")
+                else -> listOf("movie", "series")
+            }
+            types.map { type ->
+                AddonDiscoverCatalog(
+                    addonId = MDBLIST_ADDON_ID,
+                    addonName = "MDBList",
+                    type = type,
+                    id = "list:${list.id}",
+                    name = list.name,
+                )
             }
         }
     }
@@ -407,6 +435,8 @@ class DiscoverViewModel @Inject constructor(
      */
     private suspend fun fetchAddon(s: UiState, skip: Int): AddonPage? {
         val catalog = s.selectedCatalog ?: return null
+        // Listas do MDBList (Lote 21, v1.31.0): pseudo-catálogo, não addon Stremio.
+        if (catalog.addonId == MDBLIST_ADDON_ID) return fetchMdbList(s, skip)
         val series = s.kind == Kind.SERIES
         val metas = stremio.catalogMetasWithExtras(
             catalog.base, catalog.type, catalog.id, skip, s.selectedExtras,
@@ -426,6 +456,40 @@ class DiscoverViewModel @Inject constructor(
         }
         val status = if (matched.isEmpty()) AddonStatus.NO_TMDB_MATCH else AddonStatus.OK
         return AddonPage(matched, skip + page.size, metas.size >= ADDON_PAGE, status)
+    }
+
+    /**
+     * Uma página de uma lista do MDBList (Lote 21, v1.31.0): os itens já têm
+     * tmdbid — resolve cada um por id no TMDB (pôster, sinopse, nota), sem
+     * casamento por título. Item sem tmdbid não entra (nunca se mostra um
+     * título como se fosse do TMDB sem ser). Página de 40, com offset p/ o
+     * "carregar mais" do Descobrir.
+     */
+    private suspend fun fetchMdbList(s: UiState, skip: Int): AddonPage {
+        val catalog = s.selectedCatalog ?: return AddonPage(emptyList(), skip, false, AddonStatus.CONNECTION_ERROR)
+        val listId = catalog.id.removePrefix("list:").toIntOrNull()
+            ?: return AddonPage(emptyList(), skip, false, AddonStatus.EMPTY)
+        val series = s.kind == Kind.SERIES
+        val items = mdbList.getListItems(listId, ADDON_PAGE, skip).getOrNull()
+            ?: return AddonPage(emptyList(), skip, false, AddonStatus.CONNECTION_ERROR)
+        if (items.isEmpty()) return AddonPage(emptyList(), skip, false, AddonStatus.EMPTY)
+        val apiKey = prefs.tmdbApiKey
+        if (apiKey.isBlank()) return AddonPage(emptyList(), skip, false, AddonStatus.EMPTY)
+        // Resolve em paralelo (40 chamadas sequenciais demorariam segundos
+        // demais numa conexão lenta); a ordem da lista é preservada.
+        val matched = coroutineScope {
+            items.mapNotNull { item ->
+                val id = item.tmdbid ?: return@mapNotNull null
+                async {
+                    runCatching {
+                        if (series) tmdb.getSeriesDetail(id, apiKey = apiKey).toMovieItem()
+                        else tmdb.getMovieDetail(id, apiKey = apiKey).toMovieItem()
+                    }.getOrNull()
+                }
+            }.awaitAll().filterNotNull()
+        }.filter { it.posterUrl.isNotBlank() && it.title.isNotBlank() }
+        val status = if (matched.isEmpty()) AddonStatus.NO_TMDB_MATCH else AddonStatus.OK
+        return AddonPage(matched, skip + items.size, items.size >= ADDON_PAGE, status)
     }
 
     private suspend fun fetch(s: UiState, page: Int): Page? {
@@ -480,6 +544,9 @@ class DiscoverViewModel @Inject constructor(
 
         /** Itens lidos por página de catálogo de addon (igual à Início e às coleções). */
         const val ADDON_PAGE = 40
+
+        /** Id do pseudo-addon das listas do MDBList no Descobrir (Lote 21, v1.31.0). */
+        const val MDBLIST_ADDON_ID = "mdblist"
 
         /** Títulos sem id por página que tentam o casamento por título+ano (o resto fica sem par). */
         const val MAX_TITLE_MATCH_ATTEMPTS = 8

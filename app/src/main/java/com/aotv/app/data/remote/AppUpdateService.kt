@@ -47,12 +47,16 @@ import android.os.Build
 import androidx.core.content.FileProvider
 import com.aotv.app.BuildConfig
 import com.aotv.app.data.local.PlatformPrefs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -311,6 +315,11 @@ class AppUpdateService @Inject constructor(
         private const val APK_FILE_NAME = "aotv-update.apk"
         /** Intervalo mínimo entre checagens automáticas (24 h). */
         const val AUTO_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
+        /** Lote 21 (v1.31.0): download com retomada — tentativas e timeouts. */
+        private const val MAX_DOWNLOAD_ATTEMPTS = 3
+        private const val DOWNLOAD_RETRY_DELAY_MS = 1000L
+        private const val DOWNLOAD_CONNECT_TIMEOUT_SEC = 30L
+        private const val DOWNLOAD_READ_TIMEOUT_SEC = 120L
     }
 
     private val http = client.newBuilder().cache(null).build()
@@ -429,38 +438,111 @@ class AppUpdateService @Inject constructor(
      * instalar nada. Sem hash ([AppRelease.sha256] vazio ou inválido), só
      * o tamanho é conferido e [ApkDownload.hashVerified] volta false — a
      * tela mostra isso com honestidade, sem fingir verificação.
+     *
+     * Lote 21 (v1.31.0) — fix do Timeout do teste da v1.30.0: o download
+     * RETOMA de onde parou (header `Range`, parcial guardado no cache),
+     * tenta até 3 vezes com backoff (1 s, 2 s) e usa timeout de leitura
+     * maior (120 s) só p/ o download — o OkHttp compartilhado não tem
+     * timeout próprio e um APK de 81 MB numa conexão instável morria no
+     * meio e recomeçava do zero. Servidor sem suporte a `Range` (responde
+     * 200 em vez de 206) recomeça do zero, descartando o parcial. Parcial
+     * incompleto é MANTIDO p/ a próxima tentativa retomar; só o arquivo
+     * com SHA-256 divergente é apagado (corrompido, não dá p/ retomar).
+     * [onProgress] recebe (baixados, total) durante a cópia — total 0
+     * quando a release não informou o tamanho.
      */
-    suspend fun downloadApk(context: Context, release: AppRelease): Result<ApkDownload> = withContext(Dispatchers.IO) {
+    suspend fun downloadApk(
+        context: Context,
+        release: AppRelease,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)? = null
+    ): Result<ApkDownload> = withContext(Dispatchers.IO) {
         runCatching {
             require(isApkAssetUrl(release.apkUrl)) { "URL do APK fora da release oficial" }
-            val req = Request.Builder()
-                .url(release.apkUrl)
-                .header("User-Agent", "AOTV/${BuildConfig.VERSION_NAME} (Android)")
-                .build()
             val outFile = File(context.cacheDir, APK_FILE_NAME)
-            http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) error("Download falhou: HTTP ${resp.code}")
-                val body = resp.body ?: error("Download falhou: resposta vazia")
-                outFile.outputStream().use { out -> body.byteStream().copyTo(out) }
-            }
-            if (!outFile.exists() || outFile.length() <= 0) error("Download falhou: arquivo vazio")
-            val downloadedBytes = outFile.length()
-            if (release.sizeBytes > 0 && downloadedBytes != release.sizeBytes) {
-                outFile.delete()
-                error("Download incompleto: $downloadedBytes de ${release.sizeBytes} bytes")
-            }
-            val expectedSha = release.sha256.trim().lowercase()
-            if (isValidSha256(expectedSha)) {
-                val actualSha = sha256Hex(outFile)
-                if (actualSha != expectedSha) {
-                    outFile.delete()
-                    error("SHA-256 não confere: o APK baixado não é o da release oficial")
+            var lastError: Exception? = null
+            repeat(MAX_DOWNLOAD_ATTEMPTS) { attempt ->
+                try {
+                    val downloadedBytes = downloadAttempt(release, outFile, onProgress)
+                    if (!outFile.exists() || downloadedBytes <= 0) {
+                        error("Download falhou: arquivo vazio")
+                    }
+                    if (release.sizeBytes > 0 && downloadedBytes != release.sizeBytes) {
+                        // Incompleto — o parcial fica p/ a próxima tentativa
+                        // retomar; só desiste depois da última tentativa.
+                        error("Download incompleto: $downloadedBytes de ${release.sizeBytes} bytes")
+                    }
+                    val expectedSha = release.sha256.trim().lowercase()
+                    if (isValidSha256(expectedSha)) {
+                        val actualSha = sha256Hex(outFile)
+                        if (actualSha != expectedSha) {
+                            // Corrompido — retomar não adianta, apaga tudo.
+                            outFile.delete()
+                            error("SHA-256 não confere: o APK baixado não é o da release oficial")
+                        }
+                        return@runCatching ApkDownload(outFile, hashVerified = true, sha256 = expectedSha)
+                    }
+                    return@runCatching ApkDownload(outFile, hashVerified = false, sha256 = "")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastError = e
+                    if (attempt + 1 < MAX_DOWNLOAD_ATTEMPTS) delay(DOWNLOAD_RETRY_DELAY_MS * (attempt + 1))
                 }
-                ApkDownload(outFile, hashVerified = true, sha256 = expectedSha)
-            } else {
-                ApkDownload(outFile, hashVerified = false, sha256 = "")
+            }
+            throw lastError ?: IllegalStateException("Download falhou sem motivo")
+        }
+    }
+
+    /**
+     * Uma tentativa de download: retoma o parcial do mesmo asset (quando
+     * o tamanho informado bate) ou recomeça do zero. Devolve os bytes no
+     * arquivo ao fim da tentativa; lança em erro HTTP, resposta vazia ou
+     * falha de rede (o chamador decide o retry). O parcial de OUTRO asset
+     * (tamanho diferente do esperado, ou sem tamanho informado e arquivo
+     * antigo) é descartado antes de começar.
+     */
+    private fun downloadAttempt(
+        release: AppRelease,
+        outFile: File,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)? = null
+    ): Long {
+        val expectedTotal = release.sizeBytes
+        val partialBytes = if (outFile.exists() && expectedTotal > 0 && outFile.length() in 1 until expectedTotal) {
+            outFile.length()
+        } else {
+            if (outFile.exists()) outFile.delete()
+            0L
+        }
+        val downloadHttp = http.newBuilder()
+            .connectTimeout(DOWNLOAD_CONNECT_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .readTimeout(DOWNLOAD_READ_TIMEOUT_SEC, TimeUnit.SECONDS)
+            .build()
+        val reqBuilder = Request.Builder()
+            .url(release.apkUrl)
+            .header("User-Agent", "AOTV/${BuildConfig.VERSION_NAME} (Android)")
+        if (partialBytes > 0) reqBuilder.header("Range", "bytes=$partialBytes-")
+        downloadHttp.newCall(reqBuilder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) error("Download falhou: HTTP ${resp.code}")
+            val body = resp.body ?: error("Download falhou: resposta vazia")
+            // 206 = o servidor aceitou retomar; 200 com Range pedido =
+            // sem suporte a Range — o corpo é o arquivo inteiro.
+            val resumed = partialBytes > 0 && resp.code == 206
+            val startAt = if (resumed) partialBytes else 0L
+            if (!resumed && partialBytes > 0) outFile.delete()
+            val total = if (expectedTotal > 0) expectedTotal else resp.body?.contentLength()?.let { it + startAt } ?: 0L
+            FileOutputStream(outFile, resumed).use { out ->
+                val stream = body.byteStream()
+                val buf = ByteArray(64 * 1024)
+                var written = startAt
+                var read: Int
+                while (stream.read(buf).also { read = it } != -1) {
+                    out.write(buf, 0, read)
+                    written += read
+                    onProgress?.invoke(written, total)
+                }
             }
         }
+        return outFile.length()
     }
 
     /** APK já baixado e conferido no cache (download em 2º plano), se existir. null = nada pronto. */

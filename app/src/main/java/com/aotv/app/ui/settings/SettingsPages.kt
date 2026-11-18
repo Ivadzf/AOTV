@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -2160,6 +2161,7 @@ private fun AparenciaPage(
         SettingsSection("Atualizações", anchor = SettingsAnchors.APPEAR_UPDATE)
         val updateState by viewModel.updateState.collectAsStateWithLifecycle()
         val updateDownloading by viewModel.updateDownloading.collectAsStateWithLifecycle()
+        val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
         val updateDownloadError by viewModel.updateDownloadError.collectAsStateWithLifecycle()
         val updateNeedsPermission by viewModel.updateNeedsPermission.collectAsStateWithLifecycle()
         val updateCheckEnabled by viewModel.appUpdateCheckEnabled.collectAsStateWithLifecycle()
@@ -2225,8 +2227,19 @@ private fun AparenciaPage(
                 } else "$abiLabel • $shaLabel"
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.FiberManualRecord,
-                    title = if (updateDownloading) "Baixando atualização…" else if (ready) "Instalar atualização pronta ${available.release.tag}" else "Baixar e instalar ${available.release.tag}",
-                    sub = if (ready) readyLabel else "Baixa o $abiLabel da release oficial e pede p/ instalar. $shaLabel.",
+                    title = if (updateDownloading) {
+                        val pct = updateDownloadProgress?.percent
+                        if (pct != null) "Baixando atualização… $pct%" else "Baixando atualização…"
+                    } else if (ready) "Instalar atualização pronta ${available.release.tag}" else "Baixar e instalar ${available.release.tag}",
+                    sub = if (updateDownloading) {
+                        // Lote 21 (v1.31.0): progresso real do download com
+                        // retomada — "34 de 81 MB", sem fingir velocidade.
+                        val prog = updateDownloadProgress
+                        if (prog != null && prog.totalBytes > 0) {
+                            val fmt = com.aotv.app.data.local.MobileDataUsage.formatBytes
+                            "${fmt(prog.downloadedBytes)} de ${fmt(prog.totalBytes)} — se cair, retoma de onde parou."
+                        } else "Baixando da release oficial…"
+                    } else if (ready) readyLabel else "Baixa o $abiLabel da release oficial e pede p/ instalar. $shaLabel.",
                     onClick = { viewModel.downloadAndInstallUpdate() },
                     grouped = true,
                     divider = true,
@@ -2322,6 +2335,8 @@ private fun ReproducaoPage(
     val audio by viewModel.audioPref.collectAsStateWithLifecycle()
     val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
     val heroTrailer by viewModel.heroTrailer.collectAsStateWithLifecycle()
+    val trailerAutoplay by viewModel.trailerAutoplay.collectAsStateWithLifecycle()
+    val trailerAutoplayWifiOnly by viewModel.trailerAutoplayWifiOnly.collectAsStateWithLifecycle()
     val subOn by viewModel.subOn.collectAsStateWithLifecycle()
     val subLang by viewModel.subLang.collectAsStateWithLifecycle()
     var pickLang by remember { mutableStateOf(false) }
@@ -2399,6 +2414,28 @@ private fun ReproducaoPage(
                 trailing = { Switch(checked = heroTrailer, onCheckedChange = { viewModel.setHeroTrailer(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setHeroTrailer(!heroTrailer) },
                 grouped = true,
+            )
+            // Autoplay do trailer no detalhe (Lote 21, v1.31.0): toca no topo
+            // do detalhe depois de alguns segundos, num mini-player (sem
+            // abrir a tela cheia). Desligado, o trailer só toca no botão ▷.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Movie,
+                title = "Autoplay do trailer no detalhe",
+                sub = if (trailerAutoplay) "Toca no topo do detalhe depois de alguns segundos" else "Desligado. O trailer só toca no botão ▷ Trailer",
+                trailing = { Switch(checked = trailerAutoplay, onCheckedChange = { viewModel.setTrailerAutoplay(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setTrailerAutoplay(!trailerAutoplay) },
+                grouped = true,
+                divider = true,
+            )
+            // Só no Wi-Fi (padrão): no dados móveis o autoplay não dispara.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Wifi,
+                title = "Autoplay do trailer só no Wi-Fi",
+                sub = if (trailerAutoplayWifiOnly) "No dados móveis, o trailer só toca no botão ▷ Trailer" else "O autoplay vale também no dados móveis",
+                trailing = { Switch(checked = trailerAutoplayWifiOnly, onCheckedChange = { viewModel.setTrailerAutoplayWifiOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setTrailerAutoplayWifiOnly(!trailerAutoplayWifiOnly) },
+                grouped = true,
+                divider = true,
             )
             // Legenda do perfil. Ligada ao abrir e o idioma em que ela liga sozinha no player.
             com.aotv.app.ui.common.SettingsRow(

@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -1804,6 +1805,31 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
             )
+        } else if (sourcePanelOpen && !locked && panelKind == "xray") {
+            // X-Ray (Lote 21, v1.31.0): corte, elenco, história, curva de
+            // intensidade (da legenda ativa) e marcadores de pular trechos.
+            XRayPanel(
+                title = title,
+                loading = xrayLoading,
+                cast = xrayCast,
+                director = xrayDirector,
+                summary = xraySummary,
+                releaseLabel = currentSourceLabel,
+                fileDurationMs = duration,
+                tmdbRuntimeMin = runtimeMin,
+                buckets = intensityBuckets(externalCues, duration),
+                hasSubtitles = selectedSubUrl != null && externalCues.isNotEmpty(),
+                markers = listOfNotNull(
+                    skipSegments.recap?.let { XRayMarker("Recapitulação", it.start * 1_000, it.end * 1_000) },
+                    skipSegments.intro?.let { XRayMarker("Abertura", it.start * 1_000, it.end * 1_000) },
+                    skipSegments.outro?.let { XRayMarker("Encerramento", it.start * 1_000, it.end * 1_000) },
+                    skipSegments.postCredits?.let { XRayMarker("Pós-créditos", it.start * 1_000, it.end * 1_000) },
+                ),
+                positionMs = position,
+                onSeek = { ms -> currentPlayer().seekTo(ms); position = ms },
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
         } else if (sourcePanelOpen && !locked) {
             PlayerActionPanel(
                 title = panelTitle,
@@ -1976,6 +2002,13 @@ class PlayerSession(
     var introSkippedEp by run { mutableIntStateOf(-1) } // já pulou nesse episódio
     // Pular trechos (v1.8.1): segmentos IntroDB/SkipDB/Anime-Skip do título atual.
     var skipSegments by run { mutableStateOf(com.aotv.app.data.remote.SkipSegments()) }
+    // X-Ray (Lote 21, v1.31.0): elenco/diretor + resumo da Wikipédia do título.
+    // Carregado ao abrir o painel (1x por título/episódio); marcadores e curva
+    // de intensidade vêm do estado que o player já tem (skipSegments/externalCues).
+    var xrayLoading by run { mutableStateOf(false) }
+    var xrayCast by run { mutableStateOf<List<com.aotv.app.domain.model.CastMember>>(emptyList()) }
+    var xrayDirector by run { mutableStateOf<String?>(null) }
+    var xraySummary by run { mutableStateOf<String?>(null) }
     val skipSegmentsService = com.aotv.app.data.remote.SkipSegmentsService()
     /** Última posição vista pelo poll (p/ detectar entrada natural no segmento). */
     private var lastSkipCheckPos by run { mutableLongStateOf(0L) }
@@ -4047,6 +4080,7 @@ class PlayerSession(
         "info" -> "Informações de reprodução"
         "eq" -> "Equalizador"
         "night" -> "Modo noturno"
+        "xray" -> "X-Ray"
         "sleep" -> "Sleep timer"
         else -> "Fontes"
     }
@@ -4065,6 +4099,22 @@ class PlayerSession(
         // Lote 5 item 2: junto, os stats do torrent (se a fonte for P2P).
         if (kind == "info") { refreshTechInfo(); refreshTorrentStats() }
         if (kind == "episodes") selectPanelSeason(curSeason.coerceAtLeast(1))
+        // X-Ray (Lote 21, v1.31.0): carrega elenco/diretor + resumo ao abrir.
+        if (kind == "xray") loadXRay()
+    }
+
+    /** Carrega os dados do X-Ray a cada abertura do painel (sem TMDB, só os marcadores/curva). */
+    fun loadXRay() {
+        if (xrayLoading) return
+        xrayLoading = true
+        scope.launch {
+            val credits = episodeVm.xrayCredits(tmdbId, type)
+            val summary = episodeVm.xrayTitleSummary(title)
+            xrayCast = credits.cast
+            xrayDirector = credits.director
+            xraySummary = summary
+            xrayLoading = false
+        }
     }
     // Chips do player (celular E TV: a mesma lista alimenta os dois — o toque
     // usa como `actions`, a TV como `tvChips`). Cada chip tem o id canônico
@@ -4105,6 +4155,10 @@ class PlayerSession(
         // chips "color"/"eq" — id fora do catálogo, vai p/ o fim e NÃO pode
         // ser desligado nas Configurações (a escolha é por título, no painel).
         add(PlayerChipItem(Icons.Default.DarkMode, "Modo noturno", active = nightModeState.nightOn || nightModeState.clearDialogueOn, id = "night") { openDpadPanel("night") })
+        // X-Ray (Lote 21, v1.31.0): mesmo padrão dos chips "color"/"info" — id
+        // fora do catálogo canônico, vai p/ o fim e NÃO pode ser desligado nas
+        // Configurações (é um painel de contexto, não um botão configurável).
+        add(PlayerChipItem(Icons.Default.Science, "X-Ray", id = "xray") { openDpadPanel("xray") })
         // Sleep timer (Lote 9 item 4, v1.19.0): mesmo padrão — id fora do
         // catálogo, vai p/ o fim. Escolha por sessão, sem pref persistente.
         add(PlayerChipItem(Icons.Default.Bedtime, "Sleep timer", active = sleepMinutes != null || sleepAtEpisodeEnd, id = "sleep") { openDpadPanel("sleep") })

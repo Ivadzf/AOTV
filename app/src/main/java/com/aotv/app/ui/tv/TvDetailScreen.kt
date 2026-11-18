@@ -376,7 +376,7 @@ private fun TvDetailScreenBody(
         }
 
         state.personName?.let { person ->
-            TvPersonOverlay(person, state.personCredits, state.personLoading, { viewModel.closePerson() }) { m ->
+            TvPersonOverlay(person, state.personCredits, state.personLoading, state.personBio, state.personDetails, { viewModel.closePerson() }) { m ->
                 viewModel.closePerson(); onRelatedClick(m)
             }
         }
@@ -487,7 +487,7 @@ fun TvSourcePanel(title: String, sub: String, onDismiss: () -> Unit, content: @C
 
 /** Filmografia do ator por cima do detalhe (.person-overlay). */
 @Composable
-private fun TvPersonOverlay(name: String, items: List<MovieItem>, loading: Boolean, onDismiss: () -> Unit, onPick: (MovieItem) -> Unit) {
+private fun TvPersonOverlay(name: String, items: List<MovieItem>, loading: Boolean, bio: String? = null, details: String? = null, onDismiss: () -> Unit, onPick: (MovieItem) -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         TvScrollArea(inset = 2.r) {
             LazyVerticalGrid(
@@ -499,6 +499,13 @@ private fun TvPersonOverlay(name: String, items: List<MovieItem>, loading: Boole
                     Column(Modifier.padding(top = 2.6.r, bottom = 1.r)) {
                         TvEyebrow("Filmografia")
                         Text(name, color = TextPrimary, fontSize = 2.6.rs, fontWeight = FontWeight.ExtraBold)
+                        // Lote 21 (v1.31.0): ficha da pessoa — bio + detalhes.
+                        if (!details.isNullOrBlank()) {
+                            Text(details, color = TextSecondary, fontSize = 1.1.rs, modifier = Modifier.padding(top = 0.6.r))
+                        }
+                        if (!bio.isNullOrBlank()) {
+                            Text(bio, color = TextSecondary, fontSize = 1.15.rs, maxLines = 6, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 0.8.r))
+                        }
                     }
                 }
                 when {

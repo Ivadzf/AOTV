@@ -2,6 +2,7 @@ package com.aotv.app.data.sports
 
 import com.aotv.app.data.live.LiveChannel
 import com.aotv.app.data.live.LiveProgram
+import java.util.Collections
 
 /**
  * Esportes (Lote 8, v1.18.0) — funções puras, sem rede e sem API de esportes.
@@ -65,12 +66,41 @@ fun isSportsChannel(channel: LiveChannel): Boolean {
 
 /** O programa é de esporte (título/descrição) ou já traz um placar no texto.
  * Lote 20 (v1.30.0): o dicionário local também classifica — "Flamengo x
- * Palmeiras" é esporte mesmo sem nenhuma palavra da lista. */
+ * Palmeiras" é esporte mesmo sem nenhuma palavra da lista.
+ * Lote 21 (v1.31.0): a classificação usa o cache ([classifySportsProgramCached])
+ * — o mesmo programa não é varrido de novo a cada recomposição/emissão. */
 fun isSportsProgram(program: LiveProgram): Boolean {
     val hay = (program.title + " " + program.desc).lowercase()
     if (SPORT_WORDS.any { it in hay }) return true
     if (extractScore(program.title + " " + program.desc) != null) return true
-    return classifySportsProgram(program.title, program.desc) != null
+    return classifySportsProgramCached(program.title, program.desc) != null
+}
+
+/**
+ * Cache da classificação do dicionário (Lote 21, v1.31.0 — fix do
+ * travamento da v1.30.0): classificar um programa varre 607 times; sem
+ * cache, cada recomposição da aba Ao vivo e cada emissão do estado do Ao
+ * vivo na Início revarria TODO o EPG na thread principal (ANR). A chave é
+ * título + descrição (é só disso que a classificação depende); LRU de 512
+ * entradas, sincronizado (a classificação roda em Dispatchers.Default e
+ * pode ser chamada de várias corrotinas).
+ */
+private val classificationCache: MutableMap<String, SportsClassification?> =
+    Collections.synchronizedMap(
+        object : LinkedHashMap<String, SportsClassification?>(256, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SportsClassification?>): Boolean =
+                size > 512
+        }
+    )
+
+/** [classifySportsProgram] com cache por programa (ver [classificationCache]). */
+fun classifySportsProgramCached(title: String, desc: String = ""): SportsClassification? {
+    val key = "$title\u0000$desc"
+    val cached = classificationCache[key]
+    if (cached != null || classificationCache.containsKey(key)) return cached
+    val found = classifySportsProgram(title, desc)
+    classificationCache[key] = found
+    return found
 }
 
 /**
@@ -118,6 +148,14 @@ fun liveSportsNow(
  * Próximos jogos de esporte do EPG (p/ a fileira "Próximos" da Início):
  * programas de esporte que começam depois de [now] OU já estão no ar,
  * ordenados pelo início. Sem EPG não há jogo — a lista volta vazia.
+ *
+ * Lote 21 (v1.31.0) — fix do travamento da v1.30.0: (a) UMA só varredura
+ * do dicionário por programa (antes, [isSportsProgram] varria e depois
+ * [classifySportsProgram] varria DE NOVO p/ o mesmo programa); (b) janela
+ * de 24 h — programa que só começa depois de amanhã não é "próximo" e nem
+ * entra na varredura; (c) classificação com cache
+ * ([classifySportsProgramCached]). O chamador ainda precisa rodar fora da
+ * thread principal (ver MoviesHomeViewModel) — aqui só fica barato.
  */
 fun upcomingSportsGames(
     channels: List<LiveChannel>,
@@ -125,21 +163,31 @@ fun upcomingSportsGames(
     now: Long,
     limit: Int = 10,
 ): List<SportsGame> {
+    val horizonMs = now + 24 * 60 * 60 * 1000L
     val out = ArrayList<SportsGame>()
     channels.forEach { c ->
+        val isChannel = isSportsChannel(c)
         val programs = epg[c.id].orEmpty()
         programs.forEach { p ->
-            if (p.stop <= now) return@forEach
-            if (!isSportsChannel(c) && !isSportsProgram(p)) return@forEach
-            // Lote 20 (v1.30.0): classificação do dicionário local — esporte,
-            // competição e times do programa, p/ a fileira e p/ gravar os
-            // jogos do time seguido.
-            val classification = classifySportsProgram(p.title, p.desc)
+            if (p.stop <= now || p.start >= horizonMs) return@forEach
+            val text = p.title + " " + p.desc
+            val hay = text.lowercase()
+            // Sinal barato: canal de esporte, palavra de esporte ou placar
+            // no texto. Sem ele, o dicionário só vale a pena quando o texto
+            // tem cara de confronto ("Time x Time", "vs") — programa com só
+            // o nome de um time, sem adversário, competição nem palavra de
+            // esporte, não é classificado (ambíguo: pode ser documentário).
+            val cheapHit = isChannel || SPORT_WORDS.any { it in hay } || extractScore(text) != null
+            val needsScan = cheapHit || " x " in hay || " vs " in hay || "×" in hay
+            // UMA só classificação por programa (com cache): decide se é
+            // esporte E preenche esporte/competição/times do jogo.
+            val classification = if (needsScan) classifySportsProgramCached(p.title, p.desc) else null
+            if (!cheapHit && classification == null) return@forEach
             out += SportsGame(
                 channelId = c.id, channelName = c.name, channelUrl = c.url,
                 channelLogo = c.logo, channelHeaders = c.headers,
                 title = p.title, desc = p.desc, startMs = p.start, stopMs = p.stop,
-                score = extractScore(p.title + " " + p.desc),
+                score = extractScore(text),
                 sport = classification?.sport.orEmpty(),
                 competition = classification?.competition.orEmpty(),
                 homeTeam = classification?.homeTeam.orEmpty(),

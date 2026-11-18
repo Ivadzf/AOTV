@@ -7,6 +7,7 @@ import com.aotv.app.data.remote.StremioAddonService
 import com.aotv.app.data.remote.SubDlService
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.bestLogoUrl
+import com.aotv.app.data.remote.dto.toCastMember
 import com.aotv.app.data.remote.dto.toDomain
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
@@ -28,6 +29,7 @@ class EpisodePlayerViewModel @Inject constructor(
     private val subDl: SubDlService,
     private val prober: com.aotv.app.data.remote.SourceProber,
     private val debrid: com.aotv.app.data.debrid.DebridService,
+    private val wiki: com.aotv.app.data.remote.WikiService,
 ) : ViewModel() {
 
     /** Serviço de debrid em uso ("Real-Debrid"). null sem conta ou desligado. */
@@ -62,6 +64,32 @@ class EpisodePlayerViewModel @Inject constructor(
         if (apiKey.isBlank() || tmdbId <= 0) return 0
         return runCatching { tmdb.getMovieDetail(tmdbId, apiKey = apiKey).runtime }.getOrNull() ?: 0
     }
+
+    // ── X-RAY (Lote 21, v1.31.0) ────────────────────────────────────────────
+
+    /** Elenco (top 8) + diretor do título, p/ o painel X-Ray do player. */
+    data class XRayCredits(val cast: List<com.aotv.app.domain.model.CastMember>, val director: String?)
+
+    suspend fun xrayCredits(tmdbId: Int, type: String): XRayCredits {
+        val apiKey = prefs.tmdbApiKey
+        if (apiKey.isBlank() || tmdbId <= 0) return XRayCredits(emptyList(), null)
+        val cast = runCatching {
+            if (type == "SERIES") tmdb.getSeriesDetail(tmdbId, apiKey = apiKey).credits?.cast.orEmpty()
+            else tmdb.getMovieDetail(tmdbId, apiKey = apiKey).credits?.cast.orEmpty()
+        }.getOrDefault(emptyList())
+            .filter { it.name.isNotBlank() }.take(8)
+            .map { it.toCastMember() }
+        val director = runCatching {
+            if (type == "SERIES") tmdb.getTvCredits(tmdbId, apiKey = apiKey).crew
+            else tmdb.getMovieCredits(tmdbId, apiKey = apiKey).crew
+        }.getOrDefault(emptyList())
+            .firstOrNull { it.job == "Director" }?.name?.takeIf { it.isNotBlank() }
+        return XRayCredits(cast, director)
+    }
+
+    /** "A história por trás" — resumo do título na Wikipédia (PT-BR). Null sem resumo. */
+    suspend fun xrayTitleSummary(title: String): String? =
+        runCatching { wiki.getSummary(title) }.getOrNull()?.extract?.trim()?.takeIf { it.isNotBlank() }
 
     /** Legendas externas (OpenSubtitles + SubDL) do filme/episódio. Vazio se sem imdb. */
     suspend fun subtitlesFor(tmdbId: Int, type: String, season: Int, episode: Int): List<com.aotv.app.data.remote.ExternalSub> {

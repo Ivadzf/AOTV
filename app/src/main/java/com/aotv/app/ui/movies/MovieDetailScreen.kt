@@ -37,7 +37,11 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Theaters
+import androidx.compose.material.icons.filled.ThumbDown
+import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SkipNext
@@ -140,6 +144,27 @@ fun MovieDetailScreen(
     var trailerOpen by remember { mutableStateOf(false) }  // IFrame (fallback)
     var trailerExo by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
     var trailerLoading by remember { mutableStateOf(false) }
+    // Lote 21 (v1.31.0) — autoplay do trailer: mini-player embutido no topo do
+    // detalhe (não o overlay de tela cheia); minimizar vira PiP flutuante.
+    var trailerMini by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
+    var trailerMiniPip by remember { mutableStateOf(false) }
+    // Uma tentativa de autoplay por título (reseta ao trocar de título).
+    var trailerAutoplayed by remember(item.tmdbId) { mutableStateOf(false) }
+    // Autoplay: 3 s após abrir, só com a pref ligada e (por padrão) só no
+    // Wi-Fi. Se o usuário já abriu o trailer na mão, não dispara.
+    val detailContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(state.trailerKey) {
+        if (state.trailerKey.isBlank() || trailerAutoplayed) return@LaunchedEffect
+        kotlinx.coroutines.delay(3_000)
+        if (trailerAutoplayed || trailerMini != null || trailerExo != null || trailerOpen) return@LaunchedEffect
+        trailerAutoplayed = true
+        if (!viewModel.trailerAutoplayOn()) return@LaunchedEffect
+        if (viewModel.trailerAutoplayWifiOnly() && !com.aotv.app.data.local.MobileDataUsage.isWifiActive(detailContext)) return@LaunchedEffect
+        trailerLoading = true
+        val s = viewModel.trailerStream()
+        trailerLoading = false
+        if (s != null) trailerMini = s
+    }
     // Folha Sobre o título (Lote 11, v1.21.0) e guarda de duração.
     var aboutOpen by remember { mutableStateOf(false) }
     var guardPending by remember { mutableStateOf<GuardPending?>(null) }
@@ -680,6 +705,29 @@ fun MovieDetailScreen(
                                 saved = state.isSaved,
                                 onClick = { viewModel.toggleSave() },
                             )
+                            // Lote 21 (v1.31.0) — 👍/👎/⭐ do gosto: o 👎 tira o
+                            // título das recomendações; ⭐ com 3+ vira semente.
+                            GlassCircleButton(
+                                icon = Icons.Default.ThumbUp,
+                                onClick = { viewModel.toggleTasteLike() },
+                                size = 52.dp,
+                                iconTint = if (state.tasteLiked) Accent else TextPrimary,
+                                contentDescription = if (state.tasteLiked) "Tirar o Gostei" else "Gostei",
+                            )
+                            GlassCircleButton(
+                                icon = Icons.Default.ThumbDown,
+                                onClick = { viewModel.toggleTasteDislike() },
+                                size = 52.dp,
+                                iconTint = if (state.tasteDisliked) LiveRed else TextPrimary,
+                                contentDescription = if (state.tasteDisliked) "Tirar o Não gostei" else "Não gostei",
+                            )
+                            GlassCircleButton(
+                                icon = if (state.tasteFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                onClick = { viewModel.toggleTasteFavorite() },
+                                size = 52.dp,
+                                iconTint = if (state.tasteFavorite) Gold else TextPrimary,
+                                contentDescription = if (state.tasteFavorite) "Tirar dos favoritos do gosto" else "Favorito do gosto",
+                            )
                             // Folha Sobre o título (Lote 11, v1.21.0): ficha do TMDB.
                             // Só aparece quando há pelo menos um dado p/ a ficha.
                             if (hasAbout) {
@@ -715,6 +763,25 @@ fun MovieDetailScreen(
                                 label = if (state.isSaved) "Salvo" else "Minha Lista",
                                 tint = if (state.isSaved) Accent else TextPrimary,
                                 onClick = { viewModel.toggleSave() },
+                            )
+                            // Lote 21 (v1.31.0) — 👍/👎/⭐ do gosto.
+                            DetailActionIcon(
+                                icon = Icons.Default.ThumbUp,
+                                label = if (state.tasteLiked) "Gostei ✓" else "Gostei",
+                                tint = if (state.tasteLiked) Accent else TextPrimary,
+                                onClick = { viewModel.toggleTasteLike() },
+                            )
+                            DetailActionIcon(
+                                icon = Icons.Default.ThumbDown,
+                                label = if (state.tasteDisliked) "Não gostei ✓" else "Não gostei",
+                                tint = if (state.tasteDisliked) LiveRed else TextPrimary,
+                                onClick = { viewModel.toggleTasteDislike() },
+                            )
+                            DetailActionIcon(
+                                icon = if (state.tasteFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                label = if (state.tasteFavorite) "Favorito ✓" else "Favorito",
+                                tint = if (state.tasteFavorite) Gold else TextPrimary,
+                                onClick = { viewModel.toggleTasteFavorite() },
                             )
                             // Folha Sobre o título (Lote 11, v1.21.0).
                             if (hasAbout) {
@@ -1267,6 +1334,33 @@ fun MovieDetailScreen(
         FrostedScrim(panelBlurOn && (sheetOpen || state.personName != null), panelBlurEffect)
         } // fecha o Box do blur atrás das folhas
 
+        // Lote 21 (v1.31.0) — mini-player do trailer: no topo do detalhe
+        // (autoplay) ou PiP flutuante no canto (minimizado). Um só composable
+        // e um só player: ao minimizar não desmonta, só muda de lugar — o
+        // trailer continua de onde estava. Expandir abre o overlay de tela cheia.
+        val miniStream = trailerMini
+        if (miniStream != null) {
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = if (trailerMiniPip) Alignment.BottomEnd else Alignment.TopCenter,
+            ) {
+                com.aotv.app.ui.common.TrailerMiniPlayer(
+                    stream = miniStream,
+                    pip = trailerMiniPip,
+                    modifier = if (trailerMiniPip) {
+                        Modifier.width(200.dp).aspectRatio(16f / 9f)
+                            .padding(end = 12.dp, bottom = 12.dp).navigationBarsPadding()
+                    } else {
+                        Modifier.fillMaxWidth().padding(horizontal = pad)
+                            .padding(top = 56.dp).aspectRatio(16f / 9f)
+                    },
+                    onExpand = { trailerMini = null; trailerMiniPip = false; trailerExo = miniStream },
+                    onMinimize = { trailerMiniPip = true },
+                    onClose = { trailerMini = null; trailerMiniPip = false },
+                )
+            }
+        }
+
         // ── (A) Painel de FONTES/SERVIDORES do episódio selecionado ────────────
         // Reaproveita o visual do bloco "Fontes" do filme (SourceRow), como bottom sheet.
         state.selectedEpisode?.let { (season, episode) ->
@@ -1373,6 +1467,8 @@ fun MovieDetailScreen(
                 name = person,
                 items = state.personCredits,
                 loading = state.personLoading,
+                bio = state.personBio,
+                details = state.personDetails,
                 // Lote 3 item 4: vidro fosco, como na folha de fontes.
                 blurred = blurBehindSheets,
                 onDismiss = { viewModel.closePerson() },
@@ -1510,6 +1606,8 @@ private fun PersonFilmographySheet(
     name: String,
     items: List<MovieItem>,
     loading: Boolean,
+    bio: String? = null,
+    details: String? = null,
     // Lote 3 item 4: com o blur ligado, o card fica translúcido (vidro fosco)
     // e o conteúdo da página atrás aparece desfocado; desligado, opaco como antes.
     blurred: Boolean = false,
@@ -1537,6 +1635,19 @@ private fun PersonFilmographySheet(
                     Text(name, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 GlassCircleButton(icon = Icons.Default.Close, onClick = onDismiss, size = 38.dp, iconTint = TextSecondary, contentDescription = "Fechar")
+            }
+            // Lote 21 (v1.31.0): ficha da pessoa — bio (TMDB, senão Wikipédia)
+            // + departamento/nascimento/local. Sem dado, a seção some.
+            if (!details.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(details, color = TextSecondary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
+            }
+            if (!bio.isNullOrBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    bio, color = TextSecondary, fontSize = 14.sp, lineHeight = 21.sp,
+                    fontFamily = ManropeFontFamily, maxLines = 8, overflow = TextOverflow.Ellipsis,
+                )
             }
             Spacer(Modifier.height(14.dp))
             if (loading) {

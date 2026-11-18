@@ -2,6 +2,8 @@ package com.aotv.app.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
 import com.aotv.app.domain.model.EpisodeItem
+import com.aotv.app.domain.model.MediaType
+import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.domain.model.SeriesItem
 
 private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w342"
@@ -95,4 +97,21 @@ fun TmdbEpisodeDto.toDomain() = EpisodeItem(
     airDate       = airDate ?: "",
     runtimeMin    = runtime ?: 0,
     rating        = voteAverage,
+)
+
+/**
+ * Série do detalhe (/tv/{id}) como MovieItem — p/ as listas do MDBList no
+ * Descobrir (Lote 21, v1.31.0), que resolvem cada item por id no TMDB.
+ */
+fun TmdbSeriesDetailDto.toMovieItem(embedId: String = id.toString()) = MovieItem(
+    tmdbId      = id,
+    embedId     = embedId,
+    title       = name,
+    overview    = overview ?: "",
+    posterUrl   = if (posterPath != null) "$TMDB_IMAGE_BASE$posterPath" else "",
+    backdropUrl = if (backdropPath != null) "$TMDB_BACKDROP_BASE$backdropPath" else "",
+    year        = (firstAirDate ?: "").take(4),
+    rating      = voteAverage,
+    type        = MediaType.SERIES,
+    releaseDate = firstAirDate ?: "",
 )

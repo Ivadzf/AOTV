@@ -151,6 +151,23 @@ interface TmdbApiService {
         @Query("api_key")  apiKey: String,
     ): com.aotv.app.data.remote.dto.TmdbCreditsListDto
 
+    // Lote 21 (v1.31.0) — X-Ray no player: elenco completo (p/ o diretor).
+    // O detalhe já traz o elenco no append credits; aqui só o diretor importa
+    // (crew[].job == "Director"), com o elenco como fallback.
+    @GET("movie/{id}/credits")
+    suspend fun getMovieCredits(
+        @Path("id")        id: Int,
+        @Query("language") lang: String = "pt-BR",
+        @Query("api_key")  apiKey: String,
+    ): com.aotv.app.data.remote.dto.TmdbCreditsListDto
+
+    @GET("tv/{id}/credits")
+    suspend fun getTvCredits(
+        @Path("id")        id: Int,
+        @Query("language") lang: String = "pt-BR",
+        @Query("api_key")  apiKey: String,
+    ): com.aotv.app.data.remote.dto.TmdbCreditsListDto
+
     // Logos do filme/série (TMDB tem logo em PT-BR). include_image_language pega PT+EN+neutro.
     @GET("movie/{id}/images")
     suspend fun getMovieImages(
