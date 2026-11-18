@@ -40,6 +40,7 @@ import com.aotv.app.data.sports.liveSportsNow
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.movies.SportsSection
 import com.aotv.app.ui.theme.*
+import kotlinx.coroutines.withContext
 
 /** Aba "Ao vivo". Canais das listas e contas, com o que está passando agora e a seguir. */
 @Composable

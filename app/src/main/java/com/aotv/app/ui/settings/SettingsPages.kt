@@ -2236,8 +2236,7 @@ private fun AparenciaPage(
                         // retomada — "34 de 81 MB", sem fingir velocidade.
                         val prog = updateDownloadProgress
                         if (prog != null && prog.totalBytes > 0) {
-                            val fmt = com.aotv.app.data.local.MobileDataUsage.formatBytes
-                            "${fmt(prog.downloadedBytes)} de ${fmt(prog.totalBytes)} — se cair, retoma de onde parou."
+                            "${MobileDataUsage.formatBytes(prog.downloadedBytes)} de ${MobileDataUsage.formatBytes(prog.totalBytes)} — se cair, retoma de onde parou."
                         } else "Baixando da release oficial…"
                     } else if (ready) readyLabel else "Baixa o $abiLabel da release oficial e pede p/ instalar. $shaLabel.",
                     onClick = { viewModel.downloadAndInstallUpdate() },
