@@ -23,7 +23,7 @@ import org.json.JSONObject
  * é salva no Continuar assistindo como qualquer reprodução interna.
  *
  * A lista de players instalados usa `queryIntentActivities` (ACTION_VIEW
- * video/*) — no Android 11+ isso exige o bloco `<queries>` no
+ * com MIME video) — no Android 11+ isso exige o bloco `<queries>` no
  * AndroidManifest (sem ele, a lista vem vazia). O pacote do AOTV é
  * excluído da lista.
  */
