@@ -6,7 +6,7 @@ import android.os.Looper
 import android.view.Surface
 import androidx.media3.common.C
 import androidx.media3.common.Format
-import androidx.media3.common.MediaTrackGroup
+import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
 import com.aotv.app.data.torrent.TorrentMagnet
 import com.aotv.app.data.torrent.Torrents
@@ -124,7 +124,7 @@ class MpvPlayer(
             mpv.setOptionString("ytdl", "no")
             mpv.init()
             initialized = true
-        }.getOrDefault(false)
+        }.isSuccess
         if (!ok) {
             initFailed = true
             mainHandler.post { listener.onInitFailed() }
@@ -306,7 +306,7 @@ class MpvPlayer(
                 .setSelectionFlags(flags)
                 .build()
             val group = Tracks.Group(
-                MediaTrackGroup("mpv-$id", format),
+                TrackGroup("mpv-$id", format),
                 false,
                 intArrayOf(C.FORMAT_HANDLED),
                 booleanArrayOf(selected),

@@ -3299,26 +3299,38 @@ class PlayerSession(
     // 0 e o currentPlayer() mentiria (posição 0, play sem efeito). O Cast
     // continua mandando quando está transmitindo, como antes.
     fun activePositionMs(): Long = when {
-        casting && castPlayer != null -> runCatching { castPlayer.currentPosition }.getOrDefault(position)
+        casting && castPlayer != null -> {
+            val cp = castPlayer
+            runCatching { cp.currentPosition }.getOrDefault(position)
+        }
         mpvActive -> mpvPlayer?.positionMs() ?: position
         else -> runCatching { exoPlayer.currentPosition }.getOrDefault(position)
     }
 
     fun activeDurationMs(): Long = when {
-        casting && castPlayer != null -> runCatching { castPlayer.duration }.getOrDefault(duration).coerceAtLeast(0L)
+        casting && castPlayer != null -> {
+            val cp = castPlayer
+            runCatching { cp.duration }.getOrDefault(duration).coerceAtLeast(0L)
+        }
         mpvActive -> mpvPlayer?.durationMs() ?: duration
         else -> runCatching { exoPlayer.duration }.getOrDefault(duration).coerceAtLeast(0L)
     }
 
     fun activeIsPlaying(): Boolean = when {
-        casting && castPlayer != null -> runCatching { castPlayer.isPlaying }.getOrDefault(false)
+        casting && castPlayer != null -> {
+            val cp = castPlayer
+            runCatching { cp.isPlaying }.getOrDefault(false)
+        }
         mpvActive -> mpvPlayer?.isPlaying() == true
         else -> exoPlayer.isPlaying
     }
 
     fun activeSeekTo(ms: Long) {
         when {
-            casting && castPlayer != null -> runCatching { castPlayer.seekTo(ms) }
+            casting && castPlayer != null -> {
+                val cp = castPlayer
+                runCatching { cp.seekTo(ms) }
+            }
             mpvActive -> mpvPlayer?.seekTo(ms)
             else -> runCatching { exoPlayer.seekTo(ms) }
         }
@@ -3327,7 +3339,10 @@ class PlayerSession(
 
     fun activeSetPlaying(playing: Boolean) {
         when {
-            casting && castPlayer != null -> runCatching { castPlayer.playWhenReady = playing }
+            casting && castPlayer != null -> {
+                val cp = castPlayer
+                runCatching { cp.playWhenReady = playing }
+            }
             mpvActive -> mpvPlayer?.setPlaying(playing)
             else -> exoPlayer.playWhenReady = playing
         }
@@ -3335,14 +3350,20 @@ class PlayerSession(
 
     fun activeSetSpeed(rate: Float) {
         when {
-            casting && castPlayer != null -> runCatching { castPlayer.setPlaybackSpeed(rate) }
+            casting && castPlayer != null -> {
+                val cp = castPlayer
+                runCatching { cp.setPlaybackSpeed(rate) }
+            }
             mpvActive -> mpvPlayer?.setSpeed(rate)
             else -> runCatching { exoPlayer.setPlaybackSpeed(rate) }
         }
     }
 
     fun activeBufferedPositionMs(): Long = when {
-        casting && castPlayer != null -> runCatching { castPlayer.bufferedPosition }.getOrDefault(position)
+        casting && castPlayer != null -> {
+            val cp = castPlayer
+            runCatching { cp.bufferedPosition }.getOrDefault(position)
+        }
         mpvActive -> mpvPlayer?.bufferedPositionMs() ?: position
         else -> runCatching { exoPlayer.bufferedPosition }.getOrDefault(position)
     }
