@@ -78,6 +78,18 @@ class PlatformPrefsLote24Settings @Inject constructor(
     private val _folders = MutableStateFlow(HomeFolder24.listFromJson(prefs.homeFolders))
     override val foldersFlow: StateFlow<List<HomeFolder24>> = _folders.asStateFlow()
 
+    // ── Item 4: abas da pílula (DECLARADO AQUI, não na seção do item 4) ────
+    // HOTFIX v1.34.1: o `init` abaixo lança coroutines que escrevem em
+    // `_hiddenTabs` — e o `collect` do StateFlow emite o valor atual NA HORA,
+    // antes de qualquer suspensão (o escopo é Dispatchers.Main.immediate).
+    // O Kotlin inicializa as propriedades na ordem do texto: com a declaração
+    // depois do `init`, o campo ainda era null na 1ª emissão e o app crashava
+    // com NPE na 1ª composição da Início (crash 2026-11-19 06:54:42). Todo
+    // MutableStateFlow escrito por um `collect` do `init` TEM que ser
+    // declarado ANTES dele — sem exceção.
+    private val _hiddenTabs = MutableStateFlow(BottomTabs24.hiddenFromCsv(prefs.bottomTabsHidden))
+    override val hiddenTabsFlow: StateFlow<Set<String>> = _hiddenTabs.asStateFlow()
+
     init {
         scope.launch {
             prefs.homeFoldersFlow.collect { raw ->
@@ -130,9 +142,7 @@ class PlatformPrefsLote24Settings @Inject constructor(
     }
 
     // ── Item 4: abas da pílula + aba padrão ────────────────────────────────
-    private val _hiddenTabs = MutableStateFlow(BottomTabs24.hiddenFromCsv(prefs.bottomTabsHidden))
-    override val hiddenTabsFlow: StateFlow<Set<String>> = _hiddenTabs.asStateFlow()
-
+    // (_hiddenTabs/hiddenTabsFlow são declarados antes do `init`, ver acima.)
     override fun setTabHidden(tabId: String, hidden: Boolean) {
         if (BottomTab24.fromId(tabId) == null) return
         val next = BottomTabs24.sanitizeHidden(
