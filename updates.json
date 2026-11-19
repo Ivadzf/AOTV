@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "44bb47c426d8c19b1cc3d45ee8d8fab0881f0394c6108d23f388b51000347bd6",
-        "size": 81296279,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.32.0/AOTV-v1.32.0.apk"
+        "sha256": "5f29a1ac6e750a13f56c8e0d932fbaaa5e6682ba77ef910658cf5d382016119d",
+        "size": 81442091,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.33.0/AOTV-v1.33.0.apk"
       }
     },
-    "changelog": "v1.32.0 \u2014 Lote 22: controle remoto por QR com monitor ao vivo e 'Reproduzir na TV', Send to TV (Chromecast, AirPlay, DLNA), instalar addon na TV por pareamento, Watch Next no launcher da Google TV, gamepads mape\u00e1veis, player externo com progresso salvo. Fixes: trailer com autoplay desligado por padr\u00e3o, faixa bege da busca, atualizador autom\u00e1tico em todo cold start. Obs.: o AirPlay aparece na lista, mas o v\u00eddeo n\u00e3o funciona (AirPlay 2 exige FairPlay).",
-    "published_at": "2026-11-18T23:12:00Z",
-    "tag": "v1.32.0",
-    "version": "1.32.0",
-    "versionCode": 69
+    "changelog": "v1.33.0 \u2014 Lote 23: estat\u00edsticas e recap, perfil infantil, g\u00eaneros bloqueados, My List com ordena\u00e7\u00e3o e teto de 250, marcar temporada inteira, Abandon Series, sync 2 vias com Trakt/Simkl, sync cont\u00ednuo de addons, revoke do Simkl, PIN V2, Simkl pull e 'N\u00e3o hoje' no Continuar. Fun\u00e7\u00f5es do JOTV 1.0.22: selo Assistido, aviso de pr\u00f3ximo epis\u00f3dio sem pular o fim, legenda for\u00e7ada autom\u00e1tica, filtros das fontes dentro do player, Ao Vivo filtrado por fonte e busca da TV pelo teclado do Google. Obs.: a rolagem da lista de fontes de epis\u00f3dio no celular n\u00e3o foi corrigida \u2014 precisa de reprodu\u00e7\u00e3o no aparelho.",
+    "published_at": "2026-11-19T03:43:00Z",
+    "tag": "v1.33.0",
+    "version": "1.33.0",
+    "versionCode": 70
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "5f29a1ac6e750a13f56c8e0d932fbaaa5e6682ba77ef910658cf5d382016119d",
+          "size": 81442091,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.33.0/AOTV-v1.33.0.apk"
+        }
+      },
+      "changelog": "v1.33.0 \u2014 Lote 23: estat\u00edsticas e recap, perfil infantil, g\u00eaneros bloqueados, My List com ordena\u00e7\u00e3o e teto de 250, marcar temporada inteira, Abandon Series, sync 2 vias com Trakt/Simkl, sync cont\u00ednuo de addons, revoke do Simkl, PIN V2, Simkl pull e 'N\u00e3o hoje' no Continuar. Fun\u00e7\u00f5es do JOTV 1.0.22: selo Assistido, aviso de pr\u00f3ximo epis\u00f3dio sem pular o fim, legenda for\u00e7ada autom\u00e1tica, filtros das fontes dentro do player, Ao Vivo filtrado por fonte e busca da TV pelo teclado do Google. Obs.: a rolagem da lista de fontes de epis\u00f3dio no celular n\u00e3o foi corrigida \u2014 precisa de reprodu\u00e7\u00e3o no aparelho.",
+      "published_at": "2026-11-19T03:43:00Z",
+      "tag": "v1.33.0",
+      "version": "1.33.0",
+      "versionCode": 70
+    },
     {
       "assets": {
         "universal": {
@@ -55,20 +69,6 @@
       "tag": "v1.30.0",
       "version": "1.30.0",
       "versionCode": 67
-    },
-    {
-      "assets": {
-        "universal": {
-          "sha256": "674568a439937a328e0e48d0e46270cdf5c8c641517b2152d283597c233897df",
-          "size": 80958695,
-          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.29.0/AOTV-v1.29.0.apk"
-        }
-      },
-      "changelog": "v1.29.0 \u2014 Lote 19: Watch Party real via WebRTC (sincronia, voz e chat), Social Hub, Hear it in your language, coment\u00e1rios do Trakt + Up Next, 'Ver todos' em cada fileira da In\u00edcio, fix do MDBList, op\u00e7\u00f5es de Reprodu\u00e7\u00e3o do JOTV (espera personaliz\u00e1vel, subir a qualidade sozinho, debrid s\u00f3 com arquivo pronto), guia de canais na aba Ao vivo e selos com logo na folha de fontes.",
-      "published_at": "2026-11-17T20:48:00Z",
-      "tag": "v1.29.0",
-      "version": "1.29.0",
-      "versionCode": 66
     }
   ]
 }
