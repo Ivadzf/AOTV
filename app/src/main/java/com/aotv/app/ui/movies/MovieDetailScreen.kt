@@ -1327,10 +1327,13 @@ fun MovieDetailScreen(
                     }
                 }
                 // Lote 25 (v1.35.0) — Frente D, item 10: onde assistir (TMDB, BR).
-                if (state.watchProvidersLoaded && state.watchProviders != null && !state.watchProviders.isEmpty) {
+                // Smart cast não funciona em propriedade delegada (`state` é `by`
+                // collectAsStateWithLifecycle): ler p/ um val local antes do null.
+                val watchProviders = state.watchProviders
+                if (state.watchProvidersLoaded && watchProviders != null && !watchProviders.isEmpty) {
                     item {
                         WatchProvidersSection(
-                            result = state.watchProviders,
+                            result = watchProviders,
                             modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
                         )
                     }

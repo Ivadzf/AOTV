@@ -4,8 +4,8 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import androidx.media3.common.C
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioCapabilities
 import androidx.media3.exoplayer.audio.AudioSink
 
@@ -83,7 +83,10 @@ fun preferredAudioDevice(context: Context, mode: AudioOutputMode): AudioDeviceIn
 }
 
 /** Aplica a rota preferida no player (null = automático). Não lança. */
-fun applyAudioOutputMode(player: Player, context: Context, mode: AudioOutputMode) {
+// Media3 1.6.0: `setPreferredAudioDevice` só existe no `ExoPlayer`, não
+// na interface `Player` (conferido no AAR) — o parâmetro é ExoPlayer;
+// os dois call sites passam `s.exoPlayer`/`exoPlayer`, que já é ExoPlayer.
+fun applyAudioOutputMode(player: ExoPlayer, context: Context, mode: AudioOutputMode) {
     runCatching {
         player.setPreferredAudioDevice(preferredAudioDevice(context, mode))
     }
@@ -99,7 +102,7 @@ fun receiverPassthroughSupported(context: Context): Boolean {
         AudioCapabilities.getCapabilities(context)
     }.getOrNull() ?: return false
     return caps.supportsEncoding(C.ENCODING_AC3) ||
-        caps.supportsEncoding(C.ENCODING_EAC3) ||
+        caps.supportsEncoding(C.ENCODING_E_AC3) ||
         caps.supportsEncoding(C.ENCODING_DTS)
 }
 

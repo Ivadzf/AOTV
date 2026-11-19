@@ -251,12 +251,14 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
 }
 
 /** Cartão de uma conta. Fora dela mostra o login. Conectado mostra as ações em [connectedContent]. */
-@Composable
 /** Data no formato do app (dd/MM/yyyy, pt-BR). Sem data, não inventa nada. */
 private fun formatHistSyncDate(at: Long): String = runCatching {
     java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("pt", "BR")).format(java.util.Date(at))
 }.getOrNull().orEmpty()
 
+// O @Composable estava grudado no KDoc acima de formatHistSyncDate e
+// anotava a função errada — AccountCard ficou sem a anotação (build #285).
+@Composable
 internal fun AccountCard(
     badge: String,
     title: String,

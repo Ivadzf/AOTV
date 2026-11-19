@@ -168,7 +168,7 @@ fun FreeVideosScreen(
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(state.items, key = { item -> "${item.source}:${item.id}" }) { item ->

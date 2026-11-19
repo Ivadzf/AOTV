@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.CircularProgressIndicator
@@ -205,17 +206,20 @@ fun StreamingScreen(
                     }
                 }
             }
+            // Smart cast não funciona em propriedade delegada (`state` é `by`
+            // collectAsStateWithLifecycle): ler p/ um val local antes do null.
+            val error = state.error
             when {
                 state.loading && state.items.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
                     Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Accent, strokeWidth = 3.dp)
                     }
                 }
-                state.error != null -> item(span = { GridItemSpan(maxLineSpan) }) {
+                error != null -> item(span = { GridItemSpan(maxLineSpan) }) {
                     AotvEmptyState(
                         icon = Icons.Default.SearchOff,
                         title = "Não deu para listar",
-                        message = state.error,
+                        message = error,
                         action = {
                             androidx.compose.material3.TextButton(onClick = { viewModel.retry() }) {
                                 Text("Tentar novamente", color = Accent, fontWeight = FontWeight.Bold)
