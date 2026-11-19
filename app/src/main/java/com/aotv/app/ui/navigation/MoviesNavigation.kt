@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -95,6 +96,8 @@ private sealed class MoviesRoute(val route: String) {
     object MinhaLista : MoviesRoute("movies_minha_lista")
     object Descobrir : MoviesRoute("movies_descobrir")
     object Downloads : MoviesRoute("movies_downloads")
+    // Estatísticas de consumo + recap (Lote 23, v1.33.0 — Frente 1).
+    object Stats : MoviesRoute("movies_stats")
     object Profiles : MoviesRoute("movies_profiles")
     object HomeCustomize : MoviesRoute("movies_home_customize")
     object Debrid : MoviesRoute("movies_debrid")
@@ -597,6 +600,7 @@ fun MoviesNavigation(
                     onItemClick = onListItem,
                     onDownloadsClick = { navController.navigate(MoviesRoute.Downloads.route) },
                     onMediaServersClick = { navController.navigate(MoviesRoute.MediaServers.route) },
+                    onStatsClick = { navController.navigate(MoviesRoute.Stats.route) },
                     // Modo aleatório (Lote 2): mesmo caminho direto ao player da Início.
                     onPlayEpisode = { item, season, episode, epTotal ->
                         navigateToPlayer(
@@ -977,6 +981,13 @@ fun MoviesNavigation(
                     },
                 )
                 }
+            }
+
+            // Estatísticas de consumo + recap (Lote 23, v1.33.0 — Frente 1).
+            composable(MoviesRoute.Stats.route) {
+                StatsScreen(
+                    onBack = { navController.popBackStack() },
+                )
             }
         }
     }
@@ -1537,13 +1548,26 @@ private fun MinhaListaScreen(
     onMediaServersClick: () -> Unit = {},
     /** Modo aleatório (Lote 2): episódio sorteado abre DIRETO no player. */
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
+    /** Estatísticas (Lote 23, v1.33.0): abre a tela de consumo + recap. */
+    onStatsClick: () -> Unit = {},
 ) {
     val vm: com.aotv.app.ui.movies.MinhaListaViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
     val randomVm: com.aotv.app.ui.movies.RandomEpisodeViewModel =
         androidx.hilt.navigation.compose.hiltViewModel()
-    val watchlist by vm.watchlist.collectAsStateWithLifecycle()
+    // Lote 23: lista ORDENADA (prefs.myListOrder: recentes/nome/não
+    // assistidos) + selo Assistido + séries abandonadas (o rail do
+    // Continuar esconde abandonada e "Não hoje"; o Histórico não esconde).
+    val watchlist by vm.orderedWatchlist.collectAsStateWithLifecycle()
+    val myListOrder by vm.myListOrder.collectAsStateWithLifecycle()
+    val watchedIds by vm.watchedTitleIds.collectAsStateWithLifecycle()
+    val dropped by vm.droppedSeries.collectAsStateWithLifecycle()
     val recent by vm.recentlyPlayed.collectAsStateWithLifecycle()
+    val recentRail = remember(recent, dropped) {
+        recent.filterNot { h ->
+            (h.type == "SERIES" && h.tmdbId in dropped) || vm.isNotToday(h.tmdbId)
+        }
+    }
     val recentArtwork by vm.recentArtwork.collectAsStateWithLifecycle()
     // Ainda não assistidos (Lote 11, v1.21.0): títulos da Minha Lista sem
     // nenhuma reprodução e sem episódio visto.
@@ -1671,6 +1695,26 @@ private fun MinhaListaScreen(
             rolling = randomState is com.aotv.app.ui.movies.RandomEpisodeViewModel.RandomState.Rolling,
             onRoll = { randomVm.roll() },
         )
+        // Estatísticas (Lote 23, v1.33.0): horas assistidas, sequência,
+        // heatmap e recap exportável — por período e por perfil, só no aparelho.
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 4.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
+                .background(com.aotv.app.ui.theme.BackgroundCard)
+                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onStatsClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Icon(Icons.Default.BarChart, null, tint = com.aotv.app.ui.theme.TextPrimary, modifier = Modifier.size(24.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Estatísticas", color = com.aotv.app.ui.theme.TextPrimary, fontSize = 16.sp, lineHeight = 22.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                Text("Horas assistidas, sequência e recap", color = com.aotv.app.ui.theme.TextTertiary, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+            Icon(Icons.Default.ChevronRight, "Abrir estatísticas", tint = com.aotv.app.ui.theme.TextTertiary, modifier = Modifier.size(22.dp))
+        }
         // Servidores de mídia (Lote 10, v1.20.0): terceira entrada, na
         // Biblioteca. Só aparece com servidor conectado e o atalho ligado
         // (pref por perfil `media_servers_show_v1`).
@@ -1719,11 +1763,13 @@ private fun MinhaListaScreen(
             contentPadding = WindowInsets.navigationBars.asPaddingValues(),
         ) {
             // ── (C) Continuar assistindo — rail horizontal ───────────────────
-            if (recent.isNotEmpty()) {
+            // Lote 23: o rail esconde série abandonada e "Não hoje" (o
+            // Histórico, abaixo, mostra tudo — ver recentRail acima).
+            if (recentRail.isNotEmpty()) {
                 item {
                     com.aotv.app.ui.common.SectionHeader(
                         title = "Continuar assistindo",
-                        action = { CountPill(recent.size) },
+                        action = { CountPill(recentRail.size) },
                     )
                 }
                 item {
@@ -1732,7 +1778,7 @@ private fun MinhaListaScreen(
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(
-                            recent,
+                            recentRail,
                             key = { "${it.tmdbId}:${it.type}" },
                         ) { h ->
                             val pct = if (h.durationMs > 0L)
@@ -1842,6 +1888,21 @@ private fun MinhaListaScreen(
                     action = { CountPill(watchlist.size) },
                 )
             }
+            // Lote 23: ordenação da Minha Lista (Recentes/Nome/Não assistidos).
+            if (watchlist.isNotEmpty()) {
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = pad, end = pad, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        com.aotv.app.ui.common.FilterChipPill("Recentes", myListOrder == "recent", onClick = { vm.setMyListOrder("recent") })
+                        com.aotv.app.ui.common.FilterChipPill("Nome", myListOrder == "name", onClick = { vm.setMyListOrder("name") })
+                        com.aotv.app.ui.common.FilterChipPill("Não assistidos", myListOrder == "unwatched", onClick = { vm.setMyListOrder("unwatched") })
+                    }
+                }
+            }
             // Filtro só aparece quando há os dois tipos, senão é chip inútil na tela.
             if (hasBothTypes) {
                 item {
@@ -1882,6 +1943,8 @@ private fun MinhaListaScreen(
                             item = item,
                             onClick = { onItemClick(item) },
                             modifier = Modifier.weight(1f),
+                            // Lote 23: selo "Assistido" no título terminado.
+                            badge = if (w.tmdbId in watchedIds) "Assistido" else null,
                             onLongClick = { pendingUnsave = w }, // segurar → tirar da lista
                         )
                     }

@@ -249,14 +249,36 @@ fun TvTextPrompt(
  * Campo de texto na TV. As setas passam por ele sem abrir o teclado do sistema (que rouba o
  * controle). OK no campo libera a digitação e o teclado abre, sair do campo trava de novo.
  * No celular desenha o campo direto.
+ *
+ * Lote 23 item 15 (JOTV 1.0.22 §4.7): OK no campo abre o TECLADO DO SISTEMA
+ * (IME) no foco — o app Google TV do celular também digita por ele. O teclado
+ * em tela continua embaixo e os dois escrevem no mesmo texto. E o foco ao
+ * voltar: depois de fechar o teclado com Voltar, o foco volta p/ o gate (o
+ * `onFocusChanged` que desligava `editing` ao perder o foco deixava a pessoa
+ * presa até apertar cima/baixo — o OK não fazia nada no campo sem foco).
  */
 @Composable
 fun TvTextFieldGate(modifier: Modifier = Modifier, label: String? = null, field: @Composable (Modifier) -> Unit) {
     if (!LocalIsTv.current) { field(modifier); return }
     var editing by remember { mutableStateOf(false) }
     val fieldFocus = remember { FocusRequester() }
+    val gateFocus = remember { FocusRequester() }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    // Saiu da edição sem usar as setas (Voltar fechou o teclado e o campo
+    // perdeu o foco): devolve o foco ao gate p/ o OK voltar a funcionar.
+    var wasEditing by remember { mutableStateOf(false) }
+    var leaveViaArrows by remember { mutableStateOf(false) }
+    LaunchedEffect(editing) {
+        if (editing) {
+            runCatching { fieldFocus.requestFocus() }
+            keyboard?.show()
+        } else if (wasEditing && !leaveViaArrows) {
+            runCatching { gateFocus.requestFocus() }
+        }
+        leaveViaArrows = false
+        wasEditing = editing
+    }
     Box(modifier) {
         field(
             Modifier.fillMaxWidth()
@@ -264,27 +286,36 @@ fun TvTextFieldGate(modifier: Modifier = Modifier, label: String? = null, field:
                 .focusProperties { canFocus = editing }
                 .onFocusChanged { if (!it.isFocused && editing) editing = false }
                 // Campo de uma linha. Cima e baixo saem dele, fecham o teclado e seguem a seta.
+                // Voltar fecha o teclado e a edição (o foco volta ao gate pelo LaunchedEffect).
                 .onPreviewKeyEvent { ev ->
                     if (ev.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    val dir = when (ev.nativeKeyEvent.keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN -> androidx.compose.ui.focus.FocusDirection.Down
-                        android.view.KeyEvent.KEYCODE_DPAD_UP -> androidx.compose.ui.focus.FocusDirection.Up
-                        else -> return@onPreviewKeyEvent false
+                    if (ev.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                        if (!editing) return@onPreviewKeyEvent false
+                        keyboard?.hide()
+                        editing = false
+                        true
+                    } else {
+                        val dir = when (ev.nativeKeyEvent.keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> androidx.compose.ui.focus.FocusDirection.Down
+                            android.view.KeyEvent.KEYCODE_DPAD_UP -> androidx.compose.ui.focus.FocusDirection.Up
+                            else -> return@onPreviewKeyEvent false
+                        }
+                        keyboard?.hide()
+                        leaveViaArrows = true
+                        editing = false
+                        focusManager.moveFocus(dir)
+                        true
                     }
-                    keyboard?.hide()
-                    editing = false
-                    focusManager.moveFocus(dir)
-                    true
                 },
         )
         if (!editing) Box(
             Modifier.matchParentSize().clip(RoundedCornerShape(12.dp))
+                .focusRequester(gateFocus)
                 .then(label?.let { name -> Modifier.semantics { contentDescription = name } } ?: Modifier)
                 // Passa o foco direto ao campo no mesmo clique. Se o botão sumisse antes, o foco
                 // cairia em outro lugar e o campo nem chegaria a abrir.
                 .clickable(role = Role.Button, onClickLabel = "Digitar") {
                     editing = true
-                    runCatching { fieldFocus.requestFocus() }
                 },
         )
     }

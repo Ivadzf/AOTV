@@ -45,8 +45,17 @@ private fun TvMyListScreenBody(
     onItemClick: (MovieItem) -> Unit,
     vm: MinhaListaViewModel = hiltViewModel(),
 ) {
-    val saved by vm.watchlist.collectAsStateWithLifecycle()
+    // Lote 23: lista ordenada (pref myListOrder) + selo Assistido; o rail
+    // do Continuar esconde série abandonada e "Não hoje" (como no celular).
+    val saved by vm.orderedWatchlist.collectAsStateWithLifecycle()
     val recent by vm.recentlyPlayed.collectAsStateWithLifecycle()
+    val watchedIds by vm.watchedTitleIds.collectAsStateWithLifecycle()
+    val dropped by vm.droppedSeries.collectAsStateWithLifecycle()
+    val recentRail = remember(recent, dropped) {
+        recent.filterNot { h ->
+            (h.type == "SERIES" && h.tmdbId in dropped) || vm.isNotToday(h.tmdbId)
+        }
+    }
     val artwork by vm.recentArtwork.collectAsStateWithLifecycle()
     var filter by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf<Triple<String, String, () -> Unit>?>(null) }
@@ -112,15 +121,15 @@ private fun TvMyListScreenBody(
                 }
                 return@LazyVerticalGrid
             }
-            if (recent.isNotEmpty()) item(span = full, key = "cw") {
+            if (recentRail.isNotEmpty()) item(span = full, key = "cw") {
                 // A fileira está dentro da grade, então desconta a margem da grade dos dois lados.
                 val extra = (tvPadPx * 2).toInt()
                 Box(Modifier.layout { m, c ->
                     val p = m.measure(c.copy(minWidth = c.maxWidth + extra, maxWidth = c.maxWidth + extra))
                     layout(c.maxWidth, p.height) { p.place(-extra / 2, 0) }
                 }) {
-                    TvRail("Continuar assistindo", eyebrow = "Recentes", trailing = { TvCountPill(count(recent.size)) }) {
-                        items(recent, key = { "${it.tmdbId}:${it.type}" }) { h ->
+                    TvRail("Continuar assistindo", eyebrow = "Recentes", trailing = { TvCountPill(count(recentRail.size)) }) {
+                        items(recentRail, key = { "${it.tmdbId}:${it.type}" }) { h ->
                             val ep = h.lastEpisode.replace(":", " ")
                             TvContinueCard(
                                 stub(h.tmdbId, h.type, h.title, h.posterUrl, ""), { onItemClick(stub(h.tmdbId, h.type, h.title, h.posterUrl, "")) },
@@ -165,6 +174,8 @@ private fun TvMyListScreenBody(
                     TvPoster(
                         stub(w.tmdbId, w.type, w.title, w.posterUrl, w.year), { onItemClick(stub(w.tmdbId, w.type, w.title, w.posterUrl, w.year)) },
                         width = Dp.Unspecified,
+                        // Lote 23: selo "Assistido" no título terminado.
+                        badge = if (w.tmdbId in watchedIds) "Assistido" else null,
                         onLongClick = { confirm = Triple("Tirar da Minha Lista?", w.title) { vm.removeFromWatchlist(w.tmdbId, w.type) } },
                     )
                 }

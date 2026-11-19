@@ -26,7 +26,17 @@ import com.aotv.app.ui.theme.TextSecondary
 
 /** Pede o PIN pra confirmar uma ação (sair do infantil, abrir Addons/TMDB/Aparelho, ou entrar num perfil com PIN). */
 @Composable
-fun VerifyPinDialog(title: String = "PIN dos pais", onConfirm: (pin: String) -> Boolean, onDismiss: () -> Unit) {
+fun VerifyPinDialog(
+    title: String = "PIN dos pais",
+    onConfirm: (pin: String) -> Boolean,
+    onDismiss: () -> Unit,
+    // Trava do PIN parental (Lote 23): com o PIN travado, o diálogo só
+    // informa o tempo restante e não aceita tentativa (Confirmar desliga).
+    lockedOut: Boolean = false,
+    lockoutMinutes: Int = 0,
+    // Chamado a cada PIN errado — o chamador registra a falha (trava na 5ª).
+    onWrongPin: (() -> Unit)? = null,
+) {
     var pin by remember { mutableStateOf("") }
     var wrong by remember { mutableStateOf(false) }
     AlertDialog(
@@ -35,28 +45,38 @@ fun VerifyPinDialog(title: String = "PIN dos pais", onConfirm: (pin: String) -> 
         title = { Text(title, color = TextPrimary) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Digite o PIN pra continuar.", color = TextSecondary, fontSize = 13.sp)
-                com.aotv.app.ui.common.TvTextFieldGate { gate ->
-                    OutlinedTextField(
-                        value = pin,
-                        onValueChange = { pin = it.filter(Char::isDigit).take(4); wrong = false },
-                        label = { Text("PIN (4 dígitos)") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        isError = wrong,
-                        modifier = gate,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Accent, unfocusedBorderColor = Border,
-                            focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
-                        ),
+                if (lockedOut) {
+                    Text(
+                        "PIN travado — tente de novo em ${lockoutMinutes.coerceAtLeast(1)} min.",
+                        color = DangerText, fontSize = 13.sp,
                     )
+                } else {
+                    Text("Digite o PIN pra continuar.", color = TextSecondary, fontSize = 13.sp)
+                    com.aotv.app.ui.common.TvTextFieldGate { gate ->
+                        OutlinedTextField(
+                            value = pin,
+                            onValueChange = { pin = it.filter(Char::isDigit).take(4); wrong = false },
+                            label = { Text("PIN (4 dígitos)") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            isError = wrong,
+                            modifier = gate,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                                focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+                            ),
+                        )
+                    }
+                    if (wrong) Text("PIN incorreto.", color = DangerText, fontSize = 12.sp)
                 }
-                if (wrong) Text("PIN incorreto.", color = DangerText, fontSize = 12.sp)
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (onConfirm(pin)) Unit else wrong = true }, enabled = pin.length == 4) {
+            TextButton(
+                onClick = { if (onConfirm(pin)) Unit else { wrong = true; onWrongPin?.invoke() } },
+                enabled = !lockedOut && pin.length == 4,
+            ) {
                 Text("Confirmar", color = Accent, fontWeight = FontWeight.Bold)
             }
         },

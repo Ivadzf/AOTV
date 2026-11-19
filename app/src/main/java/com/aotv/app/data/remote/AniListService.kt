@@ -3,17 +3,21 @@
 // Adaptação do arquivo da outra IA: mesma estrutura, com prefs tipadas
 // (padrão Trakt/Simkl). O client ID é DO APARELHO (prefs.anilistClientId);
 // o token e o toggle são POR PERFIL. Login por código: o deep link
-// aotv://anilist/callback (Manifest) é de outra frente — aqui fica a troca
-// do código por token via POST ([exchangeCodeForToken]) e o [saveToken] que
-// o callback usa. Erro HTTP ou corpo que não é JSON NUNCA conta como
+// aotv://anilist/callback (Manifest) chega via [AniListDeepLink] (Lote 23,
+// v1.33.0) — aqui fica a troca do código por token via POST
+// ([exchangeCodeForToken]) e o [saveToken] que o callback usa. Erro HTTP ou corpo que não é JSON NUNCA conta como
 // conexão concluída: o token só é salvo com resposta 2xx e token não vazio.
 
 package com.aotv.app.data.remote
 
+import android.net.Uri
 import com.aotv.app.data.local.PlatformPrefs
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -49,6 +53,36 @@ data class AniListListEntry(
     val score: Double,
     val progress: Int
 )
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Deep link aotv://anilist/callback (Lote 23, v1.33.0)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Pedido de login do AniList vindo de deep link (Lote 23, v1.33.0). A
+ * MainActivity oferece o código (onCreate/onNewIntent) e o
+ * TrackersViewModel consome e troca pelo token quando a tela de Trackers
+ * está aberta. Espelha o PartyDeepLink/AddonDeepLink (Lote 10/17): o
+ * código só viaja até quem consome — nada é trocado sozinho aqui.
+ */
+object AniListDeepLink {
+    private val _code = MutableStateFlow<String?>(null)
+    val code: StateFlow<String?> = _code.asStateFlow()
+    fun offer(code: String) { _code.value = code }
+    fun consume() { _code.value = null }
+
+    /**
+     * Extrai o `code` de `aotv://anilist/callback?code=...`. Devolve null
+     * quando não é esse deep link ou quando não há código.
+     */
+    fun parse(uri: Uri?): String? {
+        if (uri == null) return null
+        if (!uri.scheme.equals("aotv", ignoreCase = true)) return null
+        if (!uri.host.equals("anilist", ignoreCase = true)) return null
+        if (uri.path != "/callback") return null
+        return uri.getQueryParameter("code")?.takeIf { it.isNotBlank() }
+    }
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service
@@ -224,6 +258,40 @@ class AniListService @Inject constructor(
                 ?: throw Exception("Entry ausente na resposta AniList")
             gson.fromJson(entryObj, AniListListEntry::class.java)
         }
+
+    /**
+     * Avalia um anime em andamento (Lote 23, v1.33.0): status CURRENT +
+     * progresso (nº do episódio) + nota 0–10 (null = sem nota). É o que o
+     * diálogo pós-play usa p/ séries — marcar COMPLETED no meio da série
+     * estaria errado. [score] em escala 0–10 (double), null = sem nota.
+     */
+    suspend fun rateAnime(
+        mediaId: Int,
+        progress: Int,
+        score: Double? = null,
+    ): Result<AniListListEntry> = runCatching {
+        val vars: MutableMap<String, Any?> = mutableMapOf(
+            "mediaId" to mediaId,
+            "status" to "CURRENT",
+            "progress" to progress,
+        )
+        score?.let { vars["score"] = it }
+        val scoreParam = if (score != null) ",\$score:Float" else ""
+        val scoreField = if (score != null) ",score:\$score" else ""
+        val mutation = """
+            mutation(${'$'}mediaId:Int,${'$'}status:MediaListStatus,${'$'}progress:Int$scoreParam){
+              SaveMediaListEntry(mediaId:${'$'}mediaId,status:${'$'}status,progress:${'$'}progress$scoreField){
+                id status score progress
+              }
+            }
+        """.trimIndent()
+        val json = graphqlRaw(mutation, vars)
+        val entryObj = JsonParser.parseString(json)
+            .asJsonObject.getAsJsonObject("data")
+            ?.getAsJsonObject("SaveMediaListEntry")
+            ?: throw Exception("Entry ausente na resposta AniList")
+        gson.fromJson(entryObj, AniListListEntry::class.java)
+    }
 
     /**
      * Marca anime como COMPLETED e envia nota (escala 0–100 → AniList 0–10).

@@ -551,6 +551,31 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.CONTENT_LIBRARY,
         kidsHidden = true,
     ),
+    // ── Lote 23 (v1.33.0): ordem da Minha Lista, período das Estatísticas e gêneros bloqueados ──
+    SettingOptionEntry(
+        title = "Ordem da Minha Lista",
+        sub = "Recentes, Nome ou Não assistidos primeiro",
+        keywords = listOf("minha lista", "ordem", "ordenar", "recentes", "nome", "não assistidos"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_LIBRARY,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Período das Estatísticas",
+        sub = "7 dias, 30 dias, 90 dias ou Tudo",
+        keywords = listOf("estatísticas", "período", "horas", "recap", "heatmap", "sequência"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_LIBRARY,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Gêneros bloqueados",
+        sub = "Esconde gêneros de Início, Busca e Filmes",
+        keywords = listOf("gêneros", "bloquear", "esconder", "terror", "bloqueio"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_LIBRARY,
+        kidsHidden = true,
+    ),
     // ── Integrações ──────────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Stremio e Nuvio",
@@ -812,6 +837,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Acompanhamento,
         anchor = SettingsAnchors.TRACK_PROFILE,
         kidsHidden = true,
+    ),
+    // Lote 23 (v1.33.0): só aparece com o perfil infantil ativo, então NÃO é kidsHidden.
+    SettingOptionEntry(
+        title = "Limite de idade",
+        sub = "Idade máxima do perfil infantil",
+        keywords = listOf("idade", "limite", "infantil", "criança", "classificação"),
+        pageId = SettingsPageIds.Acompanhamento,
+        anchor = SettingsAnchors.TRACK_PROFILE,
     ),
     SettingOptionEntry(
         title = "Grupos trancados com PIN",
@@ -1208,6 +1241,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_SUBS,
     ),
+    // Lote 23 (v1.33.0): legenda forçada automática.
+    SettingOptionEntry(
+        title = "Legenda forçada automática",
+        sub = "Sem legenda completa, entra sozinha a faixa forçada",
+        keywords = listOf("legenda forçada", "forced", "automática", "idioma", "falas"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_SUBS,
+    ),
     SettingOptionEntry(
         title = "Pular abertura automaticamente",
         sub = "Pula a abertura e o encerramento sozinho (1x por episódio)",
@@ -1359,6 +1400,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.BACKUP_DRIVE,
         kidsHidden = true,
     ),
+    // Lote 23 (v1.33.0): sync contínuo p/ o Drive.
+    SettingOptionEntry(
+        title = "Sync contínuo",
+        sub = "Sobe o backup p/ o Drive sozinho a cada 6 h e na abertura",
+        keywords = listOf("sync contínuo", "automático", "drive", "nuvem", "sincronizar"),
+        pageId = SettingsPageIds.Backup,
+        anchor = SettingsAnchors.BACKUP_DRIVE,
+        kidsHidden = true,
+    ),
     SettingOptionEntry(
         title = "Client ID do Google Drive",
         sub = "Client ID OAuth do seu projeto no Google Cloud",
@@ -1443,6 +1493,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Desconectar do Simkl",
         sub = "Apaga só a sessão deste perfil",
         keywords = listOf("simkl", "desconectar", "sair", "logout"),
+        pageId = SettingsPageIds.Trackers,
+        kidsHidden = true,
+    ),
+    // Lote 23 (v1.33.0): sync de 2 vias do Simkl.
+    SettingOptionEntry(
+        title = "Sincronização de 2 vias do Simkl",
+        sub = "Puxar assistidos e Minha Lista do Simkl",
+        keywords = listOf("simkl", "sincronizar", "sync", "2 vias", "puxar", "assistidos"),
         pageId = SettingsPageIds.Trackers,
         kidsHidden = true,
     ),

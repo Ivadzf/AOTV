@@ -3,6 +3,7 @@ package com.aotv.app.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.remote.AniListDeepLink
 import com.aotv.app.data.remote.AniListService
 import com.aotv.app.data.remote.MDBListService
 import com.aotv.app.data.remote.SimklService
@@ -59,6 +60,9 @@ data class TrackersUiState(
     val tvdbError: String? = null,
     // Avaliação pós-filme (v1.17.0): pedir nota ao fim do título e enviar aos trackers.
     val postPlayRatingEnabled: Boolean = true,
+    // Lote 23 (v1.33.0): sync de 2 vias do Simkl (puxar assistidos + Minha Lista).
+    val simklSyncEnabled: Boolean = true,
+    val simklLastPullMs: Long = 0L,
 )
 
 /**
@@ -104,12 +108,28 @@ class TrackersViewModel @Inject constructor(
             tvdbEnabled = tvdb.isEnabled,
             tvdbOrdering = tvdb.getOrdering(),
             postPlayRatingEnabled = prefs.postPlayRatingEnabled,
+            simklSyncEnabled = prefs.simklSyncEnabled,
+            simklLastPullMs = prefs.simklLastPullMs,
         ),
     )
     val ui: StateFlow<TrackersUiState> = _ui.asStateFlow()
 
     private var pollJob: Job? = null
     private var traktPollJob: Job? = null
+
+    init {
+        // Deep link do AniList (Lote 23, v1.33.0): quando a tela de Trackers
+        // está aberta e chega um código de `aotv://anilist/callback`, troca
+        // pelo token. O código fica guardado no StateFlow até a tela abrir
+        // (chegou com o app fechado, p. ex.) — é consumido uma vez só.
+        viewModelScope.launch {
+            AniListDeepLink.code.collect { code ->
+                if (code == null) return@collect
+                AniListDeepLink.consume()
+                consumeAniListCode(code)
+            }
+        }
+    }
 
     fun clearMessage() = _ui.update { it.copy(message = null, error = null) }
 
@@ -136,7 +156,32 @@ class TrackersViewModel @Inject constructor(
     }
 
     private fun refreshStatus() = _ui.update {
-        it.copy(connectedUser = simkl.user(), expiresAt = simkl.expiresAt())
+        it.copy(
+            connectedUser = simkl.user(), expiresAt = simkl.expiresAt(),
+            simklSyncEnabled = prefs.simklSyncEnabled, simklLastPullMs = prefs.simklLastPullMs,
+        )
+    }
+
+    /** Liga/desliga o pull do Simkl (sync de 2 vias, Lote 23). */
+    fun setSimklSyncEnabled(on: Boolean) {
+        prefs.simklSyncEnabled = on
+        _ui.update { it.copy(simklSyncEnabled = on) }
+    }
+
+    /** Puxa agora assistidos + Minha Lista do Simkl (só com sessão ativa). */
+    fun syncSimklNow() {
+        viewModelScope.launch {
+            _ui.update { it.copy(busy = true, message = null, error = null) }
+            val ok = runCatching { simkl.sync(prefs.profileId.value) }.getOrDefault(false)
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    simklLastPullMs = prefs.simklLastPullMs,
+                    message = if (ok) "Simkl sincronizado — assistidos e Minha Lista atualizados." else null,
+                    error = if (ok) null else "Não foi possível puxar do Simkl agora. Confira a conexão e tente de novo.",
+                )
+            }
+        }
     }
 
     /**
@@ -200,11 +245,22 @@ class TrackersViewModel @Inject constructor(
         _ui.update { it.copy(pin = null, busy = false) }
     }
 
-    /** Desconecta o Simkl deste perfil (apaga só a sessão; o client ID fica). */
+    /**
+     * Desconecta o Simkl deste perfil (Lote 23, v1.33.0): revoga a sessão
+     * no site e apaga a sessão local SEMPRE, mesmo se o site falhar — a
+     * sessão nunca fica presa. O client ID fica salvo.
+     */
     fun disconnect() {
-        simkl.logout()
-        refreshStatus()
-        _ui.update { it.copy(message = "Simkl desconectado neste perfil. O Client ID continua salvo.") }
+        viewModelScope.launch {
+            val confirmed = simkl.revokeAndLogout()
+            refreshStatus()
+            _ui.update {
+                it.copy(
+                    message = if (confirmed) "Simkl desconectado e sessão revogada no site."
+                    else "Sessão local apagada, mas o site não confirmou a revogação — confira em simkl.com/settings/developer",
+                )
+            }
+        }
     }
 
     // ── Trakt (v1.17.0, espelho do Simkl) ───────────────────────────────────
@@ -404,6 +460,37 @@ class TrackersViewModel @Inject constructor(
                 aniMessage = "AniList conectado neste perfil.",
                 aniError = null,
             )
+        }
+    }
+
+    /**
+     * Troca o código do deep link `aotv://anilist/callback` pelo token
+     * (Lote 23, v1.33.0). Sucesso mostra "AniList conectado"; falha mostra
+     * o erro real do AniList (ex.: Client ID não configurado). Chamado
+     * pelo coletor do [AniListDeepLink] quando a tela está aberta.
+     */
+    fun consumeAniListCode(code: String) {
+        if (code.isBlank()) return
+        viewModelScope.launch {
+            _ui.update { it.copy(aniError = null, aniMessage = null) }
+            val result = aniList.exchangeCodeForToken(code)
+            result.onSuccess {
+                _ui.update {
+                    it.copy(
+                        aniConnected = aniList.isConnected,
+                        aniEnabled = aniList.isEnabled,
+                        aniMessage = "AniList conectado neste perfil.",
+                        aniError = null,
+                    )
+                }
+            }.onFailure { e ->
+                _ui.update {
+                    it.copy(
+                        aniError = e.message ?: "Não foi possível conectar o AniList.",
+                        aniMessage = null,
+                    )
+                }
+            }
         }
     }
 

@@ -58,11 +58,39 @@ class ProfilesViewModel @Inject constructor(
     val profileId = prefs.profileId
 
     fun select(id: String) = prefs.selectProfile(id)
-    fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false) {
+    fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false, kidsAgeLimit: Int = 12) {
         prefs.addProfile(name, kids)?.let {
             prefs.updateProfile(it.copy(color = color, avatarUrl = avatarUrl.trim(), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons))
+            if (kids) setKidsAgeLimit(it.id, kidsAgeLimit)
         }
     }
+
+    // Limite de idade do perfil infantil (Lote 23, v1.33.0): por perfil, via
+    // chave crua — o setter tipado (`prefs.kidsAgeLimit`) só escreve no
+    // perfil ATIVO, e aqui se edita qualquer perfil (inclusive o que está
+    // sendo criado, que ainda não é o ativo). 0 = só gênero, sem idade.
+    fun kidsAgeLimitOf(profileId: String): Int =
+        (prefs.rawPref("kids_age_limit_v1", profileId) as? Int) ?: 12
+
+    fun setKidsAgeLimit(profileId: String, value: Int) {
+        prefs.writeRawPref("kids_age_limit_v1", value.coerceIn(0, 18), profileId)
+    }
+
+    // Trava do PIN parental (Lote 23): 5 erros seguidos travam por 5 min.
+    val isParentalLockedOut: Boolean get() = prefs.isParentalLockedOut
+
+    /** Minutos restantes da trava (arredonda p/ cima; 0 = livre). */
+    fun parentalLockoutMinutesLeft(): Int {
+        val left = prefs.parentalLockoutUntilMs - System.currentTimeMillis()
+        if (left <= 0) return 0
+        return ((left + 59_999L) / 60_000L).toInt().coerceAtLeast(1)
+    }
+
+    /** Registra um erro do PIN parental. Devolve true quando travou agora (5ª seguida). */
+    fun recordParentalPinFailure(): Boolean = prefs.recordParentalPinFailure()
+
+    /** PIN parental certo: zera as falhas seguidas. */
+    fun resetParentalPinFailures() { prefs.resetParentalPinFailures() }
     fun update(p: Profile) = prefs.updateProfile(p)
     fun remove(id: String) {
         if (prefs.removeProfile(id)) viewModelScope.launch { library.dropProfile(id) }
@@ -179,6 +207,19 @@ fun ProfilesScreen(
     var pendingSwitchPin by remember { mutableStateOf<Profile?>(null) }
     var pendingEditProfile by remember { mutableStateOf<Profile?>(null) }
     var showSetPinNudge by remember { mutableStateOf(false) }
+    // Trava do PIN parental (Lote 23): com o PIN travado, o diálogo de
+    // troca/edição mostra o tempo restante e não aceita tentativa.
+    var parentalLocked by remember { mutableStateOf(false) }
+    var parentalLockoutMin by remember { mutableIntStateOf(0) }
+    fun refreshParentalLockout() {
+        parentalLocked = vm.isParentalLockedOut
+        parentalLockoutMin = vm.parentalLockoutMinutesLeft()
+    }
+    // Ao abrir um gate parental, lê a trava do momento (ela pode ter vencido
+    // desde a última abertura — o diálogo não fica com o estado velho).
+    LaunchedEffect(pendingSwitch, pendingEdit) {
+        if (pendingSwitch != null || pendingEdit) refreshParentalLockout()
+    }
     // Controle remoto começa no perfil em uso.
     val currentTile = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(200); runCatching { currentTile.requestFocus() } }
@@ -308,6 +349,7 @@ fun ProfilesScreen(
     panel?.let { p ->
         ProfileEditDialog(
             initial = p,
+            initialAgeLimit = if (p.id.isEmpty()) 12 else vm.kidsAgeLimitOf(p.id),
             canRemove = p.id.isNotEmpty() && profiles.size > 1,
             // Resumo como na foto do Nuvio ("Perfil 2 | Addons primários ativados / Avatar: Kai").
             summary = if (p.id.isEmpty()) "" else buildString {
@@ -317,9 +359,13 @@ fun ProfilesScreen(
                 if (p.pinHash.isNotBlank()) append("  |  Com PIN")
             },
             onDismiss = { panel = null },
-            onSave = { edited ->
+            onSave = { edited, limit ->
                 val becameKids = edited.kids && !p.kids
-                if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons) else vm.update(edited)
+                if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons, kidsAgeLimit = limit)
+                else {
+                    vm.update(edited)
+                    if (edited.kids) vm.setKidsAgeLimit(edited.id, limit)
+                }
                 panel = null
                 // Marcou infantil pela 1ª vez sem PIN nenhum definido no aparelho: convida a criar
                 // um agora, senão o modo infantil não trava nada (qualquer um sai dele na hora).
@@ -351,15 +397,41 @@ fun ProfilesScreen(
 
     pendingSwitch?.let { target ->
         VerifyPinDialog(
+            lockedOut = parentalLocked,
+            lockoutMinutes = parentalLockoutMin,
+            onWrongPin = {
+                if (vm.recordParentalPinFailure()) {
+                    parentalLocked = true
+                    parentalLockoutMin = vm.parentalLockoutMinutesLeft()
+                }
+            },
             onConfirm = { pin ->
-                if (vm.checkPin(pin)) { vm.select(target.id); pendingSwitch = null; onPicked(); true } else false
+                if (vm.checkPin(pin)) {
+                    vm.resetParentalPinFailures()
+                    parentalLocked = false
+                    vm.select(target.id); pendingSwitch = null; onPicked(); true
+                } else false
             },
             onDismiss = { pendingSwitch = null },
         )
     }
     if (pendingEdit) {
         VerifyPinDialog(
-            onConfirm = { pin -> if (vm.checkPin(pin)) { editing = true; pendingEdit = false; true } else false },
+            lockedOut = parentalLocked,
+            lockoutMinutes = parentalLockoutMin,
+            onWrongPin = {
+                if (vm.recordParentalPinFailure()) {
+                    parentalLocked = true
+                    parentalLockoutMin = vm.parentalLockoutMinutesLeft()
+                }
+            },
+            onConfirm = { pin ->
+                if (vm.checkPin(pin)) {
+                    vm.resetParentalPinFailures()
+                    parentalLocked = false
+                    editing = true; pendingEdit = false; true
+                } else false
+            },
             onDismiss = { pendingEdit = false },
         )
     }
@@ -399,15 +471,17 @@ private fun ProfileTile(label: String, selected: Boolean, onClick: () -> Unit, m
 @Composable
 private fun ProfileEditDialog(
     initial: Profile,
+    initialAgeLimit: Int = 12,
     canRemove: Boolean,
     summary: String = "",
     onDismiss: () -> Unit,
-    onSave: (Profile) -> Unit,
+    onSave: (Profile, Int) -> Unit,
     onRemove: () -> Unit,
     onHashPin: (String) -> String,
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var kids by remember { mutableStateOf(initial.kids) }
+    var ageLimit by remember { mutableStateOf(initialAgeLimit.coerceIn(0, 18)) }
     var color by remember { mutableIntStateOf(initial.color) }
     // Lote 3 (v1.11.0): avatar por URL, preset do catálogo, "usar addons
     // primários" e PIN do perfil. O perfil principal (id "main") não tem o
@@ -537,10 +611,41 @@ private fun ProfileEditDialog(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text("Perfil infantil", color = TextPrimary, fontWeight = FontWeight.SemiBold)
-                        Text("Só desenhos e títulos até 12 anos", color = TextTertiary, fontSize = 12.sp)
+                        Text(
+                            if (kids) {
+                                if (ageLimit <= 0) "Só por gênero, sem limite de idade"
+                                else "Só desenhos e títulos até $ageLimit anos"
+                            } else "Só desenhos e títulos para crianças",
+                            color = TextTertiary, fontSize = 12.sp,
+                        )
                     }
                     // A linha inteira já liga e desliga. O controle não precisa parar no Switch.
                     Switch(checked = kids, onCheckedChange = { kids = it }, modifier = Modifier.focusProperties { canFocus = false })
+                }
+                // ── Limite de idade (Lote 23, v1.33.0) ───────────────────────
+                // Vale pro perfil infantil: 0 ("Só gênero") ignora a
+                // classificação indicativa e filtra só pelo gênero.
+                if (kids) {
+                    Text("Limite de idade", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(0, 7, 10, 12, 14, 16, 18).forEach { limit ->
+                            val selected = ageLimit == limit
+                            Box(
+                                Modifier.clip(RoundedCornerShape(999.dp))
+                                    .background(if (selected) Accent else BackgroundCard)
+                                    .border(1.dp, if (selected) Accent else Border, RoundedCornerShape(999.dp))
+                                    .clickable { ageLimit = limit }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    if (limit == 0) "Só gênero" else "Até $limit anos",
+                                    color = if (selected) Color.White else TextPrimary,
+                                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
                 }
                 // ── PIN do perfil (Lote 3 item 2c) ──────────────────────────
                 // Trava entrar neste perfil E editar este perfil. Sem PIN, o
@@ -576,7 +681,7 @@ private fun ProfileEditDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(draft) }, enabled = name.isNotBlank()) { Text("Salvar", color = Accent, fontWeight = FontWeight.Bold) }
+            TextButton(onClick = { onSave(draft, ageLimit) }, enabled = name.isNotBlank()) { Text("Salvar", color = Accent, fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = TextSecondary) } },
     )

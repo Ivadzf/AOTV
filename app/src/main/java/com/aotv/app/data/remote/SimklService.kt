@@ -1,12 +1,16 @@
 package com.aotv.app.data.remote
 
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.repository.LibraryRepository
+import com.aotv.app.domain.model.MediaType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -88,16 +92,24 @@ import kotlinx.coroutines.currentCoroutineContext
  * parseável (ex.: página HTML) NUNCA conta como conexão concluída —
  * [requireJson] rejeita antes de qualquer parse e [call] só aceita 2xx.
  *
- * Follow-up (não implementado aqui): revogar a sessão no site
- * (`POST /oauth2/revoke`) — hoje o [logout] só limpa a sessão local.
+ *  - Erro 412 (`client_id_failed`, provado na doc oficial): client ID
+ *    inválido, desativado, sem cota ou bloqueado; omitir o client_id
+ *    também dá 412. Client_id válido sem token dá 401. O 412 PARA o
+ *    polling (retry não ajuda) e as chamadas dão erro direto.
+ *
+ * Revogar a sessão no site (`POST /oauth2/revoke`, v1.33.0) — ver
+ * [revokeAndLogout]: o site é chamado e a sessão local é SEMPRE limpa,
+ * mesmo se o site falhar, p/ a sessão nunca ficar presa.
  */
 @Singleton
 class SimklService @Inject constructor(
     client: OkHttpClient,
     private val prefs: PlatformPrefs,
+    private val library: LibraryRepository,
 ) {
     private val http = client.newBuilder().cache(null).build()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val syncLock = Mutex()
 
     /** Client ID configurado pelo usuário neste perfil ("" = Simkl desligado). */
     val clientId: String get() = prefs.simklClientId
@@ -146,6 +158,35 @@ class SimklService @Inject constructor(
     fun isConnected(): Boolean = session() != null
 
     fun logout() = saveSession(null)
+
+    /**
+     * Revoga a sessão no site do Simkl e limpa a sessão local (v1.33.0).
+     * POST form em `/oauth2/revoke` com token + client_id +
+     * token_type_hint=access_token. A sessão local é SEMPRE limpa, mesmo
+     * se o site falhar ou não houver rede — a sessão nunca fica presa.
+     * Devolve true só quando o site confirmou (2xx). Sem sessão ou sem
+     * client ID, só limpa o local e devolve false.
+     */
+    suspend fun revokeAndLogout(): Boolean {
+        val token = session()?.access
+        var confirmed = false
+        if (token != null && configured) {
+            val form = FormBody.Builder()
+                .add("token", token)
+                .add("client_id", clientId)
+                .add("token_type_hint", "access_token")
+                .build()
+            confirmed = try {
+                val r = raw("POST", "$API/oauth2/revoke", form, null)
+                r.code in 200..299
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                false
+            }
+        }
+        saveSession(null)
+        return confirmed
+    }
 
     // ── HTTP ─────────────────────────────────────────────────────────────────
 
@@ -235,6 +276,7 @@ class SimklService @Inject constructor(
             s = session() ?: error("simkl sem sessão")
         }
         var r = raw(method, url(path), body?.toString()?.toRequestBody(JSON), s.access)
+        if (r.code == 412) error("Simkl 412 — Client ID inválido ou desativado")
         if (r.code == 401) {
             if (refreshSession()) {
                 s = session() ?: error("simkl sem sessão")
@@ -260,6 +302,7 @@ class SimklService @Inject constructor(
             s = session() ?: error("simkl sem sessão")
         }
         var r = raw(method, url(path), null, s.access)
+        if (r.code == 412) error("Simkl 412 — Client ID inválido ou desativado")
         if (r.code == 401) {
             if (refreshSession()) {
                 s = session() ?: error("simkl sem sessão")
@@ -362,8 +405,11 @@ class SimklService @Inject constructor(
                 "Sem conexão com o Simkl — confira a internet e tente de novo.",
             )
         }
+        if (r.code == 412) return LoginResult.Failed(
+            "Client ID inválido, desativado ou sem cota no Simkl (412) — confira o Client ID colado em Configurações → Trackers.",
+        )
         if (r.code == 401) return LoginResult.Failed(
-            "Client ID não reconhecido pelo Simkl (401)",
+            "Client ID não reconhecido pelo Simkl (401) — confira o Client ID; app V1 não funciona neste fluxo",
         )
         if (r.code == 400) return LoginResult.Failed(
             "Simkl recusou o Client ID (400)",
@@ -457,9 +503,14 @@ class SimklService @Inject constructor(
                     session()?.let { saveSession(it.copy(user = name)) }
                     return LoginOutcome.Connected(name)
                 }
+                if (r.code == 412) {
+                    return LoginOutcome.Failed(
+                        "Client ID inválido, desativado ou sem cota no Simkl (412) — confira o Client ID colado em Configurações → Trackers.",
+                    )
+                }
                 if (r.code == 401) {
                     return LoginOutcome.Failed(
-                        "Client ID não reconhecido pelo Simkl (401)",
+                        "Client ID não reconhecido pelo Simkl (401) — confira o Client ID; app V1 não funciona neste fluxo",
                     )
                 }
                 if (r.code == 400) {
@@ -532,6 +583,145 @@ class SimklService @Inject constructor(
         scope.launch { runCatching { call("POST", "/sync/add-to-list", body) } }
     }
 
+    // ── Sincronia 2 vias (Lote 23, v1.33.0) ─────────────────────────────────
+    // Espelho do pull do Trakt: puxa a Minha Lista (plantowatch) e os
+    // assistidos do Simkl p/ o perfil capturado UMA VEZ no início. O push
+    // já existe (watchlistChanged + scrobble) e não é duplicado aqui.
+
+    /** Sincronia completa (pull). true quando o pull deu certo. Uma por vez. */
+    suspend fun sync(profileId: String): Boolean {
+        if (!prefs.simklSyncEnabled) return false
+        if (!configured || session() == null) return false
+        return syncLock.withLock {
+            runCatching { pullAllItems(profileId) }.isSuccess
+        }
+    }
+
+    /** Sincroniza sem esperar (abertura da Início). Perfil capturado uma vez aqui. */
+    fun syncInBackground() {
+        if (!prefs.simklSyncEnabled || !configured || session() == null) return
+        val profileId = prefs.profileId.value
+        scope.launch { sync(profileId) }
+    }
+
+    /**
+     * Pull via `GET /sync/all-items` (array com filmes e séries; cada item
+     * tem `status` e `show`/`movie` com `ids.tmdb`):
+     * - `plantowatch` → importa p/ a Minha Lista local.
+     * - Filme `completed` → completa o Continuar local; sem registro local
+     *   (getPlayback null), marca "assistido em outro lugar".
+     * - Séries: episódios com marca de visto (`watched_at` ou `watched`)
+     *   nas temporadas → marca o episódio visto localmente; episódio que
+     *   não era visto antes também ganha "assistido em outro lugar".
+     * O histórico (`GET /sync/history`) complementa os episódios vistos,
+     * caso o all-items não traga a marca por episódio — falha dele não
+     * derruba o pull. No fim do pull com sucesso, grava
+     * [PlatformPrefs.simklLastPullMs].
+     */
+    private suspend fun pullAllItems(profileId: String) {
+        val arr = callArray("GET", "/sync/all-items")
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            val status = item.optString("status")
+            val movie = item.optJSONObject("movie")
+            if (movie != null) {
+                val tmdb = movie.optJSONObject("ids")?.optInt("tmdb", 0) ?: 0
+                if (tmdb <= 0) continue
+                when (status) {
+                    "plantowatch" -> library.importToList(
+                        tmdb, MediaType.MOVIE.name, movie.optString("title"), "",
+                        movie.optInt("year", 0).takeIf { it > 0 }?.toString().orEmpty(),
+                        System.currentTimeMillis(), profileId,
+                    )
+                    "completed" -> markMovieWatched(tmdb, profileId)
+                }
+                continue
+            }
+            val show = item.optJSONObject("show") ?: continue
+            val tmdb = show.optJSONObject("ids")?.optInt("tmdb", 0) ?: 0
+            if (tmdb <= 0) continue
+            if (status == "plantowatch") {
+                library.importToList(
+                    tmdb, MediaType.SERIES.name, show.optString("title"), "",
+                    show.optInt("year", 0).takeIf { it > 0 }?.toString().orEmpty(),
+                    System.currentTimeMillis(), profileId,
+                )
+            }
+            val seasons = item.optJSONArray("seasons") ?: continue
+            for (s in 0 until seasons.length()) {
+                val seasonObj = seasons.optJSONObject(s) ?: continue
+                val season = seasonObj.optInt("number", 0)
+                if (season <= 0) continue
+                val episodes = seasonObj.optJSONArray("episodes") ?: continue
+                for (e in 0 until episodes.length()) {
+                    val ep = episodes.optJSONObject(e) ?: continue
+                    val number = ep.optInt("number", 0)
+                    if (number <= 0) continue
+                    val watched = ep.optString("watched_at").isNotBlank() || ep.optBoolean("watched", false)
+                    if (watched) markEpisodeWatched(tmdb, season, number, profileId)
+                }
+            }
+        }
+        runCatching { pullHistory(profileId) }
+        prefs.simklLastPullMs = System.currentTimeMillis()
+    }
+
+    /**
+     * Histórico assistido (`GET /sync/history`, array com `movie`/`show` +
+     * `episode` e `watched_at`): marca os episódios e filmes vistos que o
+     * all-items não trouxe. Só complementa — nunca inventa episódio.
+     */
+    private suspend fun pullHistory(profileId: String) {
+        val arr = callArray("GET", "/sync/history")
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            if (item.optString("watched_at").isBlank()) continue
+            val movie = item.optJSONObject("movie")
+            if (movie != null) {
+                val tmdb = movie.optJSONObject("ids")?.optInt("tmdb", 0) ?: 0
+                if (tmdb > 0) markMovieWatched(tmdb, profileId)
+                continue
+            }
+            val show = item.optJSONObject("show") ?: continue
+            val tmdb = show.optJSONObject("ids")?.optInt("tmdb", 0) ?: 0
+            val ep = item.optJSONObject("episode") ?: continue
+            val season = ep.optInt("season", 0)
+            val number = ep.optInt("number", 0)
+            if (tmdb > 0 && season > 0 && number > 0) markEpisodeWatched(tmdb, season, number, profileId)
+        }
+    }
+
+    /** Filme visto no Simkl: completa o Continuar, ou marca "assistido em outro lugar" sem registro local. */
+    private suspend fun markMovieWatched(tmdbId: Int, profileId: String) {
+        val local = library.getPlayback(tmdbId, MediaType.MOVIE.name, profileId)
+        if (local == null) {
+            prefs.markWatchedElsewhere(tmdbId)
+        } else {
+            library.markContinueWatched(tmdbId)
+        }
+    }
+
+    /** Episódio visto no Simkl: marca localmente; sem registro local antes, marca "assistido em outro lugar". */
+    private suspend fun markEpisodeWatched(tmdbId: Int, season: Int, episode: Int, profileId: String) {
+        if (!library.isEpisodeWatched(tmdbId, season, episode, profileId)) {
+            library.markEpisodeWatched(tmdbId, season, episode, profileId)
+            prefs.markWatchedElsewhere(tmdbId)
+        }
+    }
+
+    /**
+     * Abandon Series — sync (Lote 23): marca a série como `dropped` no
+     * Simkl (`POST /sync/add-to-list`, shows com status "dropped").
+     * Fire-and-forget; sem sessão, no-op. A outra frente (detalhe da
+     * série) chama esta função quando o usuário abandona a série.
+     */
+    fun seriesDropped(tmdbId: Int) {
+        if (!configured || session() == null || tmdbId <= 0) return
+        val one = JSONObject().put("ids", JSONObject().put("tmdb", tmdbId)).put("status", "dropped")
+        val body = JSONObject().put("shows", JSONArray().put(one))
+        scope.launch { runCatching { call("POST", "/sync/add-to-list", body) } }
+    }
+
     companion object {
         const val API = "https://api.simkl.com"
 
@@ -552,7 +742,7 @@ class SimklService @Inject constructor(
         const val DEVELOPER_LIST_URL = "https://simkl.com/settings/developer/"
 
         const val APP_NAME = "aotv"
-        const val APP_VERSION = "1.32.0"
+        const val APP_VERSION = "1.33.0"
 
         val JSON = "application/json".toMediaType()
     }

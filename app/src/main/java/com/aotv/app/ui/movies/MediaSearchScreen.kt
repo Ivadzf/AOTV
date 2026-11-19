@@ -184,6 +184,9 @@ class MediaSearchViewModel @Inject constructor(
                     .map { it.toMovieItem() }
                     // Sem pôster ou sem título = card quebrado. Fora.
                     .filter { it.posterUrl.isNotBlank() && it.title.isNotBlank() }
+                    // Lote 23: gêneros bloqueados somem da busca (item sem
+                    // genreIds passa — ver withoutBlockedGenres).
+                    .let { withoutBlockedGenres(it, prefs.blockedGenres) }
             }.getOrDefault(emptyList())
             _results.value = results
             _isLoading.value = false
@@ -268,7 +271,13 @@ fun MediaSearchScreen(
         val firstKey = remember { androidx.compose.ui.focus.FocusRequester() }
         Row(Modifier.fillMaxSize().background(Background).padding(top = 28.dp)) {
             Column(Modifier.width(400.dp).padding(start = 28.dp, end = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = true, onSearch = viewModel::searchNow)
+                // Lote 23 item 15 (JOTV 1.0.22 §4.7): OK no campo abre o teclado
+                // do sistema (IME) — o app Google TV do celular digita por
+                // ele; o teclado em tela continua embaixo e os dois escrevem
+                // no mesmo texto (query). Sem foco automático ao entrar (Lote 22).
+                com.aotv.app.ui.common.TvTextFieldGate { gate ->
+                    SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = false, onSearch = viewModel::searchNow, fieldModifier = gate)
+                }
                 com.aotv.app.ui.common.TvKeyboard(
                     onKey = { viewModel.onQueryChange(com.aotv.app.ui.common.typeKey(query, it)) },
                     onBackspace = { viewModel.onQueryChange(query.dropLast(1)) },
@@ -974,8 +983,10 @@ private fun SearchPill(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
-    /** Só mostra o texto (TV, digitado pelo teclado na tela). Fica fora do caminho do foco. */
+    /** Só mostra o texto, fora do caminho do foco. */
     readOnly: Boolean = false,
+    /** Modificador do campo de texto em si (o gate da TV passa o dele aqui). */
+    fieldModifier: Modifier = Modifier,
     /** Busca imediata (botão de busca do teclado). */
     onSearch: (() -> Unit)? = null,
     /** Busca por voz (só celular: null na TV e em aparelho sem reconhecedor). */
@@ -1033,7 +1044,8 @@ private fun SearchPill(
                 ),
                 readOnly = readOnly,
                 modifier = Modifier.fillMaxWidth()
-                    .then(if (readOnly) Modifier.focusProperties { canFocus = false } else Modifier),
+                    .then(if (readOnly) Modifier.focusProperties { canFocus = false } else Modifier)
+                    .then(fieldModifier),
             )
         }
         // Microfone (Lote 3, item 1): só no celular editável — na TV readOnly=true

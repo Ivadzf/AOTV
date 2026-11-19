@@ -42,6 +42,8 @@ class MoviesHomeViewModel @Inject constructor(
     private val youtubeTrailer: com.aotv.app.data.remote.YoutubeTrailer,
     private val stremio: com.aotv.app.data.remote.StremioAddonService,
     private val trakt: com.aotv.app.data.remote.TraktService,
+    /** Abandon Series (Lote 23): avisa o Simkl quando a série é abandonada. */
+    private val simkl: com.aotv.app.data.remote.SimklService,
     private val addonMetas: com.aotv.app.data.remote.AddonMetaResolver,
     collections: com.aotv.app.data.collections.CollectionsRepository,
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
@@ -57,6 +59,9 @@ class MoviesHomeViewModel @Inject constructor(
 ) : ViewModel() {
     /** Coleções do perfil, para as fileiras de pastas da Início. */
     val collectionsFlow: StateFlow<List<com.aotv.app.data.collections.MediaCollection>> = collections.flow
+
+    /** Séries abandonadas no perfil (Lote 23) — a tela mostra "Desfazer abandono" no lugar de "Abandonar série". */
+    val droppedSeries: StateFlow<Set<Int>> = prefs.droppedSeriesFlow
 
     init {
         // Abrir a Início (e trocar de perfil, que reabre o app) sincroniza com o Trakt.
@@ -531,9 +536,10 @@ class MoviesHomeViewModel @Inject constructor(
                         byId.putIfAbsent(item.tmdbId, item)
                     }
             }
-            val ranked = byId.values
-                .sortedWith(compareByDescending<MovieItem> { hits[it.tmdbId] ?: 0 }.thenByDescending { it.rating })
-                .take(20)
+            val ranked = filterBlockedGenres(
+                byId.values
+                    .sortedWith(compareByDescending<MovieItem> { hits[it.tmdbId] ?: 0 }.thenByDescending { it.rating }),
+            ).take(20)
 
             // Títulos-semente p/ a explicação ("O que molda suas
             // recomendações"): os do histórico + os favoritos que viraram
@@ -619,6 +625,13 @@ class MoviesHomeViewModel @Inject constructor(
         refreshTasteEntries()
         refreshRecommendations()
     }
+
+    /**
+     * Gêneros bloqueados (Lote 23): tira da lista o que tem um gênero
+     * bloqueado. Ver [withoutBlockedGenres] — item sem genreIds passa.
+     */
+    private fun filterBlockedGenres(items: List<MovieItem>): List<MovieItem> =
+        withoutBlockedGenres(items, prefs.blockedGenres)
 
     /**
      * Resolve um item do histórico p/ o "Continuar assistindo": filme 90%+ assistido sai da
@@ -721,7 +734,9 @@ class MoviesHomeViewModel @Inject constructor(
         viewModelScope.launch {
             val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, row.skip)
             val page = metas.orEmpty().take(ADDON_PAGE)
-            val items = resolveAddonMetas(page, row.ref.type == "series")
+            // Sem genreIds no resolver, hoje passa tudo — o filtro fica p/
+            // quando o resolver trouxer gênero (ver withoutBlockedGenres).
+            val items = filterBlockedGenres(resolveAddonMetas(page, row.ref.type == "series"))
             addonRowsInFlight.remove(key)
             _uiState.update { st ->
                 st.copy(addonRows = st.addonRows.map { r ->
@@ -831,7 +846,7 @@ class MoviesHomeViewModel @Inject constructor(
         viewModelScope.launch {
             val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, 0)
             val page = metas.orEmpty().take(ADDON_PAGE)
-            val items = resolveAddonMetas(page, series)
+            val items = filterBlockedGenres(resolveAddonMetas(page, series))
             _uiState.update { cur ->
                 if (cur.addonGridKey != key) cur else cur.copy(
                     addonGridLoading = false,
@@ -859,7 +874,7 @@ class MoviesHomeViewModel @Inject constructor(
             _uiState.update { it.copy(addonGridLoadingMore = true) }
             val metas = stremio.catalogMetas(row.ref.base, row.ref.type, row.ref.id, skip)
             val page = metas.orEmpty().take(ADDON_PAGE)
-            val items = resolveAddonMetas(page, series)
+            val items = filterBlockedGenres(resolveAddonMetas(page, series))
             _uiState.update { cur ->
                 if (cur.addonGridKey != key) cur.copy(addonGridLoadingMore = false)
                 else {
@@ -1014,7 +1029,10 @@ class MoviesHomeViewModel @Inject constructor(
     private fun rebuildTrackedSeries() {
         val merged = (lastLocalSeries +
             if (prefs.calendarAutoAddTrackers) trackerSeries else emptyList())
-            .distinctBy { it.first }.take(15)
+            .distinctBy { it.first }
+            // Série abandonada (Lote 23) some de "Novos episódios" e "Próximos".
+            .filterNot { prefs.isSeriesDropped(it.first) }
+            .take(15)
         buildNewEpisodes(merged)
         buildUpcomingEpisodes(merged)
     }
@@ -1023,6 +1041,43 @@ class MoviesHomeViewModel @Inject constructor(
     fun markNewEpisodeNotToday(tmdbId: Int) {
         prefs.markNotToday(tmdbId)
         _uiState.update { it.copy(newEpisodes = it.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId }) }
+    }
+
+    /**
+     * "Não hoje" no Continuar assistindo (Lote 23): dispensa o título até
+     * amanhã (a mesma pref do episódio novo — o dispenso vale só hoje).
+     * O filtro do coletor do histórico já tira quem foi dispensado; aqui o
+     * sumiço é imediato, sem esperar a próxima emissão do histórico.
+     */
+    fun markContinueNotToday(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        prefs.markNotToday(tmdbId)
+        _uiState.update { it.copy(continueWatching = it.continueWatching.filterNot { m -> m.tmdbId == tmdbId }) }
+    }
+
+    /** Abandonar série (Lote 23): some do Continuar, de "Novos episódios" e do calendário; avisa os trackers. */
+    fun dropSeries(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        prefs.dropSeries(tmdbId)
+        simkl.seriesDropped(tmdbId)
+        trakt.seriesDropped(tmdbId)
+        _uiState.update { st ->
+            st.copy(
+                continueWatching = st.continueWatching.filterNot { m -> m.tmdbId == tmdbId && m.type == MediaType.SERIES },
+                continueProgress = st.continueProgress - tmdbId,
+                continueRemaining = st.continueRemaining - tmdbId,
+                continueEpisode = st.continueEpisode - tmdbId,
+                newEpisodes = st.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId },
+            )
+        }
+        rebuildTrackedSeries()
+    }
+
+    /** Desfazer o abandono de uma série ("Novos episódios" volta na hora; o Continuar volta na próxima emissão do histórico). */
+    fun undropSeries(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        prefs.undropSeries(tmdbId)
+        rebuildTrackedSeries()
     }
 
     /** Fileiras visíveis na última aplicação do layout (para repor dados de quem voltou a aparecer). */
@@ -1139,6 +1194,29 @@ class MoviesHomeViewModel @Inject constructor(
         viewModelScope.launch {
             prefs.homeDisplayFlow.collect { d -> _uiState.update { it.copy(display = d) } }
         }
+        // Gêneros bloqueados (Lote 23): bloquear um gênero tira os títulos
+        // das fileiras na hora. Desbloquear repõe no próximo load() — as
+        // listas em memória já perderam os itens filtrados (não há cópia
+        // crua guardada). O hero deriva do em alta, então some junto.
+        viewModelScope.launch {
+            prefs.blockedGenresFlow.collect { blocked ->
+                if (blocked.isEmpty()) return@collect
+                _uiState.update { st ->
+                    st.copy(
+                        trendingMovies = withoutBlockedGenres(st.trendingMovies, blocked),
+                        trendingTv = withoutBlockedGenres(st.trendingTv, blocked),
+                        nowPlaying = withoutBlockedGenres(st.nowPlaying, blocked),
+                        releases2026 = withoutBlockedGenres(st.releases2026, blocked),
+                        catalogItems = withoutBlockedGenres(st.catalogItems, blocked),
+                        gridItems = withoutBlockedGenres(st.gridItems, blocked),
+                        addonGridItems = withoutBlockedGenres(st.addonGridItems, blocked),
+                        recommended = withoutBlockedGenres(st.recommended, blocked),
+                        homeSections = st.homeSections.map { s -> s.copy(items = withoutBlockedGenres(s.items, blocked)) },
+                        addonRows = st.addonRows.map { r -> r.copy(items = withoutBlockedGenres(r.items, blocked)) },
+                    )
+                }
+            }
+        }
         load()
         // Trailers carregam pelo applyLayout (fileira que aparece), não aqui:
         // a fileira desligada não busca dado nenhum.
@@ -1212,7 +1290,11 @@ class MoviesHomeViewModel @Inject constructor(
                 // seguinte). Recomendações abaixo seguem usando o histórico cru (`list`).
                 // Removido do Continuar (v1.13.0): o oculto por perfil some da fileira
                 // (e um backup antigo não traz de volta); assistir de novo libera.
+                // Lote 23: série abandonada some; título dispensado com "Não hoje"
+                // some até amanhã (só vale p/ filme/série — o ao vivo não entra).
                 val continueList = list.filterNot { prefs.isContinueHidden(it.tmdbId, it.type) }
+                    .filterNot { it.type == MediaType.SERIES.name && prefs.isSeriesDropped(it.tmdbId) }
+                    .filterNot { it.type != com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE && prefs.isNotToday(it.tmdbId) }
                     .mapNotNull { resolveHistoryItem(it) }
                 val items = continueList.map { h ->
                     MovieItem(
@@ -1451,7 +1533,7 @@ class MoviesHomeViewModel @Inject constructor(
                     apiKey = apiKey,
                 )
             }
-            resp.results.map { it.toMovieItem() } to resp.totalPages
+            resp.results.map { it.toMovieItem() }.let { filterBlockedGenres(it) } to resp.totalPages
         }.getOrNull()
     }
 
@@ -1479,7 +1561,7 @@ class MoviesHomeViewModel @Inject constructor(
         }
         // trending não aceita page na API → só há a 1ª página.
         val totalPages = if (q.endpoint == CatalogEndpoint.TRENDING && !kids) 1 else resp.totalPages
-        resp.results.filterNot { it.adult }.map { it.toMovieItem() } to totalPages
+        filterBlockedGenres(resp.results.filterNot { it.adult }.map { it.toMovieItem() }) to totalPages
     }.getOrNull()
 
     /** Abre o grid "Ver Tudo" para [query]. Carrega EXATAMENTE o conteúdo que a fileira mostra. */
@@ -1612,12 +1694,12 @@ class MoviesHomeViewModel @Inject constructor(
                 if (apiKey.isBlank() || !fetchReleases) emptyList()
                 else runCatching { tmdb.discoverMovies(sort = SORT_RELEASE_MOVIE, year = _uiState.value.releasesYear, apiKey = apiKey).results.filterNot { it.adult }.map { it.toMovieItem() } }.getOrDefault(emptyList())
             }
-            val trendingMovies = trendingMoviesD.await()
-            val trendingTv = trendingTvD.await()
+            val trendingMovies = filterBlockedGenres(trendingMoviesD.await())
+            val trendingTv = filterBlockedGenres(trendingTvD.await())
             val genres = genresD.await()
             val tvGenres = tvGenresD.await()
-            val nowPlaying = nowPlayingD.await()
-            val releases2026 = releases2026D.await()
+            val nowPlaying = filterBlockedGenres(nowPlayingD.await())
+            val releases2026 = filterBlockedGenres(releases2026D.await())
 
             _uiState.update {
                 it.copy(
@@ -1804,3 +1886,16 @@ internal fun newEpisodeOf(item: MovieItem, last: TmdbNextEpisodeDto?, next: Tmdb
 /** Os que já saíram primeiro (o mais recente na frente), depois as estreias pela mais próxima. */
 internal fun sortNewEpisodes(list: List<NewEpisode>) =
     list.sortedWith(compareBy<NewEpisode> { it.upcoming }.thenBy { if (it.upcoming) it.at else -it.at })
+
+/**
+ * Gêneros bloqueados (Lote 23): tira da lista o que tem um gênero bloqueado
+ * (ids TMDB). Item SEM genreIds não pode ser filtrado — passa: catálogo de
+ * addon (o resolver não traz gênero), VOD do Xtream, ao vivo e "Novos
+ * episódios" (montados à mão, sem gênero). Sem bloqueio, a lista volta
+ * intacta. A busca usa a mesma função (a tela dela aplica na hora de
+ * guardar os resultados — ver MediaSearchScreen).
+ */
+fun withoutBlockedGenres(items: List<MovieItem>, blocked: Set<Int>): List<MovieItem> {
+    if (blocked.isEmpty()) return items
+    return items.filter { it.genreIds.isEmpty() || it.genreIds.none { genre -> genre in blocked } }
+}

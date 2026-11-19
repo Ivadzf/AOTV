@@ -8,6 +8,7 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import coil.request.CachePolicy
 import com.aotv.app.data.local.CrashLog
+import com.aotv.app.data.sync.ContinuousSync
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.Dispatchers
 
@@ -24,6 +25,13 @@ class AotvApplication : Application(), ImageLoaderFactory {
         runCatching {
             com.google.android.gms.cast.framework.CastContext.getSharedInstance(this)
         }
+        // Lote 23 (v1.33.0): sync contínuo p/ o Drive — agenda o trabalho
+        // periódico quando o toggle está ligado (e desagenda quando
+        // desligado) e dispara um sync se o último tem mais de 24 h.
+        // Nada trava a abertura: o sync roda em 2º plano e qualquer falha
+        // só fica p/ o próximo ciclo (ver ContinuousSync).
+        ContinuousSync.applyEnabled(this)
+        ContinuousSync.maybeSyncOnOpen(this)
     }
 
     // ImageLoader afinado para TV box / aparelhos fracos (Android 9+):

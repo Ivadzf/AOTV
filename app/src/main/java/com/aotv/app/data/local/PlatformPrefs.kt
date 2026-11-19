@@ -244,6 +244,13 @@ internal val SCOPED_KEYS = listOf(
     // pergunta toda vez. Sem credencial: só nomes de pacote.
     "external_player_default_movie", "external_player_default_series",
     "external_player_by_title", "external_player_ask",
+    // Lote 23 (v1.33.0) — Biblioteca, perfis e sincronização: limite de
+    // idade do perfil infantil, gêneros bloqueados, ordenação da Minha
+    // Lista, séries abandonadas, "assistido em outro lugar", sync do
+    // Simkl, legenda forçada automática e período das estatísticas.
+    "kids_age_limit_v1", "blocked_genres_v1", "mylist_order_v1",
+    "dropped_series_v1", "watched_elsewhere_v1", "simkl_sync_v1",
+    "simkl_last_pull_v1", "pref_forced_subs", "stats_period_v1",
 )
 
 /**
@@ -3622,4 +3629,190 @@ class PlatformPrefs @Inject constructor(
         }
         return arr.toString()
     }
+
+    // ── Lote 23 (v1.33.0) — Biblioteca, perfis e sincronização ──────────
+    // Padrão das prefs da Fase C: o `var` lê do disco a cada acesso (sempre
+    // no perfil ativo — trocar de perfil não deixa valor velho), e o fluxo
+    // só existe p/ quem observa a tela. Conjuntos guardam JSON array de
+    // strings (mesmo formato de writeStringList/readStringList).
+
+    private val _statsPeriodFlow = MutableStateFlow(
+        (prefs.getString(sk("stats_period_v1"), "30d") ?: "30d")
+            .takeIf { it in setOf("7d", "30d", "90d", "all") } ?: "30d",
+    )
+    /** Período da tela de Estatísticas, que avisa quem observa. */
+    val statsPeriodFlow: StateFlow<String> = _statsPeriodFlow.asStateFlow()
+
+    /** Período da tela de Estatísticas ("7d" | "30d" | "90d" | "all"). */
+    var statsPeriod: String
+        get() = (prefs.getString(sk("stats_period_v1"), "30d") ?: "30d")
+            .takeIf { it in setOf("7d", "30d", "90d", "all") } ?: "30d"
+        set(value) {
+            val clean = value.takeIf { it in setOf("7d", "30d", "90d", "all") } ?: "30d"
+            prefs.edit().putString(sk("stats_period_v1"), clean).apply()
+            _statsPeriodFlow.value = clean
+        }
+
+    private val _kidsAgeLimitFlow = MutableStateFlow(prefs.getInt(sk("kids_age_limit_v1"), 12))
+    /** Limite de idade do perfil infantil, que avisa quem observa. */
+    val kidsAgeLimitFlow: StateFlow<Int> = _kidsAgeLimitFlow.asStateFlow()
+
+    /** Limite de idade do perfil infantil, em anos (padrão 12 — ver kidsBlocked). 0 = sem limite além do gênero. */
+    var kidsAgeLimit: Int
+        get() = prefs.getInt(sk("kids_age_limit_v1"), 12)
+        set(value) {
+            val clean = value.coerceIn(0, 18)
+            prefs.edit().putInt(sk("kids_age_limit_v1"), clean).apply()
+            _kidsAgeLimitFlow.value = clean
+        }
+
+    /** Tentativas falhas seguidas do PIN parental (GLOBAL, do aparelho). */
+    var parentalPinFailures: Int
+        get() = prefs.getInt("parental_pin_failures_v1", 0)
+        set(value) { prefs.edit().putInt("parental_pin_failures_v1", value.coerceAtLeast(0)).apply() }
+
+    /** Até quando o PIN parental fica travado, em epoch ms (GLOBAL, 0 = livre). */
+    var parentalLockoutUntilMs: Long
+        get() = prefs.getLong("parental_lockout_until_v1", 0L)
+        set(value) { prefs.edit().putLong("parental_lockout_until_v1", value.coerceAtLeast(0L)).apply() }
+
+    /** PIN parental travado agora? (5 falhas seguidas = 5 minutos.) */
+    val isParentalLockedOut: Boolean get() = System.currentTimeMillis() < parentalLockoutUntilMs
+
+    /**
+     * Registra uma falha do PIN parental. Na 5ª seguida, trava por 5
+     * minutos e zera o contador. Devolve true quando travou agora.
+     */
+    fun recordParentalPinFailure(): Boolean {
+        val n = parentalPinFailures + 1
+        parentalPinFailures = n
+        if (n >= 5) {
+            parentalLockoutUntilMs = System.currentTimeMillis() + 5 * 60_000L
+            parentalPinFailures = 0
+            return true
+        }
+        return false
+    }
+
+    /** PIN parental certo: zera as falhas seguidas. */
+    fun resetParentalPinFailures() { parentalPinFailures = 0 }
+
+    private val _blockedGenresFlow = MutableStateFlow(readStringList("blocked_genres_v1").mapNotNull { it.toIntOrNull() }.toSet())
+    /** Gêneros bloqueados no perfil ativo (ids TMDB), que avisam quem observa. */
+    val blockedGenresFlow: StateFlow<Set<Int>> = _blockedGenresFlow.asStateFlow()
+
+    /** Gêneros bloqueados no perfil ativo (ids TMDB). Vazio = nada bloqueado. */
+    var blockedGenres: Set<Int>
+        get() = readStringList("blocked_genres_v1").mapNotNull { it.toIntOrNull() }.toSet()
+        set(value) { writeStringList("blocked_genres_v1", value.map { it.toString() }); _blockedGenresFlow.value = value }
+
+    private val _droppedSeriesFlow = MutableStateFlow(readStringList("dropped_series_v1").mapNotNull { it.toIntOrNull() }.toSet())
+    /** Séries abandonadas no perfil ativo, que avisam quem observa. */
+    val droppedSeriesFlow: StateFlow<Set<Int>> = _droppedSeriesFlow.asStateFlow()
+
+    /** Séries abandonadas no perfil ativo (tmdbId). Abandonada some do Continuar e do calendário. */
+    var droppedSeries: Set<Int>
+        get() = readStringList("dropped_series_v1").mapNotNull { it.toIntOrNull() }.toSet()
+        set(value) { writeStringList("dropped_series_v1", value.map { it.toString() }); _droppedSeriesFlow.value = value }
+
+    /** Marca uma série como abandonada (some do Continuar e do calendário). */
+    fun dropSeries(tmdbId: Int) { droppedSeries = droppedSeries + tmdbId }
+
+    /** Tira uma série do abandono. */
+    fun undropSeries(tmdbId: Int) { droppedSeries = droppedSeries - tmdbId }
+
+    /** A série está abandonada neste perfil? */
+    fun isSeriesDropped(tmdbId: Int): Boolean = tmdbId in droppedSeries
+
+    private val _watchedElsewhereFlow = MutableStateFlow(readStringList("watched_elsewhere_v1").mapNotNull { it.toIntOrNull() }.toSet())
+    /** Títulos assistidos em outro lugar no perfil ativo, que avisam quem observa. */
+    val watchedElsewhereFlow: StateFlow<Set<Int>> = _watchedElsewhereFlow.asStateFlow()
+
+    /**
+     * Títulos que a sincronia (Trakt/Simkl) marcou como vistos fora daqui
+     * (tmdbId). O detalhe mostra o selo "Assistido em outro lugar"; dar
+     * play no título limpa a marca.
+     */
+    var watchedElsewhere: Set<Int>
+        get() = readStringList("watched_elsewhere_v1").mapNotNull { it.toIntOrNull() }.toSet()
+        set(value) { writeStringList("watched_elsewhere_v1", value.map { it.toString() }); _watchedElsewhereFlow.value = value }
+
+    /** Marca um título como assistido em outro lugar. */
+    fun markWatchedElsewhere(tmdbId: Int) { watchedElsewhere = watchedElsewhere + tmdbId }
+
+    /** Limpa a marca de assistido em outro lugar (ao dar play no título). */
+    fun clearWatchedElsewhere(tmdbId: Int) { watchedElsewhere = watchedElsewhere - tmdbId }
+
+    /** O título foi assistido em outro lugar (pela sincronia)? */
+    fun isWatchedElsewhere(tmdbId: Int): Boolean = tmdbId in watchedElsewhere
+
+    private val _myListOrderFlow = MutableStateFlow(
+        (prefs.getString(sk("mylist_order_v1"), "recent") ?: "recent")
+            .takeIf { it in setOf("recent", "name", "unwatched") } ?: "recent",
+    )
+    /** Ordenação da Minha Lista, que avisa quem observa. */
+    val myListOrderFlow: StateFlow<String> = _myListOrderFlow.asStateFlow()
+
+    /** Ordenação da Minha Lista ("recent" | "name" | "unwatched"). */
+    var myListOrder: String
+        get() = (prefs.getString(sk("mylist_order_v1"), "recent") ?: "recent")
+            .takeIf { it in setOf("recent", "name", "unwatched") } ?: "recent"
+        set(value) {
+            val clean = value.takeIf { it in setOf("recent", "name", "unwatched") } ?: "recent"
+            prefs.edit().putString(sk("mylist_order_v1"), clean).apply()
+            _myListOrderFlow.value = clean
+        }
+
+    private val _simklSyncEnabledFlow = MutableStateFlow(prefs.getBoolean(sk("simkl_sync_v1"), true))
+    /** Sync de 2 vias do Simkl ligado, que avisa quem observa. */
+    val simklSyncEnabledFlow: StateFlow<Boolean> = _simklSyncEnabledFlow.asStateFlow()
+
+    /** Sync de 2 vias do Simkl ligado (puxar assistidos + Minha Lista). */
+    var simklSyncEnabled: Boolean
+        get() = prefs.getBoolean(sk("simkl_sync_v1"), true)
+        set(value) { prefs.edit().putBoolean(sk("simkl_sync_v1"), value).apply(); _simklSyncEnabledFlow.value = value }
+
+    private val _simklLastPullMsFlow = MutableStateFlow(prefs.getLong(sk("simkl_last_pull_v1"), 0L))
+    /** Último pull do Simkl, que avisa quem observa. */
+    val simklLastPullMsFlow: StateFlow<Long> = _simklLastPullMsFlow.asStateFlow()
+
+    /** Último pull do Simkl, em epoch ms (0 = nunca). */
+    var simklLastPullMs: Long
+        get() = prefs.getLong(sk("simkl_last_pull_v1"), 0L)
+        set(value) { prefs.edit().putLong(sk("simkl_last_pull_v1"), value).apply(); _simklLastPullMsFlow.value = value }
+
+    private val _forcedSubsAuto = MutableStateFlow(prefs.getBoolean(sk("pref_forced_subs"), true))
+    /** Legenda forçada automática ligada, que avisa quem observa. */
+    val forcedSubsAutoFlow: StateFlow<Boolean> = _forcedSubsAuto.asStateFlow()
+
+    /**
+     * Legenda forçada automática (JOTV 1.0.22 §4.4): ligada por padrão.
+     * Quando a legenda completa não liga, entra sozinha a faixa forçada
+     * (só as falas em outro idioma); nunca toma o lugar da completa.
+     */
+    var forcedSubsAuto: Boolean
+        get() = _forcedSubsAuto.value
+        set(value) { prefs.edit().putBoolean(sk("pref_forced_subs"), value).apply(); _forcedSubsAuto.value = value }
+
+    private val _continuousSync = MutableStateFlow(prefs.getBoolean("pref_continuous_sync_v1", false))
+    /** Sync contínuo p/ o Drive ligado, que avisa quem observa. */
+    val continuousSyncEnabledFlow: StateFlow<Boolean> = _continuousSync.asStateFlow()
+
+    /**
+     * Sync contínuo (GLOBAL, do aparelho): com o Drive configurado, sobe o
+     * backup sozinho de tempos em tempos e na abertura, sem esperar o
+     * botão manual. DESLIGADO por padrão.
+     */
+    var continuousSyncEnabled: Boolean
+        get() = _continuousSync.value
+        set(value) { prefs.edit().putBoolean("pref_continuous_sync_v1", value).apply(); _continuousSync.value = value }
+
+    private val _continuousSyncLastMsFlow = MutableStateFlow(prefs.getLong("continuous_sync_last_v1", 0L))
+    /** Último sync contínuo, que avisa quem observa. */
+    val continuousSyncLastMsFlow: StateFlow<Long> = _continuousSyncLastMsFlow.asStateFlow()
+
+    /** Último sync contínuo, em epoch ms (0 = nunca). GLOBAL. */
+    var continuousSyncLastMs: Long
+        get() = prefs.getLong("continuous_sync_last_v1", 0L)
+        set(value) { prefs.edit().putLong("continuous_sync_last_v1", value).apply(); _continuousSyncLastMsFlow.value = value }
 }

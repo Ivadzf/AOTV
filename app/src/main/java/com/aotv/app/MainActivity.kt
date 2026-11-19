@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
         offerPartyDeepLink(intent)
         offerAddonDeepLink(intent)
         offerWatchNextDeepLink(intent)
+        offerAniListDeepLink(intent)
         enableEdgeToEdge()
         hideSystemBars()
 
@@ -108,6 +109,7 @@ class MainActivity : ComponentActivity() {
         offerPartyDeepLink(intent)
         offerAddonDeepLink(intent)
         offerWatchNextDeepLink(intent)
+        offerAniListDeepLink(intent)
     }
 
     // Extrai o código de `aotv://party/?code=XXXXXX` e oferece p/ navegação
@@ -134,6 +136,15 @@ class MainActivity : ComponentActivity() {
         val type = intent?.getStringExtra(EXTRA_WATCH_NEXT_TYPE) ?: return
         if (tmdbId <= 0) return
         com.aotv.app.data.remote.WatchNextDeepLink.offer(tmdbId, type)
+    }
+
+    // Deep link do AniList (Lote 23, v1.33.0): extrai o `code` de
+    // `aotv://anilist/callback?code=...` e oferece p/ o TrackersViewModel
+    // (que troca pelo token quando a tela de Trackers está aberta). Sem
+    // código válido, não faz nada. O intent-filter já existe no Manifest.
+    private fun offerAniListDeepLink(intent: Intent?) {
+        val code = com.aotv.app.data.remote.AniListDeepLink.parse(intent?.data) ?: return
+        com.aotv.app.data.remote.AniListDeepLink.offer(code)
     }
 
     // ── Gamepad (Lote 22, item 5) ─────────────────────────────────────────

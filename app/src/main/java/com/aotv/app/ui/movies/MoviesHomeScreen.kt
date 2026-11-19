@@ -24,12 +24,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MovieFilter
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -41,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -551,14 +559,22 @@ private fun HomeSectionsTab(
     // Continuar abre Ir para detalhes / Marcar como assistido / Remover.
     // O "Remover" do painel cai na confirmação acima; "Marcar" some com
     // canal ao vivo (embedId "live|...") — ao vivo não tem assistido.
+    // Lote 23: o painel local (ContinueTitleOptionsDialog, no fim do
+    // arquivo) soma "Não hoje" e "Abandonar série"/"Desfazer abandono" —
+    // o TitleOptionsDialog original é de outra frente e não pode ganhar
+    // parâmetros sem mexer no arquivo dele.
+    val droppedSeries by viewModel.droppedSeries.collectAsStateWithLifecycle()
     var pendingOptions by remember { mutableStateOf<MovieItem?>(null) }
     pendingOptions?.let { item ->
-        TitleOptionsDialog(
+        ContinueTitleOptionsDialog(
             item = item,
-            showMarkWatched = !item.embedId.startsWith("live|"),
+            isSeriesDropped = item.type == MediaType.SERIES && item.tmdbId in droppedSeries,
             onDismiss = { pendingOptions = null },
             onGoToDetails = { onItemClick(item) },
             onMarkWatched = { viewModel.markContinueWatched(item) },
+            onNotToday = { viewModel.markContinueNotToday(item.tmdbId) },
+            onDropSeries = { viewModel.dropSeries(item.tmdbId) },
+            onUndropSeries = { viewModel.undropSeries(item.tmdbId) },
             onRemove = { pendingRemove = item },
         )
     }
@@ -2076,5 +2092,88 @@ private fun TrailerCardView(card: MoviesHomeViewModel.TrailerCard, onClick: () -
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+// ── Painel de opções do cartão do Continuar assistindo (Lote 23) ──────────
+// Mesmo desenho do TitleOptionsDialog (OptionsPanels.kt — outra frente),
+// com "Não hoje" e "Abandonar série"/"Desfazer abandono" a mais. Local
+// porque o original não pode ganhar parâmetros sem mexer no arquivo dele;
+// quando unificarem, apaga-se este e volta-se a usar o original.
+@Composable
+private fun ContinueTitleOptionsDialog(
+    item: MovieItem,
+    isSeriesDropped: Boolean,
+    onDismiss: () -> Unit,
+    onGoToDetails: () -> Unit,
+    onMarkWatched: () -> Unit,
+    onNotToday: () -> Unit,
+    onDropSeries: () -> Unit,
+    onUndropSeries: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val isLive = item.embedId.startsWith("live|")
+    val isSeries = item.type == MediaType.SERIES
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(20.dp), color = BackgroundCard) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text(
+                    "Opções do título",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = ManropeFontFamily,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                )
+                if (item.title.isNotBlank()) {
+                    Text(
+                        item.title,
+                        color = TextSecondary,
+                        fontSize = 14.sp,
+                        fontFamily = ManropeFontFamily,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                    )
+                }
+                ContinueOptionsRow(label = "Ir para detalhes", icon = Icons.Default.Info, onClick = { onDismiss(); onGoToDetails() })
+                if (!isLive) {
+                    ContinueOptionsRow(label = "Marcar como assistido", icon = Icons.Default.Check, onClick = { onDismiss(); onMarkWatched() })
+                    ContinueOptionsRow(label = "Não hoje", icon = Icons.Default.Schedule, onClick = { onDismiss(); onNotToday() })
+                }
+                if (isSeries) {
+                    if (isSeriesDropped) {
+                        ContinueOptionsRow(label = "Desfazer abandono", icon = Icons.Default.Restore, onClick = { onDismiss(); onUndropSeries() })
+                    } else {
+                        ContinueOptionsRow(label = "Abandonar série", icon = Icons.Default.Block, destructive = true, onClick = { onDismiss(); onDropSeries() })
+                    }
+                }
+                ContinueOptionsRow(label = "Remover", icon = Icons.Default.Delete, destructive = true, onClick = { onDismiss(); onRemove() })
+            }
+        }
+    }
+}
+
+/** Uma linha do painel: ícone + rótulo, largura toda, toca e fecha. */
+@Composable
+private fun ContinueOptionsRow(
+    label: String,
+    icon: ImageVector,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = if (destructive) Danger else TextPrimary, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(
+            label,
+            color = if (destructive) Danger else TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = ManropeFontFamily,
+        )
     }
 }

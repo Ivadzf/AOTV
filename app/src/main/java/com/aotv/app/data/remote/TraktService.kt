@@ -766,6 +766,9 @@ class TraktService @Inject constructor(
                 lastSourceUrl = "",
                 profileId = profileId,
             )
+            // Sem registro local antes (getPlayback null): o ponto onde
+            // parou veio de outro lugar — marca "assistido em outro lugar".
+            if (local == null) prefs.markWatchedElsewhere(id)
         }
     }
 
@@ -778,6 +781,8 @@ class TraktService @Inject constructor(
                 for (ep in so.episodes.orEmpty()) {
                     if (!library.isEpisodeWatched(id, so.number, ep.number, profileId)) {
                         library.markEpisodeWatched(id, so.number, ep.number, profileId)
+                        // Episódio que não era visto aqui: veio de outro lugar.
+                        prefs.markWatchedElsewhere(id)
                     }
                 }
             }
@@ -1016,6 +1021,24 @@ class TraktService @Inject constructor(
                         api.removeFromSyncWatchlist(auth, key, payload).checkOk()
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Abandon Series — sync (Lote 23): o Trakt não tem estado "dropped",
+     * então a série abandonada sai da watchlist do Trakt
+     * (POST /sync/watchlist/remove). Fire-and-forget; sem sessão, no-op.
+     * A outra frente (detalhe da série) chama esta função quando o usuário
+     * abandona a série.
+     */
+    fun seriesDropped(tmdbId: Int) {
+        if (!configured || !isConnected || tmdbId <= 0) return
+        val one = mapOf<String, Any>("ids" to mapOf("tmdb" to tmdbId))
+        val payload = mapOf<String, Any>("shows" to listOf(one))
+        scope.launch {
+            runCatching {
+                withAuth { auth, key -> api.removeFromSyncWatchlist(auth, key, payload).checkOk() }
             }
         }
     }

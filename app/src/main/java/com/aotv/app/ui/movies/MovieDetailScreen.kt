@@ -26,16 +26,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -56,11 +60,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.ViewModel
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -108,6 +119,33 @@ private fun fmtIsoDateMobile(iso: String): String {
     return if (p.size == 3) "${p[2]}/${p[1]}/${p[0]}" else iso
 }
 
+/**
+ * Ações do Lote 23 no detalhe (selo "Assistido em outro lugar" + Abandonar
+ * série): a MovieDetailViewModel é de outra frente, então este VM pequeno
+ * lê as prefs reativas e avisa os trackers quando a série é abandonada.
+ */
+@HiltViewModel
+class MovieDetailL23ViewModel @Inject constructor(
+    private val prefs: com.aotv.app.data.local.PlatformPrefs,
+    private val trakt: com.aotv.app.data.remote.TraktService,
+    private val simkl: com.aotv.app.data.remote.SimklService,
+) : ViewModel() {
+    val droppedSeries: StateFlow<Set<Int>> = prefs.droppedSeriesFlow
+    val watchedElsewhere: StateFlow<Set<Int>> = prefs.watchedElsewhereFlow
+
+    fun dropSeries(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        prefs.dropSeries(tmdbId)
+        simkl.seriesDropped(tmdbId)
+        trakt.seriesDropped(tmdbId)
+    }
+
+    fun undropSeries(tmdbId: Int) {
+        if (tmdbId <= 0) return
+        prefs.undropSeries(tmdbId)
+    }
+}
+
 @Composable
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun MovieDetailScreen(
@@ -131,11 +169,19 @@ fun MovieDetailScreen(
     viewModel: MovieDetailViewModel = hiltViewModel(),
     // Preferências da página de detalhes (Fase B): fundo, transição, ícones, abas, episódios.
     detailPrefs: DetailPrefsViewModel = hiltViewModel(),
+    // Lote 23: selo "Assistido em outro lugar" + Abandonar série.
+    l23Vm: MovieDetailL23ViewModel = hiltViewModel(),
+    // Lote 23: ordenação de episódios do TVDB.
+    tvdbOrderVm: TvdbEpisodeOrderViewModel = hiltViewModel(),
 ) {
     // Passa o item completo (título/poster/ano/tipo) p/ a ViewModel poder salvar na
     // Minha Lista e registrar reprodução; também abre os coletores reativos da BIBLIOTECA.
     LaunchedEffect(item.tmdbId) { viewModel.load(item) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // Lote 23: séries abandonadas e títulos assistidos em outro lugar.
+    val droppedSeries by l23Vm.droppedSeries.collectAsStateWithLifecycle()
+    val watchedElsewhere by l23Vm.watchedElsewhere.collectAsStateWithLifecycle()
+    val tvdbOrder by tvdbOrderVm.order.collectAsStateWithLifecycle()
     val pad = com.aotv.app.ui.common.pagePadding()
     val wide = com.aotv.app.ui.common.isWideLayout()
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
@@ -235,6 +281,12 @@ fun MovieDetailScreen(
     // Seasons info
     val numberOfSeasons = primary.numberOfSeasons
     val durationLabel = if (isSeries) "$numberOfSeasons temp." else ""
+    // Série abandonada (Lote 23): o botão vira "Desfazer abandono".
+    val isDropped = detailItem.tmdbId in droppedSeries
+    // Ordem TVDB (Lote 23): carrega o mapa da série quando o detalhe abre
+    // (ou quando muda o título); sem chave ou com erro, o mapa fica null e
+    // o navegador segue na ordem oficial.
+    LaunchedEffect(detailItem.tmdbId, title) { tvdbOrderVm.load(detailItem.tmdbId, title) }
     // Data de lançamento (completa) + próximo episódio (séries semanais/em produção).
     val releaseDateStr = fmtIsoDateMobile(if (isSeries) state.series?.firstAirDate.orEmpty() else state.item?.releaseDate.orEmpty())
     val nextEpDateStr = fmtIsoDateMobile(state.series?.nextEpisodeDate.orEmpty())
@@ -546,6 +598,15 @@ fun MovieDetailScreen(
                                 letterSpacing = (-0.5).sp,
                             )
                         }
+                        // Selo "Assistido em outro lugar" (Lote 23): a sincronia
+                        // (Trakt/Simkl) marcou o título como visto fora daqui;
+                        // dar play no título limpa a marca.
+                        if (detailItem.tmdbId in watchedElsewhere) {
+                            com.aotv.app.ui.common.Badge(
+                                "Assistido em outro lugar",
+                                modifier = Modifier.padding(top = 10.dp),
+                            )
+                        }
                         // Título em idioma original (Lote 3 item 6): linha secundária
                         // abaixo do título traduzido (ou do logo, quando há). Só quando a
                         // pref está ligada, o TMDB trouxe o original E ele é diferente do
@@ -705,6 +766,20 @@ fun MovieDetailScreen(
                                 saved = state.isSaved,
                                 onClick = { viewModel.toggleSave() },
                             )
+                            // Abandonar série (Lote 23): some do Continuar e do
+                            // calendário; o botão vira "Desfazer abandono".
+                            if (isSeries) {
+                                GlassCircleButton(
+                                    icon = if (isDropped) Icons.Default.Restore else Icons.Default.Block,
+                                    onClick = {
+                                        if (isDropped) l23Vm.undropSeries(detailItem.tmdbId)
+                                        else l23Vm.dropSeries(detailItem.tmdbId)
+                                    },
+                                    size = 52.dp,
+                                    iconTint = if (isDropped) Accent else LiveRed,
+                                    contentDescription = if (isDropped) "Desfazer abandono" else "Abandonar série",
+                                )
+                            }
                             // Lote 21 (v1.31.0) — 👍/👎/⭐ do gosto: o 👎 tira o
                             // título das recomendações; ⭐ com 3+ vira semente.
                             GlassCircleButton(
@@ -764,6 +839,18 @@ fun MovieDetailScreen(
                                 tint = if (state.isSaved) Accent else TextPrimary,
                                 onClick = { viewModel.toggleSave() },
                             )
+                            // Abandonar série (Lote 23): some do Continuar e do calendário.
+                            if (isSeries) {
+                                DetailActionIcon(
+                                    icon = if (isDropped) Icons.Default.Restore else Icons.Default.Block,
+                                    label = if (isDropped) "Desfazer abandono" else "Abandonar série",
+                                    tint = if (isDropped) Accent else LiveRed,
+                                    onClick = {
+                                        if (isDropped) l23Vm.undropSeries(detailItem.tmdbId)
+                                        else l23Vm.dropSeries(detailItem.tmdbId)
+                                    },
+                                )
+                            }
                             // Lote 21 (v1.31.0) — 👍/👎/⭐ do gosto.
                             DetailActionIcon(
                                 icon = Icons.Default.ThumbUp,
@@ -1060,7 +1147,11 @@ fun MovieDetailScreen(
                 // ordenada pelo modo escolhido — calculada 1x e usada pelo
                 // mapa, pelo contador e pelos cards (mesma ordem nos três).
                 val seasonEpisodes = state.seasons[state.selectedSeason] ?: emptyList()
-                val episodes = sortEpisodes(filterEpisodes(seasonEpisodes, episodeQuery), EpisodeSort.fromId(episodeSortId))
+                val baseEpisodes = sortEpisodes(filterEpisodes(seasonEpisodes, episodeQuery), EpisodeSort.fromId(episodeSortId))
+                // Ordem TVDB (Lote 23): só reordena quando o modo é "Nº" —
+                // Data/Nota continuam mandando — e só quando o mapa carregou
+                // (sem mapa, a lista segue na ordem oficial).
+                val episodes = if (episodeSortId == EpisodeSort.NUMBER.id) sortEpisodesByTvdb(baseEpisodes, tvdbOrder) else baseEpisodes
 
                 // ── Navegador de episódios (Lote 2 item 3) ─────────────────
                 // Busca + ordenação + Rating Map, SOBRE os cards da Fase B.
@@ -1401,15 +1492,24 @@ fun MovieDetailScreen(
         // ── Painel de opções do episódio (Lote 14, v1.24.0) ───────────────────
         // "Ver fontes" abre a mesma folha que tocar o card; as marcações usam
         // só os episódios do catálogo local da temporada selecionada.
+        // Lote 23: o painel local (EpisodeOptionsDialogL23, no fim do
+        // arquivo) soma a trava de episódio não lançado e "Desmarcar
+        // temporada" — o EpisodeOptionsDialog original é de outra frente e
+        // não pode ganhar parâmetros sem mexer no arquivo dele.
         episodeOptions?.let { ep ->
-            EpisodeOptionsDialog(
+            EpisodeOptionsDialogL23(
                 episodeLabel = "T${ep.seasonNumber} E${ep.episodeNumber} · ${ep.name.ifBlank { "Episódio ${ep.episodeNumber}" }}",
+                episode = ep,
+                seasonEpisodes = state.seasons[ep.seasonNumber].orEmpty(),
+                watchedEpisodes = state.watchedEpisodes,
                 watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
                 hasPrevious = ep.episodeNumber > 1,
                 onDismiss = { episodeOptions = null },
                 onToggleWatched = { viewModel.toggleEpisodeWatched(ep.seasonNumber, ep.episodeNumber) },
                 onMarkPrevious = { viewModel.markPreviousEpisodesWatched(ep.seasonNumber, ep.episodeNumber) },
                 onMarkSeason = { viewModel.markSeasonWatched(ep.seasonNumber) },
+                onMarkEpisodes = { numbers -> numbers.forEach { n -> viewModel.markEpisodeWatched(ep.seasonNumber, n) } },
+                onUnmarkEpisodes = { numbers -> numbers.forEach { n -> viewModel.toggleEpisodeWatched(ep.seasonNumber, n) } },
                 onViewSources = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
             )
         }
@@ -3248,5 +3348,158 @@ private fun WikiQuotesSection(
         if (error != null) {
             Text("Não foi possível carregar frases e ficha: $error", color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
         }
+    }
+}
+
+// ── Painel de opções do episódio (Lote 23) ──────────────────────────────────
+// Mesmo desenho do EpisodeOptionsDialog (OptionsPanels.kt — outra frente),
+// com a trava de episódio não lançado e "Desmarcar temporada". Local porque
+// o original não pode ganhar parâmetros sem mexer no arquivo dele; quando
+// unificarem, apaga-se este e volta-se a usar o original.
+//
+// Trava: episódio sem data de estreia ou com estreia futura não pode ser
+// marcado — a linha vira texto desabilitado com a data ("Estreia em
+// dd/MM/yyyy"). "Marcar temporada" e "Marcar anteriores" usam o caminho em
+// lote da ViewModel quando tudo está lançado; com episódio não lançado no
+// meio, marcam só os lançados, um a um (só os números que existem no
+// catálogo local da temporada — nada é inventado). "Desmarcar temporada"
+// desmarca só os que estão marcados (o toggle de cada um só anda p/ o lado
+// de desmarcar, porque a lista já é só de vistos).
+@Composable
+private fun EpisodeOptionsDialogL23(
+    episodeLabel: String,
+    episode: EpisodeItem,
+    seasonEpisodes: List<EpisodeItem>,
+    watchedEpisodes: Set<String>,
+    watched: Boolean,
+    hasPrevious: Boolean,
+    onDismiss: () -> Unit,
+    onToggleWatched: () -> Unit,
+    onMarkPrevious: () -> Unit,
+    onMarkSeason: () -> Unit,
+    onMarkEpisodes: (List<Int>) -> Unit,
+    onUnmarkEpisodes: (List<Int>) -> Unit,
+    onViewSources: () -> Unit,
+) {
+    val released = isEpisodeReleased(episode)
+    val releasedNumbers = seasonEpisodes.filter { isEpisodeReleased(it) }.map { it.episodeNumber }.sorted()
+    val previousNumbers = seasonEpisodes.filter { it.episodeNumber < episode.episodeNumber }.map { it.episodeNumber }.sorted()
+    val previousReleased = previousNumbers.intersect(releasedNumbers.toSet()).sorted()
+    val watchedNumbers = seasonEpisodes
+        .map { it.episodeNumber }
+        .filter { n -> "${episode.seasonNumber}:$n" in watchedEpisodes }
+        .sorted()
+    val seasonAllReleased = seasonEpisodes.isNotEmpty() && releasedNumbers.size == seasonEpisodes.size
+    val airLabel = formatAirDateBr(episode.airDate).ifBlank { "" }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(20.dp), color = BackgroundCard) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Text(
+                    "Opções do episódio",
+                    color = TextPrimary,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = ManropeFontFamily,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                )
+                if (episodeLabel.isNotBlank()) {
+                    Text(
+                        episodeLabel,
+                        color = TextSecondary,
+                        fontSize = 14.sp,
+                        fontFamily = ManropeFontFamily,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                    )
+                }
+                if (released) {
+                    EpisodeOptionsRowL23(
+                        label = if (watched) "Desmarcar como assistido" else "Marcar como assistido",
+                        icon = if (watched) Icons.Default.Close else Icons.Default.Check,
+                        onClick = { onDismiss(); onToggleWatched() },
+                    )
+                } else {
+                    // Desabilitado: não marca o que ainda não estreou.
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Check, null, tint = TextTertiary, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                "Marcar como assistido",
+                                color = TextTertiary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = ManropeFontFamily,
+                            )
+                            Text(
+                                if (airLabel.isBlank()) "Sem data de estreia" else "Estreia em $airLabel",
+                                color = TextTertiary,
+                                fontSize = 13.sp,
+                                fontFamily = ManropeFontFamily,
+                            )
+                        }
+                    }
+                }
+                if (hasPrevious && previousReleased.isNotEmpty()) {
+                    EpisodeOptionsRowL23(
+                        label = "Marcar anteriores como assistidos",
+                        icon = Icons.Default.SkipPrevious,
+                        onClick = {
+                            onDismiss()
+                            if (previousReleased.size == previousNumbers.size) onMarkPrevious()
+                            else onMarkEpisodes(previousReleased)
+                        },
+                    )
+                }
+                EpisodeOptionsRowL23(
+                    label = "Marcar temporada como assistida",
+                    icon = Icons.Default.DoneAll,
+                    onClick = {
+                        onDismiss()
+                        if (seasonAllReleased) onMarkSeason()
+                        else onMarkEpisodes(releasedNumbers)
+                    },
+                )
+                if (watchedNumbers.isNotEmpty()) {
+                    EpisodeOptionsRowL23(
+                        label = "Desmarcar temporada como assistida",
+                        icon = Icons.Default.Close,
+                        onClick = { onDismiss(); onUnmarkEpisodes(watchedNumbers) },
+                    )
+                }
+                EpisodeOptionsRowL23(
+                    label = "Ver fontes",
+                    icon = Icons.Default.List,
+                    onClick = { onDismiss(); onViewSources() },
+                )
+            }
+        }
+    }
+}
+
+/** Uma linha do painel: ícone + rótulo, largura toda, toca e fecha. */
+@Composable
+private fun EpisodeOptionsRowL23(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = TextPrimary, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(
+            label,
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            fontFamily = ManropeFontFamily,
+        )
     }
 }

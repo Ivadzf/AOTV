@@ -97,6 +97,8 @@ data class SourceFilterChip(
     val label: String,
     val selected: Boolean,
     val onClick: () -> Unit,
+    /** Chave estável da fileira (padrão = label). Provider e qualidade podem ter o mesmo rótulo ("4K"). */
+    val key: String = label,
 )
 
 /** Painel aberto com a lista do tipo pedido. [focusIdx] é o item com foco do D-pad. */
@@ -115,6 +117,8 @@ internal fun PlayerActionPanel(
     frosted: Boolean = false,
     /** Chips de filtro no topo do painel (Lote 15 item 2 — folha de Fontes). Vazio = sem chips. */
     filterChips: List<SourceFilterChip> = emptyList(),
+    /** Cursor D-pad na fileira de chips (Lote 23 item 13): -1 = foco na lista; >= 0 = índice do chip com o anel. */
+    chipCursor: Int = -1,
     /**
      * Painel de legendas em duas colunas (Lote 17 item 14, estilo Nuvio).
      * Só vale fora da TV e quando a lista tem entradas com [TvPlayerAction.langKey];
@@ -124,9 +128,9 @@ internal fun PlayerActionPanel(
      */
     subtitleMode: Boolean = false,
 ) {
-    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true, frosted, filterChips) }
+    if (television) TvScaled { PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, true, frosted, filterChips, chipCursor) }
     else if (subtitleMode && actions.any { it.langKey.isNotBlank() }) SubtitlePanelBody(title, actions, movieTitle, onPick, onDismiss, frosted)
-    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false, frosted, filterChips)
+    else PlayerActionPanelBody(title, showCount, actions, focusIdx, pinned, movieTitle, onPick, onDismiss, false, frosted, filterChips, chipCursor)
 }
 
 @Composable
@@ -142,6 +146,7 @@ private fun PlayerActionPanelBody(
     television: Boolean,
     frosted: Boolean = false,
     filterChips: List<SourceFilterChip> = emptyList(),
+    chipCursor: Int = -1,
 ) {
     val sourceCount = actions.count { it.isSource }
     val shortWindow = !television && androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
@@ -166,9 +171,10 @@ private fun PlayerActionPanelBody(
             else -> "A troca de fonte mantém o tempo"
         },
         subColor = if (pinned) Accent else TextTertiary,
+        // Lote 23 item 13: a contagem é "N fontes", não só o número.
         titleTrailing = if (showCount && sourceCount > 0) ({
             Text(
-                "$sourceCount", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
+                "$sourceCount fontes", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(AccentFill).padding(horizontal = 10.dp, vertical = 3.dp),
             )
         }) else null,
@@ -177,18 +183,30 @@ private fun PlayerActionPanelBody(
         LaunchedEffect(focusIdx, actions.size) {
             if (actions.isNotEmpty()) listState.animateScrollToItem(focusIdx.coerceIn(0, actions.lastIndex))
         }
-        // Chips de filtro (Lote 15 item 2): Todos + um por provider presente na
-        // lista atual. Só no celular — na TV o D-pad é dono do painel e a fileira
-        // de chips ficaria fora da navegação (o call site só manda chips fora da TV).
+        val chipRowState = rememberLazyListState()
+        LaunchedEffect(chipCursor, filterChips.size) {
+            if (chipCursor >= 0 && filterChips.isNotEmpty()) chipRowState.animateScrollToItem(chipCursor.coerceIn(0, filterChips.lastIndex))
+        }
+        // Chips de filtro (Lote 15 item 2 + Lote 23 item 13): Todos + um por
+        // provider presente + um por qualidade. No celular é toque; na TV o
+        // D-pad navega a fileira (chipCursor, anel branco no chip com foco).
         if (filterChips.isNotEmpty()) {
             LazyRow(
-                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                state = chipRowState,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(filterChips, key = { it.label }) { chip ->
-                    FilterChipPill(chip.label, chip.selected, onClick = chip.onClick)
+                itemsIndexed(filterChips, key = { _, chip -> chip.key }) { i, chip ->
+                    val ring = if (i == chipCursor) Modifier.border(2.dp, Color.White, RoundedCornerShape(999.dp)) else Modifier
+                    Box(ring) { FilterChipPill(chip.label, chip.selected, onClick = chip.onClick) }
                 }
             }
+        }
+        // Lote 23 item 13: o filtro zerou a lista — estado vazio honesto em
+        // vez de uma lista só com os botões de vista.
+        if (showCount && sourceCount == 0) {
+            Text("Nenhuma fonte neste filtro", color = TextTertiary, fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp))
         }
         LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             itemsIndexed(actions) { i, act ->

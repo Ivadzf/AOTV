@@ -95,6 +95,42 @@ fun LiveTvScreen(
     // Grupo esperando a CRIAÇÃO do PIN (trancar sem PIN definido ainda).
     var pendingLockGroup by remember { mutableStateOf<String?>(null) }
     var showSetPinForLock by remember { mutableStateOf(false) }
+    // Lote 23 item 14 (JOTV 1.0.22 §4.6): filtro por fonte de canal — estado
+    // local da tela (sem pref). A fonte é a lista M3U/conta Xtream de origem
+    // (LiveChannel.sourceId); o nome vem do JSON de fontes do repo ("aotv_live",
+    // mesmas chaves do readSources — sem 2ª instância do repositório).
+    var sourceFilter by remember { mutableStateOf("") }
+    // Bônus Lote 23 — lockout do PIN: até quando o PIN travou, p/ recompor o
+    // diálogo quando a 5ª falha trava no meio da tentativa.
+    var pinLockedUntilMs by remember { mutableStateOf(0L) }
+    val sourceNames: Map<String, String> = remember(context) {
+        val out = LinkedHashMap<String, String>()
+        runCatching {
+            val a = org.json.JSONArray(
+                context.getSharedPreferences("aotv_live", android.content.Context.MODE_PRIVATE)
+                    .getString("sources", "[]")
+            )
+            for (i in 0 until a.length()) {
+                val o = a.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (id.isNotBlank()) out[id] = o.optString("name").ifBlank { id }
+            }
+        }
+        out
+    }
+    /** Chave do filtro: a fonte do canal; canais de addon de TV caem num só chip ("Addons"). */
+    fun sourceKey(c: com.aotv.app.data.live.LiveChannel): String =
+        if (c.sourceId.startsWith("addon-tv:")) "addon-tv" else c.sourceId
+    fun sourceLabel(key: String): String =
+        if (key == "addon-tv") "Addons" else sourceNames[key] ?: key
+    // Canais da fonte escolhida (a lista já vem filtrada por favoritos/grupo/
+    // busca na ViewModel — aqui só soma a fonte).
+    val shownRows = if (sourceFilter.isBlank()) v.rows
+        else v.rows.filter { sourceKey(it.channel) == sourceFilter }
+    val sourceOptions = remember(v.groupedRows) {
+        v.groupedRows.values.flatten().map { it.channel }.distinctBy { it.id }
+            .groupBy(::sourceKey).map { (k, cs) -> k to cs.size }
+    }
 
     /** Tocar um canal respeitando o cadeado do grupo (só no celular). */
     fun playChannel(channel: com.aotv.app.data.live.LiveChannel) {
@@ -120,22 +156,47 @@ fun LiveTvScreen(
     }
 
     pendingUnlockGroup?.let { group ->
-        com.aotv.app.ui.settings.VerifyPinDialog(
-            title = "PIN dos pais",
-            onConfirm = { pin ->
-                if (prefs.checkParentalPin(pin)) {
-                    if (pendingUnlockRemovesLock) prefs.unlockLiveGroup(group)
-                    else unlockedGroups = unlockedGroups + group
-                    pendingPlayChannel?.let { playChannelById(it) }
-                    pendingPlayChannel = null
-                    pendingUnlockGroup = null
-                    true
-                } else {
-                    false
-                }
-            },
-            onDismiss = { pendingUnlockGroup = null; pendingPlayChannel = null },
-        )
+        // Bônus Lote 23 — lockout do PIN parental (5 falhas = 5 min, ver
+        // PlatformPrefs.recordParentalPinFailure): travado, mostra o tempo
+        // restante e NÃO aceita tentativa, nem com o PIN certo.
+        val lockedUntil = maxOf(prefs.parentalLockoutUntilMs, pinLockedUntilMs)
+        if (System.currentTimeMillis() < lockedUntil) {
+            val mins = ((lockedUntil - System.currentTimeMillis() + 59_999) / 60_000).coerceAtLeast(1)
+            AlertDialog(
+                onDismissRequest = { pendingUnlockGroup = null; pendingPlayChannel = null },
+                containerColor = BackgroundCard,
+                title = { Text("PIN travado", color = TextPrimary) },
+                text = { Text("PIN travado — tente de novo em $mins min.", color = TextSecondary, fontSize = 13.sp) },
+                confirmButton = {
+                    TextButton(onClick = { pendingUnlockGroup = null; pendingPlayChannel = null }) {
+                        Text("Entendi", color = Accent, fontWeight = FontWeight.Bold)
+                    }
+                },
+            )
+        } else {
+            com.aotv.app.ui.settings.VerifyPinDialog(
+                title = "PIN dos pais",
+                onConfirm = { pin ->
+                    if (prefs.isParentalLockedOut) {
+                        pinLockedUntilMs = prefs.parentalLockoutUntilMs
+                        false
+                    } else if (prefs.checkParentalPin(pin)) {
+                        prefs.resetParentalPinFailures()
+                        if (pendingUnlockRemovesLock) prefs.unlockLiveGroup(group)
+                        else unlockedGroups = unlockedGroups + group
+                        pendingPlayChannel?.let { playChannelById(it) }
+                        pendingPlayChannel = null
+                        pendingUnlockGroup = null
+                        true
+                    } else {
+                        prefs.recordParentalPinFailure()
+                        pinLockedUntilMs = prefs.parentalLockoutUntilMs
+                        false
+                    }
+                },
+                onDismiss = { pendingUnlockGroup = null; pendingPlayChannel = null },
+            )
+        }
     }
     if (showSetPinForLock) {
         com.aotv.app.ui.settings.SetPinDialog(
@@ -236,6 +297,24 @@ fun LiveTvScreen(
             }
         }
 
+        // Lote 23 item 14 (JOTV 1.0.22 §4.6): filtro por fonte de canal, no
+        // padrão de chips do Descobrir (um por fonte presente + "Todos", com
+        // contagem). Combina com favoritos, grupo e busca. Só aparece com
+        // mais de uma fonte — e não no Guia (a grade tem ViewModel própria).
+        if (!guide && sourceOptions.size > 1) {
+            Text("Fonte dos canais", color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = pad, end = pad, top = 4.dp))
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = pad, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item { com.aotv.app.ui.common.FilterChipPill("Todos ${v.total}", sourceFilter.isBlank(), { sourceFilter = "" }) }
+                items(sourceOptions, key = { it.first }) { (key, n) ->
+                    com.aotv.app.ui.common.FilterChipPill("${sourceLabel(key)} $n", sourceFilter == key, { sourceFilter = key })
+                }
+            }
+        }
+
         // Lote 8 (v1.18.0): seção de esportes ao vivo (Frente 2) — depois das
         // pílulas de filtro, só na vista de canais. Sem linhas, não desenha nada.
         // Lote 21 (v1.31.0): a classificação do EPG NÃO roda na composição
@@ -245,10 +324,10 @@ fun LiveTvScreen(
         if (!guide && sportsShow) {
             val liveSportsRows by produceState(
                 initialValue = emptyList<Pair<com.aotv.app.data.live.LiveChannel, com.aotv.app.data.live.LiveProgram?>>(),
-                key1 = v.rows, key2 = v.epg, key3 = v.now,
+                key1 = shownRows, key2 = v.epg, key3 = v.now,
             ) {
                 value = withContext(kotlinx.coroutines.Dispatchers.Default) {
-                    liveSportsNow(v.rows.map { it.channel }, v.epg, v.now)
+                    liveSportsNow(shownRows.map { it.channel }, v.epg, v.now)
                 }
             }
             SportsSection(
@@ -313,9 +392,11 @@ fun LiveTvScreen(
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }
 
-        if (v.rows.isEmpty()) {
+        if (shownRows.isEmpty()) {
             Text(
-                if (v.loading) "Carregando canais…" else "Nenhum canal aqui.",
+                if (v.loading) "Carregando canais…"
+                else if (sourceFilter.isNotBlank()) "Nenhum canal nesta fonte."
+                else "Nenhum canal aqui.",
                 color = TextTertiary, fontSize = 14.sp, modifier = Modifier.padding(pad),
             )
             return@Column
@@ -327,7 +408,9 @@ fun LiveTvScreen(
         // Lote 9 (v1.19.0): no celular e na vista padrão (sem filtro nem
         // busca), os canais vêm em cartões por grupo (o hub); na TV, com
         // filtro ou com busca, segue a grade plana de antes.
-        if (!isTv && !guide && v.filter == LiveTvViewModel.ALL && v.query.isBlank()) {
+        // Lote 23 item 14: com filtro de fonte ativo, o hub (sem filtro)
+        // não vale — segue a grade plana com as linhas filtradas.
+        if (!isTv && !guide && v.filter == LiveTvViewModel.ALL && v.query.isBlank() && sourceFilter.isBlank()) {
             LiveGroupCards(
                 groupedRows = v.groupedRows,
                 favorites = groupFavorites,
@@ -371,7 +454,7 @@ fun LiveTvScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(v.rows, key = { it.channel.id }) { row ->
+            items(shownRows, key = { it.channel.id }) { row ->
                 ChannelRow(
                     // PIN por grupo (Lote 11): tocar um canal de grupo
                     // trancado pede o PIN (só no celular; na TV, sem gate).

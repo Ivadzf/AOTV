@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Teto da Minha Lista (Lote 23, JOTV 1.0.22 §4.2): 250 títulos; além disso sai o mais antigo. */
+private const val WATCHLIST_MAX = 250
+
 /**
  * Agrega os 3 DAOs da BIBLIOTECA do AOTV (Minha Lista, Continuar Assistindo, Episodios Vistos).
  * Expoe metodos convenientes baseados em [MovieItem] (dominio) para a UI consumir.
@@ -66,6 +69,19 @@ class LibraryRepository @Inject constructor(
                 addedAt = System.currentTimeMillis(),
             )
         )
+        trimWatchlist(profileId ?: pid)
+    }
+
+    /**
+     * Tira da Minha Lista os mais antigos além do teto de 250 (Lote 23).
+     * A lista vem ordenada por addedAt desc, então o que passa do teto é
+     * o mais antigo. A importação da sincronia não apara (é em lote) — o
+     * próximo salvar do usuário apara o excedente.
+     */
+    private suspend fun trimWatchlist(profileId: String) {
+        val all = watchlistDao.getAll(profileId).first()
+        if (all.size <= WATCHLIST_MAX) return
+        all.drop(WATCHLIST_MAX).forEach { watchlistDao.remove(profileId, it.tmdbId, it.type) }
     }
 
     /** Remove um [MovieItem] da Minha Lista. */
@@ -108,6 +124,9 @@ class LibraryRepository @Inject constructor(
     ) {
         // Assistir de novo libera o título que tinha sido removido do Continuar (v1.13.0).
         prefs.unhideContinue(item.tmdbId, item.type.name)
+        // Dar play limpa a marca de "assistido em outro lugar" (Lote 23): o
+        // título agora foi assistido AQUI, não só fora.
+        prefs.clearWatchedElsewhere(item.tmdbId)
         val prev = movieHistoryDao.get(pid, item.tmdbId, item.type.name)
         movieHistoryDao.upsert(
             MovieHistoryEntity(

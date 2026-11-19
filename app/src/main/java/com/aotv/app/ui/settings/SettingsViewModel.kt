@@ -171,6 +171,37 @@ class SettingsViewModel @Inject constructor(
     val calendarAutoAddTrackers: StateFlow<Boolean> = platformPrefs.calendarAutoAddTrackersFlow
     fun setCalendarAutoAddTrackers(v: Boolean) { platformPrefs.calendarAutoAddTrackers = v }
 
+    // ── Lote 23 (v1.33.0): biblioteca, perfil infantil, legendas, sync ──
+    val statsPeriod: StateFlow<String> = platformPrefs.statsPeriodFlow
+    fun setStatsPeriod(v: String) { platformPrefs.statsPeriod = v }
+
+    val myListOrder: StateFlow<String> = platformPrefs.myListOrderFlow
+    fun setMyListOrder(v: String) { platformPrefs.myListOrder = v }
+
+    val blockedGenres: StateFlow<Set<Int>> = platformPrefs.blockedGenresFlow
+    fun setBlockedGenres(v: Set<Int>) { platformPrefs.blockedGenres = v }
+
+    val kidsAgeLimit: StateFlow<Int> = platformPrefs.kidsAgeLimitFlow
+    fun setKidsAgeLimit(v: Int) { platformPrefs.kidsAgeLimit = v }
+
+    val forcedSubsAuto: StateFlow<Boolean> = platformPrefs.forcedSubsAutoFlow
+    fun setForcedSubsAuto(v: Boolean) { platformPrefs.forcedSubsAuto = v }
+
+    val simklSyncEnabled: StateFlow<Boolean> = platformPrefs.simklSyncEnabledFlow
+    fun setSimklSyncEnabled(v: Boolean) { platformPrefs.simklSyncEnabled = v }
+    val simklLastPullMs: StateFlow<Long> = platformPrefs.simklLastPullMsFlow
+
+    val continuousSyncEnabled: StateFlow<Boolean> = platformPrefs.continuousSyncEnabledFlow
+    fun setContinuousSyncEnabled(v: Boolean) { platformPrefs.continuousSyncEnabled = v }
+    val continuousSyncLastMs: StateFlow<Long> = platformPrefs.continuousSyncLastMsFlow
+    /** Roda o sync contínuo agora (sobe o backup p/ o Drive, se configurado). */
+    fun syncNow(onDone: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val r = com.aotv.app.data.sync.ContinuousSync.syncNow(appContext)
+            onDone(r.getOrDefault("Falha ao sincronizar"))
+        }
+    }
+
     val recordStartEarlyMin: StateFlow<Int> = platformPrefs.recordStartEarlyMinFlow
     fun setRecordStartEarlyMin(v: Int) { platformPrefs.recordStartEarlyMin = v }
 

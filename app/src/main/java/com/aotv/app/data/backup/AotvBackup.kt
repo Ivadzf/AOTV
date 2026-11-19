@@ -1,6 +1,13 @@
 package com.aotv.app.data.backup
 
 import com.aotv.app.BuildConfig
+import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.Profile
+import com.aotv.app.data.local.SCOPED_KEYS
+import com.aotv.app.data.plugins.PluginStore
+import com.aotv.app.data.repository.LibraryRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -226,4 +233,97 @@ object AotvBackup {
 
     /** Versão do app que gerou o backup (p/ o campo "appVersion"). */
     fun appVersion(): String = BuildConfig.VERSION_NAME
+
+    // ── Montagem do JSON sem ViewModel (Lote 23, v1.33.0) ───────────────────
+    // O sync contínuo precisa do MESMO JSON do backup manual, mas roda num
+    // Worker — sem ViewModel. Esta função monta o JSON a partir de
+    // dependências diretas (prefs, biblioteca, plugins), e o
+    // BackupViewModel delega p/ cá — fonte única do payload; se a montagem
+    // mudar, muda só aqui.
+
+    /**
+     * Monta o JSON `aotv-backup-v1` do perfil ativo (addons, plugins, Minha
+     * Lista, Continuar, episódios vistos e prefs — com o toggle de segredos
+     * do backup manual). Erro quando passa de 8 MB.
+     */
+    suspend fun buildBackupJson(
+        prefs: PlatformPrefs,
+        library: LibraryRepository,
+        plugins: PluginStore,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val includeSecrets = prefs.backupIncludeSecrets
+            val profile = prefs.profile
+            val root = JSONObject()
+                .put("format", FORMAT)
+                .put("appVersion", appVersion())
+                .put("includesSecrets", includeSecrets)
+                .put("profile", profileJson(profile, includeSecrets))
+            val profilesArr = JSONArray()
+            prefs.profiles.value.forEach { profilesArr.put(profileJson(it, includeSecrets)) }
+            root.put("profiles", profilesArr)
+            val addonsArr = JSONArray()
+            prefs.addonEntries.forEach {
+                val o = JSONObject().put("url", it.url).put("enabled", it.enabled)
+                if (it.id.isNotBlank()) o.put("id", it.id)
+                addonsArr.put(o)
+            }
+            root.put("addons", addonsArr)
+            root.put("plugins", JSONObject(plugins.backup()))
+            val watchlistArr = JSONArray()
+            library.watchlistNow().forEach {
+                watchlistArr.put(
+                    JSONObject().put("tmdbId", it.tmdbId).put("type", it.type)
+                        .put("title", it.title).put("posterUrl", it.posterUrl)
+                        .put("year", it.year).put("addedAt", it.addedAt),
+                )
+            }
+            root.put("watchlist", watchlistArr)
+            val continueArr = JSONArray()
+            library.recentlyPlayedNow().forEach {
+                // Sem lastSourceUrl: URL de fonte pode trazer token/assinatura.
+                continueArr.put(
+                    JSONObject().put("tmdbId", it.tmdbId).put("type", it.type)
+                        .put("title", it.title).put("posterUrl", it.posterUrl)
+                        .put("positionMs", it.positionMs).put("durationMs", it.durationMs)
+                        .put("lastEpisode", it.lastEpisode).put("lastWatchedAt", it.lastWatchedAt),
+                )
+            }
+            root.put("continue", continueArr)
+            val watchedArr = JSONArray()
+            library.allWatchedEpisodes().forEach {
+                watchedArr.put(
+                    JSONObject().put("seriesTmdbId", it.seriesTmdbId).put("season", it.season)
+                        .put("episode", it.episode).put("watchedAt", it.watchedAt),
+                )
+            }
+            root.put("watched", watchedArr)
+            val profilePrefs = JSONObject()
+            SCOPED_KEYS.forEach { key ->
+                if (!includeSecrets && key in SECRET_SCOPED_KEYS) return@forEach
+                encodePrefValue(prefs.rawPref(key))?.let { profilePrefs.put(key, it) }
+            }
+            root.put("profilePrefs", profilePrefs)
+            val globalPrefs = JSONObject()
+            (GLOBAL_KEYS + if (includeSecrets) SECRET_GLOBAL_KEYS else emptySet())
+                .forEach { key ->
+                    encodePrefValue(prefs.rawGlobalPref(key))?.let { globalPrefs.put(key, it) }
+                }
+            root.put("globalPrefs", globalPrefs)
+            val text = root.toString()
+            if (text.toByteArray(Charsets.UTF_8).size > MAX_BACKUP_BYTES) {
+                throw BackupException("Backup grande demais (limite de 8 MB)")
+            }
+            text
+        }
+    }
+
+    /** Perfil serializado p/ o JSON (o hash do PIN só com segredos). */
+    private fun profileJson(p: Profile, includeSecrets: Boolean): JSONObject {
+        val o = JSONObject().put("id", p.id).put("name", p.name).put("color", p.color)
+            .put("kids", p.kids).put("avatarUrl", p.avatarUrl).put("avatarId", p.avatarId)
+            .put("usePrimaryAddons", p.usePrimaryAddons)
+        if (includeSecrets && p.pinHash.isNotBlank()) o.put("pinHash", p.pinHash)
+        return o
+    }
 }

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -164,6 +165,12 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     SummaryRow("Expira em", formatSimklDate(st.expiresAt), TextPrimary)
                 }
                 SummaryRow("Client ID", if (st.clientId.isBlank()) "Não configurado" else "Configurado", TextPrimary)
+                SummaryRow("Sync 2 vias", if (st.simklSyncEnabled) "Sim" else "Não", TextPrimary)
+                SummaryRow(
+                    "Último pull",
+                    if (st.simklLastPullMs > 0L) formatSimklDate(st.simklLastPullMs) else "Nunca",
+                    TextPrimary,
+                )
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "O Simkl marca o que você assiste e sincroniza a Minha Lista, independente do Trakt. " +
@@ -301,6 +308,38 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                         "Desconectar", { confirmLogout = true },
                         icon = Icons.AutoMirrored.Filled.Logout, tone = ButtonTone.SECONDARY, compact = true,
                     )
+                }
+                // Lote 23 (v1.33.0): sync de 2 vias — puxar assistidos e
+                // Minha Lista do Simkl (o push já existia desde a v1.13.0).
+                if (st.connectedUser != null) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Sincronização de 2 vias", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (st.simklSyncEnabled) "Ligada: o Simkl puxa assistidos e Minha Lista; o que só existe lá vira \"assistido em outro lugar\"."
+                                else "Desligada: o AOTV só envia o que você assiste, não puxa nada.",
+                                color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                        }
+                        Switch(checked = st.simklSyncEnabled, onCheckedChange = viewModel::setSimklSyncEnabled, colors = trackerSwitchColors())
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AotvButton(
+                            "Sincronizar agora", viewModel::syncSimklNow,
+                            icon = Icons.Default.Sync, tone = ButtonTone.SECONDARY,
+                            busy = st.busy, busyLabel = "Sincronizando…", compact = true,
+                        )
+                    }
+                    if (st.simklLastPullMs > 0L) {
+                        Text(
+                            "Último pull: ${formatSimklDate(st.simklLastPullMs)}.",
+                            color = TextTertiary, fontSize = 12.sp, lineHeight = 16.sp,
+                        )
+                    }
                 }
 
                 st.traktMessage?.let { SimklBanner(it, ok = true, onClose = viewModel::clearTraktMessage) }
@@ -657,7 +696,7 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
             title = { Text("Desconectar o Simkl?", color = TextPrimary) },
-            text = { Text("Só a sessão deste perfil é apagada. O Client ID continua salvo.", color = TextSecondary) },
+            text = { Text("A sessão deste perfil é apagada e revogada no site do Simkl. O Client ID continua salvo.", color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = { confirmLogout = false; viewModel.disconnect() }) {
                     Text("Desconectar", color = Accent)
@@ -768,6 +807,22 @@ private fun SimklPinDialog(pin: SimklService.DeviceCode, onCancel: () -> Unit) {
                         Toast.makeText(context, "Link copiado", Toast.LENGTH_SHORT).show()
                     },
                     icon = Icons.Default.ContentCopy, tone = ButtonTone.SECONDARY, compact = true,
+                )
+                // Lote 23 (v1.33.0): abrir a página do PIN direto no navegador
+                // (a URL já traz o código embutido — nada p/ digitar).
+                AotvButton(
+                    "Abrir simkl.com/pin",
+                    {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(pin.pinUrl),
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                    icon = Icons.Default.Link, tone = ButtonTone.SECONDARY, compact = true,
                 )
                 Text(
                     "Esperando você confirmar no celular",

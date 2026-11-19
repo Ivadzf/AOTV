@@ -23,10 +23,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.aotv.app.domain.model.EpisodeItem
 import com.aotv.app.ui.theme.ManropeFontFamily
 import com.aotv.app.ui.theme.TextSecondary
 import com.aotv.app.ui.theme.TextTertiary
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 // ── Navegador de episódios (Lote 2, v1.10.0) ───────────────────────────────
 // Busca + ordenação + Rating Map, construídos SOBRE os cards de episódio da
@@ -200,6 +208,111 @@ fun RatingMap(
                     modifier = Modifier.padding(start = 2.dp),
                 )
             }
+        }
+    }
+}
+
+// ── Trava de episódio não lançado (Lote 23, v1.33.0) ───────────────────────
+// Episódio sem data de estreia ou com estreia futura NÃO pode ser marcado
+// como visto: a data que o TMDB traz é o meio-dia UTC do dia da estreia, e
+// sem data não há o que ter estreado.
+
+/** O episódio já estreou? Sem data de estreia, não. */
+fun isEpisodeReleased(ep: EpisodeItem, nowMs: Long = System.currentTimeMillis()): Boolean {
+    val at = airDateMs(ep.airDate) ?: return false
+    return nowMs >= at
+}
+
+/** "2026-11-20" → "20/11/2026". Sem data válida, volta cru. */
+fun formatAirDateBr(iso: String): String {
+    val p = iso.trim().split("-")
+    return if (p.size == 3) "${p[2]}/${p[1]}/${p[0]}" else iso
+}
+
+// ── Ordenação TVDB (Lote 23, v1.33.0) ──────────────────────────────────────
+// Quando o toggle da ordem TVDB está ligado e a ordem não é "official", o
+// navegador reordena pela mapa do TVDB (posição na ordem escolhida, por
+// episódio TMDB). Sem chave, sem id encontrado ou com erro de rede, cai p/
+// a ordem oficial sem erro e sem travar a tela (o mapa vira null).
+
+/** Ordem de episódios vinda do TVDB (posição na ordem escolhida, por episódio TMDB). */
+data class TvdbEpisodeOrder(
+    val kind: String,
+    /** (temporada TMDB, episódio TMDB) → chave de ordenação (menor = antes). */
+    val positions: Map<Pair<Int, Int>, Int>,
+)
+
+/**
+ * Reordena os episódios exibidos pela ordem TVDB. Sem mapa, volta a lista
+ * intacta. Episódio sem correspondência no mapa MANTÉM a posição original:
+ * os sem mapa ficam presos no índice em que estavam, e os com mapa se
+ * ordenam pela posição TVDB nos lugares que sobraram.
+ */
+fun sortEpisodesByTvdb(episodes: List<EpisodeItem>, order: TvdbEpisodeOrder?): List<EpisodeItem> {
+    if (order == null || order.positions.isEmpty()) return episodes
+    val mapped = episodes
+        .filter { (it.seasonNumber to it.episodeNumber) in order.positions }
+        .sortedBy { order.positions[it.seasonNumber to it.episodeNumber] }
+    val out = arrayOfNulls<EpisodeItem>(episodes.size)
+    episodes.forEachIndexed { idx, ep ->
+        if ((ep.seasonNumber to ep.episodeNumber) !in order.positions) out[idx] = ep
+    }
+    val iter = mapped.iterator()
+    for (i in out.indices) {
+        if (out[i] == null) out[i] = iter.next()
+    }
+    return out.filterNotNull()
+}
+
+/**
+ * Mapa TVDB da série p/ o navegador de episódios. Cache por série+ordem na
+ * sessão (o ViewModel morre com a tela de detalhe). Busca o id TVDB pelo
+ * título (1º resultado) e monta o mapa; qualquer falha devolve null e o
+ * navegador segue na ordem oficial.
+ */
+@HiltViewModel
+class TvdbEpisodeOrderViewModel @Inject constructor(
+    private val tvdb: com.aotv.app.data.remote.TvdbService,
+) : ViewModel() {
+    private val cache = mutableMapOf<String, TvdbEpisodeOrder?>()
+    private val _order = MutableStateFlow<TvdbEpisodeOrder?>(null)
+    val order: StateFlow<TvdbEpisodeOrder?> = _order.asStateFlow()
+
+    fun load(tmdbId: Int, title: String) {
+        if (!tvdb.isEnabled || title.isBlank() || tmdbId <= 0) {
+            _order.value = null
+            return
+        }
+        val ordering = tvdb.getOrdering()
+        if (ordering == "official") {
+            _order.value = null
+            return
+        }
+        val key = "$tmdbId|$ordering"
+        if (cache.containsKey(key)) {
+            _order.value = cache[key]
+            return
+        }
+        viewModelScope.launch {
+            val result = runCatching {
+                val found = tvdb.searchSeries(title).getOrNull()?.firstOrNull()
+                    ?: return@runCatching null
+                val tvdbId = found.tvdbId?.toIntOrNull() ?: found.id?.toIntOrNull()
+                    ?: return@runCatching null
+                val map = tvdb.buildEpisodeMap(tvdbId).getOrNull()
+                    ?: return@runCatching null
+                val positions = when (ordering) {
+                    "absolute" -> map.mapNotNull { m ->
+                        m.absoluteNumber?.let { n -> (m.tmdbSeason to m.tmdbEpisode) to n }
+                    }.toMap()
+                    else -> map.associate { m ->
+                        (m.tmdbSeason to m.tmdbEpisode) to (m.tvdbSeason * 1000 + m.tvdbEpisode)
+                    }
+                }
+                if (positions.isEmpty()) null else TvdbEpisodeOrder(ordering, positions)
+            }.getOrNull()
+            cache[key] = result
+            _order.value = result
         }
     }
 }

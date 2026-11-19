@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
@@ -279,6 +281,34 @@ fun BackupScreen(
                         title = "Baixar agora",
                         sub = "Baixa o backup do Drive e mostra o resumo p/ restaurar",
                         onClick = { viewModel.downloadFromDrive() },
+                    )
+                }
+                // Lote 23 (v1.33.0): sync contínuo — sobe o backup sozinho
+                // (worker de 6 h + na abertura, ver ContinuousSync); o botão
+                // "Sincronizar agora" roda o mesmo caminho na hora.
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Sync,
+                        title = "Sync contínuo",
+                        sub = if (state.continuousSyncEnabled)
+                            "Ligado: sobe sozinho a cada 6 h e na abertura" +
+                                if (state.continuousSyncLastMs > 0L) " · último sync ${formatSyncDate(state.continuousSyncLastMs)}" else ""
+                        else "Desligado: o backup só sobe com \"Subir agora\"",
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(if (state.continuousSyncEnabled) "Ligado" else "Desligado", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Switch(checked = state.continuousSyncEnabled, onCheckedChange = viewModel::setContinuousSyncEnabled)
+                            }
+                        },
+                        onClick = { viewModel.setContinuousSyncEnabled(!state.continuousSyncEnabled) },
+                    )
+                }
+                item {
+                    SettingsRow(
+                        icon = Icons.Default.Refresh,
+                        title = "Sincronizar agora",
+                        sub = "Sobe o backup atual e grava o último sync",
+                        onClick = { viewModel.syncNow() },
                     )
                 }
                 item {

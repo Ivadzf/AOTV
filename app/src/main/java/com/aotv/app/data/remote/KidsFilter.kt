@@ -38,13 +38,16 @@ fun certAge(cert: String): Int? {
 
 /**
  * Título fora do perfil infantil. Falha fechado. Bloqueia adulto, gênero que não passa no
- * [kidsOk] e classificação acima de 12. Sem classificação nenhuma só passa animação infantil ou
- * de família (16 junto com 10762 ou 10751).
+ * [kidsOk] e classificação acima de [maxAge] (o limite de idade do perfil —
+ * [com.aotv.app.data.local.PlatformPrefs.kidsAgeLimit], padrão 12; 0 = sem
+ * limite de idade, só o gênero decide). Sem classificação nenhuma só passa
+ * animação infantil ou de família (16 junto com 10762 ou 10751).
  */
-fun kidsBlocked(genreIds: Collection<Int>, cert: String, adult: Boolean = false): Boolean {
+fun kidsBlocked(genreIds: Collection<Int>, cert: String, adult: Boolean = false, maxAge: Int = 12): Boolean {
     if (adult || !kidsOk(genreIds)) return true
+    if (maxAge <= 0) return false
     val age = certAge(cert) ?: return !(16 in genreIds && (10762 in genreIds || 10751 in genreIds))
-    return age > 12
+    return age > maxAge
 }
 
 // Listas do TMDB que levam título. "cast" e "crew" com gênero são a filmografia de uma pessoa

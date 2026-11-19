@@ -1041,9 +1041,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
                 markedWatchedMovie = true
             }
             // AUTO-PLAY: aviso de próximo episódio só no ÚLTIMO 1 MINUTO (antes aparecia a 90%,
-            // cedo demais em episódios longos).
+            // cedo demais em episódios longos). Lote 23 item 11: o aviso é
+            // MANUAL aqui (sem contagem, sem avançar sozinho) — a contagem só
+            // arma no fim real (ver LaunchedEffect(playbackEnded)).
             if (upNextEnabled && hasNextEpisode && duration > 60_000 && position >= duration - 60_000 && nextPromptEp != curEpisode) {
-                nextPromptEp = curEpisode; promptIsSeason = false; nextCountdown = autoNextDelaySec; showNextPrompt = true
+                nextPromptEp = curEpisode; promptIsSeason = false; nextCountdown = autoNextDelaySec; nextCountdownArmed = false; showNextPrompt = true
             }
             // PRÉ-CARREGA o próximo (ou a próxima temporada) na METADE do episódio atual. Quando
             // o usuário aperta "Próximo", as fontes já estão na memória e a troca é instantânea.
@@ -1058,10 +1060,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             }
             // Último episódio da temporada com temporada seguinte → oferece a PRÓXIMA TEMPORADA
             // já nos créditos, não só quando o arquivo termina (muita fonte corta antes do fim).
+            // Lote 23 item 11: manual aqui também (sem contagem).
             if (upNextEnabled && !hasNextEpisode && hasNextSeason && duration > 60_000 &&
                 position >= duration - 60_000 && nextPromptEp != curEpisode
             ) {
-                nextPromptEp = curEpisode; promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true
+                nextPromptEp = curEpisode; promptIsSeason = true; nextCountdown = autoNextDelaySec; nextCountdownArmed = false; showNextPrompt = true
             }
             delay(500)
         }
@@ -1131,10 +1134,17 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     // Contagem regressiva do prompt — 0 = avança automaticamente (próximo ep OU próxima temporada).
     // Com o "A seguir" automático DESLIGADO (Fase C), o cartão aparece mas a
     // contagem não anda: só avança no botão "Assistir".
-    LaunchedEffect(showNextPrompt) {
+    // Lote 23 item 11 (JOTV 1.0.22 §4.3): a contagem só anda com
+    // nextCountdownArmed — no último minuto o cartão é manual e este efeito
+    // volta sem contar (a chave nextCountdownArmed o reinicia no fim real).
+    LaunchedEffect(showNextPrompt, nextCountdownArmed) {
         if (!showNextPrompt) return@LaunchedEffect
         if (!autoNextEnabled) return@LaunchedEffect
+        if (!nextCountdownArmed) return@LaunchedEffect
         while (nextCountdown > 0) { delay(1000); nextCountdown -= 1 }
+        // NÃO zerar nextCountdownArmed aqui: ele é chave deste efeito e
+        // mudá-lo cancelaria o avanço abaixo. O reset está em
+        // playNextEpisode/goToNextSeason, chamados logo abaixo.
         showNextPrompt = false
         // v1.13.0 (JOTV 1.0.19 §3.4): o avanço automático preserva a cena
         // pós-créditos ainda não vista — em vez de trocar de episódio, vai
@@ -1168,9 +1178,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         }
         when {
             // Tem próximo episódio na temporada → card "Próximo episódio".
-            type == "SERIES" && hasNextEpisode && upNextEnabled -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = autoNextDelaySec; showNextPrompt = true }
+            // Lote 23 item 11: o fim real ARMA a contagem (antes o cartão do
+            // último minuto já contava e avançava nos créditos).
+            type == "SERIES" && hasNextEpisode && upNextEnabled -> { promptIsSeason = false; nextPromptEp = curEpisode; nextCountdown = autoNextDelaySec; nextCountdownArmed = true; showNextPrompt = true }
             // Acabou a temporada e existe outra → card "Próxima temporada".
-            type == "SERIES" && hasNextSeason && upNextEnabled -> { promptIsSeason = true; nextCountdown = autoNextDelaySec; showNextPrompt = true }
+            type == "SERIES" && hasNextSeason && upNextEnabled -> { promptIsSeason = true; nextCountdown = autoNextDelaySec; nextCountdownArmed = true; showNextPrompt = true }
             // "A seguir" desligado e há próximo: fica parado no fim (o chip
             // "Próximo" e o botão Voltar continuam valendo).
             type == "SERIES" && (hasNextEpisode || hasNextSeason) -> Unit
@@ -1495,15 +1507,41 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                             else -> false
                         }
                     }
+                    // Fileira de chips de filtro do painel de fontes (Lote 23
+                    // item 13): os chips entram no anel de navegação junto
+                    // com a lista — ↑ na 1ª linha entra nos chips, ↑ de novo
+                    // vai p/ a última linha, ↓ nos chips volta p/ a 1ª linha,
+                    // ↓ na última entra nos chips, ←→ troca de chip, OK
+                    // aplica o filtro e continua nos chips.
+                    val chips = if (panelKind == "sources") sourceFilterChips else emptyList()
+                    fun currentChipIdx(): Int = chips.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: 0
                     val n = panelActions.size
                     return@onKeyEvent when (kc) {
-                        KeyEvent.KEYCODE_DPAD_UP -> { if (n > 0) sourcePanelIdx = (sourcePanelIdx - 1 + n) % n; true }
-                        KeyEvent.KEYCODE_DPAD_DOWN -> { if (n > 0) sourcePanelIdx = (sourcePanelIdx + 1) % n; true }
+                        KeyEvent.KEYCODE_DPAD_UP -> {
+                            when {
+                                sourceChipCursor >= 0 -> { sourceChipCursor = -1; if (n > 0) sourcePanelIdx = n - 1; true }
+                                chips.isNotEmpty() && sourcePanelIdx == 0 -> { sourceChipCursor = currentChipIdx(); true }
+                                n > 0 -> { sourcePanelIdx = (sourcePanelIdx - 1 + n) % n; true }
+                                else -> true
+                            }
+                        }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            when {
+                                sourceChipCursor >= 0 -> { sourceChipCursor = -1; sourcePanelIdx = 0; true }
+                                chips.isNotEmpty() && n > 0 && sourcePanelIdx == n - 1 -> { sourceChipCursor = currentChipIdx(); true }
+                                n > 0 -> { sourcePanelIdx = (sourcePanelIdx + 1) % n; true }
+                                else -> true
+                            }
+                        }
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            panelActions.getOrNull(sourcePanelIdx)?.let { it.onRun(); if (!it.keepOpen) sourcePanelOpen = false }; true
+                            if (sourceChipCursor >= 0) { chips.getOrNull(sourceChipCursor)?.onClick?.invoke(); true }
+                            else { panelActions.getOrNull(sourcePanelIdx)?.let { it.onRun(); if (!it.keepOpen) sourcePanelOpen = false }; true }
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (panelKind == "episodes" && sourcePanelIdx == 0 && numSeasons > 1) {
+                            if (sourceChipCursor >= 0) {
+                                val step = if (kc == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                                sourceChipCursor = (sourceChipCursor + step + chips.size) % chips.size
+                            } else if (panelKind == "episodes" && sourcePanelIdx == 0 && numSeasons > 1) {
                                 val step = if (kc == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
                                 selectPanelSeason((panelSeason + step - 1 + numSeasons) % numSeasons + 1)
                             } else if (kc == KeyEvent.KEYCODE_DPAD_LEFT) sourcePanelOpen = false
@@ -1715,14 +1753,17 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 if (extHeld && !buffering && !switching) ExtAudioLoading()
 
                 // AUTO-PLAY: card "próximo episódio em Ns" (canto inferior-direito).
+                // Lote 23 item 11: no último minuto o card é manual
+                // (autoAdvance = false → "Assistir agora" sem contagem); a
+                // contagem só aparece depois do fim real (nextCountdownArmed).
                 if (showNextPrompt && !inPip && !locked) {
                     NextEpisodeCard(
                         isSeason = promptIsSeason,
                         line = if (promptIsSeason) "Temporada ${curSeason + 1}" else "T$curSeason · E${curEpisode + 1}",
                         countdown = nextCountdown,
-                        autoAdvance = autoNextEnabled,
+                        autoAdvance = autoNextEnabled && nextCountdownArmed,
                         onPlay = { if (promptIsSeason) goToNextSeason() else playNextEpisode() },
-                        onCancel = { showNextPrompt = false },
+                        onCancel = { nextCountdownArmed = false; showNextPrompt = false },
                     )
                 }
 
@@ -1944,18 +1985,12 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 // Lote 4: painel de fontes (e demais painéis) em vidro fosco.
                 frosted = panelBlurOn,
                 subtitleMode = panelKind == "subs",
-                // Lote 15 item 2 — chips de provider no topo da folha de Fontes
-                // (Todos + um por addon presente). Só no celular: na TV o D-pad
-                // é dono do painel e a fileira ficaria fora da navegação.
-                filterChips = if (panelKind == "sources" && !isTv) {
-                    listOf(SourceFilterChip("Todos", sourceProviderFilter.isBlank()) {
-                        sourceProviderFilter = ""; sourcePanelIdx = 0
-                    }) + sourceProviders.map { provider ->
-                        SourceFilterChip(provider, sourceProviderFilter.equals(provider, ignoreCase = true)) {
-                            sourceProviderFilter = provider; sourcePanelIdx = 0
-                        }
-                    }
-                } else emptyList(),
+                // Lote 15 item 2 + Lote 23 item 13 — chips de filtro no topo
+                // da folha de Fontes (Todos + provider + qualidade). Na TV a
+                // fileira entra na navegação D-pad (ver sourceChipCursor e o
+                // onKeyEvent do painel): ↑ na 1ª linha entra nos chips.
+                filterChips = if (panelKind == "sources") sourceFilterChips else emptyList(),
+                chipCursor = sourceChipCursor,
             )
         }
 
@@ -2041,8 +2076,11 @@ class PlayerSession(
     private var panelOpenState by mutableStateOf(false)
     var sourcePanelOpen: Boolean
         get() = panelOpenState
-        set(v) { if (v != panelOpenState) sourcePanelIdx = 0; panelOpenState = v }
+        set(v) { if (v != panelOpenState) { sourcePanelIdx = 0; sourceChipCursor = -1 }; panelOpenState = v }
     var sourcePanelIdx by mutableIntStateOf(0) // foco D-pad no painel, zera ao abrir ou fechar
+    /** Cursor D-pad na fileira de chips de filtro do painel de fontes
+     * (Lote 23 item 13): -1 = foco na lista; >= 0 = índice do chip. */
+    var sourceChipCursor by mutableIntStateOf(-1)
     // Barra de chips (Zoom/Velocidade/Legendas/Áudio/Fontes) navegável por D-pad na TV.
     var chipFocused by run { mutableStateOf(false) }
     var chipIdx by run { mutableIntStateOf(0) }
@@ -2086,10 +2124,15 @@ class PlayerSession(
     val hasNextEpisode get() = type == "SERIES" && curEpisode in 1 until epTotal
     // Tem PRÓXIMA TEMPORADA? (fim do último episódio da temporada e existe temporada seguinte).
     val hasNextSeason get() = type == "SERIES" && numSeasons > 0 && curSeason in 1 until numSeasons
-    // Auto-play próximo episódio: prompt aparece a ~90% (antes dos créditos), conta 10s e avança.
+    // Auto-play próximo episódio: prompt aparece no ÚLTIMO MINUTO, MANUAL
+    // (sem contagem); a contagem só arma no fim real do vídeo (Lote 23 item 11).
     var nextPromptEp by run { mutableIntStateOf(-1) }
     var showNextPrompt by run { mutableStateOf(false) }
     var nextCountdown by run { mutableIntStateOf(10) }
+    // Lote 23 item 11 (JOTV 1.0.22 §4.3): true = a contagem vale — só depois
+    // do fim real do vídeo. No último minuto o cartão é manual (false) e o
+    // episódio seguinte NÃO começa sozinho no meio dos créditos.
+    var nextCountdownArmed by run { mutableStateOf(false) }
     // true = o card de aviso é de PRÓXIMA TEMPORADA (não próximo episódio).
     var promptIsSeason by run { mutableStateOf(false) }
     // true quando o ExoPlayer chega ao fim (STATE_ENDED) — dispara próximo ep. ou fecha o player.
@@ -2476,6 +2519,10 @@ class PlayerSession(
      * [noteSourcesArrived]). O filtro só ESCONDE — a ordem continua a congelada.
      */
     var sourceProviderFilter by run { mutableStateOf("") }
+    /** Filtro de qualidade da folha de fontes (Lote 23 item 13, JOTV 1.0.22
+     * §4.5): "" = Todas; senão "4K", "1080p", "720p" ou "480p". Combina com o
+     * filtro de provider — os dois só ESCONDEM, a ordem continua a congelada. */
+    var sourceQualityFilter by run { mutableStateOf("") }
     /** Salva a vista da folha no perfil (ligado pela tela a [PlayerPrefsViewModel.setSourcesRanked]). */
     var onSourcesRankedChange: (Boolean) -> Unit = {}
     // ── Lote 17 — saúde aprendida + downgrade adaptativo (v1.27.0) ───────
@@ -2968,10 +3015,15 @@ class PlayerSession(
         subDelay = addDelay(subDelay, stepMs / 1000.0)
         persistPrimaryDelay()
     }
-    /** Forced subs (Lote 16 item 3): com a legenda desligada e o áudio
+    /** Forced subs (Lote 16 item 3 + Lote 23 item 12, JOTV 1.0.22 §4.4): com
+     * a legenda completa DESLIGADA (não ligou sozinha nem à mão) e o áudio
      * estrangeiro, mostra a faixa forced (falas em outra língua dentro do
-     * filme). A escolha explícita do usuário (subPicked) nunca é desfeita. */
+     * filme) — só com a pref `pref_forced_subs` ligada (padrão). Ela nunca
+     * toma o lugar da completa: ligar uma faixa completa troca o override
+     * do tipo texto no ExoPlayer (ver [enableTextGroup]) e a forçada sai.
+     * A escolha explícita do usuário (subPicked) nunca é desfeita. */
     fun maybeShowForcedSub() {
+        if (!prefs.forcedSubsAuto) return
         if (subtitleOn || selectedSubUrl != null || subPicked) return
         val audioLang = audioGroups.firstOrNull { it.isSelected }?.getTrackFormat(0)?.language
         if (!isForeignAudio(audioLang, subLang)) return
@@ -3458,10 +3510,11 @@ class PlayerSession(
             if (!started) { switching = false; sourceFailed = true }
         }
     }
-    fun playNextEpisode() { showNextPrompt = false; if (hasNextEpisode) goToEpisode(curEpisode + 1) }
+    fun playNextEpisode() { nextCountdownArmed = false; showNextPrompt = false; if (hasNextEpisode) goToEpisode(curEpisode + 1) }
     // Próxima TEMPORADA: episódio 1 da temporada seguinte (mesma fonte quando existir).
     fun goToNextSeason() {
         if (type != "SERIES" || !hasNextSeason) return
+        nextCountdownArmed = false
         showNextPrompt = false
         goToEpisode(1, curSeason + 1)
     }
@@ -3847,6 +3900,39 @@ class PlayerSession(
     val sourceProviders: List<String> get() =
         stableSourceOrder().mapNotNull { currentSources.getOrNull(it)?.addon?.takeIf { a -> a.isNotBlank() } }.distinct()
 
+    /** Rank de qualidade de uma fonte: o do stream, ou o do rótulo quando o stream não traz (Lote 23 item 13). */
+    private fun sourceQualityRankOf(src: MoviePlayerSource): Int =
+        src.stream?.qualityRank?.takeIf { it > 0 } ?: sourceQualityRank(src.label)
+
+    /** O rank passa no filtro de qualidade do painel de fontes ("" = Todas).
+     * 1440p cai em 1080p; sem rank conhecido, só "Todas" mostra. */
+    fun matchesQualityFilter(rank: Int): Boolean = when (sourceQualityFilter) {
+        "4K" -> rank >= 2160
+        "1080p" -> rank in 1080..2159
+        "720p" -> rank in 720..1079
+        "480p" -> rank in 1..719
+        else -> true
+    }
+
+    /** Chips de filtro do painel de fontes (Lote 23 item 13): "Todos" (zera os
+     * dois filtros) + um por provider presente + um por qualidade. A mesma
+     * lista alimenta o celular (toque) e a TV (D-pad, ver [sourceChipCursor]). */
+    val sourceFilterChips: List<SourceFilterChip> get() = buildList {
+        add(SourceFilterChip("Todos", sourceProviderFilter.isBlank() && sourceQualityFilter.isBlank(), key = "all") {
+            sourceProviderFilter = ""; sourceQualityFilter = ""; sourcePanelIdx = 0
+        })
+        sourceProviders.forEach { provider ->
+            add(SourceFilterChip(provider, sourceProviderFilter.equals(provider, ignoreCase = true), key = "prov:$provider") {
+                sourceProviderFilter = provider; sourcePanelIdx = 0
+            })
+        }
+        listOf("4K", "1080p", "720p", "480p").forEach { q ->
+            add(SourceFilterChip(q, sourceQualityFilter == q, key = "q:$q") {
+                sourceQualityFilter = q; sourcePanelIdx = 0
+            })
+        }
+    }
+
     /** "T2 E3" p/ os cards da folha quando for série (Lote 15 item 2). "" em filme. */
     private val episodeCode: String get() =
         if (type == "SERIES" && curSeason > 0 && curEpisode > 0) "T$curSeason E$curEpisode" else ""
@@ -3911,7 +3997,8 @@ class PlayerSession(
                 // Lote 15 item 2: o filtro de provider esconde o resto; o
                 // ranking (#1, #2…) vale DENTRO do que está visível.
                 val order = stableSourceOrder().filter { idx ->
-                    matchesFilter(currentSources.getOrNull(idx)?.addon.orEmpty())
+                    val src = currentSources.getOrNull(idx)
+                    src != null && matchesFilter(src.addon) && matchesQualityFilter(sourceQualityRankOf(src))
                 }
                 // Score com motivo (Lote 17): o mesmo do detalhe.
                 val scores = rankedByUrl()
@@ -3920,8 +4007,8 @@ class PlayerSession(
                     val stream = src.stream ?: com.aotv.app.data.remote.StremioStream(src.label, src.url, src.addon,
                         qualityRank = com.aotv.app.data.remote.qualityRankOf(src.label))
                     // "Melhor fonte" só na vista sem filtro: filtrado, o #1 é
-                    // o melhor DAQUELE provider, não o melhor da folha.
-                    val best = rank == 0 && providerFilter.isBlank()
+                    // o melhor DAQUELE provider/qualidade, não o melhor da folha.
+                    val best = rank == 0 && providerFilter.isBlank() && sourceQualityFilter.isBlank()
                     // O card já mostra o addon no título — o sub não repete.
                     // T/E entra no card quando for série (Lote 15 item 2).
                     val scored = scores[src.url]
@@ -3938,9 +4025,11 @@ class PlayerSession(
                 if (order.size > sourceLimit) add(TvPlayerAction("Mostrar mais", false, false,
                     sub = "${order.size - sourceLimit} fontes", keepOpen = true) { sourceLimit += 30 })
             } else {
-                // Lote 15 item 2: filtrado, só os grupos com alguma fonte do provider.
-                val shownGroups = if (providerFilter.isBlank()) groups
-                    else groups.filter { g -> g.members.any { matchesFilter(it.addon) } }
+                // Lote 15 item 2 + Lote 23 item 13: filtrado, só os grupos com
+                // alguma fonte do provider E da qualidade (o filtro de
+                // qualidade vale por membro, como o de provider).
+                val shownGroups = if (providerFilter.isBlank() && sourceQualityFilter.isBlank()) groups
+                    else groups.filter { g -> g.members.any { matchesFilter(it.addon) && matchesQualityFilter(it.qualityRank.takeIf { q -> q > 0 } ?: sourceQualityRank(it.label)) } }
                 shownGroups.take(sourceLimit).forEach { group ->
                     val active = group.members.any { it.url == playing }
                     val src = group.members.firstOrNull { it.url == playing } ?: group.lead
@@ -3997,13 +4086,29 @@ class PlayerSession(
                 .sortedBy { SubLangs.rank(it.getTrackFormat(0).language, subLang) }
                 .groupBy { SubLangs.of(it.getTrackFormat(0).language)?.key ?: it.getTrackFormat(0).language.orEmpty() }
             embeddedByLang.values.forEachIndexed { i, group ->
-                val g = group.first()
+                // Lote 23 item 12 (JOTV 1.0.22 §4.4): a faixa forçada do idioma
+                // ganha linha própria "(forçada)" — dá p/ escolher à mão; o
+                // automático nunca a impõe no lugar da completa.
+                val fullTracks = group.filter { !isForcedTrack(it.getTrackFormat(0)) }
+                val forcedTracks = group.filter { isForcedTrack(it.getTrackFormat(0)) }
+                val g = fullTracks.firstOrNull() ?: group.first()
                 val f = g.getTrackFormat(0)
                 val name = f.label?.takeIf { it.isNotBlank() } ?: SubLangs.label(f.language)
-                add(TvPlayerAction(name, false, subtitleOn && group.any { it.isSelected },
+                val displayName = if (fullTracks.isEmpty()) "$name (forçada)" else name
+                val mainActive = subtitleOn && (if (fullTracks.isNotEmpty()) fullTracks.any { it.isSelected } else group.any { it.isSelected })
+                add(TvPlayerAction(displayName, false, mainActive,
                     header = if (i == 0) "No vídeo" else "", count = group.size,
                     langKey = SubLangs.of(f.language)?.key ?: f.language.orEmpty(),
                     source = "No vídeo") { pickSub(g, null) })
+                if (fullTracks.isNotEmpty() && forcedTracks.isNotEmpty()) {
+                    val fg = forcedTracks.first()
+                    val ff = fg.getTrackFormat(0)
+                    val forcedName = (ff.label?.takeIf { it.isNotBlank() } ?: SubLangs.label(ff.language)) + " (forçada)"
+                    add(TvPlayerAction(forcedName, false, subtitleOn && forcedTracks.any { it.isSelected },
+                        count = forcedTracks.size,
+                        langKey = SubLangs.of(ff.language)?.key ?: ff.language.orEmpty(),
+                        source = "No vídeo") { pickSub(fg, null) })
+                }
             }
             // Lote 17 item 14 — uma ação por legenda: o painel duas-colunas agrupa
             // por idioma na coluna "Idiomas" e mostra selo + ID por entrada.

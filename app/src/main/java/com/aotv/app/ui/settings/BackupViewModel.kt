@@ -86,6 +86,9 @@ class BackupViewModel @Inject constructor(
         val driveAccountEmail: String = "",
         val driveLastSyncAt: Long = 0L,
         val driveConflict: DriveConflict? = null,
+        // Lote 23 (v1.33.0): sync contínuo p/ o Drive (automático + manual).
+        val continuousSyncEnabled: Boolean = false,
+        val continuousSyncLastMs: Long = 0L,
     )
 
     private val _uiState = MutableStateFlow(
@@ -95,6 +98,8 @@ class BackupViewModel @Inject constructor(
             driveConnected = prefs.driveAccountEmail.isNotBlank(),
             driveAccountEmail = prefs.driveAccountEmail,
             driveLastSyncAt = prefs.driveLastSyncAt,
+            continuousSyncEnabled = prefs.continuousSyncEnabled,
+            continuousSyncLastMs = prefs.continuousSyncLastMs,
         )
     )
     val uiState: StateFlow<BackupUiState> = _uiState.asStateFlow()
@@ -110,6 +115,31 @@ class BackupViewModel @Inject constructor(
     }
 
     fun clearMessage() = _uiState.update { it.copy(message = null) }
+
+    // ── Sync contínuo (Lote 23, v1.33.0) ───────────────────────────────────
+    // Sobe o backup p/ o Drive sozinho (worker de 6 h + na abertura, ver
+    // ContinuousSync); o toggle aqui liga/desliga e aplica o worker na hora.
+    fun setContinuousSyncEnabled(v: Boolean) {
+        prefs.continuousSyncEnabled = v
+        com.aotv.app.data.sync.ContinuousSync.applyEnabled(appContext)
+        _uiState.update { it.copy(continuousSyncEnabled = v, message = null) }
+    }
+
+    /** Sincroniza agora (mesmo caminho do worker) e mostra o resultado. */
+    fun syncNow() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(busy = "Sincronizando…", message = null) }
+            val result = com.aotv.app.data.sync.ContinuousSync.syncNow(appContext)
+            _uiState.update {
+                it.copy(
+                    busy = null,
+                    continuousSyncLastMs = prefs.continuousSyncLastMs,
+                    driveLastSyncAt = prefs.driveLastSyncAt,
+                    message = result.getOrDefault("Não foi possível sincronizar agora."),
+                )
+            }
+        }
+    }
 
     // ── Google Drive (Lote 10, v1.20.0) ────────────────────────────────────
 
@@ -245,73 +275,12 @@ class BackupViewModel @Inject constructor(
     // ── Exportar ────────────────────────────────────────────────────────────
 
     /** Monta o JSON do backup do perfil ativo. Erro quando passa de 8 MB. */
-    suspend fun buildBackupJson(): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            val includeSecrets = prefs.backupIncludeSecrets
-            val profile = prefs.profile
-            val root = JSONObject()
-                .put("format", AotvBackup.FORMAT)
-                .put("appVersion", AotvBackup.appVersion())
-                .put("includesSecrets", includeSecrets)
-                .put("profile", profileJson(profile, includeSecrets))
-            val profilesArr = JSONArray()
-            prefs.profiles.value.forEach { profilesArr.put(profileJson(it, includeSecrets)) }
-            root.put("profiles", profilesArr)
-            val addonsArr = JSONArray()
-            prefs.addonEntries.forEach {
-                val o = JSONObject().put("url", it.url).put("enabled", it.enabled)
-                if (it.id.isNotBlank()) o.put("id", it.id)
-                addonsArr.put(o)
-            }
-            root.put("addons", addonsArr)
-            root.put("plugins", JSONObject(plugins.backup()))
-            val watchlistArr = JSONArray()
-            library.watchlistNow().forEach {
-                watchlistArr.put(
-                    JSONObject().put("tmdbId", it.tmdbId).put("type", it.type)
-                        .put("title", it.title).put("posterUrl", it.posterUrl)
-                        .put("year", it.year).put("addedAt", it.addedAt),
-                )
-            }
-            root.put("watchlist", watchlistArr)
-            val continueArr = JSONArray()
-            library.recentlyPlayedNow().forEach {
-                // Sem lastSourceUrl: URL de fonte pode trazer token/assinatura.
-                continueArr.put(
-                    JSONObject().put("tmdbId", it.tmdbId).put("type", it.type)
-                        .put("title", it.title).put("posterUrl", it.posterUrl)
-                        .put("positionMs", it.positionMs).put("durationMs", it.durationMs)
-                        .put("lastEpisode", it.lastEpisode).put("lastWatchedAt", it.lastWatchedAt),
-                )
-            }
-            root.put("continue", continueArr)
-            val watchedArr = JSONArray()
-            library.allWatchedEpisodes().forEach {
-                watchedArr.put(
-                    JSONObject().put("seriesTmdbId", it.seriesTmdbId).put("season", it.season)
-                        .put("episode", it.episode).put("watchedAt", it.watchedAt),
-                )
-            }
-            root.put("watched", watchedArr)
-            val profilePrefs = JSONObject()
-            SCOPED_KEYS.forEach { key ->
-                if (!includeSecrets && key in AotvBackup.SECRET_SCOPED_KEYS) return@forEach
-                AotvBackup.encodePrefValue(prefs.rawPref(key))?.let { profilePrefs.put(key, it) }
-            }
-            root.put("profilePrefs", profilePrefs)
-            val globalPrefs = JSONObject()
-            (AotvBackup.GLOBAL_KEYS + if (includeSecrets) AotvBackup.SECRET_GLOBAL_KEYS else emptySet())
-                .forEach { key ->
-                    AotvBackup.encodePrefValue(prefs.rawGlobalPref(key))?.let { globalPrefs.put(key, it) }
-                }
-            root.put("globalPrefs", globalPrefs)
-            val text = root.toString()
-            if (text.toByteArray(Charsets.UTF_8).size > AotvBackup.MAX_BACKUP_BYTES) {
-                throw AotvBackup.BackupException("Backup grande demais (limite de 8 MB)")
-            }
-            text
-        }
-    }
+    /**
+     * Monta o JSON `aotv-backup-v1` — delega p/ [AotvBackup.buildBackupJson]
+     * (Lote 23: antes havia uma cópia idêntica aqui; fonte única agora).
+     */
+    suspend fun buildBackupJson(): Result<String> =
+        AotvBackup.buildBackupJson(prefs, library, plugins)
 
     // ── Restaurar (com resumo + confirmação) ─────────────────────────────────
 
@@ -484,14 +453,6 @@ class BackupViewModel @Inject constructor(
         bool("app_update_check_enabled")?.let { prefs.appUpdateCheckEnabled = it }
         (AotvBackup.decodePrefValue(obj.optJSONObject("app_update_last_check_v1")) as? Long)
             ?.let { prefs.appUpdateLastCheck = it }
-    }
-
-    private fun profileJson(p: Profile, includeSecrets: Boolean): JSONObject {
-        val o = JSONObject().put("id", p.id).put("name", p.name).put("color", p.color)
-            .put("kids", p.kids).put("avatarUrl", p.avatarUrl).put("avatarId", p.avatarId)
-            .put("usePrimaryAddons", p.usePrimaryAddons)
-        if (includeSecrets && p.pinHash.isNotBlank()) o.put("pinHash", p.pinHash)
-        return o
     }
 
     private fun profileFromJson(o: JSONObject): Profile? {

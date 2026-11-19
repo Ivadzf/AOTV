@@ -37,24 +37,27 @@ class KidsGateViewModel @Inject constructor(
      */
     suspend fun blocked(tmdbId: Int, type: String): Boolean {
         if (tmdbId <= 0) return true
-        cache[tmdbId to type]?.let { return it }
+        // Limite de idade do perfil infantil (Lote 23): entra na chave do
+        // cache, senão trocar o limite não mudava o que já foi conferido.
+        val maxAge = prefs.kidsAgeLimit
+        cache[Triple(tmdbId, type, maxAge)]?.let { return it }
         val key = prefs.tmdbApiKey
         return runCatching {
             if (type == "SERIES") tmdb.getSeriesDetail(tmdbId, append = "content_ratings", apiKey = key)
-                .let { kidsBlocked(it.genres.map { g -> g.id }, it.contentRatings.certBR(), it.adult) }
+                .let { kidsBlocked(it.genres.map { g -> g.id }, it.contentRatings.certBR(), it.adult, maxAge) }
             else tmdb.getMovieDetail(tmdbId, append = "release_dates", apiKey = key)
-                .let { kidsBlocked(it.genres.map { g -> g.id }, it.releaseDates.certBR(), it.adult) }
-        }.getOrNull()?.also { cache[tmdbId to type] = it } ?: true
+                .let { kidsBlocked(it.genres.map { g -> g.id }, it.releaseDates.certBR(), it.adult, maxAge) }
+        }.getOrNull()?.also { cache[Triple(tmdbId, type, maxAge)] = it } ?: true
     }
 
     private companion object {
-        val cache = java.util.concurrent.ConcurrentHashMap<Pair<Int, String>, Boolean>()
+        val cache = java.util.concurrent.ConcurrentHashMap<Triple<Int, String, Int>, Boolean>()
     }
 }
 
 /**
  * Porta do detalhe e do player no perfil infantil. Fora dele mostra o conteúdo direto, sem
- * espera. No infantil confere o título antes e, acima de 12 anos ou fora de animação e família,
+ * espera. No infantil confere o título antes e, acima do limite de idade do perfil ou fora de animação e família,
  * mostra "Bloqueado no perfil infantil".
  */
 @Composable

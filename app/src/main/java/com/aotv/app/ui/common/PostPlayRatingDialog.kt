@@ -108,16 +108,20 @@ fun PostPlayRatingDialog(
 }
 
 /**
- * Envia a nota para os trackers conectados.
+ * Envia a nota para os trackers conectados (v1.17.0, AniList p/ séries na
+ * v1.33.0).
  *
  * - Trakt (escala 1–10, nativa): filme via [TraktService.rateMovie],
  *   episódio via [TraktService.rateEpisode]. Só envia com o Trakt ligado
  *   (o próprio serviço ignora quando desligado).
  * - MDBList é read-only (só consome notas) — não recebe nota.
- * - AniList (escala 0–10): só quando o id AniList do título é conhecido
- *   ([aniListMediaId]) e o título é um filme — marcar uma série como
- *   COMPLETED no meio dela estaria errado, e o player não sabe o total de
- *   episódios. Sem id conhecido, o AniList é pulado sem erro.
+ * - AniList (escala 0–10): filme via [AniListService.markCompleted];
+ *   série via [AniListService.rateAnime] (status CURRENT + episódio +
+ *   nota — marcar COMPLETED no meio da série estaria errado). O id AniList
+ *   vem de [aniListMediaId] ou, quando null, da busca por título
+ *   ([AniListService.searchAnime]) com o AniList ligado. Sem id conhecido,
+ *   o AniList é pulado sem erro. Nada aqui lança: falhar a nota nunca
+ *   trava o diálogo.
  */
 suspend fun sendRatingToAllTrackers(
     tmdbId: Int?,
@@ -135,7 +139,16 @@ suspend fun sendRatingToAllTrackers(
         if (isMovie) traktService.rateMovie(tmdbId, title, year, rating)
         else traktService.rateEpisode(tmdbId, title, season, episode, rating)
     }
-    if (isMovie && aniListService.isEnabled && aniListMediaId != null) {
-        aniListService.markCompleted(aniListMediaId, 1, rating.toDouble())
+    if (aniListService.isEnabled) {
+        runCatching {
+            val mediaId = aniListMediaId
+                ?: aniListService.searchAnime(title).getOrNull()?.id
+                ?: return@runCatching
+            if (isMovie) {
+                aniListService.markCompleted(mediaId, 1, rating.toDouble())
+            } else if (episode > 0) {
+                aniListService.rateAnime(mediaId, episode, rating.toDouble())
+            }
+        }
     }
 }

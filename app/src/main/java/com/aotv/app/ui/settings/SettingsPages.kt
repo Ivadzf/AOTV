@@ -1496,6 +1496,10 @@ private fun ConteudoPage(
     val sourceStatus by viewModel.sourceStatus.collectAsStateWithLifecycle()
     val checkingHealth by viewModel.checkingHealth.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { if (sourceStatus.isEmpty()) viewModel.checkSourcesHealth() }
+    // Lote 23: ordem da Minha Lista, período das Estatísticas e gêneros bloqueados.
+    val myListOrder by viewModel.myListOrder.collectAsStateWithLifecycle()
+    val statsPeriod by viewModel.statsPeriod.collectAsStateWithLifecycle()
+    val blockedGenres by viewModel.blockedGenres.collectAsStateWithLifecycle()
     SettingsPageScaffold("Conteúdo & Descoberta", "Addons, plugins, fontes e Biblioteca", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Addons", anchor = SettingsAnchors.CONTENT_ADDONS)
         com.aotv.app.ui.common.SettingsGroup {
@@ -1601,6 +1605,51 @@ private fun ConteudoPage(
             },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
         )
+        // Lote 23 (v1.33.0): ordem da Minha Lista, período das Estatísticas
+        // e gêneros bloqueados — tudo do perfil ativo.
+        SettingsCard {
+            PrefRow(
+                "Minha Lista: ordem",
+                listOf("recent" to "Recentes", "name" to "Nome", "unwatched" to "Não assistidos"),
+                myListOrder, viewModel::setMyListOrder,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Estatísticas: período",
+                listOf("7d" to "7 dias", "30d" to "30 dias", "90d" to "90 dias", "all" to "Tudo"),
+                statsPeriod, viewModel::setStatsPeriod,
+            )
+            Text(
+                "A tela Estatísticas fica na Biblioteca, junto dos Downloads.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+            Spacer(Modifier.height(14.dp))
+            Text("Gêneros bloqueados", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            // GENRE_SHORT (ui.common) tem ids de filme e de TV com o mesmo
+            // rótulo (28 e 10759 = "Ação"): o chip bloqueia todos os ids do
+            // rótulo de uma vez; o filtro vale p/ Início, Busca e Filmes.
+            val genreGroups = remember {
+                com.aotv.app.ui.common.GENRE_SHORT.entries
+                    .groupBy({ it.value }, { it.key }).entries.toList()
+            }
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                genreGroups.forEach { (label, ids) ->
+                    val on = ids.all { it in blockedGenres }
+                    com.aotv.app.ui.common.FilterChipPill(label, on, onClick = {
+                        viewModel.setBlockedGenres(
+                            if (on) blockedGenres - ids.toSet() else blockedGenres + ids,
+                        )
+                    })
+                }
+            }
+            Text(
+                if (blockedGenres.isEmpty()) "Nenhum gênero bloqueado."
+                else "${blockedGenres.size} ${if (blockedGenres.size == 1) "gênero bloqueado" else "gêneros bloqueados"} — escondidos de Início, Busca e Filmes.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
     }
 }
 
@@ -1827,6 +1876,8 @@ private fun AcompanhamentoPage(
 ) {
     var showSetPin by remember { mutableStateOf(false) }
     val hasPin = viewModel.hasParentalPin
+    // Lote 23: limite de idade do perfil infantil (só aparece com infantil ativo).
+    val kidsAgeLimit by viewModel.kidsAgeLimit.collectAsStateWithLifecycle()
     // Grupos trancados com o PIN (Lote 11, v1.21.0): gerenciar os cadeados
     // aqui (destrancar pede o PIN); trancar é no cartão do grupo, no Ao vivo.
     val lockedGroups by viewModel.liveLockedGroups.collectAsStateWithLifecycle()
@@ -1877,6 +1928,21 @@ private fun AcompanhamentoPage(
             onSet = { pin -> viewModel.setParentalPin(pin); showSetPin = false },
             onDismiss = { showSetPin = false },
         )
+        // Lote 23 (v1.33.0): limite de idade do perfil infantil ativo.
+        // 0 = só o filtro de conteúdo infantil, sem limite de idade.
+        if (isKids) {
+            SettingsCard {
+                PrefRow(
+                    "Limite de idade",
+                    listOf(0 to "Só gênero", 7 to "7 anos", 10 to "10 anos", 12 to "12 anos", 14 to "14 anos", 16 to "16 anos", 18 to "18 anos"),
+                    kidsAgeLimit, viewModel::setKidsAgeLimit,
+                )
+                Text(
+                    "Só mostra títulos até essa idade. Com \"Só gênero\", vale só o filtro de conteúdo infantil.",
+                    fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
         if (showLockedGroups) {
             AlertDialog(
                 onDismissRequest = { showLockedGroups = false },
@@ -2342,6 +2408,9 @@ private fun ReproducaoPage(
     val trailerAutoplayWifiOnly by viewModel.trailerAutoplayWifiOnly.collectAsStateWithLifecycle()
     val subOn by viewModel.subOn.collectAsStateWithLifecycle()
     val subLang by viewModel.subLang.collectAsStateWithLifecycle()
+    // Lote 23: legenda forçada automática (só as falas em outro idioma,
+    // quando a legenda completa não liga — nunca toma o lugar dela).
+    val forcedSubsAuto by viewModel.forcedSubsAuto.collectAsStateWithLifecycle()
     var pickLang by remember { mutableStateOf(false) }
     // Idioma preferido de ÁUDIO (Lote 4 item 7, v1.12.0) + reutilizar a última
     // fonte do título (item 6). A legenda já tinha o controle acima.
@@ -2479,6 +2548,19 @@ private fun ReproducaoPage(
                     else "Desligada. O ajuste manual ± do player continua valendo",
                 trailing = { Switch(checked = autoSync, onCheckedChange = { playerPrefs.setAutoSync(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setAutoSync(!autoSync) },
+                grouped = true,
+                divider = true,
+            )
+            // Legenda forçada automática (Lote 23, v1.33.0): quando a legenda
+            // completa não liga, entra sozinha a faixa forçada (só as falas em
+            // outro idioma); nunca toma o lugar da legenda completa.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.ClosedCaption,
+                title = "Legenda forçada automática",
+                sub = if (forcedSubsAuto) "Ligada: sem legenda completa, entra sozinha a faixa forçada"
+                    else "Desligada: a faixa forçada só entra pelo painel de Legendas",
+                trailing = { Switch(checked = forcedSubsAuto, onCheckedChange = { viewModel.setForcedSubsAuto(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setForcedSubsAuto(!forcedSubsAuto) },
                 grouped = true,
                 divider = true,
             )
