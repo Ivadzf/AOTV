@@ -2053,7 +2053,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
             // Lote 24 item 9: modo sensorial (toggle único, por perfil).
             SensoryFriendlyPanel(
                 enabled = sensoryOn,
-                onToggle = { setSensoryOn(it) },
+                onToggle = { applySensoryOn(it) },
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
             )
@@ -2584,7 +2584,7 @@ class PlayerSession(
     var onSensorySave: (Boolean) -> Unit = {}
     fun setAmbilightEnabled(v: Boolean) { ambilightState = ambilightState.copy(enabled = v); onAmbilightSave(ambilightState) }
     fun setAmbilightIntensity(v: AmbilightIntensity) { ambilightState = ambilightState.copy(intensity = v); onAmbilightSave(ambilightState) }
-    fun setSensoryOn(v: Boolean) { sensoryOn = v; onSensorySave(v); applyNightMode() }
+    fun applySensoryOn(v: Boolean) { sensoryOn = v; onSensorySave(v); applyNightMode() }
 
     // ── Prefs do player (Fase C) ─────────────────────────────────────────
     // A tela lê os fluxos do PlayerPrefsViewModel e entrega aqui (ver
