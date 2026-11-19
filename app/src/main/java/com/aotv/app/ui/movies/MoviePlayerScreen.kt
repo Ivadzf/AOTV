@@ -3918,18 +3918,18 @@ class PlayerSession(
      * dois filtros) + um por provider presente + um por qualidade. A mesma
      * lista alimenta o celular (toque) e a TV (D-pad, ver [sourceChipCursor]). */
     val sourceFilterChips: List<SourceFilterChip> get() = buildList {
-        add(SourceFilterChip("Todos", sourceProviderFilter.isBlank() && sourceQualityFilter.isBlank(), key = "all") {
+        add(SourceFilterChip("Todos", sourceProviderFilter.isBlank() && sourceQualityFilter.isBlank(), key = "all", onClick = {
             sourceProviderFilter = ""; sourceQualityFilter = ""; sourcePanelIdx = 0
-        })
+        }))
         sourceProviders.forEach { provider ->
-            add(SourceFilterChip(provider, sourceProviderFilter.equals(provider, ignoreCase = true), key = "prov:$provider") {
+            add(SourceFilterChip(provider, sourceProviderFilter.equals(provider, ignoreCase = true), key = "prov:$provider", onClick = {
                 sourceProviderFilter = provider; sourcePanelIdx = 0
-            })
+            }))
         }
         listOf("4K", "1080p", "720p", "480p").forEach { q ->
-            add(SourceFilterChip(q, sourceQualityFilter == q, key = "q:$q") {
+            add(SourceFilterChip(q, sourceQualityFilter == q, key = "q:$q", onClick = {
                 sourceQualityFilter = q; sourcePanelIdx = 0
-            })
+            }))
         }
     }
 
