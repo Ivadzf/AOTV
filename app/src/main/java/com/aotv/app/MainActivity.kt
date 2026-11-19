@@ -25,6 +25,7 @@ import com.aotv.app.ui.common.LocalPosterQuality
 import com.aotv.app.ui.common.LocalPosterRanks
 import com.aotv.app.ui.common.currentDeviceLayout
 import com.aotv.app.ui.navigation.MoviesNavigation
+import com.aotv.app.ui.lote24.withAmoled
 import com.aotv.app.ui.theme.AotvPalette
 import com.aotv.app.ui.theme.AotvTheme
 import com.aotv.app.ui.theme.currentPalette
@@ -55,7 +56,14 @@ class MainActivity : ComponentActivity() {
             // Lote 3 (v1.11.0): com o Personalizado selecionado, a paleta vem das
             // 6 cores editáveis salvas — editar uma cor recompõe o app na hora.
             val customColors by platformPrefs.customThemeFlow.collectAsStateWithLifecycle()
-            val palette = AotvPalette.fromId(paletteId, customColors)
+            // Lote 24 (v1.34.0), item 1: AMOLED puro por cima do tema
+            // escolhido. NÃO usar resolveLote24Palette aqui: ele não conhece
+            // o id "custom" do tema personalizado e voltaria ao Padrão — o
+            // fromId com as cores salvas é quem resolve o "custom". O
+            // withAmoled() vale p/ qualquer base (no tema AMOLED é idempotente).
+            val amoled by platformPrefs.homeAmoledFlow.collectAsStateWithLifecycle()
+            val basePalette = AotvPalette.fromId(paletteId, customColors)
+            val palette = if (amoled) basePalette.withAmoled() else basePalette
             LaunchedEffect(palette) { if (currentPalette != palette) setCurrentPalette(palette) }
             AotvTheme {
                 val deviceLayout = currentDeviceLayout(platformPrefs.platformMode)

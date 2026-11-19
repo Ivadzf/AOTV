@@ -29,6 +29,7 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Locale
 import java.util.TimeZone
 import javax.inject.Inject
@@ -265,6 +266,17 @@ data class TraktSearchResult(
     }
 }
 
+// ─── Nota do episódio (Lote 24 item 12, v1.34.0) ─────────────────────────
+// GET /shows/{id}/seasons/{season}/episodes/{episode}/ratings — média 0–10
+// da comunidade + votos. Formato da resposta (docs do Trakt / tRakt):
+// {"rating": 8.5, "votes": 123, "distribution": {...}} — só "rating" é
+// lido; sem teste ao vivo ainda, a leitura é tolerante (null ou fora de
+// 0–10 = sem nota). A distribuição não é usada.
+data class TraktRatingsResponse(
+    @SerializedName("rating") val rating: Double? = null,
+    @SerializedName("votes") val votes: Int = 0,
+)
+
 // ─── Interface Retrofit ───────────────────────────────────────────────────────
 
 private interface TraktApi {
@@ -435,6 +447,15 @@ private interface TraktApi {
         @Query("sort") sort: String = "newest",
         @Query("limit") limit: Int = 10,
     ): List<TraktComment>
+
+    // ── Nota do episódio (Lote 24 item 12, v1.34.0 — público: só client_id) ──
+    @GET("shows/{id}/seasons/{season}/episodes/{episode}/ratings")
+    suspend fun getEpisodeRatings(
+        @Header("trakt-api-key") key: String,
+        @Path("id") traktId: Int,
+        @Path("season") season: Int,
+        @Path("episode") episode: Int,
+    ): TraktRatingsResponse
 }
 
 /**
@@ -970,6 +991,39 @@ class TraktService @Inject constructor(
         if (season <= 0 || episode <= 0) return@runCatching emptyList()
         val id = resolveTraktId(tmdbId, false) ?: return@runCatching emptyList()
         api.getEpisodeComments(clientId, id, season, episode)
+    }
+
+    // ── Nota do episódio (Lote 24 item 12, v1.34.0) ─────────────────────
+    // Endpoint público (só client_id, como os comentários), mas a fonte só
+    // entra quando o Trakt está CONECTADO neste perfil (decisão do lote):
+    // sem login, sem nota do Trakt na média. O id do Trakt é cacheado por
+    // série na sessão (1 busca por série, não 1 por episódio).
+
+    /** Id do Trakt da série p/ a nota do episódio (null = sem par no Trakt). */
+    private val episodeRatingTraktIds = Collections.synchronizedMap(mutableMapOf<Int, Int?>())
+
+    private suspend fun episodeRatingTraktId(tmdbId: Int): Int? {
+        if (episodeRatingTraktIds.containsKey(tmdbId)) return episodeRatingTraktIds[tmdbId]
+        val resolved = runCatching { resolveTraktId(tmdbId, false) }.getOrNull()
+        episodeRatingTraktIds[tmdbId] = resolved
+        return resolved
+    }
+
+    /**
+     * Nota média do episódio no Trakt (0–10). null = sem conexão, sem par
+     * no Trakt, sem nota ou erro de rede/HTTP. Nunca lança (só o
+     * CancellationException da coroutine passa).
+     */
+    suspend fun getEpisodeRating(tmdbId: Int, season: Int, episode: Int): Double? {
+        if (!isConnected || tmdbId <= 0 || season <= 0 || episode <= 0) return null
+        val traktId = episodeRatingTraktId(tmdbId) ?: return null
+        val rating = try {
+            api.getEpisodeRatings(clientId, traktId, season, episode).rating
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            return null
+        }
+        return rating?.takeIf { it in 0.0..10.0 }?.takeIf { it > 0 }
     }
 
     // ── Avisos do player e da Minha Lista ─────────────────────────────────────

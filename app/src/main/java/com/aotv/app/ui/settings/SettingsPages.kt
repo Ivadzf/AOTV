@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Dns
@@ -63,11 +64,13 @@ import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
@@ -831,6 +834,15 @@ private fun LayoutPage(
     highlightAnchor: String? = null,
 ) {
     val display by viewModel.homeDisplay.collectAsStateWithLifecycle()
+    // Lote 24 (v1.34.0): herói (item 2), abas (item 4), MK Channel e Peak
+    // Cinema (itens 5 e 6). As pastas (item 3) vivem no Personalizar Início.
+    val heroAutoRotate by viewModel.heroAutoRotate.collectAsStateWithLifecycle()
+    val heroPreviewOnFocus by viewModel.heroPreviewOnFocus.collectAsStateWithLifecycle()
+    val hiddenTabs by viewModel.bottomTabsHidden.collectAsStateWithLifecycle()
+    val defaultTab by viewModel.bottomTabDefault.collectAsStateWithLifecycle()
+    val mkSource by viewModel.mkChannelSource.collectAsStateWithLifecycle()
+    val peakEnabled by viewModel.peakCinemaEnabled.collectAsStateWithLifecycle()
+    val peakMood by viewModel.peakCinemaMood.collectAsStateWithLifecycle()
     SettingsPageScaffold("Layout", "Personalizar Início e Coleções", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Início", anchor = SettingsAnchors.LAYOUT_HOME)
         com.aotv.app.ui.common.SettingsGroup {
@@ -851,6 +863,95 @@ private fun LayoutPage(
                 onClick = onOpenCollections,
                 grouped = true,
                 divider = true,
+            )
+        }
+
+        // Lote 24 (v1.34.0), itens 2, 5 e 6: herói auto-rotativo, MK Channel
+        // e Peak Cinema. A rotação "Automática" é ligada no celular e só em
+        // TV que não for fraca; com o modo sensorial ligado, o herói não
+        // rotaciona sozinho mesmo com a rotação ligada.
+        SettingsCard {
+            PrefRow(
+                "Rotação do herói",
+                listOf("auto" to "Automática", "on" to "Sempre ligada", "off" to "Desligada"),
+                heroAutoRotate, viewModel::setHeroAutoRotate,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Movie,
+                title = "Prévia de cena ao focar",
+                sub = if (heroPreviewOnFocus) "Ao parar no destaque, o trailer começa em mudo depois de alguns segundos"
+                    else "Desligada: o destaque não mostra prévia sozinho",
+                trailing = { Switch(checked = heroPreviewOnFocus, onCheckedChange = { viewModel.setHeroPreviewOnFocus(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setHeroPreviewOnFocus(!heroPreviewOnFocus) },
+                grouped = true,
+            )
+        }
+        SettingsCard {
+            PrefRow(
+                "Fonte do MK Channel",
+                listOf("up_next" to "Up next", "watchlist" to "Minha Lista", "marathon" to "Maratona"),
+                mkSource, viewModel::setMkChannelSource,
+            )
+            Text(
+                "A fileira \"liga e já tem algo tocando\", logo depois do herói. Up next usa o próximo do Continuar assistindo; Maratona, o próximo episódio da série em andamento.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Star,
+                title = "Peak Cinema",
+                sub = if (peakEnabled) "Fileira \"melhores cenas\" por humor, logo depois do MK Channel"
+                    else "Desligado: a fileira não aparece na Início",
+                trailing = { Switch(checked = peakEnabled, onCheckedChange = { viewModel.setPeakCinemaEnabled(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setPeakCinemaEnabled(!peakEnabled) },
+                grouped = true,
+            )
+        }
+        if (peakEnabled) SettingsCard {
+            PrefRow(
+                "Humor do Peak Cinema",
+                com.aotv.app.ui.lote24.PEAK_CINEMA_PRESETS.map { it.id to it.label },
+                peakMood, viewModel::setPeakCinemaMood,
+            )
+        }
+
+        // Lote 24 (v1.34.0), item 4: esconder/mostrar abas da pílula e a aba
+        // padrão ao abrir. A Início nunca some (se todas ficarem escondidas,
+        // ela volta sozinha). A aba padrão escondida cai p/ a Início.
+        SettingsSection("Navegação", anchor = SettingsAnchors.LAYOUT_NAV)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.lote24.BottomTab24.entries.forEachIndexed { index, tab ->
+                val hidden = tab.id in hiddenTabs
+                com.aotv.app.ui.common.SettingsRow(
+                    icon = when (tab) {
+                        com.aotv.app.ui.lote24.BottomTab24.HOME -> Icons.Default.Home
+                        com.aotv.app.ui.lote24.BottomTab24.LIVE -> Icons.Default.LiveTv
+                        com.aotv.app.ui.lote24.BottomTab24.SEARCH -> Icons.Default.Search
+                        com.aotv.app.ui.lote24.BottomTab24.LIBRARY -> Icons.Default.BookmarkBorder
+                        com.aotv.app.ui.lote24.BottomTab24.SPORTS -> Icons.Default.SportsSoccer
+                        com.aotv.app.ui.lote24.BottomTab24.PROFILE -> Icons.Default.AccountCircle
+                    },
+                    title = "Mostrar aba ${tab.label}",
+                    sub = if (hidden) "Escondida da pílula" else "Visível na pílula",
+                    trailing = { Switch(checked = !hidden, onCheckedChange = { viewModel.setTabHidden(tab.id, !it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                    onClick = { viewModel.setTabHidden(tab.id, hidden) },
+                    grouped = true,
+                    divider = index < com.aotv.app.ui.lote24.BottomTab24.entries.size - 1,
+                )
+            }
+        }
+        SettingsCard {
+            PrefRow(
+                "Aba ao abrir o app",
+                com.aotv.app.ui.lote24.BottomTab24.entries.map { it.id to it.label },
+                defaultTab, viewModel::setBottomTabDefault,
+            )
+            Text(
+                "A aba em que o app abre. Se ela estiver escondida, abre na Início.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
         }
 
@@ -1096,6 +1197,11 @@ private fun DetalhePage(
     val showAggregateRating by viewModel.detailShowAggregateRating.collectAsStateWithLifecycle()
     // Fonte da nota exibida (Lote 12 — Frente 3, v1.22.0).
     val ratingsSource by viewModel.ratingsSource.collectAsStateWithLifecycle()
+    // Lote 24 (v1.34.0), item 12: fonte da nota dos EPISÓDIOS + chave do OMDb.
+    val episodeRatingMode by viewModel.episodeRatingMode.collectAsStateWithLifecycle()
+    val omdbKey by viewModel.omdbApiKey.collectAsStateWithLifecycle()
+    var omdbDraft by remember(omdbKey) { mutableStateOf(omdbKey) }
+    var omdbVisible by remember(omdbKey) { mutableStateOf(false) }
     val showTraktReviews by viewModel.detailShowTraktReviews.collectAsStateWithLifecycle()
     val showQuotes by viewModel.detailShowQuotes.collectAsStateWithLifecycle()
     SettingsPageScaffold("Página de detalhes", "Fundo, abas e ações do título", onBack, highlightAnchor = highlightAnchor) {
@@ -1193,9 +1299,9 @@ private fun DetalhePage(
             )
         }
         // Lote 12 — Frente 3 (Notas, v1.22.0): fonte da nota exibida de
-        // filmes e séries. Episódios seguem sempre com TMDB (a API do
-        // MDBList não tem nota por episódio). Sem nota MDBList p/ o título,
-        // o TMDB assume como fallback — nunca se inventa nota.
+        // filmes e séries. O MDBList não tem nota por episódio, por isso a
+        // nota DO EPISÓDIO segue a pref do Lote 24 abaixo (item 12). Sem nota
+        // MDBList p/ o título, o TMDB assume como fallback — nunca se inventa nota.
         SettingsCard {
             PrefRow(
                 "Fonte da nota exibida",
@@ -1210,6 +1316,86 @@ private fun DetalhePage(
                 "A nota de filmes e séries na página de detalhes. Automática usa a nota agregada do MDBList quando há chave configurada e ele está ligado; sem chave, ou sem nota p/ o título, vale a do TMDB.",
                 fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
+        }
+        // Lote 24 (v1.34.0), item 12: fonte da nota dos EPISÓDIOS. A média
+        // soma só as fontes que têm nota p/ o episódio; sem nota em nenhuma,
+        // fica "sem nota". Fonte única não cai p/ outra fonte quando a
+        // escolhida não tem nota. A ordenação e as cores do navegador de
+        // episódios usam a nota resultante daqui.
+        SettingsCard {
+            PrefRow(
+                "Nota dos episódios",
+                listOf(
+                    "average" to "Média das fontes com nota",
+                    "tmdb" to "Só TMDB",
+                    "trakt" to "Só Trakt",
+                    "omdb" to "Só OMDb (IMDb)",
+                    "tvmaze" to "Só TVmaze",
+                ),
+                episodeRatingMode, viewModel::setEpisodeRatingMode,
+            )
+            Text(
+                "De onde vem a nota do episódio (0–10) nos cards, no mapa de notas e no painel do player. Trakt só vale conectado; OMDb só com a chave abaixo (grátis, 1000 consultas/dia); TVmaze é grátis e sem chave. A origem aparece no card (ex.: \"8,4 · média de 3 fontes\").",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        SettingsCard {
+            Text(
+                if (omdbKey.isBlank()) "Sem chave do OMDb: a fonte OMDb fica fora da média e o modo \"Só OMDb\" fica sem nota. A chave é sua (grátis em omdbapi.com) e fica só neste aparelho."
+                    else "Chave do OMDb configurada. A fonte entra na média e no modo \"Só OMDb\".",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                    OutlinedTextField(
+                        value = omdbDraft,
+                        onValueChange = { omdbDraft = it },
+                        label = { Text("Sua chave do OMDb") },
+                        placeholder = { Text("Cole sua chave aqui", color = TextTertiary) },
+                        visualTransformation = if (omdbVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = gate,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent,
+                            unfocusedBorderColor = Border,
+                            focusedContainerColor = Surface2,
+                            unfocusedContainerColor = Surface2,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = Accent,
+                            unfocusedLabelColor = TextTertiary,
+                            cursorColor = Accent,
+                        ),
+                    )
+                }
+                IconButton(
+                    onClick = { omdbVisible = !omdbVisible }, enabled = omdbDraft.isNotEmpty(),
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        if (omdbVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (omdbVisible) "Ocultar chave do OMDb" else "Mostrar chave do OMDb",
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                com.aotv.app.ui.common.AotvButton(
+                    "Salvar chave", onClick = {
+                        viewModel.setOmdbApiKey(omdbDraft)
+                        omdbDraft = viewModel.omdbApiKey.value
+                        omdbVisible = false
+                    },
+                    enabled = omdbDraft.isNotBlank() && omdbDraft.trim() != omdbKey,
+                    compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+                )
+                if (omdbKey.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                    "Remover chave", onClick = { viewModel.setOmdbApiKey(""); omdbDraft = ""; omdbVisible = false },
+                    compact = true,
+                )
+            }
         }
         SettingsSection("O que estão dizendo", anchor = SettingsAnchors.DETAIL_REVIEWS)
         com.aotv.app.ui.common.SettingsGroup {
@@ -2151,11 +2337,26 @@ private fun AparenciaPage(
     val deviceLayout = com.aotv.app.ui.common.currentDeviceLayout(currentMode)
     // Blur nos painéis (Lote 3 item 4, v1.11.0; padrão: ligado).
     val panelBlur by viewModel.panelBlur.collectAsStateWithLifecycle()
+    // Lote 24 (v1.34.0), item 1: preto puro por cima do tema escolhido.
+    val homeAmoled by viewModel.homeAmoled.collectAsStateWithLifecycle()
     SettingsPageScaffold("Aparência", "Tema e aparelho", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Tema", anchor = SettingsAnchors.APPEAR_THEME)
         // Única setting nova da Fase A. O composable vem de ui/theme/ThemePicker.kt
         // (outra frente); sem ele, esta é a única importação a integrar.
         ThemeSelector()
+        // Lote 24 (v1.34.0), item 1: AMOLED puro por cima do tema escolhido.
+        // Com o tema AMOLED selecionado, o toggle não muda nada (já é preto puro).
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Contrast,
+                title = "Preto puro (AMOLED)",
+                sub = if (homeAmoled) "Fundo #000000 e cartões quase pretos por cima do tema — economia de bateria em tela OLED"
+                    else "Desligado: o tema usa os fundos dele",
+                trailing = { Switch(checked = homeAmoled, onCheckedChange = { viewModel.setHomeAmoled(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setHomeAmoled(!homeAmoled) },
+                grouped = true,
+            )
+        }
         // Tema personalizado (Lote 3 item 3, v1.11.0): as 6 cores editáveis.
         SettingsSection("Tema personalizado", anchor = SettingsAnchors.APPEAR_CUSTOM)
         CustomThemeEditor()
@@ -2438,6 +2639,10 @@ private fun ReproducaoPage(
     // qualidade sozinho (e) e debrid só com arquivo pronto (f).
     val autoUpgrade by playerPrefs.autoUpgrade.collectAsStateWithLifecycle()
     val debridReadyOnly by playerPrefs.debridReadyOnly.collectAsStateWithLifecycle()
+    // Lote 24 (v1.34.0), itens 8 e 9: Ambilight e modo sensorial.
+    val ambilight by viewModel.playerAmbilight.collectAsStateWithLifecycle()
+    val ambilightIntensity by viewModel.playerAmbilightIntensity.collectAsStateWithLifecycle()
+    val sensoryFriendly by viewModel.playerSensoryFriendly.collectAsStateWithLifecycle()
     val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
     // Personalização de legenda e velocidade padrão (v1.9.0).
     val subColor by playerPrefs.subColor.collectAsStateWithLifecycle()
@@ -2571,6 +2776,40 @@ private fun ReproducaoPage(
         // Personalização de legenda (v1.9.0): cor, fonte, opacidade do fundo e
         // contorno. Vale para a legenda embutida e para a externa, e também dá
         // para mudar no player, em Legendas. Tamanho e fundo continuam no player.
+        // Lote 24 (v1.34.0), itens 8 e 9: Ambilight e modo sensorial. O
+        // Ambilight amostra as cores da cena (ou do pôster, quando a fonte
+        // não permite amostrar) e pinta o fundo do player; em HLS, torrent
+        // e DRM, ficam as cores do pôster. O modo sensorial suaviza estouros
+        // de som e pisca-pisca e desliga a rotação do herói.
+        SettingsSection("Ambilight e conforto", anchor = SettingsAnchors.PLAY_COMFORT)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Lightbulb,
+                title = "Ambilight no player",
+                sub = if (ambilight) "O fundo do player acompanha as cores da cena"
+                    else "Desligado: o fundo do player é o de sempre",
+                trailing = { Switch(checked = ambilight, onCheckedChange = { viewModel.setPlayerAmbilight(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setPlayerAmbilight(!ambilight) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Tune,
+                title = "Modo sensorial",
+                sub = if (sensoryFriendly) "Suaviza estouros de som e pisca-pisca (transições e Ambilight mais calmos)"
+                    else "Desligado: som e transições no normal",
+                trailing = { Switch(checked = sensoryFriendly, onCheckedChange = { viewModel.setPlayerSensoryFriendly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setPlayerSensoryFriendly(!sensoryFriendly) },
+                grouped = true,
+            )
+        }
+        if (ambilight) SettingsCard {
+            PrefRow(
+                "Intensidade do Ambilight",
+                listOf("low" to "Baixa", "medium" to "Média", "high" to "Alta"),
+                ambilightIntensity, viewModel::setPlayerAmbilightIntensity,
+            )
+        }
         SettingsSection("Legendas", anchor = SettingsAnchors.PLAY_SUBS)
         SettingsCard {
             PrefRow("Cor da legenda", SUB_COLORS, subColor, playerPrefs::setSubColor)

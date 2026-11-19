@@ -398,11 +398,83 @@ data class AotvPalette(
             accentSecondary = Color(0xFF7E57C2),
         )
 
+        /** Netflixy (Lote 24, v1.34.0): destaque vermelho vivo sobre fundo bem escuro. */
+        val Netflixy = Default.copy(
+            id = "netflixy",
+            name = "Netflixy",
+            background = Color(0xFF141414),
+            backgroundElevated = Color(0xFF1F1F1F),
+            backgroundCard = Color(0xFF242424),
+            backgroundCard2 = Color(0xFF1C1C1C),
+            surface2 = Color(0xFF2E2E2E),
+            accent = Color(0xFFE50914),
+            accentFill = Color(0xFFC40812),
+            accentDark = Color(0xFF7A0C10),
+            accentSoft = Color(0xFF2E0E10),
+            accentSecondary = Color(0xFF00C2B8),
+            onAccent = Color(0xFFFFFFFF),
+            searchFocused = Color(0xFF33262A),
+        )
+
+        /** Cyberpunk (Lote 24, v1.34.0): destaque amarelo neon, secundário magenta. */
+        val Cyberpunk = Default.copy(
+            id = "cyberpunk",
+            name = "Cyberpunk",
+            background = Color(0xFF0A0A12),
+            backgroundElevated = Color(0xFF14141F),
+            backgroundCard = Color(0xFF1B1B2A),
+            backgroundCard2 = Color(0xFF131320),
+            surface2 = Color(0xFF262640),
+            accent = Color(0xFFFCEE0A),
+            accentFill = Color(0xFFD9C400),
+            accentDark = Color(0xFF8A7500),
+            accentSoft = Color(0xFF2A2505),
+            accentSecondary = Color(0xFFFF003C),
+            onAccent = Color(0xFF0A0A0A),
+            border = Color(0xFF2E2E44),
+            searchFocused = Color(0xFF2B2B1A),
+        )
+
+        /** Primefly (Lote 24, v1.34.0): destaque azul Prime sobre azul-marinho escuro. */
+        val Primefly = Default.copy(
+            id = "primefly",
+            name = "Primefly",
+            background = Color(0xFF0F171E),
+            backgroundElevated = Color(0xFF1A242E),
+            backgroundCard = Color(0xFF1F2C38),
+            backgroundCard2 = Color(0xFF16202A),
+            surface2 = Color(0xFF2A3A48),
+            accent = Color(0xFF00A8E1),
+            accentFill = Color(0xFF0090C2),
+            accentDark = Color(0xFF0077A3),
+            accentSoft = Color(0xFF0E2A38),
+            accentSecondary = Color(0xFF9E1B1B),
+            onAccent = Color(0xFF0A0A0A),
+            border = Color(0xFF2B3A47),
+            searchFocused = Color(0xFF1D2F3D),
+        )
+
+        /** AMOLED puro (Lote 24, v1.34.0): a identidade Padrão com fundo #000000 e cartões quase pretos. */
+        val Amoled = Default.copy(
+            id = "amoled",
+            name = "AMOLED puro",
+            background = Color(0xFF000000),
+            backgroundElevated = Color(0xFF0A0A0A),
+            backgroundCard = Color(0xFF0D0D0D),
+            backgroundCard2 = Color(0xFF111111),
+            surface2 = Color(0xFF161616),
+            border = Color(0xFF1F1F1F),
+            glassBg = Color(0xB8000000),
+            panelBackground = Color(0xF7000000),
+            focusBackground = Color(0xFF1A1A1A),
+            searchFocused = Color(0xFF0E1E1C),
+        )
+
         /** Tema personalizado (Lote 3, v1.11.0): derivado das cores salvas; aqui, com os padrões. */
         val Custom: AotvPalette = derivedCustomPalette(DEFAULT_CUSTOM_COLORS)
 
         /** Todas as paletas, na ordem do seletor. */
-        val all: List<AotvPalette> = listOf(Default, White, Crimson, Ocean, Violet, Emerald, Amber, Pink, Custom)
+        val all: List<AotvPalette> = listOf(Default, Netflixy, Cyberpunk, Primefly, Amoled, White, Crimson, Ocean, Violet, Emerald, Amber, Pink, Custom)
 
         /**
          * Paleta pelo id salvo; id desconhecido (ou vazio) volta ao Padrão.

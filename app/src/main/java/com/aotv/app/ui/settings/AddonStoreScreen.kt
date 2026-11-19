@@ -27,6 +27,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -109,6 +111,12 @@ fun AddonStoreScreen(onBack: () -> Unit, onOpenHome: () -> Unit = {}, vm: AddonS
                             contentPadding = PaddingValues(start = com.aotv.app.ui.common.pagePadding(), end = com.aotv.app.ui.common.pagePadding(), bottom = 32.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
+                            // Lote 24 (v1.34.0), item 3: compartilhar o setup de
+                            // addons por código — gerar o código deste aparelho
+                            // ou aplicar um código colado de outro aparelho.
+                            item(key = "share_setup") {
+                                ShareSetupCard(vm, st)
+                            }
                             if (list.isEmpty()) item {
                                 Text("Nenhum addon com esses filtros.", color = TextTertiary, fontSize = 15.sp, modifier = Modifier.padding(top = 24.dp))
                             }
@@ -497,5 +505,97 @@ private fun ConfigFormDialog(a: CommunityAddon, onDismiss: () -> Unit, onDone: (
                 ) { Text("Salvar e instalar", fontWeight = FontWeight.ExtraBold) }
             }
         }
+    }
+}
+
+/**
+ * Compartilhar o setup de addons por código (Lote 24, v1.34.0, item 3).
+ * Gerar codifica os addons instalados (URL + ativo) num código em grupos
+ * de 4; aplicar cola o código de outro aparelho e instala os addons dele
+ * pelo fluxo normal. O código é longo (a URL do manifest domina) — não é
+ * um código de 6 caracteres. Sem servidor: o código viaja por onde o
+ * usuário colar (mensagem, nota, QR da câmera — fora do app).
+ */
+@Composable
+private fun ShareSetupCard(vm: AddonStoreViewModel, st: AddonStoreViewModel.UiState) {
+    val clipboard = LocalClipboardManager.current
+    var code by remember { mutableStateOf(vm.lastShareCode) }
+    var applyCode by remember { mutableStateOf("") }
+    var copied by remember { mutableStateOf(false) }
+    var localMsg by remember { mutableStateOf<String?>(null) }
+    val busy = st.busy != null
+    Column(
+        Modifier.fillMaxWidth()
+            .background(BackgroundCard, RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Compartilhar setup", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+        Text(
+            "Gere um código com os addons instalados neste aparelho e aplique num outro — sem conta e sem servidor. O código carrega as URLs dos manifests, por isso é longo.",
+            color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            com.aotv.app.ui.common.AotvButton(
+                "Gerar meu código", onClick = {
+                    val generated = vm.generateShareCode()
+                    if (generated == null) {
+                        localMsg = "Nenhum addon instalado p/ compartilhar."
+                    } else {
+                        code = generated
+                        copied = false
+                        localMsg = null
+                    }
+                },
+                enabled = !busy && st.installed.isNotEmpty(),
+                compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+            )
+            if (code.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                if (copied) "Copiado!" else "Copiar código", onClick = {
+                    clipboard.setText(AnnotatedString(code))
+                    copied = true
+                },
+                compact = true,
+            )
+        }
+        if (code.isNotBlank()) {
+            Text(
+                code, color = TextSecondary, fontSize = 13.sp, lineHeight = 20.sp,
+                modifier = Modifier.fillMaxWidth()
+                    .background(Surface2, RoundedCornerShape(10.dp))
+                    .padding(10.dp),
+            )
+        }
+        if (localMsg != null) Text(localMsg!!, color = TextSecondary, fontSize = 13.sp)
+        com.aotv.app.ui.common.TvTextFieldGate(Modifier.fillMaxWidth()) { gate ->
+            OutlinedTextField(
+                value = applyCode,
+                onValueChange = { applyCode = it },
+                label = { Text("Código de outro aparelho") },
+                placeholder = { Text("Cole o código aqui", color = TextTertiary) },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = gate,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Accent,
+                    unfocusedBorderColor = Border,
+                    focusedContainerColor = Surface2,
+                    unfocusedContainerColor = Surface2,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedLabelColor = Accent,
+                    unfocusedLabelColor = TextTertiary,
+                    cursorColor = Accent,
+                ),
+            )
+        }
+        com.aotv.app.ui.common.AotvButton(
+            "Aplicar código", onClick = {
+                vm.applyShareCode(applyCode)
+                applyCode = ""
+            },
+            enabled = !busy && applyCode.isNotBlank(),
+            compact = true,
+        )
     }
 }

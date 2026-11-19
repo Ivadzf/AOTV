@@ -95,6 +95,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.ratings.episodeRatingOriginCaption
 import com.aotv.app.data.remote.durationGuardMismatch
 import com.aotv.app.data.remote.hasAtmos
 import com.aotv.app.data.remote.hasDolbyVision
@@ -324,6 +325,8 @@ fun MovieDetailScreen(
     val episodeStyle = EpisodeCardStyle.fromId(episodeStyleId)
     // Notas dos episódios (Lote 2 item 5, por perfil; padrão: mostrar).
     val showEpisodeRatings by detailPrefs.episodeRatings.collectAsStateWithLifecycle()
+    // Lote 24 item 12 (v1.34.0) — modo da nota dos episódios (rótulo de origem do mapa).
+    val episodeRatingMode by viewModel.episodeRatingMode.collectAsStateWithLifecycle()
 
     // Blur nos painéis (Lote 3 item 4, v1.11.0): com uma folha aberta (fontes
     // ou filmografia), o conteúdo da página atrás dela é desfocado. O efeito
@@ -1214,6 +1217,7 @@ fun MovieDetailScreen(
                             RatingMap(
                                 episodes = episodes,
                                 onEpisodeClick = { ep -> viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+                                ratingOrigin = episodeRatingOriginCaption(episodeRatingMode),
                             )
                         }
                         if (episodeQuery.isNotBlank()) {
@@ -2756,12 +2760,17 @@ private fun EpisodeRowCard(
     val displayTitle = if (hideSpoiler) "Episódio ${episode.episodeNumber}" else "${episode.episodeNumber}. ${episode.name}"
     // Meta do episódio: data de lançamento · duração · nota (minimalista).
     // A nota só entra quando as notas estão ligadas (item 5) — e só quando
-    // existe (rating 0 = sem votos no TMDB, não "nota zero").
-    val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating, showRating) {
+    // existe (rating 0 = sem votos no TMDB, não "nota zero"). Com a nota
+    // resolvida (Lote 24 item 12), a origem acompanha: "★ 8,4 · Trakt" ou
+    // "★ 8,4 · média de 3 fontes"; sem origem, é só o TMDB ("★ 8,4").
+    val epMeta = remember(episode.airDate, episode.runtimeMin, episode.rating, episode.ratingSource, showRating) {
         buildList {
             fmtIsoDateMobile(episode.airDate).takeIf { it.isNotBlank() }?.let { add(it) }
             if (episode.runtimeMin > 0) add("${episode.runtimeMin} min")
-            if (showRating && episode.rating > 0) add("★ %.1f".format(episode.rating))
+            if (showRating && episode.rating > 0) {
+                val source = episode.ratingSource?.let { " · $it" }.orEmpty()
+                add("★ %.1f$source".format(episode.rating))
+            }
         }
     }
     // Empilhado com foco em texto (Fase B): sem arte, título + sinopse + duração.

@@ -200,6 +200,14 @@ fun MoviesNavigation(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
+    // Lote 24 (v1.34.0), item 4: abas escondidas + aba padrão ao abrir.
+    // O startDestination é a rota resolvida (cai p/ a Início se a padrão
+    // estiver escondida — ver BottomTabs24.resolveDefaultRoute).
+    val tabsVm: com.aotv.app.ui.lote24.BottomTabsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val hiddenTabs by tabsVm.hiddenTabs.collectAsStateWithLifecycle()
+    val defaultTabId by tabsVm.defaultTab.collectAsStateWithLifecycle()
+    val startRoute = com.aotv.app.ui.lote24.BottomTabs24.resolveDefaultRoute(defaultTabId, hiddenTabs)
+
     // Deep link da Watch Party (Lote 10, v1.20.0): a MainActivity oferece o
     // código (onCreate/onNewIntent) e aqui a navegação pousa na página da
     // festa — a tela lê o código do intent e pré-preenche a entrada.
@@ -291,7 +299,7 @@ fun MoviesNavigation(
 
     // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
     // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
-    // Configurações cobre o hub e as páginas (movies_settings/*).
+    // Configurações cobre o hub e as páginas (movies_settings/...).
     val isFullscreen = currentRoute?.startsWith("movies_player") == true ||
         currentRoute?.startsWith("movies_detail") == true ||
         currentRoute?.startsWith("movies_settings") == true ||
@@ -337,7 +345,7 @@ fun MoviesNavigation(
         val reduced = com.aotv.app.ui.common.rememberReducedMotion()
         val dur = if (reduced) 0 else 220
         NavHost(
-            navController, startDestination = MoviesRoute.Home.route,
+            navController, startDestination = startRoute,
             enterTransition = {
                 androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(dur)) +
                     androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(dur)) { if (reduced) 0 else 48 }
@@ -1020,7 +1028,7 @@ fun MoviesNavigation(
     // Descobrir e Downloads saíram da barra: Descobrir virou entrada na Início e
     // Downloads, entrada na Biblioteca (Minha Lista). As rotas continuam existindo.
     // Perfil é item à parte (usa o avatar do perfil em uso, não um ícone).
-    val pillItems = listOf(
+    val pillItemsRaw = listOf(
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Home.route, "Início", Icons.Default.Home) { navTab(MoviesRoute.Home.route) },
     ) + (if (liveOn) listOf(
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.Live.route, "Ao vivo", Icons.Default.LiveTv) { navTab(MoviesRoute.Live.route) },
@@ -1031,6 +1039,11 @@ fun MoviesNavigation(
         // celular (a pílula só existe no celular — na TV o hideBar a esconde).
         com.aotv.app.ui.common.PhoneNavItem(MoviesRoute.SportsTab.route, "Esportes", Icons.Default.SportsSoccer) { navTab(MoviesRoute.SportsTab.route) },
     )
+    // Lote 24 (v1.34.0), item 4: abas escondidas nas Configurações somem da
+    // pílula. A Início nunca some (sanitizeHidden garante pelo menos 1 aba).
+    val visibleTabRoutes = com.aotv.app.ui.lote24.BottomTabs24.visibleTabs(hiddenTabs).map { it.route }.toSet()
+    val pillItems = pillItemsRaw.filter { it.route in visibleTabRoutes }
+    val showProfileTab = com.aotv.app.ui.lote24.BottomTab24.PROFILE.route in visibleTabRoutes
 
     // IMPORTANTE: o NavHost precisa ficar SEMPRE no mesmo slot de composição. Se ele
     // trocar de pai (ex.: dentro do Scaffold vs. direto) quando isFullscreen muda, o
@@ -1333,6 +1346,7 @@ fun MoviesNavigation(
                     profile = profile,
                     profilesRoute = MoviesRoute.Profiles.route,
                     onProfile = { navTab(MoviesRoute.Profiles.route) },
+                    showProfile = showProfileTab,
                     frosted = panelBlurOn,
                     showWhatsNewDot = whatsNewDotVisible,
                 )
@@ -1474,6 +1488,8 @@ private fun MoviesBottomBar(
     profile: com.aotv.app.data.local.Profile,
     profilesRoute: String,
     onProfile: () -> Unit,
+    /** Lote 24 (v1.34.0), item 4: com o Perfil escondido, o avatar some da pílula. */
+    showProfile: Boolean = true,
     /**
      * Vidro fosco (Lote 4): com o toggle `pref_panel_blur` ligado, a pílula
      * ("gota") fica mais translúcida (0.62 em vez de 0.72) p/ o conteúdo
@@ -1496,7 +1512,7 @@ private fun MoviesBottomBar(
         items.forEach { item ->
             MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
         }
-        MoviesBottomBarItem(
+        if (showProfile) MoviesBottomBarItem(
             icon = null, label = "Perfil", selected = currentRoute == profilesRoute,
             onClick = onProfile, modifier = Modifier.weight(1f), profile = profile,
             showWhatsNewDot = showWhatsNewDot,

@@ -251,6 +251,15 @@ internal val SCOPED_KEYS = listOf(
     "kids_age_limit_v1", "blocked_genres_v1", "mylist_order_v1",
     "dropped_series_v1", "watched_elsewhere_v1", "simkl_sync_v1",
     "simkl_last_pull_v1", "pref_forced_subs", "stats_period_v1",
+    // Lote 24 (v1.34.0) — Temas/início: pastas da Home, abas visíveis e
+    // aba padrão, fonte do MK Channel, Peak Cinema ligado/humor, Ambilight
+    // e intensidade, modo sensorial e fonte da nota dos episódios. As prefs
+    // globais do lote (AMOLED, rotação do herói, prévia ao focar, chave do
+    // OMDb e último código de setup) são do aparelho e NÃO entram aqui.
+    "home_folders_v1", "bottom_tabs_hidden_v1", "bottom_tab_default_v1",
+    "mk_channel_source_v1", "peak_cinema_enabled_v1", "peak_cinema_mood_v1",
+    "pref_player_ambilight_v1", "pref_player_ambilight_intensity_v1",
+    "pref_player_sensory_friendly_v1", "episode_rating_mode_v1",
 )
 
 /**
@@ -1218,6 +1227,15 @@ class PlatformPrefs @Inject constructor(
         get() = _themePalette.value
         set(value) { prefs.edit().putString(KEY_THEME_PALETTE, value).apply(); _themePalette.value = value }
 
+    // Lote 24 (v1.34.0), item 1 — AMOLED puro (global, do aparelho):
+    // preto puro por cima do tema escolhido. A MainActivity resolve a
+    // paleta final com resolveLote24Palette(themeId, amoled).
+    private val _homeAmoled = MutableStateFlow(prefs.getBoolean("home_amoled_v1", false))
+    val homeAmoledFlow: StateFlow<Boolean> = _homeAmoled.asStateFlow()
+    var homeAmoled: Boolean
+        get() = _homeAmoled.value
+        set(value) { prefs.edit().putBoolean("home_amoled_v1", value).apply(); _homeAmoled.value = value }
+
     // ── Tema personalizado (Lote 3, v1.11.0) — do aparelho, como o tema ─────
     // As 6 cores editáveis (ver CustomThemeColors); o resto da paleta é
     // derivado delas em derivedCustomPalette. Editar aqui já avisa a
@@ -2095,6 +2113,49 @@ class PlatformPrefs @Inject constructor(
         homeDisplay = transform(homeDisplay)
     }
 
+    // Lote 24 (v1.34.0), itens 3–6 — Pastas da Home, abas da pílula,
+    // MK Channel e Peak Cinema (por perfil, SCOPED_KEYS). Pastas guardam
+    // JSON de HomeFolder24 (ver ui/lote24/HomeFolders24.kt); abas escondidas
+    // guardam CSV de ids de BottomTab24 (nunca todas — ver sanitizeHidden).
+    private val _homeFolders = MutableStateFlow(prefs.getString(sk("home_folders_v1"), "[]") ?: "[]")
+    val homeFoldersFlow: StateFlow<String> = _homeFolders.asStateFlow()
+    var homeFolders: String
+        get() = _homeFolders.value
+        set(value) { prefs.edit().putString(sk("home_folders_v1"), value).apply(); _homeFolders.value = value }
+
+    private val _bottomTabsHidden = MutableStateFlow(prefs.getString(sk("bottom_tabs_hidden_v1"), "") ?: "")
+    val bottomTabsHiddenFlow: StateFlow<String> = _bottomTabsHidden.asStateFlow()
+    var bottomTabsHidden: String
+        get() = _bottomTabsHidden.value
+        set(value) { prefs.edit().putString(sk("bottom_tabs_hidden_v1"), value).apply(); _bottomTabsHidden.value = value }
+
+    private val _bottomTabDefault = MutableStateFlow(prefs.getString(sk("bottom_tab_default_v1"), "home") ?: "home")
+    val bottomTabDefaultFlow: StateFlow<String> = _bottomTabDefault.asStateFlow()
+    var bottomTabDefault: String
+        get() = _bottomTabDefault.value
+        set(value) { prefs.edit().putString(sk("bottom_tab_default_v1"), value).apply(); _bottomTabDefault.value = value }
+
+    private val _mkChannelSource = MutableStateFlow(prefs.getString(sk("mk_channel_source_v1"), "up_next") ?: "up_next")
+    val mkChannelSourceFlow: StateFlow<String> = _mkChannelSource.asStateFlow()
+    var mkChannelSource: String
+        get() = _mkChannelSource.value
+        set(value) {
+            val clean = if (value in setOf("up_next", "watchlist", "marathon")) value else "up_next"
+            prefs.edit().putString(sk("mk_channel_source_v1"), clean).apply(); _mkChannelSource.value = clean
+        }
+
+    private val _peakCinemaEnabled = MutableStateFlow(prefs.getBoolean(sk("peak_cinema_enabled_v1"), true))
+    val peakCinemaEnabledFlow: StateFlow<Boolean> = _peakCinemaEnabled.asStateFlow()
+    var peakCinemaEnabled: Boolean
+        get() = _peakCinemaEnabled.value
+        set(value) { prefs.edit().putBoolean(sk("peak_cinema_enabled_v1"), value).apply(); _peakCinemaEnabled.value = value }
+
+    private val _peakCinemaMood = MutableStateFlow(prefs.getString(sk("peak_cinema_mood_v1"), "acao_adrenalina") ?: "acao_adrenalina")
+    val peakCinemaMoodFlow: StateFlow<String> = _peakCinemaMood.asStateFlow()
+    var peakCinemaMood: String
+        get() = _peakCinemaMood.value
+        set(value) { prefs.edit().putString(sk("peak_cinema_mood_v1"), value).apply(); _peakCinemaMood.value = value }
+
     // ── Página de detalhes (por perfil, Fase B) ─────────────────────────────
     // Fundo cinematográfico, transição do pôster, ações em ícones, layout de
     // abas e estilo do card de episódio. Cada pref tem um fluxo que avisa quem
@@ -2188,8 +2249,9 @@ class PlatformPrefs @Inject constructor(
     // episódios). "auto" (padrão) = MDBList quando conectado e ligado, senão
     // TMDB; "mdblist" força o MDBList (sem nota p/ o título, o TMDB assume
     // como fallback — nunca se inventa nota); "tmdb" força o TMDB.
-    // EPISÓDIOS seguem sempre com TMDB: a API do MDBList não tem nota por
-    // episódio (`m` só aceita `movie|show`). Por perfil (SCOPED_KEYS).
+    // O MDBList não tem nota por episódio (`m` só aceita `movie|show`), por
+    // isso a nota DO EPISÓDIO segue a pref abaixo (Lote 24, item 12).
+    // Por perfil (SCOPED_KEYS).
     private val _ratingsSource = MutableStateFlow(prefs.getString(sk("pref_ratings_source"), "auto") ?: "auto")
     /** Fonte da nota exibida de filmes e séries: "auto" | "mdblist" | "tmdb". */
     val ratingsSourceFlow: StateFlow<String> = _ratingsSource.asStateFlow()
@@ -2199,6 +2261,34 @@ class PlatformPrefs @Inject constructor(
             val clean = if (value in setOf("auto", "mdblist", "tmdb")) value else "auto"
             prefs.edit().putString(sk("pref_ratings_source"), clean).apply(); _ratingsSource.value = clean
         }
+
+    // Lote 24 (v1.34.0), item 12 — Fontes da nota dos episódios (ver
+    // data/ratings/EpisodeRatings.kt). O modo é por perfil (SCOPED_KEYS);
+    // a chave do OMDb é DO USUÁRIO e global (do aparelho), no mesmo padrão
+    // da chave do MDBList: vazio = fonte desligada. Nenhuma chave embutida.
+    private val _episodeRatingMode = MutableStateFlow(prefs.getString(sk("episode_rating_mode_v1"), "average") ?: "average")
+    val episodeRatingModeFlow: StateFlow<String> = _episodeRatingMode.asStateFlow()
+    var episodeRatingMode: String
+        get() = _episodeRatingMode.value
+        set(value) {
+            val clean = if (value in setOf("average", "tmdb", "trakt", "omdb", "tvmaze")) value else "average"
+            prefs.edit().putString(sk("episode_rating_mode_v1"), clean).apply(); _episodeRatingMode.value = clean
+        }
+
+    private val _omdbApiKey = MutableStateFlow(prefs.getString("omdb_api_key", "") ?: "")
+    val omdbApiKeyFlow: StateFlow<String> = _omdbApiKey.asStateFlow()
+    var omdbApiKey: String
+        get() = _omdbApiKey.value
+        set(value) { val clean = value.trim(); prefs.edit().putString("omdb_api_key", clean).apply(); _omdbApiKey.value = clean }
+
+    // Lote 24 (v1.34.0), item 3 — Último código de setup de addons gerado
+    // (global, do aparelho). O código em si não tem segredo: é só a lista de
+    // addons instalados codificada p/ compartilhar com outro aparelho.
+    private val _addonShareCodeLast = MutableStateFlow(prefs.getString("addon_share_code_last_v1", "") ?: "")
+    val addonShareCodeLastFlow: StateFlow<String> = _addonShareCodeLast.asStateFlow()
+    var addonShareCodeLast: String
+        get() = _addonShareCodeLast.value
+        set(value) { prefs.edit().putString("addon_share_code_last_v1", value).apply(); _addonShareCodeLast.value = value }
 
     // ── Streams: folha de fontes (por perfil, Fase C) ───────────────────────
     // Pesquisa, emblemas, logo do addon e fontes fixadas. Cada pref tem um fluxo
@@ -3386,6 +3476,49 @@ class PlatformPrefs @Inject constructor(
         get() = _hideUnreleased.value
         set(value) { prefs.edit().putBoolean(sk("pref_hide_unreleased"), value).apply(); _hideUnreleased.value = value }
 
+    // Lote 24 (v1.34.0), item 2 — Herói auto-rotativo + prévia ao focar
+    // (globais, do aparelho). "auto" usa o default do aparelho (ligado no
+    // celular; na TV só se não for fraca — ver heroAutoRotateEffective).
+    private val _heroAutoRotate = MutableStateFlow(prefs.getString("hero_autorotate_v1", "auto") ?: "auto")
+    val heroAutoRotateFlow: StateFlow<String> = _heroAutoRotate.asStateFlow()
+    var heroAutoRotate: String
+        get() = _heroAutoRotate.value
+        set(value) {
+            val clean = if (value in setOf("auto", "on", "off")) value else "auto"
+            prefs.edit().putString("hero_autorotate_v1", clean).apply(); _heroAutoRotate.value = clean
+        }
+
+    private val _heroPreviewOnFocus = MutableStateFlow(prefs.getBoolean("hero_preview_on_focus_v1", true))
+    val heroPreviewOnFocusFlow: StateFlow<Boolean> = _heroPreviewOnFocus.asStateFlow()
+    var heroPreviewOnFocus: Boolean
+        get() = _heroPreviewOnFocus.value
+        set(value) { prefs.edit().putBoolean("hero_preview_on_focus_v1", value).apply(); _heroPreviewOnFocus.value = value }
+
+    // Lote 24 (v1.34.0), itens 8 e 9 — Ambilight e modo sensorial no
+    // player (por perfil, SCOPED_KEYS). O player já lia estas chaves por
+    // rawPref desde a Frente B; aqui elas ganham fluxo + var p/ as
+    // Configurações e p/ a troca de perfil (refreshLayout).
+    private val _playerAmbilight = MutableStateFlow(prefs.getBoolean(sk("pref_player_ambilight_v1"), false))
+    val playerAmbilightFlow: StateFlow<Boolean> = _playerAmbilight.asStateFlow()
+    var playerAmbilight: Boolean
+        get() = _playerAmbilight.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_ambilight_v1"), value).apply(); _playerAmbilight.value = value }
+
+    private val _playerAmbilightIntensity = MutableStateFlow(prefs.getString(sk("pref_player_ambilight_intensity_v1"), "medium") ?: "medium")
+    val playerAmbilightIntensityFlow: StateFlow<String> = _playerAmbilightIntensity.asStateFlow()
+    var playerAmbilightIntensity: String
+        get() = _playerAmbilightIntensity.value
+        set(value) {
+            val clean = if (value in setOf("low", "medium", "high")) value else "medium"
+            prefs.edit().putString(sk("pref_player_ambilight_intensity_v1"), clean).apply(); _playerAmbilightIntensity.value = clean
+        }
+
+    private val _playerSensoryFriendly = MutableStateFlow(prefs.getBoolean(sk("pref_player_sensory_friendly_v1"), false))
+    val playerSensoryFriendlyFlow: StateFlow<Boolean> = _playerSensoryFriendly.asStateFlow()
+    var playerSensoryFriendly: Boolean
+        get() = _playerSensoryFriendly.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_sensory_friendly_v1"), value).apply(); _playerSensoryFriendly.value = value }
+
     /**
      * Catálogos que alimentam o destaque no automático (chaves das fileiras).
      * null = padrão (o automático de sempre); vazio = nenhum catálogo no destaque.
@@ -3476,6 +3609,18 @@ class PlatformPrefs @Inject constructor(
         _hideUnreleased.value = prefs.getBoolean(sk("pref_hide_unreleased"), false)
         _heroCatalogs.value = readHeroCatalogs()
         _homeDisplay.value = readHomeDisplay()
+        // Lote 24 (v1.34.0): pastas, abas, MK Channel e Peak Cinema são por
+        // perfil — recarregar na troca, como o resto do layout.
+        _homeFolders.value = prefs.getString(sk("home_folders_v1"), "[]") ?: "[]"
+        _bottomTabsHidden.value = prefs.getString(sk("bottom_tabs_hidden_v1"), "") ?: ""
+        _bottomTabDefault.value = prefs.getString(sk("bottom_tab_default_v1"), "home") ?: "home"
+        _mkChannelSource.value = prefs.getString(sk("mk_channel_source_v1"), "up_next") ?: "up_next"
+        _peakCinemaEnabled.value = prefs.getBoolean(sk("peak_cinema_enabled_v1"), true)
+        _peakCinemaMood.value = prefs.getString(sk("peak_cinema_mood_v1"), "acao_adrenalina") ?: "acao_adrenalina"
+        // Lote 24 (v1.34.0): Ambilight e modo sensorial também são por perfil.
+        _playerAmbilight.value = prefs.getBoolean(sk("pref_player_ambilight_v1"), false)
+        _playerAmbilightIntensity.value = prefs.getString(sk("pref_player_ambilight_intensity_v1"), "medium") ?: "medium"
+        _playerSensoryFriendly.value = prefs.getBoolean(sk("pref_player_sensory_friendly_v1"), false)
         _detailCinematic.value = prefs.getBoolean(sk("pref_detail_cinematic"), false)
         _detailPosterTransition.value = prefs.getBoolean(sk("pref_detail_poster_transition"), true)
         _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
@@ -3487,6 +3632,8 @@ class PlatformPrefs @Inject constructor(
         _detailShowTraktReviews.value = prefs.getBoolean(sk("pref_detail_show_trakt_reviews"), true)
         _detailShowQuotes.value = prefs.getBoolean(sk("pref_detail_show_quotes"), true)
         _ratingsSource.value = prefs.getString(sk("pref_ratings_source"), "auto") ?: "auto"
+        // Lote 24 (v1.34.0), item 12: modo da nota dos episódios, por perfil.
+        _episodeRatingMode.value = prefs.getString(sk("episode_rating_mode_v1"), "average") ?: "average"
         _streamSearch.value = prefs.getBoolean(sk("pref_stream_search"), true)
         _streamBadgesSize.value = prefs.getBoolean(sk("pref_stream_badges_size"), true)
         _streamBadgesCodec.value = prefs.getBoolean(sk("pref_stream_badges_codec"), true)

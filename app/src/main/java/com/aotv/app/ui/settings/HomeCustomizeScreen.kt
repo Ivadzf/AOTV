@@ -5,10 +5,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,10 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.SystemRow
@@ -52,6 +57,11 @@ fun HomeCustomizeScreen(
     val pad = com.aotv.app.ui.common.pagePadding()
     var renaming by remember { mutableStateOf<HomeCustomizeViewModel.Row?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
+    // Lote 24 (v1.34.0), item 11: arrastar p/ reordenar. O estado do drag
+    // vive aqui (a lista precisa dele p/ medir o passo de cada item).
+    val rowListState = rememberLazyListState()
+    var dragKey by remember { mutableStateOf<String?>(null) }
+    var dragDy by remember { mutableFloatStateOf(0f) }
 
     Column(Modifier.fillMaxSize().background(Background).topInsetsPadding()) {
         Row(
@@ -102,7 +112,8 @@ fun HomeCustomizeScreen(
 
         com.aotv.app.ui.common.ContentWithSummary(summary) { below ->
             LazyColumn(
-                Modifier.fillMaxSize(),
+                state = rowListState,
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = pad, end = pad, top = 6.dp, bottom = 32.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -289,12 +300,21 @@ fun HomeCustomizeScreen(
                 }
 
                 item {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        com.aotv.app.ui.common.Eyebrow("Fileiras", Modifier.weight(1f).padding(start = 4.dp))
-                        com.aotv.app.ui.common.FilterChipPill("Só as ligadas", st.onlyOn, { viewModel.setOnlyOn(!st.onlyOn) })
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            com.aotv.app.ui.common.Eyebrow("Fileiras", Modifier.weight(1f).padding(start = 4.dp))
+                            com.aotv.app.ui.common.FilterChipPill("Só as ligadas", st.onlyOn, { viewModel.setOnlyOn(!st.onlyOn) })
+                        }
+                        // Lote 24 (v1.34.0), item 11: segurar e arrastar
+                        // reordena; os botões ↑↓ continuam como alternativa.
+                        Text(
+                            "Segure um cartão e arraste p/ reordenar — ou use ↑↓.",
+                            color = TextTertiary, fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                        )
                     }
                 }
                 if (st.kids) item {
@@ -304,8 +324,43 @@ fun HomeCustomizeScreen(
                     )
                 }
                 items(st.rows, key = { it.pref.key }) { row ->
+                    // Lote 24 (v1.34.0), item 11: arrastar p/ reordenar.
+                    // NÃO há API de reorder no Foundation fixado (1.7.0 —
+                    // conferido no AAR: sem rememberReorderableLazyListState
+                    // nem detectReorderAfterLongPress), então é pointerInput:
+                    // toque longo + arrasto vertical. A cada passo (~60% da
+                    // altura do cartão) o item troca de lugar com o vizinho
+                    // pelo MESMO move() dos botões ↑↓ — a ordem persiste
+                    // igual (home_layout_v1, por perfil). O gesto consome o
+                    // arrasto, então a lista não rola enquanto arrasta.
+                    val isDragging = dragKey == row.pref.key
+                    val dragModifier = Modifier.pointerInput(row.pref.key) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { dragKey = row.pref.key; dragDy = 0f },
+                            onDragEnd = { dragKey = null; dragDy = 0f },
+                            onDragCancel = { dragKey = null; dragDy = 0f },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragDy += dragAmount.y
+                                val info = rowListState.layoutInfo.visibleItemsInfo
+                                    .firstOrNull { it.key == row.pref.key }
+                                val step = (info?.size ?: 200).toFloat()
+                                if (step > 0f && dragDy >= step * 0.6f) {
+                                    viewModel.move(row.pref.key, 1)
+                                    dragDy -= step
+                                } else if (step > 0f && dragDy <= -step * 0.6f) {
+                                    viewModel.move(row.pref.key, -1)
+                                    dragDy += step
+                                }
+                            },
+                        )
+                    }
                     HomeRowCard(
                         row = row,
+                        itemModifier = Modifier.animateItemPlacement(),
+                        dragModifier = dragModifier,
+                        isDragging = isDragging,
+                        dragOffsetY = if (isDragging) dragDy else 0f,
                         onToggle = { viewModel.toggle(row.pref.key) },
                         onUp = { viewModel.move(row.pref.key, -1) },
                         onDown = { viewModel.move(row.pref.key, 1) },
@@ -314,6 +369,31 @@ fun HomeCustomizeScreen(
                 }
                 if (st.rows.isEmpty()) item {
                     Text("Nenhuma fileira ligada.", color = TextTertiary, fontSize = 14.sp, modifier = Modifier.padding(vertical = 16.dp))
+                }
+                // Lote 24 (v1.34.0), item 3: pastas da Home. O editor lista
+                // TODAS as fileiras (st.allRows, sem o filtro "Só as ligadas")
+                // p/ agrupar; a ordem das pastas na Início segue a ordem
+                // das fileiras do layout.
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            com.aotv.app.ui.common.Eyebrow("Pastas", Modifier.weight(1f).padding(start = 4.dp))
+                        }
+                        Text(
+                            "Agrupe fileiras sob um cabeçalho recolhível na Início.",
+                            color = TextTertiary, fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                        )
+                    }
+                }
+                item {
+                    com.aotv.app.ui.lote24.HomeFolderEditor(
+                        settings = viewModel.lote24Settings,
+                        availableRows = st.allRows.map { it.pref.key to it.pref.displayTitle },
+                    )
                 }
                 below?.let { b -> item { Spacer(Modifier.height(12.dp)); b() } }
             }
@@ -350,6 +430,10 @@ fun HomeCustomizeScreen(
 @Composable
 private fun HomeRowCard(
     row: HomeCustomizeViewModel.Row,
+    itemModifier: Modifier = Modifier,
+    dragModifier: Modifier = Modifier,
+    isDragging: Boolean = false,
+    dragOffsetY: Float = 0f,
     onToggle: () -> Unit,
     onUp: () -> Unit,
     onDown: () -> Unit,
@@ -359,8 +443,15 @@ private fun HomeRowCard(
     val alpha by animateFloatAsState(if (p.enabled && row.blocked == null) 1f else 0.5f, tween(180), label = "rowAlpha")
     val isGenres = p.key == SystemRow.GENRES.key
     Column(
-        Modifier
+        itemModifier
             .fillMaxWidth()
+            .then(dragModifier)
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationY = dragOffsetY
+                scaleX = if (isDragging) 1.02f else 1f
+                scaleY = if (isDragging) 1.02f else 1f
+            }
             .clip(RoundedCornerShape(16.dp))
             .background(BackgroundCard2)
             .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),

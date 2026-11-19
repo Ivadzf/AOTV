@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.kodi.KodiAddonStore
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.ratings.EpisodeRatingsResolver
+import com.aotv.app.data.ratings.MODE_TMDB
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.bestLogoUrl
 import com.aotv.app.data.remote.dto.bestTrailerKey
@@ -26,7 +28,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +61,8 @@ class MovieDetailViewModel @Inject constructor(
     private val posterInfo: com.aotv.app.data.local.PosterInfo,
     private val pluginService: com.aotv.app.data.plugins.PluginService,
     private val kodiStore: KodiAddonStore,
+    // Lote 24 item 12 (v1.34.0) — fontes da nota dos episódios.
+    private val episodeRatings: EpisodeRatingsResolver,
 ) : ViewModel() {
 
     // URLs já mandadas pro teste. A lista é recriada a cada addon que responde, então o
@@ -69,6 +75,14 @@ class MovieDetailViewModel @Inject constructor(
     private val pendingProbes = mutableMapOf<String, com.aotv.app.data.remote.ProbeResult>()
     private var probeDebounceJob: Job? = null
     private var streamDebounceJob: Job? = null
+
+    // Lote 24 item 12 (v1.34.0) — enriquecimento das notas dos episódios
+    // (Trakt/OMDb/TVmaze em 2º plano). 1 job por temporada carregada: trocar
+    // de temporada cancela o anterior.
+    private var seasonRatingsJob: Job? = null
+
+    /** Modo da nota dos episódios ("average" por padrão) — a tela lê p/ o rótulo de origem do mapa. */
+    val episodeRatingMode: StateFlow<String> = episodeRatings.modeFlow
 
     /** Aplica [apply] no UiState depois de 300 ms sem outra chamada (cancela a anterior). */
     private fun updateStreamsDebounced(apply: (UiState) -> UiState) {
@@ -1256,10 +1270,70 @@ class MovieDetailViewModel @Inject constructor(
             }.getOrNull()
             if (episodes != null) {
                 _uiState.update { it.copy(seasons = it.seasons + (season to episodes)) }
+                enrichSeasonRatings(tmdbId, season, episodes)
             } else {
                 // Antes a falha sobrescrevia a temporada com lista vazia e não avisava
                 // nada — os episódios sumiam sem explicação.
                 _uiState.update { it.copy(error = "Não foi possível carregar a Temporada $season. Toque em Tentar novamente.") }
+            }
+        }
+    }
+
+    // ── Notas dos episódios — fontes extras (Lote 24 item 12, v1.34.0) ───
+    // Lazy e em 2º plano: a temporada abre com a nota do TMDB como hoje e
+    // as outras fontes enriquecem cada episódio quando chegam (timeout de
+    // 8 s por fonte, falha de uma nunca quebra as outras — ver
+    // [EpisodeRatingsResolver]). Cada episódio resolvido atualiza só o seu
+    // card e a sua célula do mapa (a ordenação por nota e as cores passam a
+    // usar a nota resolvida). Modo "tmdb": nada a enriquecer.
+    //
+    // Guarda: se a temporada foi recarregada (ou a série trocada) enquanto
+    // o job rodava, a lista atual não casa mais com a capturada e o
+    // resultado é descartado — nunca aplica nota de uma temporada em outra.
+
+    private fun enrichSeasonRatings(tmdbId: Int, season: Int, episodes: List<EpisodeItem>) {
+        if (episodeRatings.modeFlow.value == MODE_TMDB) return
+        val title = _uiState.value.series?.title ?: _uiState.value.item?.title.orEmpty()
+        val originalTitle = _uiState.value.originalTitle
+        val imdbId = _uiState.value.seriesImdbId
+        seasonRatingsJob?.cancel()
+        seasonRatingsJob = viewModelScope.launch {
+            val episodeNumbers = episodes.map { it.episodeNumber }.toSet()
+            val jobs = episodes.map { ep ->
+                async {
+                    try {
+                        val resolved = episodeRatings.resolve(
+                            tmdbId = tmdbId,
+                            season = season,
+                            episode = ep.episodeNumber,
+                            title = title,
+                            imdbId = imdbId,
+                            tmdbRating = ep.rating,
+                            originalTitle = originalTitle,
+                        )
+                        ep to resolved
+                    } catch (e: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        null
+                    }
+                }
+            }
+            jobs.forEach { deferred ->
+                val pair = deferred.await() ?: return@forEach
+                val (ep, resolved) = pair
+                if (!resolved.hasRating) return@forEach
+                _uiState.update { state ->
+                    val current = state.seasons[season] ?: return@update state
+                    if (current.map { it.episodeNumber }.toSet() != episodeNumbers) return@update state
+                    val updated = current.map { cur ->
+                        if (cur.episodeNumber == ep.episodeNumber) {
+                            cur.copy(rating = resolved.value, ratingSource = resolved.label)
+                        } else {
+                            cur
+                        }
+                    }
+                    state.copy(seasons = state.seasons + (season to updated))
+                }
             }
         }
     }

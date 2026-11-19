@@ -26,6 +26,8 @@ object SettingsAnchors {
     const val LAYOUT_HERO = "layout-destaque"
     const val LAYOUT_TITLES = "layout-titulos"
     const val LAYOUT_RANDOM = "layout-aleatorio"
+    // Lote 24 (v1.34.0), item 4: abas da pílula + aba ao abrir.
+    const val LAYOUT_NAV = "layout-navegacao"
     // Página de detalhes
     const val DETAIL_BG = "detalhe-fundo"
     const val DETAIL_ACTIONS = "detalhe-acoes"
@@ -65,6 +67,8 @@ object SettingsAnchors {
     // Reprodução
     const val PLAY_MAIN = "reproducao-reproducao"
     const val PLAY_SUBS = "reproducao-legendas"
+    // Lote 24 (v1.34.0), itens 8 e 9: Ambilight e modo sensorial.
+    const val PLAY_COMFORT = "reproducao-conforto"
     const val PLAY_BUTTONS = "reproducao-botoes"
     const val PLAY_TOP = "reproducao-botoes-topo"
     const val PLAY_PLAYER = "reproducao-player"
@@ -150,6 +154,63 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Coleções",
         sub = "Pastas de estúdios, streamings e franquias na Início",
         keywords = listOf("coleções", "pastas", "estúdios", "franquias"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    // Lote 24 (v1.34.0): herói, pastas, abas, MK Channel e Peak Cinema.
+    SettingOptionEntry(
+        title = "Rotação do herói",
+        sub = "Automática, Sempre ligada ou Desligada",
+        keywords = listOf("herói", "rotação", "destaque", "carrossel", "automático"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Prévia de cena ao focar",
+        sub = "O trailer do destaque começa em mudo ao parar nele",
+        keywords = listOf("prévia", "trailer", "herói", "foco", "destaque"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Pastas da Home",
+        sub = "Agrupa fileiras sob um cabeçalho recolhível (em Personalizar Início)",
+        keywords = listOf("pastas", "fileiras", "agrupar", "organizar"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Abas da pílula",
+        sub = "Esconde ou mostra cada aba da navegação inferior",
+        keywords = listOf("abas", "pílula", "navegação", "esconder", "mostrar"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_NAV,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Aba ao abrir o app",
+        sub = "A aba em que o app abre: Início, Ao vivo, Busca, Biblioteca, Esportes ou Perfil",
+        keywords = listOf("aba padrão", "abrir", "início", "navegação"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_NAV,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Fonte do MK Channel",
+        sub = "Up next, Minha Lista ou Maratona p/ a fileira \"liga e já tem algo tocando\"",
+        keywords = listOf("MK Channel", "up next", "maratona", "minha lista", "tocando"),
+        pageId = SettingsPageIds.Layout,
+        anchor = SettingsAnchors.LAYOUT_HOME,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Peak Cinema",
+        sub = "Fileira \"melhores cenas\" por humor, depois do MK Channel",
+        keywords = listOf("Peak Cinema", "melhores cenas", "humor", "gênero"),
         pageId = SettingsPageIds.Layout,
         anchor = SettingsAnchors.LAYOUT_HOME,
         kidsHidden = true,
@@ -372,6 +433,21 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Detalhe,
         anchor = SettingsAnchors.DETAIL_RATINGS,
     ),
+    // Lote 24 (v1.34.0), item 12: fonte da nota dos episódios + chave do OMDb.
+    SettingOptionEntry(
+        title = "Nota dos episódios",
+        sub = "Média das fontes com nota, ou uma só: TMDB, Trakt, OMDb ou TVmaze",
+        keywords = listOf("nota dos episódios", "média", "TMDB", "Trakt", "OMDb", "TVmaze", "avaliação"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_RATINGS,
+    ),
+    SettingOptionEntry(
+        title = "Chave do OMDb",
+        sub = "Sua chave gratuita do OMDb (omdbapi.com) p/ a nota dos episódios",
+        keywords = listOf("OMDb", "chave", "IMDb", "nota dos episódios"),
+        pageId = SettingsPageIds.Detalhe,
+        anchor = SettingsAnchors.DETAIL_RATINGS,
+    ),
     SettingOptionEntry(
         title = "O que estão dizendo",
         sub = "Avaliações do Trakt na página de detalhes",
@@ -499,6 +575,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Gerenciar addons",
         sub = "Instale, ordene e ative cada addon",
         keywords = listOf("addons", "gerenciar", "instalar", "fontes"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_ADDONS,
+        kidsHidden = true,
+    ),
+    // Lote 24 (v1.34.0), item 3: código de setup — fica no topo da Loja de
+    // addons (a busca abre a página de Conteúdo, de onde a loja abre).
+    SettingOptionEntry(
+        title = "Compartilhar setup de addons",
+        sub = "Gere um código com os addons instalados ou aplique o código de outro aparelho",
+        keywords = listOf("compartilhar", "setup", "código", "addons", "transferir", "outro aparelho"),
         pageId = SettingsPageIds.Conteudo,
         anchor = SettingsAnchors.CONTENT_ADDONS,
         kidsHidden = true,
@@ -878,6 +964,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.APPEAR_THEME,
         kidsHidden = true,
     ),
+    // Lote 24 (v1.34.0), item 1: preto puro por cima do tema.
+    SettingOptionEntry(
+        title = "Preto puro (AMOLED)",
+        sub = "Fundo #000000 e cartões quase pretos por cima do tema",
+        keywords = listOf("AMOLED", "preto puro", "OLED", "bateria", "escuro"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_THEME,
+        kidsHidden = true,
+    ),
     SettingOptionEntry(
         title = "Tema personalizado",
         sub = "As 6 cores editáveis do tema",
@@ -967,6 +1062,28 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("áudio", "dublado", "legendado", "preferência"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    // Lote 24 (v1.34.0), itens 8 e 9: Ambilight e modo sensorial.
+    SettingOptionEntry(
+        title = "Ambilight no player",
+        sub = "O fundo do player acompanha as cores da cena",
+        keywords = listOf("Ambilight", "cores", "luz", "fundo", "player"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_COMFORT,
+    ),
+    SettingOptionEntry(
+        title = "Intensidade do Ambilight",
+        sub = "Baixa, Média ou Alta",
+        keywords = listOf("Ambilight", "intensidade", "brilho"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_COMFORT,
+    ),
+    SettingOptionEntry(
+        title = "Modo sensorial",
+        sub = "Suaviza estouros de som e pisca-pisca",
+        keywords = listOf("sensorial", "sensível", "som", "pisca", "estouro", "calmo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_COMFORT,
     ),
     SettingOptionEntry(
         title = "Qualidade máxima",

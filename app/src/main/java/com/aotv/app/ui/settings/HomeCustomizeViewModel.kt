@@ -23,6 +23,8 @@ import javax.inject.Inject
 class HomeCustomizeViewModel @Inject constructor(
     private val prefs: PlatformPrefs,
     private val tvCatalogs: AddonTvCatalogLoader,
+    /** Prefs do Lote 24 (v1.34.0): pastas da Home (item 3). */
+    val lote24Settings: com.aotv.app.data.local.PlatformPrefsLote24Settings,
 ) : ViewModel() {
 
     /** Uma linha da lista. [blocked] explica por que a fileira ligada não aparece agora. */
@@ -61,6 +63,8 @@ class HomeCustomizeViewModel @Inject constructor(
 
     data class UiState(
         val rows: List<Row> = emptyList(),
+        /** Todas as fileiras, sem o filtro "Só as ligadas" (p/ o editor de pastas do Lote 24). */
+        val allRows: List<Row> = emptyList(),
         val total: Int = 0,
         val enabledCount: Int = 0,
         val catalogOn: Boolean = true,
@@ -140,9 +144,8 @@ class HomeCustomizeViewModel @Inject constructor(
         val cols = prefs.collectionsFlow.value.associateBy { HomeLayout.COL_PREFIX + it.id }
         val pinned = cols.filterValues { it.pinToTop }.keys
         val movable: (HomeRowPref) -> Boolean = { visible(it) && it.key !in pinned }
-        val shown = layout.filter(visible)
         val inHomeKeys = layout.mapTo(HashSet()) { it.key }
-        val rows = shown.map { r ->
+        val allRows = layout.map { r ->
             val sys = r.system
             val col = cols[r.key]
             Row(
@@ -175,7 +178,8 @@ class HomeCustomizeViewModel @Inject constructor(
         }
         val heroable = layout.filter { isHeroable(it) }
         UiState(
-            rows = rows,
+            rows = allRows.filter { visible(it.pref) },
+            allRows = allRows,
             total = layout.size,
             enabledCount = layout.count { it.enabled },
             catalogOn = catalogOn,

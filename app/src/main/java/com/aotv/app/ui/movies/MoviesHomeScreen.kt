@@ -6,8 +6,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -78,6 +81,14 @@ import com.aotv.app.data.sports.SportsGame
 import kotlinx.coroutines.delay
 import com.aotv.app.ui.theme.*
 import com.aotv.app.data.local.SystemRow
+import com.aotv.app.ui.lote24.FolderHeaderRow
+import com.aotv.app.ui.lote24.HeroAutoRotate
+import com.aotv.app.ui.lote24.HomeFolder24
+import com.aotv.app.ui.lote24.MkChannelRow
+import com.aotv.app.ui.lote24.MkChannelSource
+import com.aotv.app.ui.lote24.PeakCinemaRow
+import com.aotv.app.ui.lote24.heroAutoRotateEffective
+import com.aotv.app.ui.lote24.pickMkChannelTargets
 
 @Composable
 fun MoviesHomeScreen(
@@ -98,6 +109,8 @@ fun MoviesHomeScreen(
     onOpenOnDemand: (Boolean) -> Unit = {},
     viewModel: MoviesHomeViewModel = hiltViewModel(),
     randomVm: RandomEpisodeViewModel = hiltViewModel(),
+    /** Minha Lista p/ o MK Channel (item 5, Lote 24): a fonte watchlist. */
+    minhaListaVm: MinhaListaViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     // "Ver Tudo" → grid daquela query; null = home (hero + fileiras).
@@ -695,6 +708,52 @@ private fun HomeSectionsTab(
     val trendingTv = vis(state.trendingTv)
     val nowPlaying = vis(state.nowPlaying)
     val releases = vis(state.releases2026)
+    // ── Lote 24 (v1.34.0), Frente A ──────────────────────────────────────
+    // Herói auto-rotativo (item 2): pref hero_autorotate_v1 ("auto" | "on" |
+    // "off") — "auto" usa o default do aparelho (ligado no celular,
+    // desligado em TV fraca; ver heroAutoRotateEffective). Prévia ao focar
+    // pela pref hero_preview_on_focus_v1.
+    val homeContext = LocalContext.current
+    val homeIsTv = com.aotv.app.ui.common.LocalIsTv.current
+    val heroMode by viewModel.lote24Settings.autoRotateFlow.collectAsStateWithLifecycle()
+    val heroPreviewOnFocus by viewModel.lote24Settings.previewOnFocusFlow.collectAsStateWithLifecycle()
+    val heroAutoRotateOn = heroAutoRotateEffective(heroMode, homeContext, homeIsTv)
+    // Lote 24 item 9 (Frente B): com o modo sensorial ligado o herói não
+    // rotaciona sozinho — o AND abaixo desliga a rotação sem mexer no
+    // default do item 2 (o trailer continua valendo).
+    val heroSensoryOn = remember(homeContext) {
+        loadSensoryFriendlyState(com.aotv.app.data.local.PlatformPrefs(homeContext)).enabled
+    }
+    // MK Channel (item 5): fontes a partir do Continuar + Minha Lista.
+    val watchlistEntities by minhaListaVm.watchlist.collectAsStateWithLifecycle()
+    val watchlistItems = remember(watchlistEntities) {
+        watchlistEntities.map { entity ->
+            MovieItem(
+                tmdbId = entity.tmdbId, embedId = "", title = entity.title,
+                overview = "", posterUrl = entity.posterUrl, backdropUrl = "",
+                year = entity.year, rating = 0.0,
+                type = runCatching { MediaType.valueOf(entity.type) }.getOrDefault(MediaType.MOVIE),
+            )
+        }
+    }
+    val mkSourceId by viewModel.lote24Settings.mkChannelSourceFlow.collectAsStateWithLifecycle()
+    val mkSource = MkChannelSource.fromId(mkSourceId) ?: MkChannelSource.UP_NEXT
+    // Peak Cinema (item 6): ligado e humor pela pref (a piscina local vem abaixo).
+    val peakEnabled by viewModel.lote24Settings.peakCinemaEnabledFlow.collectAsStateWithLifecycle()
+    val peakMood by viewModel.lote24Settings.peakCinemaMoodFlow.collectAsStateWithLifecycle()
+    // Pastas da Home (item 3): fileira -> pasta que a agrupa (se houver).
+    val homeFolders by viewModel.lote24Settings.foldersFlow.collectAsStateWithLifecycle()
+    val folderOfRow: Map<String, HomeFolder24> = remember(homeFolders) {
+        homeFolders.flatMap { folder -> folder.rowKeys.map { key -> key to folder } }.toMap()
+    }
+    var collapsedFolderIds by remember { mutableStateOf(emptySet<String>()) }
+    val mkTargets = remember(state.continueWatching, state.continueEpisode, watchlistItems) {
+        pickMkChannelTargets(state.continueWatching, state.continueEpisode, watchlistItems)
+    }
+    // Peak Cinema (item 6): piscina local = em alta + recomendados.
+    val peakPool = remember(trendingMovies, trendingTv, recommended) {
+        trendingMovies + trendingTv + recommended
+    }
     // Fundo dinâmico (opt-in, desligado por padrão): gradiente com a matiz do
     // pôster do destaque. Sem matiz ainda, o fundo sólido aparece no lugar.
     val heroHue = if (display.dynamicBackground && heroItems.isNotEmpty()) {
@@ -746,11 +805,68 @@ private fun HomeSectionsTab(
                     trailerOn = state.heroTrailer && atTop,
                     trailerFor = viewModel::heroTrailerStream,
                     heroStyle = display.heroStyle,
+                    autoRotate = heroAutoRotateOn && heroAutoRotateAllowed(heroSensoryOn),
+                    autoRotateIntervalMs = HeroAutoRotate.INTERVAL_MS,
+                    previewOnFocus = heroPreviewOnFocus,
                 )
             }
         }
-        // Cada fileira na ordem e com o nome que o perfil escolheu. Sem item, a fileira some.
+        // ── Lote 24 (v1.34.0), Frente A: MK Channel (item 5) + Peak Cinema
+        // (item 6) — logo depois do herói, antes das fileiras do layout.
+        if (mkTargets.values.any { it != null }) {
+            item(key = "mk_channel") {
+                MkChannelRow(
+                    targets = mkTargets,
+                    selectedSource = mkSource,
+                    onSelectSource = { source -> viewModel.lote24Settings.setMkChannelSource(source.id) },
+                    onPlay = { target ->
+                        if (target.season > 0 && target.episode > 0) {
+                            onPlayEpisode(target.item, target.season, target.episode, target.episodeTotal)
+                        } else {
+                            onItemClick(target.item)
+                        }
+                    },
+                    onOpenItem = onItemClick,
+                )
+            }
+        }
+        if (peakEnabled && peakPool.isNotEmpty()) {
+            item(key = "peak_cinema") {
+                PeakCinemaRow(
+                    items = peakPool,
+                    selectedMoodId = peakMood,
+                    onSelectMood = { viewModel.lote24Settings.setPeakCinemaMood(it) },
+                    onItemClick = onItemClick,
+                )
+            }
+        }
+        // Pastas da Home (item 3): cabeçalhos emitidos nesta composição
+        // (local, não remember — a cada recomposição a lista recomeça).
+        val emittedFolderHeaders = mutableSetOf<String>()
         state.layout.forEach { row ->
+            // Pastas da Home (item 3): a fileira agrupada ganha o cabeçalho
+            // da pasta na primeira vez que aparece; com a pasta recolhida,
+            // as fileiras dela são puladas (o cabeçalho continua visível).
+            val folder = folderOfRow[row.key]
+            if (folder != null) {
+                if (emittedFolderHeaders.add(folder.id)) {
+                    item(key = "folder:${folder.id}") {
+                        FolderHeaderRow(
+                            folder = folder,
+                            rowCount = folder.rowKeys.size,
+                            collapsed = folder.id in collapsedFolderIds,
+                            onToggle = {
+                                collapsedFolderIds = if (folder.id in collapsedFolderIds) {
+                                    collapsedFolderIds - folder.id
+                                } else {
+                                    collapsedFolderIds + folder.id
+                                }
+                            },
+                        )
+                    }
+                }
+                if (folder.id in collapsedFolderIds) return@forEach
+            }
             val custom = row.title
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
@@ -1146,11 +1262,22 @@ private fun HeroCarousel(
     trailerFor: suspend (MovieItem) -> com.aotv.app.data.remote.YoutubeTrailer.TrailerStream? = { null },
     /** Estilo do herói (Fase B): tela cheia (o atual) ou cartão com cantos arredondados. */
     heroStyle: HeroStyle = HeroStyle.FULL_BLEED,
+    /** Lote 24 (v1.34.0), item 2: rotação automática ligada. Desligado, o herói não avança sozinho. */
+    autoRotate: Boolean = true,
+    /** Lote 24, item 2: intervalo da rotação automática (padrão 8 s). */
+    autoRotateIntervalMs: Long = HeroAutoRotate.INTERVAL_MS,
+    /** Lote 24, item 2: prévia de cena ao focar (TV/D-pad) ou toque longo (celular). */
+    previewOnFocus: Boolean = true,
 ) {
     val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { items.size })
     // Trailer mudo depois de 5 s parado no mesmo destaque. Trocar de página, rolar a Início ou
     // sair dela (o composable some) para o trailer.
     var trailer by remember { mutableStateOf<Pair<Int, com.aotv.app.data.remote.YoutubeTrailer.TrailerStream>?>(null) }
+    // Lote 24, item 2: prévia de cena — o item em foco (ou de toque longo) mostra o trailer
+    // mudo dele; a rotação pausa enquanto a prévia está aberta.
+    var previewItem by remember { mutableStateOf<MovieItem?>(null) }
+    // Lote 24, item 2: arrastar o pager pausa a rotação (o usuário está interagindo).
+    val dragged by pagerState.interactionSource.collectIsDraggedAsState()
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val resumed by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
     val active = trailerOn && resumed.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
@@ -1162,13 +1289,28 @@ private fun HeroCarousel(
     // espera 5 s, toca e só avança quando o trailer acaba. Sem trailer, avança a cada 6 s.
     // Herói fora do topo (rolou) ou app em 2º plano: PARA — antes avançava a cada
     // 6 s mesmo fora da tela, animando o pager e buscando trailer sem ninguém ver.
-    LaunchedEffect(pagerState.settledPage, active, items.size) {
+    // Lote 24, item 2: o intervalo virou 8 s (autoRotateIntervalMs); sem
+    // autoRotate, o trailer ainda toca mas o herói não avança sozinho; com o
+    // usuário arrastando ou a prévia aberta, o ciclo pausa.
+    LaunchedEffect(pagerState.settledPage, active, items.size, autoRotate, dragged, previewItem) {
+        // Prévia de outra página ficou para trás (o pager andou): fecha.
+        if (previewItem != null && previewItem != items.getOrNull(pagerState.settledPage)) previewItem = null
+        if (previewItem != null || dragged) return@LaunchedEffect
         trailer = null
         if (items.isEmpty() || !active) return@LaunchedEffect
         val page = pagerState.settledPage
-        kotlinx.coroutines.delay(5000)
+        kotlinx.coroutines.delay(if (autoRotate) autoRotateIntervalMs else HeroAutoRotate.TRAILER_DELAY_MS)
         trailerFor(items[page])?.let { trailer = page to it; return@LaunchedEffect }
-        advance(page)
+        if (autoRotate) advance(page)
+    }
+    // Lote 24, item 2: prévia de cena do item em foco — busca o trailer mudo
+    // dele (o mesmo caminho do trailer do herói) e toca por cima do backdrop.
+    LaunchedEffect(previewItem) {
+        val preview = previewItem ?: return@LaunchedEffect
+        val page = pagerState.settledPage
+        if (preview != items.getOrNull(page)) return@LaunchedEffect
+        kotlinx.coroutines.delay(600)
+        trailerFor(preview)?.let { trailer = page to it }
     }
     val config = androidx.compose.ui.platform.LocalConfiguration.current
     val wide = config.screenWidthDp >= 600 && config.screenWidthDp > config.screenHeightDp
@@ -1188,11 +1330,23 @@ private fun HeroCarousel(
     Box(heroBox) {
         androidx.compose.foundation.pager.HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             val item = items[page]
-            Box(Modifier.fillMaxSize()) {
+            // Lote 24, item 2: focar o item (TV/D-pad) abre a prévia de cena;
+            // perder o foco fecha. O toque longo (celular) abre pela arte, abaixo.
+            Box(
+                Modifier.fillMaxSize()
+                    .onFocusChanged { focusState ->
+                        if (!previewOnFocus) return@onFocusChanged
+                        if (focusState.isFocused) previewItem = item
+                        else if (previewItem == item) previewItem = null
+                    },
+            ) {
                 // Arte. Box com o tamanho exato da área, a imagem e o trailer recortam no centro.
                 Box(
-                    if (wide) Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.8f)
-                    else Modifier.fillMaxSize()
+                    (if (wide) Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.8f)
+                    else Modifier.fillMaxSize())
+                        .pointerInput(item.tmdbId, previewOnFocus) {
+                            detectTapGestures(onLongPress = { if (previewOnFocus) previewItem = item })
+                        },
                 ) {
                     // Tamanho explícito em px de exibição (chave de cache estável).
                     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -1212,7 +1366,14 @@ private fun HeroCarousel(
                     )
                     trailer?.takeIf { it.first == page }?.let { (_, st) ->
                         com.aotv.app.ui.common.MutedTrailer(
-                            st.videoUrl, st.audioUrl, onEnd = { trailer = null; advance(page) },
+                            st.videoUrl, st.audioUrl,
+                            // Lote 24, item 2: fim da prévia só fecha a prévia;
+                            // fim do trailer do ciclo avança (só com autoRotate).
+                            onEnd = {
+                                trailer = null
+                                if (previewItem != null) previewItem = null
+                                else if (autoRotate) advance(page)
+                            },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }

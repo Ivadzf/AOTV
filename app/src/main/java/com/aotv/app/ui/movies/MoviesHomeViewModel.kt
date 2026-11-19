@@ -56,6 +56,8 @@ class MoviesHomeViewModel @Inject constructor(
     private val trackerShows: com.aotv.app.data.remote.TrackerShowsCache,
     /** Contexto p/ o Watch Next do launcher (Lote 22, item 4). */
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
+    /** Prefs do Lote 24 (v1.34.0): tema/AMOLED, herói, pastas, abas, MK Channel e Peak Cinema. */
+    val lote24Settings: com.aotv.app.data.local.PlatformPrefsLote24Settings,
 ) : ViewModel() {
     /** Coleções do perfil, para as fileiras de pastas da Início. */
     val collectionsFlow: StateFlow<List<com.aotv.app.data.collections.MediaCollection>> = collections.flow

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Spa
 import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
@@ -590,6 +591,18 @@ fun MoviePlayerScreen(
         s.applyNightMode()
     }
     LaunchedEffect(s.nightModeState) { s.applyNightMode() }
+    // Lote 24 — Frente B: Ambilight + modo sensorial (prefs por perfil).
+    // Carregados 1x ao abrir o player; os toggles dos painéis salvam de
+    // volta pelos setters da sessão. O contexto da app vai p/ o sampler
+    // (o fallback do pôster precisa do Coil sem guardar Activity).
+    LaunchedEffect(Unit) {
+        AmbilightSampler.appContextForAmbilight = context.applicationContext
+        s.ambilightState = loadAmbilightState(nightPrefs)
+        s.sensoryOn = loadSensoryFriendlyState(nightPrefs)
+        s.applyNightMode()
+    }
+    s.onAmbilightSave = { saveAmbilightState(nightPrefs, it) }
+    s.onSensorySave = { saveSensoryFriendlyState(nightPrefs, SensoryFriendlyState(it)) }
     DisposableEffect(s) { onDispose { s.nightController.release(); s.fpsMeter.stop() } }
     // Modo privado (Lote 2, item 7 — v1.10.0): a tela lê o fluxo e entrega à
     // sessão; o chip salva de volta por onPrivateModeToggle. Mudar no Perfil
@@ -1131,6 +1144,21 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         PipState.enter = if (streamUrl != null) ({ enterPip() }) else null
         onDispose { PipState.enter = null }
     }
+    // Lote 24 item 8: amostragem do Ambilight (só com o toggle ligado e fonte
+    // ativa; o loop morre ao desligar, trocar de fonte ou sair do player).
+    DisposableEffect(ambilightState.enabled, streamUrl) {
+        if (ambilightState.enabled && streamUrl != null) {
+            ambilightSampler.start(
+                scope,
+                isPlaying = { isPlaying },
+                positionMs = { position },
+                streamUrl = { streamUrl },
+                posterUrl = { posterUrl.ifBlank { backdropUrl } },
+                onColors = { ambilightColors = it },
+            )
+        }
+        onDispose { ambilightSampler.stop() }
+    }
     // Contagem regressiva do prompt — 0 = avança automaticamente (próximo ep OU próxima temporada).
     // Com o "A seguir" automático DESLIGADO (Fase C), o cartão aparece mas a
     // contagem não anda: só avança no botão "Assistir".
@@ -1146,6 +1174,15 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         // mudá-lo cancelaria o avanço abaixo. O reset está em
         // playNextEpisode/goToNextSeason, chamados logo abaixo.
         showNextPrompt = false
+        // Lote 24 item 10: o avanço automático conta; 3 seguidos sem nenhuma
+        // interação do usuário pausam e perguntam antes de avançar (o avanço
+        // em si NÃO acontece aqui — o "Continuar" do diálogo avança depois).
+        if (stillWatching.noteAutoAdvance()) {
+            stillWatchingPendingSeason = promptIsSeason
+            stillWatchingAsk = true
+            runCatching { currentPlayer().playWhenReady = false }
+            return@LaunchedEffect
+        }
         // v1.13.0 (JOTV 1.0.19 §3.4): o avanço automático preserva a cena
         // pós-créditos ainda não vista — em vez de trocar de episódio, vai
         // para o início dela. Se já estiver dentro da cena, só esconde o
@@ -1396,6 +1433,9 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
             .focusRequester(focusRequester).focusable()
             .onKeyEvent { ev ->
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                // Lote 24 item 10: qualquer tecla é interação — zera o contador
+                // do "Ainda assistindo?" (antes de qualquer desvio do when).
+                noteUserInteraction()
                 val kc = ev.nativeKeyEvent.keyCode
                 // TELA TRAVADA (item 4): D-pad/teclado não mexe em nada — só BACK/ESC
                 // sai do player e OK/CENTER mostra o cadeado. O Voltar nunca trava.
@@ -1588,6 +1628,8 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 }
             }
             .clickable(interactionSource = tapInteraction, indication = null) {
+                // Lote 24 item 10: qualquer toque é interação (mesmo travado).
+                noteUserInteraction()
                 if (locked) lockHintVisible = !lockHintVisible
                 else controlsVisible = !controlsVisible
             }
@@ -1595,6 +1637,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
             .then(
                 if (streamUrl != null && !locked) Modifier.pointerInput(Unit) {
                     detectVerticalDragGestures(
+                        onDragStart = { noteUserInteraction() },
                         onDragEnd = { gestureHud = null },
                         onVerticalDrag = { change, dragAmount ->
                             val frac = -dragAmount / size.height.toFloat()
@@ -1614,7 +1657,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 if (streamUrl != null && !locked && swipeSeekEnabled) Modifier.pointerInput(Unit) {
                     var accum = 0f
                     detectHorizontalDragGestures(
-                        onDragStart = { accum = 0f },
+                        onDragStart = { accum = 0f; noteUserInteraction() },
                         onDragEnd = { accum = 0f },
                         onDragCancel = { accum = 0f },
                     ) { _, dragAmount ->
@@ -1629,6 +1672,17 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
         when {
             // ── Player custom (ExoPlayer) ──
             streamUrl != null -> {
+                // Ambilight (Lote 24 item 8): brilho atrás do vídeo, com as
+                // cores amostradas. O fundo do PlayerView fica transparente
+                // enquanto ligado, p/ o brilho aparecer nas barras do letterbox.
+                if (ambilightState.enabled && ambilightColors.isNotEmpty()) {
+                    AmbilightGlow(
+                        colors = ambilightColors,
+                        intensity = ambilightState.intensity,
+                        sensoryOn = sensoryOn,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
                 AndroidView(
                     factory = { ctx ->
                         PlayerView(ctx).apply {
@@ -1641,9 +1695,20 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     update = {
                         setPlayerViewRef(it)
                         applyFrameRate()
-                        it.resizeMode = effectiveResizeMode(it.width, it.height)
-                        it.scaleX = if (screenModeIdx == 3) 1.33f else 1f
-                        it.scaleY = if (screenModeIdx == 3) 1.33f else 1f
+                        // Lote 24 item 7: o modo de aspecto decide o resizeMode
+                        // (Original devolve o do modo de tela legado). Troca
+                        // imediata, sem reiniciar o vídeo.
+                        it.resizeMode = resolveAspectResizeMode(aspectMode, effectiveResizeMode(it.width, it.height))
+                        // Zoom legado (índice 3) amplia 33% — só vale no modo
+                        // Original, senão os dois zooms somariam.
+                        val legacyZoom = aspectMode == AspectMode.ORIGINAL && screenModeIdx == 3
+                        it.scaleX = if (legacyZoom) 1.33f else 1f
+                        it.scaleY = if (legacyZoom) 1.33f else 1f
+                        // Bands: reserva a faixa inferior p/ a legenda não cobrir o vídeo.
+                        val bandPx = if (aspectMode == AspectMode.BANDS) aspectSubtitleBandPx(it.context) else 0
+                        if (it.paddingBottom != bandPx) it.setPadding(0, 0, 0, bandPx)
+                        // Ambilight: fundo transparente p/ o brilho aparecer nas barras.
+                        it.setBackgroundColor(if (ambilightState.enabled) android.graphics.Color.TRANSPARENT else android.graphics.Color.BLACK)
                         // Legenda embutida segue o tamanho e o fundo escolhidos.
                         it.subtitleView?.apply {
                             setFractionalTextSize(androidx.media3.ui.SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * subSize)
@@ -1686,11 +1751,13 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 val skipTarget = activeSkipTarget()
                 AnimatedVisibility(
                     visible = skipTarget != null && !inPip && !locked,
-                    enter = fadeIn(), exit = fadeOut(),
+                    enter = sensoryEnterTransition(sensoryOn), exit = sensoryExitTransition(sensoryOn),
                     modifier = Modifier.align(Alignment.BottomEnd),
                 ) {
                     SkipIntroButton(raised = controlsVisible, label = skipTarget?.label ?: "Pular abertura") {
                         skipTarget?.let { t ->
+                            // Lote 24 item 10: pular trecho à mão é interação.
+                            noteUserInteraction()
                             if (t.goNext) {
                                 if (hasNextEpisode) playNextEpisode() else goToNextSeason()
                             } else {
@@ -1762,12 +1829,30 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         line = if (promptIsSeason) "Temporada ${curSeason + 1}" else "T$curSeason · E${curEpisode + 1}",
                         countdown = nextCountdown,
                         autoAdvance = autoNextEnabled && nextCountdownArmed,
-                        onPlay = { if (promptIsSeason) goToNextSeason() else playNextEpisode() },
-                        onCancel = { nextCountdownArmed = false; showNextPrompt = false },
+                        onPlay = { noteUserInteraction(); if (promptIsSeason) goToNextSeason() else playNextEpisode() },
+                        onCancel = { noteUserInteraction(); nextCountdownArmed = false; showNextPrompt = false },
                     )
                 }
 
-                AnimatedVisibility(controlsVisible && !inPip && !syncBarOpen, enter = fadeIn(), exit = fadeOut()) {
+                // "Ainda assistindo?" (Lote 24 item 10): 3 avanços automáticos
+                // sem interação pausaram o player — o diálogo decide o destino.
+                if (stillWatchingAsk && !inPip && !locked) {
+                    StillWatchingDialog(
+                        count = STILL_WATCHING_THRESHOLD,
+                        onContinue = {
+                            stillWatchingAsk = false
+                            stillWatching.reset()
+                            if (stillWatchingPendingSeason) goToNextSeason() else playNextEpisode()
+                        },
+                        onStop = {
+                            stillWatchingAsk = false
+                            stillWatching.reset()
+                            onBack()
+                        },
+                    )
+                }
+
+                AnimatedVisibility(controlsVisible && !inPip && !syncBarOpen, enter = sensoryEnterTransition(sensoryOn), exit = sensoryExitTransition(sensoryOn)) {
                     CustomPlayerControls(
                         title = displayTitle,
                         clock = clockLine(System.currentTimeMillis(), position, duration, speeds[speedIdx]),
@@ -1943,6 +2028,32 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 onNightToggle = ::setNightOn,
                 onClearToggle = ::setClearDialogue,
                 onIntensity = ::setNightIntensity,
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "aspect") {
+            // Lote 24 item 7: seletor de aspecto (Original/Zoom/Bands, por sessão).
+            AspectModePanel(
+                mode = aspectMode,
+                onModeChange = { aspectMode = it },
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "ambilight") {
+            // Lote 24 item 8: Ambilight (toggle + intensidade, por perfil).
+            AmbilightPanel(
+                state = ambilightState,
+                sensoryOn = sensoryOn,
+                onToggle = { setAmbilightEnabled(it) },
+                onIntensity = { setAmbilightIntensity(it) },
+                onDismiss = { sourcePanelOpen = false },
+                television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "sensory") {
+            // Lote 24 item 9: modo sensorial (toggle único, por perfil).
+            SensoryFriendlyPanel(
+                enabled = sensoryOn,
+                onToggle = { setSensoryOn(it) },
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
             )
@@ -2448,6 +2559,33 @@ class PlayerSession(
     var locked by run { mutableStateOf(false) }
     var lockHintVisible by run { mutableStateOf(false) }
 
+    // ── Lote 24 — Frente B (v1.34.0) ─────────────────────────────────────
+    // Item 7: modo de aspecto da sessão (Original/Zoom/Bands). Só sessão:
+    // default Original, sem pref persistente — ver PlayerAspectModes.kt.
+    var aspectMode by run { mutableStateOf(AspectMode.ORIGINAL) }
+    // Item 8: Ambilight (estado por perfil, ver PlayerAmbilight.kt) + cores
+    // amostradas (vazias = sem brilho até a 1ª amostra).
+    var ambilightState by run { mutableStateOf(AmbilightState()) }
+    var ambilightColors by run { mutableStateOf<List<Color>>(emptyList()) }
+    /** Amostrador do Ambilight (loop 1,5 s; ver PlayerAmbilight.kt). */
+    val ambilightSampler = AmbilightSampler()
+    // Item 9: modo sensorial (pref por perfil, ver SensoryFriendly.kt).
+    var sensoryOn by run { mutableStateOf(false) }
+    // Item 10: "Ainda assistindo?" — contador de avanços automáticos sem
+    // interação (ver StillWatching.kt). O diálogo e o destino pendente vivem aqui.
+    val stillWatching = StillWatchingTracker()
+    var stillWatchingAsk by run { mutableStateOf(false) }
+    var stillWatchingPendingSeason by run { mutableStateOf(false) }
+    /** Qualquer interação do usuário zera o contador do "Ainda assistindo?". */
+    fun noteUserInteraction() { stillWatching.noteUserInteraction() }
+    /** Salva o estado do Ambilight no perfil (ligado pela tela). */
+    var onAmbilightSave: (AmbilightState) -> Unit = {}
+    /** Salva o modo sensorial no perfil (ligado pela tela). */
+    var onSensorySave: (Boolean) -> Unit = {}
+    fun setAmbilightEnabled(v: Boolean) { ambilightState = ambilightState.copy(enabled = v); onAmbilightSave(ambilightState) }
+    fun setAmbilightIntensity(v: AmbilightIntensity) { ambilightState = ambilightState.copy(intensity = v); onAmbilightSave(ambilightState) }
+    fun setSensoryOn(v: Boolean) { sensoryOn = v; onSensorySave(v); applyNightMode() }
+
     // ── Prefs do player (Fase C) ─────────────────────────────────────────
     // A tela lê os fluxos do PlayerPrefsViewModel e entrega aqui (ver
     // MoviePlayerScreen). São mutableState para a UI reagir na hora.
@@ -2675,11 +2813,12 @@ class PlayerSession(
     }
     var nightModeState by run { mutableStateOf(NightModeState()) }
     var nightModeTitleKey by run { mutableStateOf("") }
-    /** (Re)aplica o modo noturno/Clear Dialogue na sessão de áudio atual. */
+    /** (Re)aplica o modo noturno/Clear Dialogue na sessão de áudio atual.
+     * Com o sensorial ligado, o DRC é forçado (ver [sensoryEffectiveNightState]). */
     fun applyNightMode() {
         val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
         val ch = runCatching { exoPlayer.audioFormat?.channelCount }.getOrNull() ?: 2
-        nightController.apply(id, ch, nightModeState)
+        nightController.apply(id, ch, sensoryEffectiveNightState(nightModeState, sensoryOn))
     }
     /** Salva o estado do título atual (chamado ao trocar um toggle). */
     fun saveNightMode() {
@@ -3239,6 +3378,8 @@ class PlayerSession(
     // Avaliação pós-filme (v1.17.0): o gatilho de filme dispara 1x por título.
     var markedWatchedMovie by run { mutableStateOf(false) }
     fun seekBy(deltaMs: Long, showControls: Boolean = true) {
+        // Lote 24 item 10: buscar é interação (botão ±10 s ou gesto).
+        noteUserInteraction()
         val p = currentPlayer()
         val d = if (duration > 0) duration else p.duration.coerceAtLeast(0L)
         val target = (p.currentPosition + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
@@ -3254,6 +3395,8 @@ class PlayerSession(
         seekHud = if (forward) "+10s" else "−10s"
     }
     fun togglePlay() {
+        // Lote 24 item 10: play/pause é interação.
+        noteUserInteraction()
         currentPlayer().let { it.playWhenReady = !it.playWhenReady }
         controlsVisible = true
         // Sleep timer (Lote 16 item 6): ao voltar a tocar depois da pausa do
@@ -4347,6 +4490,8 @@ class PlayerSession(
     }
 
     fun openDpadPanel(kind: String) {
+        // Lote 24 item 10: abrir qualquer painel é interação.
+        noteUserInteraction()
         panelKind = kind
         chipFocused = false
         sourcePanelIdx = 0
@@ -4391,8 +4536,9 @@ class PlayerSession(
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Sources, "Fontes", id = "sources") { openDpadPanel("sources") })
         if (type == "SERIES") {
             add(PlayerChipItem(WebPlayerIcons.Episodes, "Episódios", id = "episodes") { openDpadPanel("episodes") })
-            if (curEpisode > 1) add(PlayerChipItem(WebPlayerIcons.Previous, "Anterior", id = "prev") { playPrevEpisode() })
+            if (curEpisode > 1) add(PlayerChipItem(WebPlayerIcons.Previous, "Anterior", id = "prev") { noteUserInteraction(); playPrevEpisode() })
             if (hasNextEpisode || hasNextSeason) add(PlayerChipItem(WebPlayerIcons.Next, "Próximo", id = "next") {
+                noteUserInteraction()
                 if (hasNextEpisode) playNextEpisode() else goToNextSeason()
             })
         }
@@ -4416,6 +4562,12 @@ class PlayerSession(
         // chips "color"/"eq" — id fora do catálogo, vai p/ o fim e NÃO pode
         // ser desligado nas Configurações (a escolha é por título, no painel).
         add(PlayerChipItem(Icons.Default.DarkMode, "Modo noturno", active = nightModeState.nightOn || nightModeState.clearDialogueOn, id = "night") { openDpadPanel("night") })
+        // Lote 24 — Frente B (v1.34.0): mesmo padrão dos chips "color"/"night"
+        // — ids fora do catálogo canônico, vão p/ o fim e NÃO podem ser
+        // desligados nas Configurações (o liga/desliga é a pref, no painel).
+        add(PlayerChipItem(Icons.Default.AspectRatio, "Aspecto ${aspectMode.label}", active = aspectMode != AspectMode.ORIGINAL, id = "aspect") { openDpadPanel("aspect") })
+        add(PlayerChipItem(Icons.Default.BrightnessHigh, "Ambilight", active = ambilightState.enabled, id = "ambilight") { openDpadPanel("ambilight") })
+        add(PlayerChipItem(Icons.Default.Spa, "Sensorial", active = sensoryOn, id = "sensory") { openDpadPanel("sensory") })
         // X-Ray (Lote 21, v1.31.0): mesmo padrão dos chips "color"/"info" — id
         // fora do catálogo canônico, vai p/ o fim e NÃO pode ser desligado nas
         // Configurações (é um painel de contexto, não um botão configurável).
@@ -4450,6 +4602,8 @@ class PlayerSession(
         // continua como fallback da abertura. O id "skip" é o da config da Fase C.
         activeSkipTarget()?.let { target ->
             add(PlayerChipItem(WebPlayerIcons.Skip, target.label, id = "skip") {
+                // Lote 24 item 10: pular trecho à mão é interação.
+                noteUserInteraction()
                 if (target.goNext) {
                     if (hasNextEpisode) playNextEpisode() else goToNextSeason()
                 } else {

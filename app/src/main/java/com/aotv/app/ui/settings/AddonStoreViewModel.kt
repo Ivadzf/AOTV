@@ -135,6 +135,66 @@ class AddonStoreViewModel @Inject constructor(
         _ui.update { it.copy(message = "${a.name} removido.") }
     }
 
+    // Lote 24 (v1.34.0), item 3 — código de setup de addons: o setup
+    // (quais addons instalados e ativos) vira um código p/ compartilhar com
+    // outro aparelho, sem servidor (ver AddonShareCode). O código é longo —
+    // cada addon custa ~60-120 caracteres (a URL do manifest domina); 6
+    // caracteres não caberiam nem 1 addon. Aplicar instala cada addon pelo
+    // fluxo normal (manifest antes de gravar) e restaura o ativo/desligado.
+    /** Último código gerado neste aparelho (vazio = nenhum ainda). */
+    val lastShareCode: String get() = prefs.addonShareCodeLast
+
+    /** Gera o código do setup atual. Null sem nenhum addon instalado. */
+    fun generateShareCode(): String? {
+        val installed = _ui.value.installed
+        if (installed.isEmpty()) return null
+        val code = com.aotv.app.ui.lote24.AddonShareCode.encode(
+            installed.map { com.aotv.app.ui.lote24.AddonShareCode.SharedAddon(it.url, it.enabled) },
+        )
+        prefs.addonShareCodeLast = code
+        return code
+    }
+
+    /** Aplica um código colado: instala os addons da lista, um por vez. */
+    fun applyShareCode(code: String) {
+        if (_ui.value.busy != null) return
+        val decoded = com.aotv.app.ui.lote24.AddonShareCode.decode(code)
+        val addons = decoded.getOrElse {
+            _ui.update { it.copy(message = it.message ?: "Código inválido") }
+            return
+        }
+        _ui.update { it.copy(busy = "share-code", message = null) }
+        viewModelScope.launch {
+            var ok = 0
+            var failed = 0
+            val disabled = mutableListOf<String>()
+            for (a in addons) {
+                val m = stremio.getManifest(a.url)
+                if (m == null) {
+                    failed++
+                    continue
+                }
+                val real = stremio.normalizeManifestUrl(a.url)
+                prefs.installAddon(real, m.id)
+                if (!a.enabled) disabled += real
+                ok++
+            }
+            if (disabled.isNotEmpty()) {
+                val off = disabled.toSet()
+                prefs.addonEntries = prefs.addonEntries.map { e ->
+                    if (e.url in off) e.copy(enabled = false) else e
+                }
+            }
+            _ui.update {
+                it.copy(
+                    busy = null,
+                    message = if (failed == 0) "Setup aplicado: $ok ${if (ok == 1) "addon instalado" else "addons instalados"}."
+                        else "Setup aplicado: $ok instalados, $failed não responderam.",
+                )
+            }
+        }
+    }
+
     companion object {
         /** O que funciona no AOTV: fontes, legendas e catálogos (viram fileira na Início). */
         fun worksHere(a: CommunityAddon) = "stream" in a.resources || "subtitles" in a.resources || "catalog" in a.resources

@@ -11,9 +11,12 @@ import com.aotv.app.data.recordings.ScheduledRecording
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -329,9 +332,72 @@ class SettingsViewModel @Inject constructor(
     fun setDetailShowAggregateRating(v: Boolean) { platformPrefs.detailShowAggregateRating = v }
 
     // Lote 12 — Frente 3 (Notas, v1.22.0): fonte da nota exibida de filmes
-    // e séries ("auto" | "mdblist" | "tmdb"). Episódios seguem sempre TMDB.
+    // e séries ("auto" | "mdblist" | "tmdb"). A nota do EPISÓDIO segue a
+    // pref do Lote 24 abaixo (item 12), não esta.
     val ratingsSource: StateFlow<String> = platformPrefs.ratingsSourceFlow
     fun setRatingsSource(v: String) { platformPrefs.ratingsSource = v }
+
+    // ── Lote 24 (v1.34.0) — Temas/início ──────────────────────────────────
+    // AMOLED (item 1), herói (item 2), abas (item 4), MK Channel e Peak
+    // Cinema (itens 5 e 6), Ambilight e modo sensorial (itens 8 e 9) e nota
+    // dos episódios (item 12). O tema em si já era exposto (themePaletteId);
+    // as pastas (item 3) vivem no Personalizar Início, não aqui.
+    val homeAmoled: StateFlow<Boolean> = platformPrefs.homeAmoledFlow
+    fun setHomeAmoled(v: Boolean) { platformPrefs.homeAmoled = v }
+
+    val heroAutoRotate: StateFlow<String> = platformPrefs.heroAutoRotateFlow
+    fun setHeroAutoRotate(v: String) { platformPrefs.heroAutoRotate = v }
+
+    val heroPreviewOnFocus: StateFlow<Boolean> = platformPrefs.heroPreviewOnFocusFlow
+    fun setHeroPreviewOnFocus(v: Boolean) { platformPrefs.heroPreviewOnFocus = v }
+
+    val bottomTabsHidden: StateFlow<Set<String>> = platformPrefs.bottomTabsHiddenFlow
+        .map { com.aotv.app.ui.lote24.BottomTabs24.hiddenFromCsv(it) }
+        .stateIn(
+            viewModelScope, SharingStarted.Eagerly,
+            com.aotv.app.ui.lote24.BottomTabs24.hiddenFromCsv(platformPrefs.bottomTabsHidden),
+        )
+    fun setTabHidden(tabId: String, hidden: Boolean) {
+        if (com.aotv.app.ui.lote24.BottomTab24.fromId(tabId) == null) return
+        val next = com.aotv.app.ui.lote24.BottomTabs24.sanitizeHidden(
+            if (hidden) bottomTabsHidden.value + tabId else bottomTabsHidden.value - tabId,
+        )
+        platformPrefs.bottomTabsHidden = com.aotv.app.ui.lote24.BottomTabs24.hiddenToCsv(next)
+    }
+
+    val bottomTabDefault: StateFlow<String> = platformPrefs.bottomTabDefaultFlow
+    fun setBottomTabDefault(v: String) {
+        val tab = com.aotv.app.ui.lote24.BottomTab24.fromId(v) ?: return
+        platformPrefs.bottomTabDefault = tab.id
+        if (tab.id in bottomTabsHidden.value) setTabHidden(tab.id, false)
+    }
+
+    val mkChannelSource: StateFlow<String> = platformPrefs.mkChannelSourceFlow
+    fun setMkChannelSource(v: String) { platformPrefs.mkChannelSource = v }
+
+    val peakCinemaEnabled: StateFlow<Boolean> = platformPrefs.peakCinemaEnabledFlow
+    fun setPeakCinemaEnabled(v: Boolean) { platformPrefs.peakCinemaEnabled = v }
+
+    val peakCinemaMood: StateFlow<String> = platformPrefs.peakCinemaMoodFlow
+    fun setPeakCinemaMood(v: String) { platformPrefs.peakCinemaMood = v }
+
+    val playerAmbilight: StateFlow<Boolean> = platformPrefs.playerAmbilightFlow
+    fun setPlayerAmbilight(v: Boolean) { platformPrefs.playerAmbilight = v }
+
+    val playerAmbilightIntensity: StateFlow<String> = platformPrefs.playerAmbilightIntensityFlow
+    fun setPlayerAmbilightIntensity(v: String) { platformPrefs.playerAmbilightIntensity = v }
+
+    val playerSensoryFriendly: StateFlow<Boolean> = platformPrefs.playerSensoryFriendlyFlow
+    fun setPlayerSensoryFriendly(v: Boolean) { platformPrefs.playerSensoryFriendly = v }
+
+    val episodeRatingMode: StateFlow<String> = platformPrefs.episodeRatingModeFlow
+    fun setEpisodeRatingMode(v: String) { platformPrefs.episodeRatingMode = v }
+
+    val omdbApiKey: StateFlow<String> = platformPrefs.omdbApiKeyFlow
+    fun setOmdbApiKey(v: String) { platformPrefs.omdbApiKey = v }
+
+    val addonShareCodeLast: StateFlow<String> = platformPrefs.addonShareCodeLastFlow
+    fun setAddonShareCodeLast(v: String) { platformPrefs.addonShareCodeLast = v }
 
     // ── Atualizador dentro do app (Lote 12 — Frente 3, v1.22.0; Lote 18, v1.28.0) ──
     // Consulta a release mais recente do repo público no GitHub (sem login).

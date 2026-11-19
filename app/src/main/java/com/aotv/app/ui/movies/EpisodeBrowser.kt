@@ -94,8 +94,12 @@ fun sortEpisodes(episodes: List<EpisodeItem>, sort: EpisodeSort): List<EpisodeIt
 
 // ── Rating Map (Lote 2 item 4) ─────────────────────────────────────────────
 // Uma célula por episódio da lista exibida (mesma ordem dos cards), pintada
-// pela nota do TMDB (`vote_average`, 0–10). Tocar a célula abre o episódio
-// (o mesmo onSelect do card).
+// pela nota RESOLVIDA (Lote 24 item 12, v1.34.0): TMDB por padrão, ou a
+// média das fontes que têm nota / uma única fonte, conforme a configuração
+// "Nota dos episódios". `EpisodeItem.rating` já carrega a nota resolvida —
+// a ordenação por nota e a escala de cores usam-na sem saber de onde veio;
+// `ratingSource` diz a origem p/ exibir no card. Tocar a célula abre o
+// episódio (o mesmo onSelect do card).
 //
 // ESCALA DE CORES (limites explícitos, em `ratingColor`):
 //   sem nota (rating <= 0)  → cinza neutro  #5A5F6A — NÃO é nota baixa:
@@ -138,7 +142,8 @@ private val RATING_LEGEND_BANDS = listOf(9.0, 8.0, 7.0, 6.0, 4.0, 0.0)
 /**
  * Mapa de notas da lista exibida: uma célula por episódio, com o número,
  * pintada por [ratingColor]. Tocar a célula abre o episódio (onSelect).
- * Abaixo, a legenda com as 6 faixas da escala.
+ * Abaixo, a legenda com as 6 faixas da escala. [ratingOrigin] é o rótulo
+ * da origem da nota ("Fonte da nota: média das fontes") — null esconde.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -146,6 +151,7 @@ fun RatingMap(
     episodes: List<EpisodeItem>,
     onEpisodeClick: (EpisodeItem) -> Unit,
     modifier: Modifier = Modifier,
+    ratingOrigin: String? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         LazyRow(
@@ -208,6 +214,17 @@ fun RatingMap(
                     modifier = Modifier.padding(start = 2.dp),
                 )
             }
+        }
+        // Origem da nota (Lote 24 item 12): de onde veio a nota que pinta o
+        // mapa — a mesma configuração vale p/ toda a temporada.
+        if (ratingOrigin != null) {
+            Text(
+                ratingOrigin,
+                color = TextTertiary,
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = ManropeFontFamily,
+            )
         }
     }
 }
