@@ -3265,7 +3265,7 @@ private fun ReproducaoPage(
         SettingsCard {
             PrefRow(
                 "Player padrão",
-                listOf("exoplayer" to "ExoPlayer (interno)", "external" to "Player externo (VLC, MX…)"),
+                listOf("exoplayer" to "ExoPlayer (interno)", "libmpv" to "Libmpv (interno)", "external" to "Player externo (VLC, MX…)"),
                 playerEngine, playerPrefs::setEngine,
             )
             Spacer(Modifier.height(14.dp))
@@ -3290,7 +3290,7 @@ private fun ReproducaoPage(
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
         Text(
-            "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Sem Libmpv interno nesta versão.",
+            "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Libmpv é experimental: se ele falhar ao iniciar, o player volta sozinho p/ o ExoPlayer e avisa; som de outra fonte, Volume Boost, equalizador e modo noturno ainda não valem com o Libmpv. Vale a partir da próxima reprodução.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
         Text(

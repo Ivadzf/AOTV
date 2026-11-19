@@ -820,20 +820,9 @@ private fun HomeSectionsTab(
                         fontFamily = ManropeFontFamily,
                     )
                 }
-                GlassCircleButton(
-                    icon = Icons.Default.AutoAwesome,
-                    onClick = { AssistantRequest.open() },
-                    size = 44.dp,
-                    iconTint = TextSecondary,
-                    contentDescription = "Assistente",
-                )
-                GlassCircleButton(
-                    icon = Icons.Default.Terminal,
-                    onClick = { CommandPaletteRequest.open() },
-                    size = 44.dp,
-                    iconTint = TextSecondary,
-                    contentDescription = "Comandos",
-                )
+                // Lote mpv 1 (v1.36.0), correção 4: o assistente e a paleta
+                // de comandos SAÍRAM daqui — o acesso fica SÓ na aba de
+                // pesquisa (MediaSearchScreen), onde já existem.
             }
         }
         // Sem chave TMDB as fileiras do sistema voltam vazias em silêncio — avisa no topo.
@@ -877,6 +866,18 @@ private fun HomeSectionsTab(
                     autoRotateIntervalMs = HeroAutoRotate.INTERVAL_MS,
                     previewOnFocus = heroPreviewOnFocus,
                 )
+            }
+        }
+        // ── Lote mpv 1 (v1.36.0), correção 2: o Continuar assistindo fica
+        // ACIMA do Peak Cinema — ele é emitido aqui (antes do MK Channel)
+        // e pulado no loop do layout abaixo. Só quando não está numa pasta
+        // (na pasta, a ordem da pasta manda) e há algo p/ continuar.
+        val continueRow = state.layout.firstOrNull { it.system == SystemRow.CONTINUE }
+        val continueHoisted = continueRow != null && folderOfRow[continueRow.key] == null &&
+            state.continueWatching.isNotEmpty()
+        if (continueHoisted && continueRow != null) {
+            item(key = continueRow.key) {
+                ContinueRow(continueRow.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onOptions = { pendingOptions = it }, onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_CONTINUE) })
             }
         }
         // ── Lote 24 (v1.34.0), Frente A: MK Channel (item 5) + Peak Cinema
@@ -936,6 +937,9 @@ private fun HomeSectionsTab(
                 if (folder.id in collapsedFolderIds) return@forEach
             }
             val custom = row.title
+            // Lote mpv 1 (v1.36.0), correção 2: o Continuar já foi emitido
+            // acima do Peak Cinema — não repetir aqui.
+            if (row.system == SystemRow.CONTINUE && continueHoisted) return@forEach
             when (row.system) {
                 SystemRow.CONTINUE -> if (state.continueWatching.isNotEmpty()) item(key = row.key) {
                     ContinueRow(row.displayTitle, state, onItemClick, display, frosted = panelBlurOn, onOptions = { pendingOptions = it }, onSeeMore = { viewModel.openLocalGrid(MoviesHomeViewModel.LOCAL_CONTINUE) })

@@ -36,7 +36,7 @@ import org.json.JSONObject
 //   // SecondarySubtitle (topo da tela) — ver o limite do ExoPlayer abaixo.
 //   val second = SubTrackId(SubSourceKind.EXTERNAL, "eng", "OpenSubtitles", "Inglês")
 //   var dual by remember { mutableStateOf(DualSubState(primary, second)) }
-//   SecondarySubtitle(secondCues, exoPlayer, delayFor(dual, second),
+//   SecondarySubtitle(secondCues, { activePositionMs() }, delayFor(dual, second),
 //       subSize, subBg, isTv, controlsVisible, subColor, subFont, subBgOpacity)
 //   // (b) Delay ao vivo: D-pad Esquerda/Direita = ±DELAY_STEP_FINE_MS
 //   // (0,1 s); o menu continua com ±0,5 s (DELAY_STEP_COARSE_MS, igual ao
@@ -353,7 +353,8 @@ fun pickForcedTrack(tracks: List<Format>, prefLang: String, audioLang: String?):
 @Composable
 internal fun BoxScope.SecondarySubtitle(
     cues: List<SubCue>,
-    player: androidx.media3.common.Player,
+    /** Posição atual do player ATIVO (ExoPlayer, libmpv ou Cast) — p/ o mpv não há Player do Media3. */
+    positionMs: () -> Long,
     delayMs: Long,
     sizeScale: Float,
     withBg: Boolean,
@@ -364,7 +365,7 @@ internal fun BoxScope.SecondarySubtitle(
     bgOpacity: Float = 0.78f,
 ) {
     var subPos by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(cues) { while (true) { subPos = player.currentPosition; delay(100) } }
+    LaunchedEffect(cues) { while (true) { subPos = positionMs(); delay(100) } }
     val line = cueAt(cues, subPos, delayMs)
     if (line.isEmpty()) return
     Text(

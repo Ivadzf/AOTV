@@ -43,6 +43,12 @@ data class TrackersUiState(
     val mdbSources: Set<String> = emptySet(),
     val mdbMessage: String? = null,
     val mdbError: String? = null,
+    // OMDb (Lote mpv 1, v1.36.0): chave do usuário p/ a nota dos episódios
+    // (Lote 24) — mesmo padrão do MDBList, sem toggle (a fonte da nota é
+    // escolhida em Configurações → Página de detalhes).
+    val omdbApiKey: String = "",
+    val omdbMessage: String? = null,
+    val omdbError: String? = null,
     // Lote 19 (v1.29.0): "Testar chave" em andamento.
     val mdbTesting: Boolean = false,
     // AniList (v1.17.0, OAuth por deep link aotv://anilist/callback).
@@ -100,6 +106,7 @@ class TrackersViewModel @Inject constructor(
             mdbApiKey = mdbList.apiKey,
             mdbEnabled = mdbList.isEnabled,
             mdbSources = mdbList.getEnabledSources(),
+            omdbApiKey = prefs.omdbApiKey,
             aniClientId = aniList.clientId,
             aniConnected = aniList.isConnected,
             aniEnabled = aniList.isEnabled,
@@ -136,6 +143,8 @@ class TrackersViewModel @Inject constructor(
     fun clearTraktMessage() = _ui.update { it.copy(traktMessage = null, traktError = null) }
 
     fun clearMdbMessage() = _ui.update { it.copy(mdbMessage = null, mdbError = null) }
+
+    fun clearOmdbMessage() = _ui.update { it.copy(omdbMessage = null, omdbError = null) }
 
     fun clearAniMessage() = _ui.update { it.copy(aniMessage = null, aniError = null) }
 
@@ -371,6 +380,19 @@ class TrackersViewModel @Inject constructor(
                 mdbMessage = if (mdbList.apiKey.isBlank()) "Chave apagada — MDBList desligado neste perfil."
                 else "Chave do MDBList salva.",
                 mdbError = null,
+            )
+        }
+    }
+
+    /** Grava a chave do OMDb digitada (só o usuário cola; nunca há valor embutido). A chave é global (vale p/ todos os perfis), como em Configurações → Página de detalhes. */
+    fun saveOmdbApiKey(key: String) {
+        prefs.omdbApiKey = key.trim()
+        _ui.update {
+            it.copy(
+                omdbApiKey = prefs.omdbApiKey,
+                omdbMessage = if (prefs.omdbApiKey.isBlank()) "Chave apagada — OMDb desligado como fonte de nota."
+                else "Chave do OMDb salva.",
+                omdbError = null,
             )
         }
     }

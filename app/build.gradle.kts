@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 73
-        versionName    = "1.35.0"
+        versionCode    = 74
+        versionName    = "1.36.0"
         // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
         // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
         // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com
@@ -249,6 +249,10 @@ dependencies {
     implementation("androidx.mediarouter:mediarouter:1.7.0")
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
     implementation("androidx.appcompat:appcompat:1.7.0") // tema p/ MediaRouteButton do Cast
+    // Libmpv (Lote mpv 1, v1.36.0): AAR pré-compilado com libmpv.so +
+    // libplayer.so p/ arm64-v8a E armeabi-v7a (APK universal, TV 32 bits).
+    // SEM NDK no CI, SEM compilar código nativo. Maven Central, MIT.
+    implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.12")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

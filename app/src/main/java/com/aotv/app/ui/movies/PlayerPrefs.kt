@@ -280,9 +280,15 @@ class PlayerPrefsViewModel @Inject constructor(
     val colorDaltonism: StateFlow<String> = prefs.playerColorDaltonismFlow
     fun setColorDaltonism(v: String) { prefs.playerColorDaltonism = v }
 
-    /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno) ou "external". */
+    /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 — v1.36.0) ou "external". */
     val engine: StateFlow<String> = prefs.playerEngineFlow
-    fun setEngine(v: String) { prefs.playerEngine = if (v == "external") "external" else "exoplayer" }
+    fun setEngine(v: String) {
+        prefs.playerEngine = when (v) {
+            "external" -> "external"
+            "libmpv" -> "libmpv"
+            else -> "exoplayer"
+        }
+    }
 
     /** Decoder de vídeo do perfil (Lote 4, v1.12.0): "hw" ou "hw_fallback". */
     val decoder: StateFlow<String> = prefs.playerDecoderFlow

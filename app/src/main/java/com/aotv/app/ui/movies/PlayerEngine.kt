@@ -21,19 +21,38 @@ import java.nio.ByteBuffer
 /**
  * Motor do player — Lote 4 (v1.12.0), itens 1–3: player externo, Cast e decoder.
  *
- * ── Libmpv: NÃO implementado nesta versão, de propósito ──────────────────
- * Um segundo player interno via Libmpv exigiria o mpv-android, que NÃO é
- * publicado como artefato Maven Central: a via oficial é o AAR do GitHub
- * Releases (ou JitPack `com.github.mpv-android:mpv-android`), um binário
- * externo com .so nativos por ABI (+~15–25 MB no APK), ciclo de vida
- * próprio de Surface (MPVLib) e build NDK — fora do que o CI atual
- * (arm64-only, sem NDK) compila com segurança. Também não há como testar
- * no celular do Davi sem um build real do CI. Por isso o Lote 4 entrega
- * só players EXTERNOS (item 1): o sistema escolhe o app instalado (VLC,
- * MX Player…). Se um dia o mpv entrar, ele vive aqui, ao lado do
- * [decoderRenderersFactory], como um segundo [DecoderMode]-like — nunca
- * espalhado pela tela do player.
+ * ── Libmpv: ENTROU no Lote mpv 1 (v1.36.0) ──────────────────────────
+ * O que faltava no Lote 4 era um artefato Maven Central: ele existe —
+ * `io.github.abdallahmehiz:mpv-android-lib:0.1.12`, AAR pré-compilado
+ * (libmpv.so + libplayer.so p/ arm64-v8a E armeabi-v7a), sem NDK no CI.
+ * O wrapper vive em [MpvPlayer] (ao lado daqui); a sessão do player
+ * escolhe o motor pela pref `pref_player_engine` ([PlayerEngineMode]) e
+ * cai p/ o ExoPlayer se o mpv falhar ao iniciar — nunca espalhado pela
+ * tela do player.
  */
+
+/**
+ * Motor interno do player (pref `pref_player_engine`, por perfil).
+ *
+ * - [EXOPLAYER]: Media3/ExoPlayer — o padrão e o fallback de tudo.
+ * - [LIBMPV]: libmpv via [MpvPlayer] (Lote mpv 1, v1.36.0) — experimental,
+ *   selecionável nas Configurações; qualquer falha ao iniciar volta p/ o
+ *   ExoPlayer sem crash.
+ * - [EXTERNAL]: abre o link resolvido num player instalado (VLC, MX…).
+ *
+ * Valor desconhecido volta p/ [EXOPLAYER] (nunca p/ externo: abrir outro
+ * app sem o usuário pedir seria surpresa).
+ */
+enum class PlayerEngineMode(val id: String) {
+    EXOPLAYER("exoplayer"),
+    LIBMPV("libmpv"),
+    EXTERNAL("external");
+
+    companion object {
+        fun fromId(id: String): PlayerEngineMode =
+            entries.firstOrNull { it.id == id } ?: EXOPLAYER
+    }
+}
 
 /**
  * Decoder de vídeo do ExoPlayer (pref `pref_player_decoder`, por perfil).

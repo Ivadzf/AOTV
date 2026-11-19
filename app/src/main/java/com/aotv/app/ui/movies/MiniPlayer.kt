@@ -86,8 +86,9 @@ object MiniPlayerState {
 /**
  * Barra compacta do mini player, acima da pílula inferior: pôster pequeno,
  * título (+ episódio), play/pause, expandir (volta ao player cheio) e fechar
- * (para e libera o player). A posição avança por poll do ExoPlayer (o poll da
- * tela cheia morre junto com a composição dela ao minimizar).
+ * (para e libera o player). A posição avança por poll do player ativo
+ * (ExoPlayer, libmpv ou Cast — o poll da tela cheia morre junto com a
+ * composição dela ao minimizar).
  *
  * [frosted] (Lote 4): com o toggle `pref_panel_blur` ligado, o fundo fica
  * translúcido (vidro fosco) em vez de opaco. Blur real não alcança aqui
@@ -101,11 +102,9 @@ fun MiniPlayerBar(onExpand: () -> Unit, modifier: Modifier = Modifier, frosted: 
     var duration by remember(session) { mutableLongStateOf(0L) }
     LaunchedEffect(session) {
         while (true) {
-            val p = runCatching { session.currentPlayer() }.getOrNull()
-            if (p == null) return@LaunchedEffect
-            isPlaying = p.isPlaying
-            position = p.currentPosition.coerceAtLeast(0L)
-            duration = p.duration.coerceAtLeast(0L)
+            isPlaying = runCatching { session.activeIsPlaying() }.getOrDefault(false)
+            position = runCatching { session.activePositionMs() }.getOrDefault(0L).coerceAtLeast(0L)
+            duration = runCatching { session.activeDurationMs() }.getOrDefault(0L).coerceAtLeast(0L)
             delay(500)
         }
     }

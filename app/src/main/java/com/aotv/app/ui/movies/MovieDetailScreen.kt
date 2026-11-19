@@ -723,18 +723,10 @@ fun MovieDetailScreen(
                         .padding(top = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
-                    // Sinopse curta ACIMA do botão Assistir (séries; filmes também têm SINOPSE abaixo).
-                    if (isSeries && overview.isNotBlank()) {
-                        Text(
-                            overview,
-                            fontSize = 15.sp,
-                            color = TextSecondary,
-                            lineHeight = 23.sp,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(bottom = 14.dp),
-                        )
-                    }
+                    // Lote mpv 1 (v1.36.0), correção 3: a sinopse desceu p/
+                    // depois das ações — antes ela empurrava a fileira de
+                    // opções (Favoritar, Gostei...) p/ longe da classificação
+                    // no topo. Nada some: só muda a ordem.
                     // Primary action row: Assistir (CTA branco) + glass actions
                     FlowRow(
                         Modifier.fillMaxWidth(),
@@ -883,6 +875,21 @@ fun MovieDetailScreen(
                                 )
                             }
                         }
+                    }
+
+                    // Sinopse da série (Lote mpv 1, correção 3): ABAIXO das
+                    // ações, p/ a classificação não ficar separada das opções.
+                    // Filmes têm a sinopse na seção Sobre, abaixo.
+                    if (isSeries && overview.isNotBlank()) {
+                        Text(
+                            overview,
+                            fontSize = 15.sp,
+                            color = TextSecondary,
+                            lineHeight = 23.sp,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(bottom = 14.dp),
+                        )
                     }
 
                     // Linha "Ready" (Lote 11, v1.21.0): a melhor fonte antes de

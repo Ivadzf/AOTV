@@ -318,6 +318,7 @@ fun MoviePlayerScreen(
             forceTv = forceTv, kodiDiag = kodiDiag,
             decoderMode = DecoderMode.fromId(playerDecoder),
             bufferProfile = BufferProfile.fromId(playerBuffer),
+            engineMode = PlayerEngineMode.fromId(playerEngine),
             startLocked = startLocked,
         )
     }
@@ -375,8 +376,8 @@ fun MoviePlayerScreen(
                 run = {
                     main.post {
                         runCatching {
-                            val p = s.currentPlayer()
-                            p.playWhenReady = !p.playWhenReady
+                            val playing = s.activeIsPlaying()
+                            s.activeSetPlaying(!playing)
                         }
                     }
                     "Play/Pause alternado."
@@ -389,11 +390,11 @@ fun MoviePlayerScreen(
                 run = {
                     main.post {
                         runCatching {
-                            val p = s.currentPlayer()
-                            val target = p.currentPosition + 10_000
+                            val target = s.activePositionMs() + 10_000
+                            val d = s.activeDurationMs()
                             // Duração desconhecida (ao vivo/sem metadado) não
                             // trava o avanço: só limita quando a duração é > 0.
-                            p.seekTo(if (p.duration > 0) target.coerceAtMost(p.duration) else target)
+                            s.activeSeekTo(if (d > 0) target.coerceAtMost(d) else target)
                         }
                     }
                     "Avançou 10 s."
@@ -406,8 +407,7 @@ fun MoviePlayerScreen(
                 run = {
                     main.post {
                         runCatching {
-                            val p = s.currentPlayer()
-                            p.seekTo((p.currentPosition - 10_000).coerceAtLeast(0))
+                            s.activeSeekTo((s.activePositionMs() - 10_000).coerceAtLeast(0))
                         }
                     }
                     "Voltou 10 s."
@@ -434,25 +434,25 @@ fun MoviePlayerScreen(
     val partyPlayer = remember(s) {
         object : PartyPlayer {
             override fun positionMs(): Long =
-                runCatching { s.currentPlayer().currentPosition }.getOrDefault(0L)
+                runCatching { s.activePositionMs() }.getOrDefault(0L)
 
             override fun isPlaying(): Boolean =
-                runCatching { s.currentPlayer().playWhenReady }.getOrDefault(false)
+                runCatching { s.activeIsPlaying() }.getOrDefault(false)
 
             override fun durationMs(): Long =
-                runCatching { s.currentPlayer().duration }.getOrDefault(0L)
+                runCatching { s.activeDurationMs() }.getOrDefault(0L)
                     .takeIf { it > 0L } ?: 0L
 
             override fun seekTo(positionMs: Long) {
-                runCatching { s.currentPlayer().seekTo(positionMs) }
+                runCatching { s.activeSeekTo(positionMs) }
             }
 
             override fun setPlaying(playing: Boolean) {
-                runCatching { s.currentPlayer().playWhenReady = playing }
+                runCatching { s.activeSetPlaying(playing) }
             }
 
             override fun setSpeed(rate: Float) {
-                runCatching { s.currentPlayer().setPlaybackSpeed(rate) }
+                runCatching { s.activeSetSpeed(rate) }
             }
 
             override fun normalSpeed(): Float = s.speeds.getOrElse(s.speedIdx) { 1f }
@@ -649,7 +649,7 @@ fun MoviePlayerScreen(
     // a velocidade sozinha porque o player é o mesmo).
     LaunchedEffect(playerSpeed) {
         s.speedIdx = PLAYBACK_SPEEDS.indexOf(playerSpeed).takeIf { it >= 0 } ?: PLAYBACK_SPEEDS.indexOf(1f)
-        runCatching { s.currentPlayer().setPlaybackSpeed(playerSpeed) }
+        runCatching { s.activeSetSpeed(playerSpeed) }
     }
     // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): o ExoPlayer nasce
     // com o padrão ("pt") e a pref do perfil é aplicada aqui — e reaplicada
@@ -816,7 +816,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     }
     // Legenda externa é desenhada pelo próprio player (ver externalCues), então trocar de
     // legenda não recarrega o vídeo.
-    LaunchedEffect(streamUrl, mobileGatePass) {
+    LaunchedEffect(streamUrl, mobileGatePass, mpvFallback) {
         val url = streamUrl ?: return@LaunchedEffect
         // Lote 25 item 7 (Frente C) — gate de dados móveis: segura a
         // preparação do stream em dados móveis até o usuário liberar
@@ -868,15 +868,38 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             } else {
                 cleanPlay to playHeaders
             }
-            // Correção de cor (v1.9.0): o setVideoEffects precisa ser chamado
-            // pelo menos 1x antes do prepare; depois os sliders reaplicam ao
-            // vivo (LaunchedEffect junto do Volume Boost, abaixo).
-            exoPlayer.setVideoEffects(buildColorEffects(colorState))
-            exoPlayer.setMediaSource(mediaSourceFactory(context, factoryHeaders).createMediaSource(mediaItemFor(context, playUrl)))
-            exoPlayer.prepare()
-            if (!didSeek && pendingSeekMs > 0) { exoPlayer.seekTo(pendingSeekMs); didSeek = true }
-            // Transmitindo: mantém o player local MUDO (o Cast recebe a fonte em efeito próprio).
-            if (casting) exoPlayer.playWhenReady = false
+            // Libmpv (Lote mpv 1): o load vai p/ o mpv (headers no
+            // http-header-fields, seek no FILE_LOADED); sem mpv ou com
+            // fallback, o caminho do ExoPlayer abaixo.
+            if (useMpv && !mpvFallback) {
+                val mpv = mpvPlayer
+                if (mpv == null) {
+                    // .so ausente ou MPV() falhou na construção: cai p/ o
+                    // ExoPlayer — o efeito re-roda pela chave mpvFallback.
+                    mpvFallback = true
+                    toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
+                } else {
+                    mpv.load(
+                        MpvPlayer.playUrlFor(context, playUrl),
+                        STREAM_HEADERS + factoryHeaders,
+                        if (!didSeek) pendingSeekMs else 0L,
+                        speeds.getOrElse(speedIdx) { 1f },
+                        casting,
+                        SubLangs.of(audioLangPref)?.family ?: "pt",
+                        SubLangs.of(subLang)?.family ?: "",
+                    )
+                }
+            } else {
+                // Correção de cor (v1.9.0): o setVideoEffects precisa ser chamado
+                // pelo menos 1x antes do prepare; depois os sliders reaplicam ao
+                // vivo (LaunchedEffect junto do Volume Boost, abaixo).
+                exoPlayer.setVideoEffects(buildColorEffects(colorState))
+                exoPlayer.setMediaSource(mediaSourceFactory(context, factoryHeaders).createMediaSource(mediaItemFor(context, playUrl)))
+                exoPlayer.prepare()
+                if (!didSeek && pendingSeekMs > 0) { exoPlayer.seekTo(pendingSeekMs); didSeek = true }
+                // Transmitindo: mantém o player local MUDO (o Cast recebe a fonte em efeito próprio).
+                if (casting) exoPlayer.playWhenReady = false
+            }
         } catch (_: Exception) {}
     }
 
@@ -951,6 +974,12 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         prevColorState = colorState
     }
 
+    // Estilo da legenda no mpv (Lote mpv 1): tamanho/cor/fundo/contorno/
+    // fonte reaplicam ao vivo; no ExoPlayer o PlayerView já faz isso no update.
+    LaunchedEffect(subSize, subColor, subBg, subBgOpacity, subOutline, subFont) {
+        if (mpvActive) mpvPlayer?.applySubStyle(subSize, subColor, subBg, subBgOpacity, subOutline, subFont)
+    }
+
     DisposableEffect(castPlayer, streamUrl) {
         val cp = castPlayer ?: return@DisposableEffect onDispose {}
         val listener = object : androidx.media3.cast.SessionAvailabilityListener {
@@ -960,7 +989,12 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                 // Volta pro local no ponto onde a TV estava.
                 val pos = runCatching { cp.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
                 casting = false
-                exoPlayer.seekTo(pos); exoPlayer.playWhenReady = true
+                if (mpvActive) {
+                    mpvPlayer?.seekTo(pos)
+                    mpvPlayer?.setPlaying(true)
+                } else {
+                    exoPlayer.seekTo(pos); exoPlayer.playWhenReady = true
+                }
             }
         }
         cp.setSessionAvailabilityListener(listener)
@@ -980,14 +1014,14 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             return@LaunchedEffect
         }
         if (casting && url != null) {
-            val start = runCatching { exoPlayer.currentPosition }.getOrDefault(0L)
+            val start = localPositionMs()
                 .let { if (it > 0) it else pendingSeekMs }.coerceAtLeast(0L)
             val cb = MediaItem.Builder().setUri(url)
                 .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(displayTitle).build())
             cb.setMimeType(if (url.contains(".m3u8")) MimeTypes.APPLICATION_M3U8 else MimeTypes.VIDEO_MP4)
             cp.setMediaItem(cb.build(), start)
             cp.playWhenReady = true
-            exoPlayer.playWhenReady = false
+            setLocalPlaying(false)
         }
     }
 
@@ -1066,10 +1100,12 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(streamUrl) {
         var sinceSave = 0L
         while (streamUrl != null) {
-            val p = currentPlayer()
-            position = p.currentPosition.coerceAtLeast(0L)
-            duration = p.duration.coerceAtLeast(0L).let { if (it > 0) it else duration }
-            isPlaying = p.isPlaying
+            position = activePositionMs().coerceAtLeast(0L)
+            duration = activeDurationMs().coerceAtLeast(0L).let { if (it > 0) it else duration }
+            isPlaying = activeIsPlaying()
+            // Libmpv: o buffering vem de paused-for-cache (o listener do
+            // ExoPlayer não roda com o mpv).
+            if (mpvActive) buffering = mpvPlayer?.isBuffering() == true
             sinceSave += 500
             if (sinceSave >= 10_000 && position > 0) {
                 val curEp = if (type == "SERIES" && curEpisode > 0) "T$curSeason:E$curEpisode" else lastEpisode
@@ -1158,15 +1194,15 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
             when (e) {
                 androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
-                    wasPlayingOnStop = exoPlayer.playWhenReady
-                    exoPlayer.playWhenReady = false
-                    val pos = runCatching { currentPlayer().currentPosition }.getOrDefault(position).coerceAtLeast(0L)
+                    wasPlayingOnStop = activeIsPlaying()
+                    setLocalPlaying(false)
+                    val pos = activePositionMs().coerceAtLeast(0L)
                     val curEp = if (type == "SERIES" && curEpisode > 0) "T$curSeason:E$curEpisode" else lastEpisode
                     if (pos > 0) progressVm.save(tmdbId, type, title, posterUrl, pos, duration, curEp, streamUrl ?: activeUrl, preferredAddon)
                 }
                 // Só retoma sozinho se já estava tocando ao sair, e sem Cast ativo (senão duplica
                 // o áudio — a TV já está tocando e o player local tomaria o play também).
-                androidx.lifecycle.Lifecycle.Event.ON_START -> if (wasPlayingOnStop && !casting) exoPlayer.playWhenReady = true
+                androidx.lifecycle.Lifecycle.Event.ON_START -> if (wasPlayingOnStop && !casting) setLocalPlaying(true)
                 else -> {}
             }
         }
@@ -1209,10 +1245,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     // de membro e não compila no corpo da classe PlayerSession (build #284).
     androidx.compose.runtime.DisposableEffect(Unit) {
         AssistantPlayerBridge.actions = AssistantPlayerActions(
-            pause = { currentPlayer().playWhenReady = false; controlsVisible = true },
-            resume = { currentPlayer().playWhenReady = true; controlsVisible = true },
+            pause = { activeSetPlaying(false); controlsVisible = true },
+            resume = { activeSetPlaying(true); controlsVisible = true },
             seekBy = { deltaMs -> seekBy(deltaMs) },
-            seekTo = { ms -> currentPlayer().seekTo(ms); position = ms; controlsVisible = true },
+            seekTo = { ms -> activeSeekTo(ms); controlsVisible = true },
             setSubtitles = { enabled ->
                 if (enabled) pickAutoSub() else { disableText(); subtitleOn = false; selectedSubUrl = null }
             },
@@ -1245,7 +1281,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         if (stillWatching.noteAutoAdvance()) {
             stillWatchingPendingSeason = promptIsSeason
             stillWatchingAsk = true
-            runCatching { currentPlayer().playWhenReady = false }
+            activeSetPlaying(false)
             return@LaunchedEffect
         }
         // v1.13.0 (JOTV 1.0.19 §3.4): o avanço automático preserva a cena
@@ -1257,8 +1293,7 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         val pc = skipSegments.postCredits
         if (pc != null && position < pc.end) {
             if (position < pc.start) {
-                currentPlayer().seekTo(pc.start)
-                position = pc.start
+                activeSeekTo(pc.start)
                 toastMsg = "Cena pós-créditos"
             }
             return@LaunchedEffect
@@ -1748,18 +1783,44 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-                AndroidView(
-                    factory = { ctx ->
-                        PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false // controles custom (Compose)
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                        }
-                    },
-                    update = {
-                        setPlayerViewRef(it)
-                        applyFrameRate()
+                // Libmpv (Lote mpv 1): SurfaceView própria — o mpv renderiza
+                // no próprio contexto OpenGL, ligado ao ciclo da superfície
+                // (ver MpvPlayer.onSurfaceCreated). O PlayerView do ExoPlayer
+                // só existe no caminho do ExoPlayer (ou no fallback).
+                if (useMpv && !mpvFallback) {
+                    AndroidView(
+                        factory = { ctx ->
+                            android.view.SurfaceView(ctx).apply {
+                                holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                                    override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                        onMpvSurfaceCreated(holder.surface)
+                                    }
+
+                                    override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
+                                        onMpvSurfaceChanged(width, height)
+                                    }
+
+                                    override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                        onMpvSurfaceDestroyed()
+                                    }
+                                })
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize().clipToBounds(),
+                    )
+                } else {
+                    AndroidView(
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = false // controles custom (Compose)
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                            }
+                        },
+                        update = {
+                            setPlayerViewRef(it)
+                            applyFrameRate()
                         // Lote 24 item 7: o modo de aspecto decide o resizeMode
                         // (Original devolve o do modo de tela legado). Troca
                         // imediata, sem reiniciar o vídeo.
@@ -1788,15 +1849,16 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     },
                     modifier = Modifier.fillMaxSize().clipToBounds(),
                 )
+                }
 
                 // Legenda externa desenhada aqui, com o atraso escolhido.
                 if (selectedSubUrl != null && externalCues.isNotEmpty()) {
-                    ExternalSubtitle(externalCues, exoPlayer, (subDelay * 1000).toLong(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
+                    ExternalSubtitle(externalCues, { activePositionMs() }, (subDelay * 1000).toLong(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
                 }
                 // Segunda legenda no topo (Lote 16 item 3): só vale com arquivo
                 // externo (o ExoPlayer renderiza 1 faixa embutida por vez).
                 if (secondarySubUrl != null && secondaryCues.isNotEmpty()) {
-                    SecondarySubtitle(secondaryCues, exoPlayer, secondaryDelayMs(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
+                    SecondarySubtitle(secondaryCues, { activePositionMs() }, secondaryDelayMs(), subSize, subBg, isTv, controlsVisible || syncBarOpen, subColor, subFont, subBgOpacity)
                 }
 
                 // Transmitindo p/ Chromecast: a mídia roda na TV; celular vira controle.
@@ -1826,8 +1888,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                             if (t.goNext) {
                                 if (hasNextEpisode) playNextEpisode() else goToNextSeason()
                             } else {
-                                currentPlayer().seekTo(t.targetMs)
-                                position = t.targetMs
+                                activeSeekTo(t.targetMs)
                                 if (t.learnedMark) introSkippedEp = curEpisode
                                 // Lote 16 item 2: pulo manual da ABERTURA de série
                                 // conta p/ o auto-skip aprendido (3 pulos = oferta opt-in).
@@ -1957,7 +2018,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         onSeekFwd = { seekBy(10_000) },
                         onSeekTo = { ms ->
                             val from = position
-                            currentPlayer().seekTo(ms); position = ms; controlsVisible = true
+                            activeSeekTo(ms); controlsVisible = true
                             // Pulo pra frente no começo do episódio = abertura. Grava e reusa depois.
                             if (type == "SERIES" && progressVm.learnIntro(tmdbId, from, ms)) {
                                 introMark = from to ms
@@ -1981,7 +2042,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                                 .orEmpty().takeUnless { it.equals("UND", true) }.orEmpty(),
                             screenModes[screenModeIdx].first, playbackSpeedText(speeds[speedIdx]),
                         ).filter { it.isNotBlank() }.joinToString("  ·  "),
-                        buffered = currentPlayer().bufferedPosition,
+                        buffered = activeBufferedPositionMs(),
                         tapSeek = tapSeekEnabled,
                         panelBlur = panelBlurOn,
                         // Lote 16 item 5: divisões da barra (intro/recap/créditos da IntroDB).
@@ -2162,7 +2223,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     skipSegments.postCredits?.let { XRayMarker("Pós-créditos", it.start * 1_000, it.end * 1_000) },
                 ),
                 positionMs = position,
-                onSeek = { ms -> currentPlayer().seekTo(ms); position = ms },
+                onSeek = { ms -> activeSeekTo(ms) },
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
             )
@@ -2245,6 +2306,9 @@ class PlayerSession(
     /** Perfil de buffer do ExoPlayer (pref `pref_player_buffer`, Lote 5 item 1 — v1.14.0).
      *  Como o decoder, só vale na criação do player: o LoadControl entra no Builder. */
     val bufferProfile: BufferProfile = BufferProfile.NORMAL,
+    /** Motor do player (pref `pref_player_engine`, Lote mpv 1 — v1.36.0).
+     *  Só vale na criação da sessão: o mpv nasce aqui (ou não nasce). */
+    val engineMode: PlayerEngineMode = PlayerEngineMode.EXOPLAYER,
     /** Fonte travada ao abrir (guarda de duração confirmada, v1.21.0). */
     val startLocked: Boolean = false,
 ) {
@@ -2426,8 +2490,7 @@ class PlayerSession(
         if (autoSkippedEp == curEpisode && autoSkippedTarget == target) return
         autoSkippedEp = curEpisode
         autoSkippedTarget = target
-        currentPlayer().seekTo(target)
-        position = target
+        activeSeekTo(target)
         toastMsg = label
     }
     var toastMsg by run { mutableStateOf("") }          // aviso curto (ex "Abertura marcada")
@@ -2539,6 +2602,14 @@ class PlayerSession(
     var techInfo by run { mutableStateOf<TechInfo?>(null) }
     /** Re-lê os dados do stream atual p/ o painel de infos técnicas. Não trava o player. */
     fun refreshTechInfo() {
+        // Libmpv (Lote mpv 1): os dados vêm das propriedades video/audio-params.
+        if (mpvActive) {
+            val mpv = mpvPlayer
+            techInfo = runCatching {
+                mpv?.techInfo(casting)?.copy(displayFps = fpsDisplayLine(mpv.videoFps(), fpsMeter.currentFps))
+            }.getOrNull()
+            return
+        }
         techInfo = runCatching { collectTechInfo(exoPlayer, context, casting) }.getOrNull()
             ?.copy(displayFps = displayFpsLine())
     }
@@ -3017,6 +3088,13 @@ class PlayerSession(
     }
     /** (Re)aplica os efeitos no ExoPlayer sem reiniciar o vídeo. */
     fun applyColorEffects() {
+        // Libmpv (Lote mpv 1): os 4 sliders viram propriedades do mpv
+        // (brightness/contrast/saturation/hue); preset e daltonismo ficam
+        // p/ o Lote mpv 2.
+        if (mpvActive) {
+            mpvPlayer?.applyColor(colorState)
+            return
+        }
         runCatching { exoPlayer.setVideoEffects(buildColorEffects(colorState)) }
     }
 
@@ -3040,6 +3118,9 @@ class PlayerSession(
     /** (Re)aplica o modo noturno/Clear Dialogue na sessão de áudio atual.
      * Com o sensorial ligado, o DRC é forçado (ver [sensoryEffectiveNightState]). */
     fun applyNightMode() {
+        // Libmpv (Lote mpv 1): o modo noturno/Clear Dialogue é um efeito na
+        // sessão de áudio do ExoPlayer — com o mpv não vale (Lote mpv 3).
+        if (mpvActive) return
         val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
         val ch = runCatching { exoPlayer.audioFormat?.channelCount }.getOrNull() ?: 2
         nightController.apply(id, ch, sensoryEffectiveNightState(nightModeState, sensoryOn))
@@ -3065,6 +3146,9 @@ class PlayerSession(
         if (pv !== playerViewRef) { playerViewRef = pv; lastAppliedFps = 0f }
     }
     fun applyFrameRate() {
+        // Libmpv (Lote mpv 1): o frame-rate matching lê o ExoPlayer e o
+        // PlayerView — com o mpv não vale (fica p/ o Lote mpv 3).
+        if (mpvActive) return
         if (!frameRateEnabled) return
         val fps = suggestedFrameRate(exoPlayer) ?: return
         if (fps == lastAppliedFps) return
@@ -3075,6 +3159,8 @@ class PlayerSession(
     /** DV perfil 7 sem suporte no aparelho: tenta a faixa HDR10 (1x por fonte). */
     private var dvFallbackTriedFor: String? = null
     fun maybeHdr10Fallback() {
+        // Libmpv (Lote mpv 1): o fallback DV→HDR10 é do ExoPlayer.
+        if (mpvActive) return
         val url = streamUrl ?: return
         if (dvFallbackTriedFor == url) return
         dvFallbackTriedFor = url
@@ -3207,6 +3293,154 @@ class PlayerSession(
     fun currentPlayer(): androidx.media3.common.Player =
         if (casting && castPlayer != null) castPlayer else exoPlayer
 
+    // ── Player ATIVO (ExoPlayer / libmpv / Cast) — Lote mpv 1 (v1.36.0) ──
+    // Os controles, o poll de posição e o save usam ESTES helpers, nunca o
+    // currentPlayer() direto: com o mpv ligado, o ExoPlayer fica parado em
+    // 0 e o currentPlayer() mentiria (posição 0, play sem efeito). O Cast
+    // continua mandando quando está transmitindo, como antes.
+    fun activePositionMs(): Long = when {
+        casting && castPlayer != null -> runCatching { castPlayer.currentPosition }.getOrDefault(position)
+        mpvActive -> mpvPlayer?.positionMs() ?: position
+        else -> runCatching { exoPlayer.currentPosition }.getOrDefault(position)
+    }
+
+    fun activeDurationMs(): Long = when {
+        casting && castPlayer != null -> runCatching { castPlayer.duration }.getOrDefault(duration).coerceAtLeast(0L)
+        mpvActive -> mpvPlayer?.durationMs() ?: duration
+        else -> runCatching { exoPlayer.duration }.getOrDefault(duration).coerceAtLeast(0L)
+    }
+
+    fun activeIsPlaying(): Boolean = when {
+        casting && castPlayer != null -> runCatching { castPlayer.isPlaying }.getOrDefault(false)
+        mpvActive -> mpvPlayer?.isPlaying() == true
+        else -> exoPlayer.isPlaying
+    }
+
+    fun activeSeekTo(ms: Long) {
+        when {
+            casting && castPlayer != null -> runCatching { castPlayer.seekTo(ms) }
+            mpvActive -> mpvPlayer?.seekTo(ms)
+            else -> runCatching { exoPlayer.seekTo(ms) }
+        }
+        position = ms
+    }
+
+    fun activeSetPlaying(playing: Boolean) {
+        when {
+            casting && castPlayer != null -> runCatching { castPlayer.playWhenReady = playing }
+            mpvActive -> mpvPlayer?.setPlaying(playing)
+            else -> exoPlayer.playWhenReady = playing
+        }
+    }
+
+    fun activeSetSpeed(rate: Float) {
+        when {
+            casting && castPlayer != null -> runCatching { castPlayer.setPlaybackSpeed(rate) }
+            mpvActive -> mpvPlayer?.setSpeed(rate)
+            else -> runCatching { exoPlayer.setPlaybackSpeed(rate) }
+        }
+    }
+
+    fun activeBufferedPositionMs(): Long = when {
+        casting && castPlayer != null -> runCatching { castPlayer.bufferedPosition }.getOrDefault(position)
+        mpvActive -> mpvPlayer?.bufferedPositionMs() ?: position
+        else -> runCatching { exoPlayer.bufferedPosition }.getOrDefault(position)
+    }
+
+    /** Posição do player LOCAL (ExoPlayer ou mpv), nunca o Cast. */
+    fun localPositionMs(): Long =
+        if (mpvActive) mpvPlayer?.positionMs() ?: position
+        else runCatching { exoPlayer.currentPosition }.getOrDefault(position)
+
+    /** Pausa/toca o player LOCAL (ExoPlayer ou mpv), nunca o Cast. */
+    fun setLocalPlaying(playing: Boolean) {
+        if (mpvActive) mpvPlayer?.setPlaying(playing) else exoPlayer.playWhenReady = playing
+    }
+
+    // ── Libmpv (Lote mpv 1, v1.36.0) ─────────────────────────────────────
+    /** Motor escolhido na pref (só vale na criação da sessão). */
+    val useMpv: Boolean get() = engineMode == PlayerEngineMode.LIBMPV
+    /** true quando o mpv falhou e a sessão caiu p/ o ExoPlayer. */
+    var mpvFallback by run { mutableStateOf(false) }
+    /** true enquanto o vídeo está de fato no mpv (não no fallback). */
+    val mpvActive: Boolean get() = useMpv && !mpvFallback && mpvPlayer != null
+    /** Wrapper do libmpv (null = MPV() falhou na construção, .so ausente). */
+    val mpvPlayer: MpvPlayer? = if (useMpv) runCatching {
+        MpvPlayer(
+            context,
+            object : MpvPlayer.MpvListener {
+                override fun onFileLoaded() = onMpvFileLoaded()
+                override fun onEndFile(eofReached: Boolean) = onMpvEndFile(eofReached)
+                override fun onInitFailed() = onMpvInitFailed()
+            },
+        )
+    }.getOrNull() else null
+
+    /** SurfaceView do mpv pronta: anexa (e dispara load pendente). */
+    fun onMpvSurfaceCreated(surface: android.view.Surface) {
+        mpvPlayer?.onSurfaceCreated(surface)
+    }
+
+    fun onMpvSurfaceChanged(width: Int, height: Int) {
+        mpvPlayer?.onSurfaceChanged(width, height)
+    }
+
+    fun onMpvSurfaceDestroyed() {
+        mpvPlayer?.onSurfaceDestroyed()
+    }
+
+    /** Arquivo carregado no mpv: faixas, duração, flags de pronto — o mesmo que o listener do ExoPlayer faz no STATE_READY. */
+    fun onMpvFileLoaded() {
+        val mpv = mpvPlayer ?: return
+        val (audio, text) = mpv.readTracks()
+        audioGroups = audio
+        textGroups = text
+        val (w, h) = mpv.videoSize()
+        if (w > 0 && h > 0) {
+            videoWidth = w
+            videoHeight = h
+            videoQualityLabel = videoResolutionLabel(w, h)
+        }
+        duration = mpv.durationMs().coerceAtLeast(0L)
+        movieStarted = true
+        switching = false
+        readyUrl = streamUrl
+        streamUrl?.let { noteSourceReady(it) }
+        refreshTechInfo()
+        fpsMeter.start()
+        // Velocidade + estilo salvos: o load pode ter corrido antes do init
+        // terminar, então reaplicar aqui garante que valem.
+        mpv.setSpeed(speeds.getOrElse(speedIdx) { 1f })
+        mpv.applyColor(colorState)
+        mpv.applySubStyle(subSize, subColor, subBg, subBgOpacity, subOutline, subFont)
+        if (!didSeek && pendingSeekMs > 0) {
+            mpv.seekAfterLoad(pendingSeekMs)
+            didSeek = true
+        }
+        if (casting) mpv.setPlaying(false)
+        pickAutoSub()
+        maybeShowForcedSub()
+        pickAutoAudio()
+    }
+
+    /** Fim do arquivo no mpv: fim de verdade → próximo; erro → próxima fonte. */
+    fun onMpvEndFile(eofReached: Boolean) {
+        if (eofReached) {
+            playbackEnded = true
+        } else {
+            movieErrored = true
+            playerError = "O Libmpv não conseguiu abrir esta fonte."
+        }
+    }
+
+    /** O libmpv não iniciou neste aparelho: cai p/ o ExoPlayer e avisa. */
+    fun onMpvInitFailed() {
+        if (!mpvFallback) {
+            mpvFallback = true
+            toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
+        }
+    }
+
     // ── Player externo (Lote 4 item 1 — v1.12.0) ──────────────────────────
     /** true depois que o \"Player externo\" automático já disparou 1x nesta sessão. */
     var externalOpened by run { mutableStateOf(false) }
@@ -3305,6 +3539,11 @@ class PlayerSession(
         // não volta por cima dela no meio da reprodução.
         audioPicked = true
         val g = audioGroups.getOrNull(index) ?: return
+        // Libmpv (Lote mpv 1): o id do mpv está no Format.id do grupo sintetizado.
+        if (mpvActive) {
+            mpvPlayer?.setAudioTrackId(g.getTrackFormat(0).id?.toIntOrNull())
+            return
+        }
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, 0))
             .build()
@@ -3316,6 +3555,9 @@ class PlayerSession(
     // escolheu a faixa à mão no vídeo atual (audioPicked).
     fun applyPreferredAudioLanguage() {
         if (audioPicked) return
+        // Libmpv: o `alang` já é passado no load e o pickAutoAudio escolhe
+        // pela track-list — não há preferência de idioma p/ aplicar aqui.
+        if (mpvActive) return
         val lang = SubLangs.of(audioLangPref)?.family ?: "pt"
         runCatching {
             exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
@@ -3336,6 +3578,11 @@ class PlayerSession(
         if (SubLangs.match(langs[best], audioLangPref) == 0) return
         val g = audioGroups[best]
         if (g.isSelected) return
+        // Libmpv (Lote mpv 1): o id do mpv está no Format.id do grupo sintetizado.
+        if (mpvActive) {
+            mpvPlayer?.setAudioTrackId(g.getTrackFormat(0).id?.toIntOrNull())
+            return
+        }
         runCatching {
             exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                 .setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, 0))
@@ -3343,12 +3590,22 @@ class PlayerSession(
         }
     }
     fun enableTextGroup(g: androidx.media3.common.Tracks.Group) {
+        // Libmpv (Lote mpv 1): o id do mpv está no Format.id do grupo sintetizado.
+        if (mpvActive) {
+            mpvPlayer?.setSubTrackId(g.getTrackFormat(0).id?.toIntOrNull())
+            return
+        }
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
             .setOverrideForType(androidx.media3.common.TrackSelectionOverride(g.mediaTrackGroup, 0))
             .build()
     }
     fun disableText() {
+        // Libmpv (Lote mpv 1): sid "no" desliga a legenda embutida.
+        if (mpvActive) {
+            mpvPlayer?.setSubTrackId(null)
+            return
+        }
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true)
             .build()
@@ -3559,6 +3816,14 @@ class PlayerSession(
     /** Liga o som de [src] com a imagem atual. [onDone] diz se deu certo. A referência
      *  de posição é o player atual (local ou CastPlayer, no Hear it) — ver [currentPlayer]. */
     fun setExt(src: MoviePlayerSource, onDone: (Boolean) -> Unit) {
+        // Libmpv (Lote mpv 1): o som de outra fonte sincroniza pela posição
+        // do Player do Media3 (ver ExtAudioSync) — com o mpv não vale ainda
+        // (fica p/ o Lote mpv 3). Não iniciar evita som dessincronizado.
+        if (mpvActive) {
+            toastMsg = "Som de outra fonte ainda não funciona com o Libmpv."
+            onDone(false)
+            return
+        }
         dropExt(restoreOwn = false)
         val ext = ExoPlayer.Builder(context).setMediaSourceFactory(mediaSourceFactory(context)).build().apply {
             // Só o som. Sem decodificar imagem nem legenda.
@@ -3607,10 +3872,9 @@ class PlayerSession(
     fun seekBy(deltaMs: Long, showControls: Boolean = true) {
         // Lote 24 item 10: buscar é interação (botão ±10 s ou gesto).
         noteUserInteraction()
-        val p = currentPlayer()
-        val d = if (duration > 0) duration else p.duration.coerceAtLeast(0L)
-        val target = (p.currentPosition + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
-        p.seekTo(target); position = target
+        val d = if (duration > 0) duration else activeDurationMs()
+        val target = (activePositionMs() + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
+        activeSeekTo(target)
         if (showControls) controlsVisible = true
     }
     /** Um passo do gesto de deslizar p/ buscar (item 5): ±10 s, o mesmo passo dos
@@ -3624,12 +3888,13 @@ class PlayerSession(
     fun togglePlay() {
         // Lote 24 item 10: play/pause é interação.
         noteUserInteraction()
-        currentPlayer().let { it.playWhenReady = !it.playWhenReady }
+        val playing = activeIsPlaying()
+        activeSetPlaying(!playing)
         controlsVisible = true
         // Sleep timer (Lote 16 item 6): ao voltar a tocar depois da pausa do
         // timer, reativa a legenda como estava (1x — o pause/resume normal
         // não restaura nada).
-        if (sleepPaused && currentPlayer().playWhenReady) {
+        if (sleepPaused && !playing) {
             sleepPaused = false
             val wake = sleepWakeState
             sleepWakeState = null
@@ -3668,7 +3933,7 @@ class PlayerSession(
             // usuário voltar a tocar (só vale 1x, p/ a pausa do timer).
             sleepWakeState = captureSleepWakeState(subtitleOn, selectedSubUrl)
             sleepPaused = true
-            currentPlayer().playWhenReady = false
+            activeSetPlaying(false)
             toastMsg = "Sleep timer: reprodução pausada"
         }
         toastMsg = "Sleep timer: pausa em $minutes min"
@@ -3712,6 +3977,9 @@ class PlayerSession(
     // (onAudioSessionIdChanged). Aparelho sem suporte: avisa 1x e segue sem boost.
     private var loudnessEnhancer: android.media.audiofx.LoudnessEnhancer? = null
     fun applyVolBoost() {
+        // Libmpv (Lote mpv 1): o Volume Boost é um LoudnessEnhancer na
+        // sessão de áudio do ExoPlayer — com o mpv não vale (Lote mpv 3).
+        if (mpvActive) return
         val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
         if (!volBoostEnabled || volBoostLevel <= 1f || id == 0) {
             runCatching { loudnessEnhancer?.enabled = false }
@@ -3755,6 +4023,9 @@ class PlayerSession(
 
     /** (Re)aplica o equalizador na sessão de áudio atual. */
     fun applyEqualizer() {
+        // Libmpv (Lote mpv 1): o equalizador é um Equalizer na sessão de
+        // áudio do ExoPlayer — com o mpv não vale (Lote mpv 3).
+        if (mpvActive) return
         val id = runCatching { exoPlayer.audioSessionId }.getOrDefault(0)
         if (!eqEnabled || id == 0) {
             runCatching { equalizer?.release() }
@@ -3799,6 +4070,8 @@ class PlayerSession(
         releaseVolBoost()
         releaseEqualizer()
         cancelSleepTimer()
+        // Libmpv (Lote mpv 1): solta a superfície e destrói o mpv antes do ExoPlayer.
+        mpvPlayer?.destroy()
         exoPlayer.release()
         mediaSession.release()
         ScrubThumbnailer.release()
@@ -4661,7 +4934,7 @@ class PlayerSession(
             speedIdx = i
             // Salva no perfil: a próxima sessão abre na mesma velocidade.
             progressVm.playerSpeed = speed
-            runCatching { currentPlayer().setPlaybackSpeed(speed) }
+            runCatching { activeSetSpeed(speed) }
         }
     }
     val screenActions get() = screenModes.mapIndexed { i, mode ->
@@ -4869,7 +5142,7 @@ class PlayerSession(
                 if (target.goNext) {
                     if (hasNextEpisode) playNextEpisode() else goToNextSeason()
                 } else {
-                    currentPlayer().seekTo(target.targetMs); position = target.targetMs
+                    activeSeekTo(target.targetMs)
                     if (target.learnedMark) introSkippedEp = curEpisode
                 }
             })

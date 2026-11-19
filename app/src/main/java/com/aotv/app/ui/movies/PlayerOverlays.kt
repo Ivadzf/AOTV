@@ -52,7 +52,8 @@ import kotlinx.coroutines.delay
 @Composable
 internal fun BoxScope.ExternalSubtitle(
     cues: List<SubCue>,
-    player: androidx.media3.common.Player,
+    /** Posição atual do player ATIVO (ExoPlayer, libmpv ou Cast) — p/ o mpv não há Player do Media3. */
+    positionMs: () -> Long,
     delayMs: Long,
     sizeScale: Float,
     withBg: Boolean,
@@ -63,7 +64,7 @@ internal fun BoxScope.ExternalSubtitle(
     bgOpacity: Float = 0.78f,
 ) {
     var subPos by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(cues) { while (true) { subPos = player.currentPosition; delay(100) } }
+    LaunchedEffect(cues) { while (true) { subPos = positionMs(); delay(100) } }
     val line = cueAt(cues, subPos, delayMs)
     if (line.isEmpty()) return
     Text(

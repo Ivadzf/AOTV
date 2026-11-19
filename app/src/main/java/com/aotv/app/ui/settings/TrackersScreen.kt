@@ -88,7 +88,7 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Tela "Trackers e Sincronização" (Simkl v1.13.1, device flow V2; Trakt v1.17.0;
- * MDBList, AniList e TheTVDB v1.17.0).
+ * MDBList, AniList e TheTVDB v1.17.0; OMDb v1.36.0).
  *
  * Ponto de entrada p/ a navegação (o coordenador faz a fiação da rota e do
  * hub; esta tela NÃO se conecta à navegação sozinha):
@@ -121,12 +121,14 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
     var traktClientId by remember(st.traktClientId) { mutableStateOf(st.traktClientId) }
     var traktClientSecret by remember(st.traktClientSecret) { mutableStateOf(st.traktClientSecret) }
     var mdbApiKey by remember(st.mdbApiKey) { mutableStateOf(st.mdbApiKey) }
+    var omdbApiKey by remember(st.omdbApiKey) { mutableStateOf(st.omdbApiKey) }
     var aniClientId by remember(st.aniClientId) { mutableStateOf(st.aniClientId) }
     var tvdbApiKey by remember(st.tvdbApiKey) { mutableStateOf(st.tvdbApiKey) }
     // Lote 20 (v1.30.0) — olho p/ exibir/mascarar as chaves (só a TMDB
     // tinha; o AniList Client ID já é texto visível, sem máscara).
     var traktSecretVisible by remember { mutableStateOf(false) }
     var mdbKeyVisible by remember { mutableStateOf(false) }
+    var omdbKeyVisible by remember { mutableStateOf(false) }
     var tvdbKeyVisible by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var confirmTraktLogout by remember { mutableStateOf(false) }
@@ -149,7 +151,7 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
             if (!com.aotv.app.ui.common.LocalIsTv.current) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar", tint = TextPrimary)
             }
-            PageHeader("Trackers e Sincronização", Modifier.weight(1f), sub = "Simkl, Trakt, MDBList, AniList e TheTVDB no perfil ${st.profileName}")
+            PageHeader("Trackers e Sincronização", Modifier.weight(1f), sub = "Simkl, Trakt, MDBList, OMDb, AniList e TheTVDB no perfil ${st.profileName}")
         }
 
         val summary: @Composable () -> Unit = {
@@ -205,6 +207,20 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "O MDBList mostra as notas de cada fonte (IMDb, TMDB, Trakt, Letterboxd e outras) nos detalhes do título. Ele só lê — nenhuma nota sai daqui para o MDBList.",
+                    color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("OMDb", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(10.dp))
+                SummaryRow(
+                    "Status",
+                    if (st.omdbApiKey.isBlank()) "Desconectado" else "Conectado",
+                    if (st.omdbApiKey.isNotBlank()) Ok else TextPrimary,
+                )
+                SummaryRow("Chave", if (st.omdbApiKey.isBlank()) "Não configurada" else "Configurada", TextPrimary)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "O OMDb é uma das fontes da nota dos episódios (junto com TMDB, Trakt e TVmaze). Ele só lê — nenhuma nota sai daqui para o OMDb.",
                     color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -521,6 +537,61 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                             onCheckedChange = { viewModel.toggleMdbSource(source, it) },
                         )
                     }
+                }
+
+                st.omdbMessage?.let { SimklBanner(it, ok = true, onClose = viewModel::clearOmdbMessage) }
+                st.omdbError?.let { SimklBanner(it, ok = false, onClose = viewModel::clearOmdbMessage) }
+
+                // OMDb (Lote mpv 1, v1.36.0): a chave já existia em
+                // Configurações → Página de detalhes (fonte da nota dos
+                // episódios, Lote 24), mas não aparecia aqui — era o
+                // tracker novo sem campo de chave na aba de Trackers.
+                SettingsSection("OMDb")
+                Text(
+                    "Para usar o OMDb como fonte da nota dos episódios, crie uma conta grátis no OMDb e cole a chave de API aqui. " +
+                        "O OMDb só é lido — nenhuma nota ou lista sai daqui para ele.",
+                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                AotvButton(
+                    "Abrir o cadastro de chaves do OMDb", { open("https://www.omdbapi.com/apikey.aspx") },
+                    icon = Icons.Default.Link, tone = ButtonTone.SECONDARY, compact = true,
+                )
+                Text(
+                    "https://www.omdbapi.com/apikey.aspx",
+                    color = TextTertiary, fontSize = 12.sp, lineHeight = 16.sp,
+                )
+                OutlinedTextField(
+                    value = omdbApiKey, onValueChange = { omdbApiKey = it.trim() }, singleLine = true,
+                    label = { Text("Chave de API do OMDb") },
+                    leadingIcon = { Icon(Icons.Default.Key, null, tint = TextSecondary) },
+                    trailingIcon = {
+                        IconButton(onClick = { omdbKeyVisible = !omdbKeyVisible }) {
+                            Icon(
+                                if (omdbKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (omdbKeyVisible) "Ocultar chave do OMDb" else "Mostrar chave do OMDb",
+                            )
+                        }
+                    },
+                    visualTransformation = if (omdbKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent, unfocusedBorderColor = Border,
+                        focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
+                    ),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AotvButton(
+                        "Salvar chave do OMDb", { viewModel.saveOmdbApiKey(omdbApiKey) },
+                        icon = Icons.Default.CheckCircle, tone = ButtonTone.SECONDARY,
+                        enabled = omdbApiKey != st.omdbApiKey, compact = true,
+                    )
+                }
+                if (st.omdbApiKey.isBlank()) {
+                    Text(
+                        "Sem a chave o OMDb não entra nas fontes da nota dos episódios — o AOTV precisa da sua própria chave, não usa a de nenhum outro app.",
+                        color = TextTertiary, fontSize = 12.sp, lineHeight = 16.sp,
+                    )
                 }
 
                 st.aniMessage?.let { SimklBanner(it, ok = true, onClose = viewModel::clearAniMessage) }

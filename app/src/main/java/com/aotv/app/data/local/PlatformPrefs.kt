@@ -2624,12 +2624,12 @@ class PlatformPrefs @Inject constructor(
         set(value) { prefs.edit().putString(sk("pref_player_color_daltonism"), value).apply(); _playerColorDaltonism.value = value }
 
     // ── Motor do player (Lote 4, v1.12.0) — por perfil ─────────────────────
-    // Player padrão: "exoplayer" (interno) ou "external" (abre o link
-    // resolvido num player instalado, via ACTION_VIEW + seletor do sistema).
-    // Libmpv NÃO entra aqui: sem artefato Maven Central (ver PlayerEngine.kt).
+    // Player padrão: "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 —
+    // v1.36.0) ou "external" (abre o link resolvido num player instalado,
+    // via ACTION_VIEW + seletor do sistema).
 
     private val _playerEngine = MutableStateFlow(prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer")
-    /** Player padrão do perfil ("exoplayer" ou "external"). */
+    /** Player padrão do perfil ("exoplayer", "libmpv" ou "external"). */
     val playerEngineFlow: StateFlow<String> = _playerEngine.asStateFlow()
     var playerEngine: String
         get() = _playerEngine.value
