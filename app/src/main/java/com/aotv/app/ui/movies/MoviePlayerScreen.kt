@@ -1202,6 +1202,28 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         }
         onDispose { ambilightSampler.stop() }
     }
+    // Lote 25 (v1.35.0), item 1 — Assistente: registra as ações deste player
+    // na ponte em memória. Sem player aberto a ponte fica null e o assistente
+    // mostra o aviso. O onDispose limpa ao sair do player. Fica AQUI (em
+    // PlayerPlaybackEffects, @Composable): DisposableEffect não é declaração
+    // de membro e não compila no corpo da classe PlayerSession (build #284).
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        AssistantPlayerBridge.actions = AssistantPlayerActions(
+            pause = { currentPlayer().playWhenReady = false; controlsVisible = true },
+            resume = { currentPlayer().playWhenReady = true; controlsVisible = true },
+            seekBy = { deltaMs -> seekBy(deltaMs) },
+            seekTo = { ms -> currentPlayer().seekTo(ms); position = ms; controlsVisible = true },
+            setSubtitles = { enabled ->
+                if (enabled) pickAutoSub() else { disableText(); subtitleOn = false; selectedSubUrl = null }
+            },
+            nextEpisode = {
+                if (hasNextEpisode) { playNextEpisode(); true }
+                else if (hasNextSeason) { goToNextSeason(); true }
+                else false
+            },
+        )
+        onDispose { AssistantPlayerBridge.actions = null }
+    }
     // Contagem regressiva do prompt — 0 = avança automaticamente (próximo ep OU próxima temporada).
     // Com o "A seguir" automático DESLIGADO (Fase C), o cartão aparece mas a
     // contagem não anda: só avança no botão "Assistir".
@@ -3865,26 +3887,6 @@ class PlayerSession(
         nextCountdownArmed = false
         showNextPrompt = false
         goToEpisode(1, curSeason + 1)
-    }
-    // Lote 25 (v1.35.0), item 1 — Assistente: registra as ações deste player
-    // na ponte em memória. Sem player aberto a ponte fica null e o assistente
-    // mostra o aviso. O onDispose limpa ao sair do player.
-    androidx.compose.runtime.DisposableEffect(Unit) {
-        AssistantPlayerBridge.actions = AssistantPlayerActions(
-            pause = { currentPlayer().playWhenReady = false; controlsVisible = true },
-            resume = { currentPlayer().playWhenReady = true; controlsVisible = true },
-            seekBy = { deltaMs -> seekBy(deltaMs) },
-            seekTo = { ms -> currentPlayer().seekTo(ms); position = ms; controlsVisible = true },
-            setSubtitles = { enabled ->
-                if (enabled) pickAutoSub() else { disableText(); subtitleOn = false; selectedSubUrl = null }
-            },
-            nextEpisode = {
-                if (hasNextEpisode) { playNextEpisode(); true }
-                else if (hasNextSeason) { goToNextSeason(); true }
-                else false
-            },
-        )
-        onDispose { AssistantPlayerBridge.actions = null }
     }
     // Aplica a fonte no índice dado (identidade por ÍNDICE, não por label — labels se repetem,
     // e resolver por label causava troca infinita / duas fontes "ativas" ao mesmo tempo).
