@@ -357,7 +357,6 @@ fun HomeCustomizeScreen(
                     }
                     HomeRowCard(
                         row = row,
-                        itemModifier = Modifier.animateItemPlacement(),
                         dragModifier = dragModifier,
                         isDragging = isDragging,
                         dragOffsetY = if (isDragging) dragDy else 0f,

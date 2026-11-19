@@ -112,7 +112,7 @@ class TvMazeService @Inject constructor(
         synchronized(ratingCache) {
             if (ratingCache.containsKey(cacheKey)) return ratingCache[cacheKey]
         }
-        val rating: Double?
+        var rating: Double?
         try {
             rating = api.episodeByNumber(showId, season, episode).rating?.average
                 ?.takeIf { it in 0.0..10.0 }

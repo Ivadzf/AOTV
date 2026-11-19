@@ -170,7 +170,7 @@ internal val SCOPED_KEYS = listOf(
     // v1.13.0 — Backup: títulos removidos do Continuar assistindo (por perfil).
     "hidden_continue_v1",
     // Fase D — trackers, Discord e servidores de mídia (por perfil, como o Trakt).
-    "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
+    "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1",
     "anilist_v1", "wetrakr_v1", "publicmetadb_v1",
     "discord_v1", "jellyfin_v1", "emby_v1",
     // v1.17.0 — MDBList, AniList, TheTVDB e avaliação pós-filme (por perfil).
@@ -1160,11 +1160,6 @@ class PlatformPrefs @Inject constructor(
     var mdblistApiKey: String
         get() = prefs.getString(sk("mdblist_key_v1"), "") ?: ""
         set(value) { prefs.edit().putString(sk("mdblist_key_v1"), value.trim()).apply() }
-
-    /** Chave de API do OMDb, colada pelo usuário. Vazio = desligado. */
-    var omdbApiKey: String
-        get() = prefs.getString(sk("omdb_key_v1"), "") ?: ""
-        set(value) { prefs.edit().putString(sk("omdb_key_v1"), value.trim()).apply() }
 
     /** Token do AniList do perfil (JSON cru). Vazio sem login. */
     var anilistSession: String

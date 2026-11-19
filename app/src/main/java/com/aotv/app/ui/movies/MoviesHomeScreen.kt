@@ -221,6 +221,7 @@ fun MoviesHomeScreen(
                 onVodClick = onVodClick,
                 onOpenOnDemand = onOpenOnDemand,
                 randomVm = randomVm,
+                minhaListaVm = minhaListaVm,
             )
         }
         // Estado vazio do sorteio (Lote 2): diálogo com o motivo, sem travar a
@@ -553,6 +554,8 @@ private fun HomeSectionsTab(
     /** "Ver tudo" da fileira On Demand: abre a tela On Demand na aba certa. */
     onOpenOnDemand: (Boolean) -> Unit = {},
     randomVm: RandomEpisodeViewModel,
+    /** Minha Lista p/ o MK Channel (item 5, Lote 24): a fonte watchlist. */
+    minhaListaVm: MinhaListaViewModel,
 ) {
     val listState = rememberLazyListState()
     // Remover do Continuar assistindo (segurar o card, v1.13.0): confirma antes.

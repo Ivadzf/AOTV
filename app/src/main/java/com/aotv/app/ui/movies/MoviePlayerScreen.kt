@@ -598,7 +598,7 @@ fun MoviePlayerScreen(
     LaunchedEffect(Unit) {
         AmbilightSampler.appContextForAmbilight = context.applicationContext
         s.ambilightState = loadAmbilightState(nightPrefs)
-        s.sensoryOn = loadSensoryFriendlyState(nightPrefs)
+        s.sensoryOn = loadSensoryFriendlyState(nightPrefs).enabled
         s.applyNightMode()
     }
     s.onAmbilightSave = { saveAmbilightState(nightPrefs, it) }

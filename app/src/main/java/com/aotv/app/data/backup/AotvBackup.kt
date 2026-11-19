@@ -56,7 +56,7 @@ object AotvBackup {
 
     /** Chaves por perfil que são segredo: só entram com o toggle ligado. */
     val SECRET_SCOPED_KEYS = setOf(
-        "trakt_access_token_v1", "trakt_refresh_token_v1", "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1", "omdb_key_v1",
+        "trakt_access_token_v1", "trakt_refresh_token_v1", "simkl_v1", "simkl_client_id_v1", "mdblist_key_v1",
         "anilist_v1", "wetrakr_v1", "publicmetadb_v1", "discord_v1", "jellyfin_v1",
         "emby_v1", "pref_player_animeskip_client_id",
         // v1.17.0 — token do AniList (por perfil): segredo, como os tokens do Trakt.
@@ -76,6 +76,10 @@ object AotvBackup {
         // de propósito: GLOBAL_KEYS entra no backup SEMPRE, e chave de API
         // nunca viaja sem o toggle de segredos (mesma regra do Trakt).
         "mdblist_api_key", "anilist_client_id", "tvdb_api_key", "tvdb_auth_token",
+        // Lote 24 (v1.34.0), fix da build #279 — a chave do OMDb é global
+        // (omdb_api_key) e segredo do usuário: fora do backup por padrão,
+        // no mesmo precedente da chave do MDBList.
+        "omdb_api_key",
         // Lote 10 (v1.20.0) — Client ID OAuth do Google Drive (configurável,
         // vazio por padrão): mesmo precedente do client ID do Trakt.
         "drive_client_id",
