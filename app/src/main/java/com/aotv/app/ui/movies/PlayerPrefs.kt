@@ -110,6 +110,26 @@ class PlayerPrefsViewModel @Inject constructor(
     val frameRate: StateFlow<Boolean> = prefs.playerFrameRateFlow
     fun setFrameRate(v: Boolean) { prefs.playerFrameRate = v }
 
+    /** Gate de dados móveis ao dar play (Lote 25 item 7, v1.35.0 — Frente C):
+     * "ask" (perguntar sempre) | "allow" (liberar sempre) | "block" (só Wi-Fi). */
+    val mobileDataGate: StateFlow<String> = prefs.mobileDataGateFlow
+    fun setMobileDataGate(v: String) { prefs.mobileDataGate = v }
+
+    /** Governador de bateria (Lote 25 item 8, v1.35.0 — Frente C): com
+     * bateria ≤ 20% e sem carregar, sugere o modo economia 1x por sessão. */
+    val batteryGovernor: StateFlow<Boolean> = prefs.batteryGovernorFlow
+    fun setBatteryGovernor(v: Boolean) { prefs.batteryGovernor = v }
+
+    /** Saída de áudio (Lote 25 item 9, v1.35.0 — Frente C): GLOBAL (do
+     * aparelho, não do perfil) — "auto" | "speakers" | "receiver". */
+    val audioOutput: StateFlow<String> = prefs.audioOutputFlow
+    fun setAudioOutput(v: String) { prefs.audioOutput = v }
+
+    /** Passthrough Dolby/DTS (Lote 25 item 9, v1.35.0 — Frente C): GLOBAL.
+     * Só vale a partir da próxima reprodução (o sink nasce com o player). */
+    val audioPassthrough: StateFlow<Boolean> = prefs.audioPassthroughFlow
+    fun setAudioPassthrough(v: Boolean) { prefs.audioPassthrough = v }
+
     /** "Foreign audio only" (Lote 16 item 3): a legenda só abre sozinha quando o áudio é estrangeiro. */
     val subForeignOnly: StateFlow<Boolean> = prefs.subForeignOnlyFlow
     fun setSubForeignOnly(v: Boolean) { prefs.subForeignOnly = v }

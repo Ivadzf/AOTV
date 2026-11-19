@@ -40,8 +40,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Comment
@@ -247,6 +249,9 @@ fun SettingsPageScreen(
     onOpenLiveChannels: () -> Unit = {},
     onOpenCollections: () -> Unit = {},
     onOpenWatchParty: () -> Unit = {},
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+    onOpenReportProblem: () -> Unit = {},
+    onOpenAddonHealth: () -> Unit = {},
     onBack: () -> Unit,
     onPlatformChanged: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -262,10 +267,10 @@ fun SettingsPageScreen(
         SettingsPageIds.Layout -> LayoutPage(onOpenHomeCustomize, onOpenCollections, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Streams -> StreamsPage(onBack, highlightAnchor = highlightAnchor)
-        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onOpenMediaServers, onBack, viewModel, highlightAnchor)
+        SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onOpenMediaServers, onOpenAddonHealth, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor, onOpenLiveChannels)
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
-        SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor)
+        SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor, onOpenReportProblem = onOpenReportProblem)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
         SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Backup -> BackupScreen(onBack, highlightAnchor = highlightAnchor)
@@ -273,7 +278,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Vpn -> VpnScreen(onBack, highlightAnchor)
         SettingsPageIds.WatchParty -> WatchPartyScreen(onBack, highlightAnchor)
         SettingsPageIds.SocialHub -> SocialHubScreen(onBack, highlightAnchor, onOpenWatchParty = onOpenWatchParty)
-        SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor)
+        SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor, onOpenReportProblem = onOpenReportProblem, onOpenAddonHealth = onOpenAddonHealth)
         SettingsPageIds.RemoteTv -> RemoteTvScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
@@ -1673,6 +1678,8 @@ private fun ConteudoPage(
     onOpenKodiAddons: () -> Unit,
     onOpenDebrid: () -> Unit,
     onOpenMediaServers: () -> Unit,
+    // Lote 25 (v1.35.0) — Frente B: saúde dos addons.
+    onOpenAddonHealth: () -> Unit = {},
     onBack: () -> Unit,
     viewModel: SettingsViewModel,
     highlightAnchor: String? = null,
@@ -1733,6 +1740,15 @@ private fun ConteudoPage(
                 onClick = onOpenMediaServers,
                 grouped = true,
                 divider = true,
+            )
+            // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Speed,
+                iconTint = Accent,
+                title = "Saúde dos addons",
+                sub = "Latência de cada manifest, o que está lento, Addon Studio e Addon Lab.",
+                onClick = onOpenAddonHealth,
+                grouped = true,
             )
         }
 
@@ -2332,8 +2348,21 @@ private fun AparenciaPage(
     onPlatformChanged: () -> Unit,
     viewModel: SettingsViewModel,
     highlightAnchor: String? = null,
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem" (na seção de versão/Sobre).
+    onOpenReportProblem: () -> Unit = {},
 ) {
     val currentMode by viewModel.platformMode.collectAsStateWithLifecycle()
+    // Lote 25 (v1.35.0), item 4 — Tour de boas-vindas: reabre os 5 capítulos.
+    // (Não existe página "Sobre" — a versão instalada vive nesta página.)
+    val tourContext = LocalContext.current
+    val tourPrefs = remember(tourContext) { com.aotv.app.data.local.PlatformPrefs(tourContext) }
+    var tourOpen by remember { mutableStateOf(false) }
+    if (tourOpen) {
+        com.aotv.app.ui.movies.OnboardingTourDialog(onDone = {
+            tourOpen = false
+            tourPrefs.onboardingTourSeenV1 = true
+        })
+    }
     val deviceLayout = com.aotv.app.ui.common.currentDeviceLayout(currentMode)
     // Blur nos painéis (Lote 3 item 4, v1.11.0; padrão: ligado).
     val panelBlur by viewModel.panelBlur.collectAsStateWithLifecycle()
@@ -2525,6 +2554,24 @@ private fun AparenciaPage(
                 onClick = { viewModel.showWhatsNew() },
                 grouped = true,
             )
+            // Lote 25 (v1.35.0) — Frente B, item 5: "Report a problem".
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.BugReport,
+                title = "Reportar um problema",
+                sub = "Relato pré-preenchido com versão e aparelho, sem chaves, + teste de velocidade",
+                onClick = onOpenReportProblem,
+                grouped = true,
+            )
+            // Lote 25 (v1.35.0), item 4 — Tour de boas-vindas (Frente A):
+            // reabre os 5 capítulos. Não há página "Sobre" — a reabertura
+            // vive aqui, junto da versão instalada.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.AutoAwesome,
+                title = "Tour de boas-vindas",
+                sub = "Rever os 5 capítulos: boas-vindas, Início, busca, player e perfis",
+                onClick = { tourOpen = true },
+                grouped = true,
+            )
         }
         // Diálogo "What's new" (Lote 18, v1.28.0): mostra o changelog da
         // versão instalada; fechar apaga a bolinha do avatar.
@@ -2643,6 +2690,12 @@ private fun ReproducaoPage(
     val ambilight by viewModel.playerAmbilight.collectAsStateWithLifecycle()
     val ambilightIntensity by viewModel.playerAmbilightIntensity.collectAsStateWithLifecycle()
     val sensoryFriendly by viewModel.playerSensoryFriendly.collectAsStateWithLifecycle()
+    // Lote 25 (v1.35.0), itens 7–9 — Frente C: gate de dados móveis,
+    // governador de bateria e saída de áudio (playerPrefs, não viewModel).
+    val mobileDataGate by playerPrefs.mobileDataGate.collectAsStateWithLifecycle()
+    val batteryGovernor by playerPrefs.batteryGovernor.collectAsStateWithLifecycle()
+    val audioOutput by playerPrefs.audioOutput.collectAsStateWithLifecycle()
+    val audioPassthrough by playerPrefs.audioPassthrough.collectAsStateWithLifecycle()
     val animeSkipId by playerPrefs.animeSkipClientId.collectAsStateWithLifecycle()
     // Personalização de legenda e velocidade padrão (v1.9.0).
     val subColor by playerPrefs.subColor.collectAsStateWithLifecycle()
@@ -2681,6 +2734,36 @@ private fun ReproducaoPage(
             PrefRow("Áudio preferido", listOf("any" to "Qualquer", "dub" to "Dublado", "leg" to "Legendado"), audio, viewModel::setAudio)
             Spacer(Modifier.height(14.dp))
             PrefRow("Qualidade máxima", listOf(0 to "Sem limite", 2160 to "4K", 1080 to "1080p", 720 to "720p"), maxQ, viewModel::setMaxQuality)
+        }
+        // Lote 25 (v1.35.0), itens 7–9 — Frente C: gate de dados móveis
+        // ao dar play, governador de bateria e saída de áudio. O gate e
+        // o governador são por perfil; a saída de áudio é do aparelho.
+        SettingsSection("Dados móveis, bateria e áudio", anchor = SettingsAnchors.PLAY_MAIN)
+        SettingsCard {
+            PrefRow("Dados móveis ao dar play", listOf("ask" to "Perguntar sempre", "allow" to "Liberar sempre", "block" to "Só Wi-Fi"), mobileDataGate, playerPrefs::setMobileDataGate)
+            Spacer(Modifier.height(14.dp))
+            PrefRow("Saída de áudio", listOf("auto" to "Automática", "speakers" to "Alto-falantes", "receiver" to "Receiver (HDMI)"), audioOutput, playerPrefs::setAudioOutput)
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Bolt,
+                title = "Governador de bateria",
+                sub = if (batteryGovernor) "Com bateria ≤ 20% e sem carregar, sugere o modo economia (até 720p)"
+                    else "Desligado: nunca sugere o modo economia",
+                trailing = { Switch(checked = batteryGovernor, onCheckedChange = { playerPrefs.setBatteryGovernor(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setBatteryGovernor(!batteryGovernor) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.VolumeUp,
+                title = "Passthrough Dolby/DTS",
+                sub = if (audioPassthrough) "Ligado: bitstream p/ o receiver (vale na próxima reprodução; modo noturno desligado)"
+                    else "Desligado: o app decodifica p/ PCM",
+                trailing = { Switch(checked = audioPassthrough, onCheckedChange = { playerPrefs.setAudioPassthrough(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAudioPassthrough(!audioPassthrough) },
+                grouped = true,
+            )
         }
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(

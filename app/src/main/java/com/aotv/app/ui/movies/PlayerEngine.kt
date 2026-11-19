@@ -93,11 +93,21 @@ enum class DecoderMode(val id: String, val label: String) {
  * app nunca liga o pré-aquecimento (default desligado), então ele nunca
  * é chamado — se um dia ligar, a fábrica-base montaria o renderer
  * padrão sem atraso de vídeo p/ o item pré-aquecido.
+ *
+ * Com [passthroughEnabled] (Lote 25 item 9, v1.35.0 — Frente C), a
+ * fábrica pede o modo offload no sink de áudio (ver
+ * [applyPassthroughToSink]): é um PEDIDO, não uma garantia — o sink só
+ * usa o caminho offload quando o formato aceita; sem suporte, ele
+ * decodifica p/ PCM sozinho. O bitstream em si (AC-3/DTS intacto até
+ * o receiver) depende das capacidades que o aparelho anuncia — o sink
+ * padrão já usa essas capacidades. Vale SÓ na criação do player (o
+ * sink nasce 1x por sessão): mudar o toggle vale a partir da próxima
+ * reprodução, como o decoder e o buffer.
  */
 @OptIn(UnstableApi::class)
-fun decoderRenderersFactory(context: Context, mode: DecoderMode, delayProcessor: AudioDelayProcessor? = null, videoDelay: VideoDelayState? = null): DefaultRenderersFactory {
+fun decoderRenderersFactory(context: Context, mode: DecoderMode, delayProcessor: AudioDelayProcessor? = null, videoDelay: VideoDelayState? = null, passthroughEnabled: Boolean = false): DefaultRenderersFactory {
     val base: DefaultRenderersFactory =
-        if (delayProcessor != null || videoDelay != null) DelayRenderersFactory(context, delayProcessor, videoDelay)
+        if (delayProcessor != null || videoDelay != null || passthroughEnabled) DelayRenderersFactory(context, delayProcessor, videoDelay, passthroughEnabled)
         else DefaultRenderersFactory(context)
     return base
         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
@@ -127,18 +137,27 @@ private class DelayRenderersFactory(
     context: Context,
     private val delayProcessor: AudioDelayProcessor?,
     private val videoDelay: VideoDelayState?,
+    private val passthroughEnabled: Boolean = false,
 ) : DefaultRenderersFactory(context) {
     @OptIn(UnstableApi::class)
     override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
         // buildAudioSink do super é @Nullable na Media3 1.6.0 — o fallback
         // nunca roda na prática (o DefaultRenderersFactory sempre devolve um sink).
-        val processor = delayProcessor ?: return super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
-            ?: DefaultAudioSink.Builder(context).build()
-        return DefaultAudioSink.Builder(context)
-            .setAudioProcessors(arrayOf(processor))
-            .setEnableFloatOutput(enableFloatOutput)
-            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            .build()
+        val sink: AudioSink = if (delayProcessor == null) {
+            super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+                ?: DefaultAudioSink.Builder(context).build()
+        } else {
+            DefaultAudioSink.Builder(context)
+                .setAudioProcessors(arrayOf(delayProcessor))
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .build()
+        }
+        // Lote 25 item 9 (Frente C): passthrough pede o offload no sink —
+        // ver applyPassthroughToSink (pedido, não garantia; sem suporte ao
+        // formato, o sink decodifica p/ PCM sozinho).
+        applyPassthroughToSink(sink, passthroughEnabled)
+        return sink
     }
 
     @OptIn(UnstableApi::class)

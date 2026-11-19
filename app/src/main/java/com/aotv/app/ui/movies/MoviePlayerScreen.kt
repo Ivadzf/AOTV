@@ -486,6 +486,13 @@ fun MoviePlayerScreen(
     // Lote 19 item 7 (v1.29.0): subir a qualidade sozinho (e) e debrid só com arquivo pronto (f).
     val playerAutoUpgrade by playerPrefsVm.autoUpgrade.collectAsState()
     val playerDebridReadyOnly by playerPrefsVm.debridReadyOnly.collectAsState()
+    // Lote 25 (v1.35.0), itens 7–9 — Frente C: gate de dados móveis,
+    // governador de bateria e saída de áudio (a saída é global; o gate
+    // e o governador são por perfil — ver PlayerPrefsViewModel).
+    val mobileDataGate by playerPrefsVm.mobileDataGate.collectAsState()
+    val batteryGovernorPref by playerPrefsVm.batteryGovernor.collectAsState()
+    val audioOutputPref by playerPrefsVm.audioOutput.collectAsState()
+    val audioPassthroughPref by playerPrefsVm.audioPassthrough.collectAsState()
     val playerAnimeSkipClientId by playerPrefsVm.animeSkipClientId.collectAsState()
     // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): pref por perfil, código SubLangs.
     val playerAudioLang by playerPrefsVm.audioLang.collectAsState()
@@ -558,6 +565,31 @@ fun MoviePlayerScreen(
     // Lote 19 item 7 (v1.29.0): subir a qualidade sozinho (e) e debrid só com arquivo pronto (f).
     s.autoUpgradeEnabled = playerAutoUpgrade
     s.debridReadyOnly = playerDebridReadyOnly
+    // Lote 25 (v1.35.0), itens 7–9 — Frente C: a tela lê os fluxos e
+    // entrega à sessão, como as outras prefs do player. O diálogo do
+    // gate e o do governador salvam de volta pelos callbacks.
+    s.mobileGateMode = mobileDataGate
+    s.batteryGovernorEnabled = batteryGovernorPref
+    s.audioOutputMode = audioOutputPref
+    s.audioPassthrough = audioPassthroughPref
+    s.onMobileGateModeChange = { playerPrefsVm.setMobileDataGate(it) }
+    s.onBatteryGovernorChange = { playerPrefsVm.setBatteryGovernor(it) }
+    s.onAudioOutputChange = { playerPrefsVm.setAudioOutput(it) }
+    s.onAudioPassthroughChange = { playerPrefsVm.setAudioPassthrough(it) }
+    // Saída de áudio (item 9): rotear p/ o dispositivo preferido na
+    // hora (null = automático, o sistema decide).
+    LaunchedEffect(audioOutputPref) {
+        applyAudioOutputMode(s.exoPlayer, context, AudioOutputMode.fromId(audioOutputPref))
+    }
+    // Passthrough (item 9): com o bitstream ligado, o modo noturno e o
+    // Clear Dialogue não processam nada (o som não passa pela sessão).
+    // O estado do título carrega o flag p/ o painel mostrar o bloqueio;
+    // o sink em si só muda na próxima reprodução (ver PlayerEngine.kt).
+    LaunchedEffect(audioPassthroughPref) {
+        s.nightController.passthrough = audioPassthroughPref
+        s.nightModeState = s.nightModeState.copy(passthrough = audioPassthroughPref)
+        s.applyNightMode()
+    }
     s.animeSkipClientId = playerAnimeSkipClientId
     // Idioma preferido de áudio (Lote 4 item 7, v1.12.0): a tela lê o fluxo e
     // entrega à sessão, como as outras prefs do player.
@@ -588,6 +620,9 @@ fun MoviePlayerScreen(
         else nightModeTitleKeyMovie(tmdbId.toLong())
         s.nightModeTitleKey = key
         s.nightModeState = loadNightModeState(nightPrefs, key)
+            // Lote 25 item 9 (Frente C): o estado do título carrega o
+            // passthrough vigente p/ o painel mostrar o bloqueio.
+            .copy(passthrough = s.audioPassthrough)
         s.applyNightMode()
     }
     LaunchedEffect(s.nightModeState) { s.applyNightMode() }
@@ -781,8 +816,16 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     }
     // Legenda externa é desenhada pelo próprio player (ver externalCues), então trocar de
     // legenda não recarrega o vídeo.
-    LaunchedEffect(streamUrl) {
+    LaunchedEffect(streamUrl, mobileGatePass) {
         val url = streamUrl ?: return@LaunchedEffect
+        // Lote 25 item 7 (Frente C) — gate de dados móveis: segura a
+        // preparação do stream em dados móveis até o usuário liberar
+        // (o diálogo) ou o modo permitir. O retrigger por mobileGatePass
+        // é p/ a liberação "desta vez" (o streamUrl não muda com ela).
+        if (!mobileGateCheck()) return@LaunchedEffect
+        // Lote 25 item 8 (Frente C) — governador de bateria: sugere o
+        // modo economia 1x por sessão, sem bloquear o play.
+        maybeSuggestBatteryEconomy()
         playVia = ""
         var play = url
         if (TorrentMagnet.isMagnet(url)) {
@@ -1852,6 +1895,25 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     )
                 }
 
+                // Lote 25 (v1.35.0), itens 7 e 8 — Frente C: gate de dados
+                // móveis (segura o play até a escolha) e governador de
+                // bateria (sugestão 1x por sessão, não bloqueia o play).
+                if (showMobileDataDialog && !inPip && !locked) {
+                    MobileDataGateDialog(
+                        title = displayTitle,
+                        onAllowOnce = { dontAskAgain -> allowMobileDataOnce(dontAskAgain) },
+                        onWifiOnly = { dontAskAgain -> declineMobileData(dontAskAgain) },
+                    )
+                }
+                if (showBatteryDialog && !inPip && !locked) {
+                    BatteryGovernorDialog(
+                        status = batteryStatus,
+                        onEnable = { enableBatteryEconomy() },
+                        onLater = { dismissBatterySuggestion(false) },
+                        onNeverAgain = { dismissBatterySuggestion(true) },
+                    )
+                }
+
                 AnimatedVisibility(controlsVisible && !inPip && !syncBarOpen, enter = sensoryEnterTransition(sensoryOn), exit = sensoryExitTransition(sensoryOn)) {
                     CustomPlayerControls(
                         title = displayTitle,
@@ -2571,6 +2633,41 @@ class PlayerSession(
     val ambilightSampler = AmbilightSampler()
     // Item 9: modo sensorial (pref por perfil, ver SensoryFriendly.kt).
     var sensoryOn by run { mutableStateOf(false) }
+
+    // ── Lote 25 — Frente C (v1.35.0), itens 7–9 ─────────────────────────
+    // Gate de dados móveis, governador de bateria e saída de áudio. A
+    // tela entrega as prefs aqui (ver MoviePlayerScreen, junto ao
+    // autoSwitch); os callbacks salvam de volta no perfil/aparelho.
+    /** Modo do gate ("ask" | "allow" | "block" — pref por perfil). */
+    var mobileGateMode by run { mutableStateOf("ask") }
+    /** Título liberado "desta vez" NESTA sessão (em memória — nunca persiste). */
+    var mobileGateAllowedTitle by run { mutableStateOf("") }
+    /** Retrigger do efeito de play quando a liberação chega (o streamUrl não muda). */
+    var mobileGatePass by run { mutableIntStateOf(0) }
+    /** Diálogo do gate aberto (o play fica segurado até a escolha). */
+    var showMobileDataDialog by run { mutableStateOf(false) }
+    /** Salva o modo do gate no perfil (ligado pela tela). */
+    var onMobileGateModeChange: (String) -> Unit = {}
+    /** Governador de bateria ligado (pref por perfil). */
+    var batteryGovernorEnabled by run { mutableStateOf(true) }
+    /** A sugestão de economia já apareceu NESTA sessão (1x por sessão). */
+    var batteryGovernorAsked by run { mutableStateOf(false) }
+    /** Diálogo do governador aberto (não bloqueia o play). */
+    var showBatteryDialog by run { mutableStateOf(false) }
+    /** Bateria lida ao sugerir a economia (null = não deu p/ ler). */
+    var batteryStatus by run { mutableStateOf<BatteryStatus?>(null) }
+    /** Modo economia ativo NESTA sessão (teto de 720p + sem prévia do herói). */
+    var batteryEconomyActive by run { mutableStateOf(false) }
+    /** Salva o governador no perfil (ligado pela tela). */
+    var onBatteryGovernorChange: (Boolean) -> Unit = {}
+    /** Saída de áudio ("auto" | "speakers" | "receiver" — GLOBAL). */
+    var audioOutputMode by run { mutableStateOf("auto") }
+    /** Passthrough Dolby/DTS (GLOBAL; vale na próxima reprodução). */
+    var audioPassthrough by run { mutableStateOf(false) }
+    /** Salva a saída de áudio (ligado pela tela). */
+    var onAudioOutputChange: (String) -> Unit = {}
+    /** Salva o passthrough (ligado pela tela). */
+    var onAudioPassthroughChange: (Boolean) -> Unit = {}
     // Item 10: "Ainda assistindo?" — contador de avanços automáticos sem
     // interação (ver StillWatching.kt). O diálogo e o destino pendente vivem aqui.
     val stillWatching = StillWatchingTracker()
@@ -2714,6 +2811,13 @@ class PlayerSession(
         val rankedOrder = rankedSourceOrder()
         val next = rankedOrder.firstOrNull { idx ->
             val s = f.getOrNull(idx) ?: return@firstOrNull false
+            s.url !in triedUrls && !s.dead && !s.wrongTitle &&
+                // Lote 25 item 8 (Frente C): com a economia ligada, a
+                // troca automática prefere fontes até 720p (cai p/ o
+                // filtro normal quando não há nenhuma nessa faixa).
+                (!batteryEconomyActive || s.rank in 1..BATTERY_ECONOMY_QUALITY_CAP_PX)
+        } ?: rankedOrder.firstOrNull { idx ->
+            val s = f.getOrNull(idx) ?: return@firstOrNull false
             s.url !in triedUrls && !s.dead && !s.wrongTitle
         } ?: rankedOrder.firstOrNull { idx -> (f.getOrNull(idx)?.url ?: "") !in triedUrls }
         if (next == null) return false
@@ -2731,6 +2835,104 @@ class PlayerSession(
         showDowngradeOffer = false
         applyMovieSource(next)
         return true
+    }
+
+    // ── Lote 25 — Frente C (v1.35.0), itens 7 e 8 ──────────────────────
+    // Gate de dados móveis + governador de bateria. Os dois são checados
+    // no efeito de play (LaunchedEffect(streamUrl)): o gate SEGURA a
+    // preparação até a escolha do usuário; o governador só SUGERE (o
+    // diálogo não bloqueia o play) e a economia vale na hora que aceita.
+
+    /** Chave do título atual p/ a liberação "desta vez" (filme ou episódio). */
+    val mobileGateTitleKey: String
+        get() = if (type == "SERIES") "s${tmdbId}_t${curSeason}e${curEpisode}" else "m$tmdbId"
+
+    /**
+     * true = pode preparar o stream agora. Em dados móveis, com o gate
+     * em "ask" e sem liberação desta vez, abre o diálogo e segura o
+     * play (false); em "block", cancela o play e volta (false). Em
+     * Wi-Fi (ou sem rede móvel ativa), sempre true — o gate só olha
+     * dados móveis. Transmitindo p/ o Chromecast o player local também
+     * prepara (e baixa) — o gate vale do mesmo jeito.
+     */
+    fun mobileGateCheck(): Boolean {
+        if (mobileGateAllowedTitle == mobileGateTitleKey) return true
+        if (!com.aotv.app.data.local.MobileDataUsage.isCellularActive(context)) return true
+        return when (MobileDataGateMode.fromId(mobileGateMode)) {
+            MobileDataGateMode.ALLOW -> true
+            MobileDataGateMode.BLOCK -> {
+                toastMsg = "Em dados móveis e o gate está em “Só Wi-Fi”. " +
+                    "Ligue o Wi-Fi ou mude em Configurações → Reprodução."
+                onBack()
+                false
+            }
+            MobileDataGateMode.ASK -> {
+                showMobileDataDialog = true
+                false
+            }
+        }
+    }
+
+    /** "Usar dados móveis desta vez": libera só este título nesta sessão (em memória). */
+    fun allowMobileDataOnce(dontAskAgain: Boolean) {
+        if (dontAskAgain) {
+            mobileGateMode = "allow"
+            onMobileGateModeChange("allow")
+        }
+        mobileGateAllowedTitle = mobileGateTitleKey
+        showMobileDataDialog = false
+        mobileGatePass++
+    }
+
+    /** "Só Wi-Fi": cancela o play e volta (sem gastar dados). */
+    fun declineMobileData(dontAskAgain: Boolean) {
+        if (dontAskAgain) {
+            mobileGateMode = "block"
+            onMobileGateModeChange("block")
+        }
+        showMobileDataDialog = false
+        onBack()
+    }
+
+    /**
+     * Sugere o modo economia 1x por sessão quando a bateria está fraca
+     * (≤ 20%, sem carregar) e o governador está ligado. Não bloqueia o
+     * play: o diálogo aparece por cima e a reprodução segue. Sem
+     * leitura de bateria, não sugere nada.
+     */
+    fun maybeSuggestBatteryEconomy() {
+        if (batteryGovernorAsked || !batteryGovernorEnabled || batteryEconomyActive) return
+        batteryGovernorAsked = true
+        val status = readBatteryStatus(context) ?: return
+        batteryStatus = status
+        if (shouldSuggestEconomy(status)) showBatteryDialog = true
+    }
+
+    /**
+     * Aceitou a economia: teto de 720p (troca a fonte atual por uma até
+     * 720p quando houver uma ainda não tentada) + sem prévia do herói/
+     * trailer nesta sessão (ver [BatteryGovernorSession]). Sem fonte
+     * ≤ 720p, o teto só vale p/ as próximas trocas de fonte.
+     */
+    fun enableBatteryEconomy() {
+        batteryEconomyActive = true
+        BatteryGovernorSession.economyActive = true
+        showBatteryDialog = false
+        if (switchToLowerQuality(BATTERY_ECONOMY_QUALITY_CAP_PX)) {
+            toastMsg = "Modo economia: fonte até 720p e sem prévia do herói nesta sessão."
+        } else {
+            toastMsg = "Modo economia: qualidade limitada a 720p quando houver fonte nessa faixa."
+        }
+    }
+
+    /** "Agora não" (só adia — nesta sessão não pergunta de novo) ou
+     * "Não perguntar de novo" (desliga o governador; religável nas Configurações). */
+    fun dismissBatterySuggestion(dontAskAgain: Boolean) {
+        showBatteryDialog = false
+        if (dontAskAgain) {
+            batteryGovernorEnabled = false
+            onBatteryGovernorChange(false)
+        }
     }
     /** Repo da TV ao vivo p/ o On Demand da folha (ligado pela tela; null = sem repo). */
     var onDemandRepo: LiveTvRepository? = null
@@ -2935,7 +3137,10 @@ class PlayerSession(
             .build()
         try {
             ExoPlayer.Builder(context)
-                .setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState))
+                // Lote 25 item 9 (Frente C): o passthrough nasce com o
+                // player (lido da pref global aqui, na criação — mudar
+                // o toggle vale na próxima reprodução, como o decoder).
+                .setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState, prefs.audioPassthrough))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setMediaSourceFactory(mediaSourceFactory(context))
                 .setAudioAttributes(audioAttrs, true)
@@ -2954,7 +3159,7 @@ class PlayerSession(
                         .build()
                 }
         } catch (_: Exception) {
-            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState))
+            ExoPlayer.Builder(context).setRenderersFactory(decoderRenderersFactory(context, decoderMode, ownAudioDelayProcessor, videoDelayState, prefs.audioPassthrough))
                 .setLoadControl(bufferLoadControl(bufferProfile))
                 .setAudioAttributes(audioAttrs, true).setHandleAudioBecomingNoisy(true)
                 .build().apply { playWhenReady = true }
@@ -3660,6 +3865,26 @@ class PlayerSession(
         nextCountdownArmed = false
         showNextPrompt = false
         goToEpisode(1, curSeason + 1)
+    }
+    // Lote 25 (v1.35.0), item 1 — Assistente: registra as ações deste player
+    // na ponte em memória. Sem player aberto a ponte fica null e o assistente
+    // mostra o aviso. O onDispose limpa ao sair do player.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        AssistantPlayerBridge.actions = AssistantPlayerActions(
+            pause = { currentPlayer().playWhenReady = false; controlsVisible = true },
+            resume = { currentPlayer().playWhenReady = true; controlsVisible = true },
+            seekBy = { deltaMs -> seekBy(deltaMs) },
+            seekTo = { ms -> currentPlayer().seekTo(ms); position = ms; controlsVisible = true },
+            setSubtitles = { enabled ->
+                if (enabled) pickAutoSub() else { disableText(); subtitleOn = false; selectedSubUrl = null }
+            },
+            nextEpisode = {
+                if (hasNextEpisode) { playNextEpisode(); true }
+                else if (hasNextSeason) { goToNextSeason(); true }
+                else false
+            },
+        )
+        onDispose { AssistantPlayerBridge.actions = null }
     }
     // Aplica a fonte no índice dado (identidade por ÍNDICE, não por label — labels se repetem,
     // e resolver por label causava troca infinita / duas fontes "ativas" ao mesmo tempo).
@@ -4392,6 +4617,41 @@ class PlayerSession(
             else if (ext != null) audioDelayLabel(audioDelay) + "  ·  o filme continua tocando"
             else audioDelayLabel(audioDelay) + "  ·  áudio da própria fonte (− adianta o som · + atrasa o som)",
         ) { syncBarOpen = true; controlsVisible = false })
+        // Lote 25 item 9 — saída de áudio (Frente C): TV/falantes vs
+        // receiver + passthrough Dolby/DTS. A saída é GLOBAL (do
+        // aparelho); a rota aplica na hora, o passthrough só vale a
+        // partir da próxima reprodução (o sink nasce com o player) e
+        // desliga o modo noturno/Clear Dialogue.
+        AudioOutputMode.entries.forEach { mode ->
+            add(TvPlayerAction(
+                mode.label, false, audioOutputMode == mode.id,
+                header = if (mode == AudioOutputMode.AUTO) "Saída de áudio" else "",
+                sub = when (mode) {
+                    AudioOutputMode.AUTO -> "O sistema escolhe (fone, Bluetooth, HDMI…)"
+                    AudioOutputMode.SPEAKERS -> "Força os alto-falantes do aparelho"
+                    AudioOutputMode.RECEIVER -> "Força a saída HDMI p/ o receiver"
+                },
+                keepOpen = true,
+            ) {
+                audioOutputMode = mode.id
+                onAudioOutputChange(mode.id)
+                applyAudioOutputMode(exoPlayer, context, mode)
+            })
+        }
+        add(TvPlayerAction(
+            "Passthrough Dolby/DTS", false, audioPassthrough,
+            sub = if (audioPassthrough) "Ligado: bitstream p/ o receiver (vale na próxima reprodução; modo noturno desligado)"
+            else "Desligado: o app decodifica p/ PCM",
+            keepOpen = true,
+        ) {
+            audioPassthrough = !audioPassthrough
+            onAudioPassthroughChange(audioPassthrough)
+            nightController.passthrough = audioPassthrough
+            nightModeState = nightModeState.copy(passthrough = audioPassthrough)
+            applyNightMode()
+            toastMsg = if (audioPassthrough) "Passthrough ligado — vale a partir da próxima reprodução."
+            else "Passthrough desligado — vale a partir da próxima reprodução."
+        })
     }
     val speedActions get() = speeds.mapIndexed { i, speed ->
         TvPlayerAction(playbackSpeedText(speed), false, i == speedIdx,

@@ -374,6 +374,10 @@ class MovieDetailViewModel @Inject constructor(
         val wikiError: String? = null,
         /** Teste das fontes por URL (filme e episódio). */
         val probes: Map<String, com.aotv.app.data.remote.ProbeResult> = emptyMap(),
+        /** Onde assistir (Lote 25, v1.35.0 — Frente D, item 10): provedores do TMDB p/ o BR. */
+        val watchProviders: com.aotv.app.data.remote.WatchProvidersResult? = null,
+        /** Já buscou o onde assistir (true mesmo sem provedor — a seção some, sem retry infinito). */
+        val watchProvidersLoaded: Boolean = false,
         /** Magnet → o debrid tem pronto (true) ou não tem (false). Ausente = não se sabe. */
         val debridCached: Map<String, Boolean> = emptyMap(),
         /** Sigla do debrid em uso ("RD", "TB", "PM"). */
@@ -805,6 +809,13 @@ class MovieDetailViewModel @Inject constructor(
         prefs.ratingsSource != "tmdb" && mdbList.isEnabled
 
     private fun loadDetailExtras(tmdbId: Int, title: String, year: Int?, isMovie: Boolean, originalTitle: String) {
+        // Onde assistir (Lote 25, v1.35.0 — Frente D, item 10): provedores do
+        // TMDB p/ o BR. Sem chave ou sem resposta, fica null e a seção some.
+        viewModelScope.launch {
+            val repo = com.aotv.app.data.remote.WatchProvidersRepository(tmdb, prefs)
+            val result = repo.forTitle(tmdbId, isMovie)
+            _uiState.update { it.copy(watchProviders = result, watchProvidersLoaded = true) }
+        }
         if (title.isBlank()) return
         // Nota agregada (MDBList) + nota exibida: UMA só chamada p/ os dois
         // usos. Busca quando a seção agregada está ligada OU quando a nota
@@ -915,6 +926,9 @@ class MovieDetailViewModel @Inject constructor(
             // Simkl: adicionar sincroniza (plantowatch); remover é no-op de
             // propósito dentro do serviço (nunca apaga o histórico assistido).
             simkl.watchlistChanged(item.tmdbId, item.type.name, adding)
+            // Lote 25 (v1.35.0) — Frente D, item 14: a mudança local entra no
+            // sync contínuo (envio 3 s depois, sem eco).
+            com.aotv.app.data.sync.HistoryContinuousSync.noteLocalChange(simkl, trakt, prefs, playing = false)
             // o estado isSaved é atualizado pelo coletor reativo de startLibraryObservers
         }
     }

@@ -69,6 +69,9 @@ class MoviesHomeViewModel @Inject constructor(
         // Abrir a Início (e trocar de perfil, que reabre o app) sincroniza com o Trakt.
         // ponytail: sem o intervalo de 30 min do webOS, a sincronia roda a cada abertura da Início.
         trakt.syncInBackground()
+        // Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do
+        // histórico (Trakt/Simkl) — pull na abertura + worker de 15 min.
+        com.aotv.app.data.sync.HistoryContinuousSync.pullOnOpen(appContext, simkl, trakt, prefs)
     }
 
 

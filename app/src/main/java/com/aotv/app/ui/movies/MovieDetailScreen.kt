@@ -1326,6 +1326,15 @@ fun MovieDetailScreen(
                         )
                     }
                 }
+                // Lote 25 (v1.35.0) — Frente D, item 10: onde assistir (TMDB, BR).
+                if (state.watchProvidersLoaded && state.watchProviders != null && !state.watchProviders.isEmpty) {
+                    item {
+                        WatchProvidersSection(
+                            result = state.watchProviders,
+                            modifier = Modifier.padding(horizontal = pad, vertical = 8.dp),
+                        )
+                    }
+                }
                 if (showTraktReviews && (state.traktReviewsLoading || state.traktShowReviews.isNotEmpty() || state.traktEpisodeReviews.isNotEmpty() || state.traktReviewsError != null)) {
                     item {
                         TraktReviewsSection(
@@ -3247,6 +3256,59 @@ private fun AggregateRatingSection(
         }
         if (error != null) {
             Text("Não foi possível carregar as notas: $error", color = TextTertiary, fontSize = 13.sp, fontFamily = ManropeFontFamily)
+        }
+    }
+}
+
+/** Onde assistir (Lote 25, v1.35.0 — Frente D, item 10): provedores do TMDB no BR. */
+@Composable
+private fun WatchProvidersSection(
+    result: com.aotv.app.data.remote.WatchProvidersResult,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth().padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        com.aotv.app.ui.common.SectionHeader("Onde assistir", eyebrow = "Streaming no Brasil")
+        if (result.flatrate.isNotEmpty()) {
+            WatchProviderRow(label = "Assinatura", entries = result.flatrate)
+        }
+        if (result.rent.isNotEmpty()) {
+            WatchProviderRow(label = "Aluguel", entries = result.rent)
+        }
+        if (result.buy.isNotEmpty()) {
+            WatchProviderRow(label = "Compra", entries = result.buy)
+        }
+        Text(
+            "Disponibilidade pelo TMDB (JustWatch). O app não vende nem aluga — é só onde o título está.",
+            color = TextTertiary, fontSize = 12.sp, fontFamily = ManropeFontFamily,
+        )
+    }
+}
+
+@Composable
+private fun WatchProviderRow(label: String, entries: List<com.aotv.app.data.remote.WatchProviderEntry>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = ManropeFontFamily)
+        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(entries, key = { entry -> entry.id }) { entry ->
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val logo = com.aotv.app.data.remote.watchProviderLogoUrl(entry.logoPath)
+                    if (logo.isNotBlank()) {
+                        AsyncImage(
+                            model = logo,
+                            contentDescription = entry.name,
+                            modifier = Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)),
+                        )
+                    } else {
+                        Box(
+                            Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).background(Surface2),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(entry.name.take(2), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Text(entry.name, color = TextSecondary, fontSize = 11.sp, fontFamily = ManropeFontFamily)
+                }
+            }
         }
     }
 }

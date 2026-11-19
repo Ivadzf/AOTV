@@ -247,6 +247,21 @@ interface TmdbApiService {
         @Query("api_key")      apiKey: String,
     ): TmdbProvidersDto
 
+    // ── Lote 25 (v1.35.0) — Frente D, item 10: onde assistir ─────────────
+    // /movie|tv/{id}/watch/providers devolve, por região, as listas
+    // flatrate/rent/buy/ads + o link do JustWatch. Região BR.
+    @GET("movie/{id}/watch/providers")
+    suspend fun getMovieWatchProviders(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+    ): com.aotv.app.data.remote.TmdbTitleProvidersDto
+
+    @GET("tv/{id}/watch/providers")
+    suspend fun getTvWatchProviders(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+    ): com.aotv.app.data.remote.TmdbTitleProvidersDto
+
     /** Discover com os filtros montados em TmdbCollectionRules.discoverQuery. [type] é movie ou tv. */
     @GET("discover/{type}")
     suspend fun discoverRaw(

@@ -17,6 +17,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -120,6 +122,11 @@ fun LiveGuideScreen(
     // Lote 19 (v1.29.0, item 8 — guia estilo JOTV): estado só desta tela.
     val isTv = com.aotv.app.ui.common.LocalIsTv.current
     var guideQuery by rememberSaveable { mutableStateOf("") }
+    // Lote 25 (v1.35.0), item 3 — voz + QR na busca do guia (reusa a voz do
+    // Lote 3 e o QR da busca principal; na TV não há microfone).
+    val guideVoice = com.aotv.app.ui.movies.rememberVoiceSearch(onResult = { heard -> guideQuery = heard })
+    var guideQrOpen by remember { mutableStateOf(false) }
+    if (guideQrOpen) com.aotv.app.ui.movies.SearchQrDialog(query = guideQuery, onDismiss = { guideQrOpen = false })
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var listMode by rememberSaveable { mutableStateOf(false) }
     // Contador p/ rolar a grade ao topo quando a categoria muda (o efeito
@@ -211,9 +218,23 @@ fun LiveGuideScreen(
             placeholder = { Text("Buscar no guia — canal ou programa") },
             leadingIcon = { Icon(Icons.Default.Search, "Buscar", tint = TextTertiary) },
             trailingIcon = {
-                if (guideQuery.isNotEmpty()) {
-                    IconButton(onClick = { guideQuery = "" }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Default.Close, "Limpar busca", tint = TextTertiary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!isTv && guideVoice.available) {
+                        IconButton(onClick = guideVoice.start, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                Icons.Default.Mic,
+                                if (guideVoice.listening) "Ouvindo…" else "Buscar por voz",
+                                tint = if (guideVoice.listening) Accent else TextTertiary,
+                            )
+                        }
+                    }
+                    if (guideQuery.isNotBlank()) {
+                        IconButton(onClick = { guideQrOpen = true }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.QrCode2, "Mostrar QR desta busca", tint = TextTertiary)
+                        }
+                        IconButton(onClick = { guideQuery = "" }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Close, "Limpar busca", tint = TextTertiary)
+                        }
                     }
                 }
             },

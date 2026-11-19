@@ -34,6 +34,9 @@ class AccountsViewModel @Inject constructor(
     private val debrid: DebridService,
     private val prefs: PlatformPrefs,
     private val collections: com.aotv.app.data.collections.CollectionsRepository,
+    // Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do histórico.
+    private val simkl: com.aotv.app.data.remote.SimklService,
+    private val trakt: com.aotv.app.data.remote.TraktService,
 ) : ViewModel() {
 
     data class Ui(
@@ -62,6 +65,21 @@ class AccountsViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
     private var codeJob: Job? = null
+
+    // ── Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do histórico ──
+    val histContSyncEnabled: StateFlow<Boolean> = prefs.histContSyncEnabledFlow
+    val histContLastSyncMs: StateFlow<Long> = prefs.histContLastSyncMsFlow
+
+    fun setHistContSyncEnabled(v: Boolean) {
+        prefs.histContSyncEnabled = v
+    }
+
+    /** Sincroniza o histórico agora (Trakt/Simkl). */
+    fun syncHistoryNow() = act("hist_sync") {
+        val ok = com.aotv.app.data.sync.HistoryContinuousSync.pullNow(simkl, trakt, prefs)
+        if (!ok) throw IllegalStateException("Nenhum tracker conectado (Trakt/Simkl) ou sem resposta.")
+        "Histórico sincronizado."
+    }
 
     init {
         if (nuvio.session.value != null) loadNuvioProfiles()

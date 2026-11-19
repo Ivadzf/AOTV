@@ -59,6 +59,9 @@ fun DiscoverScreen(
     onBack: () -> Unit,
     columns: Int = 3,
     viewModel: DiscoverViewModel = hiltViewModel(),
+    // Lote 25 (v1.35.0) — Frente D: entradas p/ Streaming (item 10) e Vídeos grátis (item 11).
+    onStreamingClick: () -> Unit = {},
+    onFreeVideosClick: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val gridState = rememberLazyGridState()
@@ -103,6 +106,16 @@ fun DiscoverScreen(
                 onPick = { viewModel.selectCatalog(it); catalogPicker = false },
                 onDismiss = { catalogPicker = false },
             )
+        }
+
+        // Lote 25 (v1.35.0) — Frente D: entradas p/ Streaming (item 10) e
+        // Vídeos grátis (item 11). Só no celular (a TV usa TvDiscoverScreen).
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DiscoverEntryButton("Streaming", Modifier.weight(1f), onClick = onStreamingClick)
+            DiscoverEntryButton("Vídeos grátis", Modifier.weight(1f), onClick = onFreeVideosClick)
         }
 
         LazyVerticalGrid(
@@ -221,6 +234,21 @@ private fun ActiveFiltersBar(state: DiscoverViewModel.UiState, vm: DiscoverViewM
 @Composable
 private fun DiscoverPoster(item: MovieItem, onClick: () -> Unit) {
     com.aotv.app.ui.common.PosterCard(item = item, onClick = onClick)
+}
+
+/** Botão de entrada p/ Streaming / Vídeos grátis (Lote 25, v1.35.0 — Frente D). */
+@Composable
+private fun DiscoverEntryButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, Accent, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+    }
 }
 
 @Composable

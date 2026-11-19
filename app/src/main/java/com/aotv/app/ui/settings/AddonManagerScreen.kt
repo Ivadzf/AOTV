@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
@@ -65,6 +66,8 @@ fun AddonManagerScreen(
     onBack: () -> Unit,
     onExplore: () -> Unit = {},
     onCustomizeHome: () -> Unit = {},
+    // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+    onOpenAddonHealth: () -> Unit = {},
     viewModel: AddonsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -133,6 +136,8 @@ fun AddonManagerScreen(
         ) {
             ExploreEntry(onExplore)
             install()
+            // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+            AddonHealthEntry(onOpenAddonHealth)
         }
         LazyColumn(
             Modifier.weight(1f).fillMaxHeight(),
@@ -144,6 +149,8 @@ fun AddonManagerScreen(
                 item { ExploreEntry(onExplore) }
                 // ── Instalar ──
                 item { install() }
+                // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+                item { AddonHealthEntry(onOpenAddonHealth) }
             }
 
             // ── Catálogo próprio do app, fixo no topo e desligável como um addon ──
@@ -727,8 +734,7 @@ private fun AotvCatalogCard(on: Boolean, rowsOn: Int, onToggle: () -> Unit, onCu
 
 /** Entrada para a loja de addons da comunidade. */
 @Composable
-private fun ExploreEntry(onClick: () -> Unit) {
-    Row(
+private fun ExploreEntry(onClick: () -> Unit) {    Row(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
@@ -769,4 +775,30 @@ private fun EmptyAddons() {
     com.aotv.app.ui.common.AotvEmptyState(
         Icons.Default.Extension, "Nenhum addon instalado", "Cole o link de um manifest para instalar ou explore o catálogo da comunidade.",
     )
+}
+
+/** Entrada p/ a saúde dos addons (Lote 25, v1.35.0 — Frente B, item 6). */
+@Composable
+private fun AddonHealthEntry(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(BackgroundCard2)
+            .clickable(onClick = onClick)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(AccentSoft),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Default.Speed, null, tint = Accent, modifier = Modifier.size(20.dp)) }
+        Column(Modifier.weight(1f)) {
+            Text("Saúde dos addons", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+            Text("Latência de cada manifest, o que está lento e o log das chamadas", color = TextSecondary, fontSize = 13.sp)
+        }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = TextTertiary)
+    }
 }

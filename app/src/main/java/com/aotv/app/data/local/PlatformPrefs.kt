@@ -207,6 +207,8 @@ internal val SCOPED_KEYS = listOf(
     // o PIN dos pais do aparelho ("parental_pin_hash", segredo global — ver
     // AotvBackup.SECRET_GLOBAL_KEYS); só os NOMES dos grupos viajam aqui.
     "live_locked_groups_v1",
+    // Lote 25 (v1.35.0) — Frente C
+    "pref_mobile_data_gate_v1", "pref_battery_governor_v1",
     // Lote 11 (v1.21.0) — Blur anti-spoiler (Frente 2): borrar arte e esconder
     // título/sinopse dos episódios não assistidos no detalhe da série.
     "pref_detail_spoiler_blur",
@@ -238,6 +240,10 @@ internal val SCOPED_KEYS = listOf(
     // Lote 14 (v1.24.0) — Descobrir com catálogos dos addons: o catálogo escolhido
     // ("addonId|type|id", vazio = TMDB). Só a escolha, sem credencial.
     "pref_discover_catalog_v1",
+    // Lote 25 (v1.35.0) — Frente D: catálogo de vídeos grátis escolhido
+    // ("ccc"/"blender"/"peertube") + toggle e último sync da sincronia
+    // contínua do histórico (Trakt/Simkl). Tudo por perfil.
+    "pref_free_catalog_v1", "hist_cont_sync_v1", "hist_cont_last_sync_v1",
     // Lote 22 (v1.32.0, item 6) — Player externo por título/tipo (por
     // perfil): pacote escolhido p/ filmes e p/ séries ("" = interno),
     // mapa JSON "tmdbId:TIPO" -> pacote p/ um título específico, e se
@@ -1230,6 +1236,13 @@ class PlatformPrefs @Inject constructor(
     var homeAmoled: Boolean
         get() = _homeAmoled.value
         set(value) { prefs.edit().putBoolean("home_amoled_v1", value).apply(); _homeAmoled.value = value }
+
+    // Lote 25 (v1.35.0), item 4 — Tour de boas-vindas (global, do aparelho):
+    // false até o usuário ver (ou pular) o tour na primeira abertura após
+    // a v1.35.0. NÃO vai p/ SCOPED_KEYS: o tour é do aparelho, não do perfil.
+    var onboardingTourSeenV1: Boolean
+        get() = prefs.getBoolean("onboarding_tour_seen_v1", false)
+        set(value) { prefs.edit().putBoolean("onboarding_tour_seen_v1", value).apply() }
 
     // ── Tema personalizado (Lote 3, v1.11.0) — do aparelho, como o tema ─────
     // As 6 cores editáveis (ver CustomThemeColors); o resto da paleta é
@@ -3432,6 +3445,25 @@ class PlatformPrefs @Inject constructor(
         refreshLayout()
     }
 
+    // ── Diagnóstico Lote 25 (v1.35.0) — Frente B ──────────────────────────
+    // Histórico de latência dos addons, log de chamadas e último teste de
+    // velocidade. Tudo GLOBAL (dado do aparelho, não do perfil): NÃO vai
+    // p/ SCOPED_KEYS. Ver data/diagnostics/AddonHealth.kt e SpeedTest.kt.
+    /** Histórico de latência por addon, JSON (teto de 20 amostras por addon). */
+    var addonHealthHistoryJson: String
+        get() = prefs.getString("addon_health_history_v1", "").orEmpty()
+        set(value) { prefs.edit().putString("addon_health_history_v1", value).apply() }
+
+    /** Log das últimas chamadas de addon, JSON (teto de 50 entradas). */
+    var addonHealthLogJson: String
+        get() = prefs.getString("addon_health_log_v1", "").orEmpty()
+        set(value) { prefs.edit().putString("addon_health_log_v1", value).apply() }
+
+    /** Último resultado do teste de velocidade, JSON (ou "" quando nunca testou). */
+    var speedTestLastJson: String
+        get() = prefs.getString("speed_test_last_v1", "").orEmpty()
+        set(value) { prefs.edit().putString("speed_test_last_v1", value).apply() }
+
     /** Bases de addon instalado depois da Início personalizável. Catálogo novo deles entra ligado. */
     private var autoOnBases: Set<String>
         get() = prefs.getStringSet("home_auto_on_v1", emptySet()).orEmpty()
@@ -3489,6 +3521,24 @@ class PlatformPrefs @Inject constructor(
         get() = _heroPreviewOnFocus.value
         set(value) { prefs.edit().putBoolean("hero_preview_on_focus_v1", value).apply(); _heroPreviewOnFocus.value = value }
 
+    // Lote 25 (v1.35.0), item 9 — Frente C: saída de áudio GLOBAL (é do
+    // aparelho, não do perfil — NÃO entra em SCOPED_KEYS): "auto" |
+    // "speakers" | "receiver" + passthrough Dolby/DTS.
+    private val _audioOutput = MutableStateFlow(prefs.getString("audio_output_v1", "auto") ?: "auto")
+    val audioOutputFlow: StateFlow<String> = _audioOutput.asStateFlow()
+    var audioOutput: String
+        get() = _audioOutput.value
+        set(value) {
+            val clean = if (value in setOf("auto", "speakers", "receiver")) value else "auto"
+            prefs.edit().putString("audio_output_v1", clean).apply(); _audioOutput.value = clean
+        }
+
+    private val _audioPassthrough = MutableStateFlow(prefs.getBoolean("audio_passthrough_v1", false))
+    val audioPassthroughFlow: StateFlow<Boolean> = _audioPassthrough.asStateFlow()
+    var audioPassthrough: Boolean
+        get() = _audioPassthrough.value
+        set(value) { prefs.edit().putBoolean("audio_passthrough_v1", value).apply(); _audioPassthrough.value = value }
+
     // Lote 24 (v1.34.0), itens 8 e 9 — Ambilight e modo sensorial no
     // player (por perfil, SCOPED_KEYS). O player já lia estas chaves por
     // rawPref desde a Frente B; aqui elas ganham fluxo + var p/ as
@@ -3513,6 +3563,26 @@ class PlatformPrefs @Inject constructor(
     var playerSensoryFriendly: Boolean
         get() = _playerSensoryFriendly.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_sensory_friendly_v1"), value).apply(); _playerSensoryFriendly.value = value }
+
+    // Lote 25 (v1.35.0), itens 7 e 8 — Frente C: gate de dados móveis na
+    // reprodução ("ask" | "allow" | "block", padrão "ask") e governador
+    // de bateria (ligado por padrão). Por perfil, SCOPED_KEYS. A
+    // liberação "desta vez" do gate NÃO é pref: é efêmera, em memória,
+    // na sessão do player (ver MobileDataGate.kt).
+    private val _mobileDataGate = MutableStateFlow(prefs.getString(sk("pref_mobile_data_gate_v1"), "ask") ?: "ask")
+    val mobileDataGateFlow: StateFlow<String> = _mobileDataGate.asStateFlow()
+    var mobileDataGate: String
+        get() = _mobileDataGate.value
+        set(value) {
+            val clean = if (value in setOf("ask", "allow", "block")) value else "ask"
+            prefs.edit().putString(sk("pref_mobile_data_gate_v1"), clean).apply(); _mobileDataGate.value = clean
+        }
+
+    private val _batteryGovernor = MutableStateFlow(prefs.getBoolean(sk("pref_battery_governor_v1"), true))
+    val batteryGovernorFlow: StateFlow<Boolean> = _batteryGovernor.asStateFlow()
+    var batteryGovernor: Boolean
+        get() = _batteryGovernor.value
+        set(value) { prefs.edit().putBoolean(sk("pref_battery_governor_v1"), value).apply(); _batteryGovernor.value = value }
 
     /**
      * Catálogos que alimentam o destaque no automático (chaves das fileiras).
@@ -3616,6 +3686,10 @@ class PlatformPrefs @Inject constructor(
         _playerAmbilight.value = prefs.getBoolean(sk("pref_player_ambilight_v1"), false)
         _playerAmbilightIntensity.value = prefs.getString(sk("pref_player_ambilight_intensity_v1"), "medium") ?: "medium"
         _playerSensoryFriendly.value = prefs.getBoolean(sk("pref_player_sensory_friendly_v1"), false)
+        // Lote 25 (v1.35.0), itens 7 e 8 — Frente C: gate de dados móveis
+        // e governador de bateria também são por perfil.
+        _mobileDataGate.value = prefs.getString(sk("pref_mobile_data_gate_v1"), "ask") ?: "ask"
+        _batteryGovernor.value = prefs.getBoolean(sk("pref_battery_governor_v1"), true)
         _detailCinematic.value = prefs.getBoolean(sk("pref_detail_cinematic"), false)
         _detailPosterTransition.value = prefs.getBoolean(sk("pref_detail_poster_transition"), true)
         _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
@@ -3922,6 +3996,35 @@ class PlatformPrefs @Inject constructor(
     var simklLastPullMs: Long
         get() = prefs.getLong(sk("simkl_last_pull_v1"), 0L)
         set(value) { prefs.edit().putLong(sk("simkl_last_pull_v1"), value).apply(); _simklLastPullMsFlow.value = value }
+
+    // ── Lote 25 (v1.35.0) — Frente D, item 11: vídeos grátis ────────────────
+    private val _freeCatalogFlow = MutableStateFlow(prefs.getString(sk("pref_free_catalog_v1"), "ccc").orEmpty())
+    /** Catálogo de vídeos grátis escolhido, que avisa quem observa. */
+    val freeCatalogFlow: StateFlow<String> = _freeCatalogFlow.asStateFlow()
+
+    /** Catálogo de vídeos grátis escolhido ("ccc", "blender" ou "peertube"). */
+    var freeCatalog: String
+        get() = prefs.getString(sk("pref_free_catalog_v1"), "ccc").orEmpty()
+        set(value) { prefs.edit().putString(sk("pref_free_catalog_v1"), value).apply(); _freeCatalogFlow.value = value }
+
+    // ── Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua ──────────
+    private val _histContSyncEnabledFlow = MutableStateFlow(prefs.getBoolean(sk("hist_cont_sync_v1"), false))
+    /** Sincronia contínua do histórico ligada, que avisa quem observa. */
+    val histContSyncEnabledFlow: StateFlow<Boolean> = _histContSyncEnabledFlow.asStateFlow()
+
+    /** Sincronia contínua do histórico (Trakt/Simkl) ligada. Desligada por padrão. */
+    var histContSyncEnabled: Boolean
+        get() = prefs.getBoolean(sk("hist_cont_sync_v1"), false)
+        set(value) { prefs.edit().putBoolean(sk("hist_cont_sync_v1"), value).apply(); _histContSyncEnabledFlow.value = value }
+
+    private val _histContLastSyncMsFlow = MutableStateFlow(prefs.getLong(sk("hist_cont_last_sync_v1"), 0L))
+    /** Último sync contínuo do histórico, que avisa quem observa. */
+    val histContLastSyncMsFlow: StateFlow<Long> = _histContLastSyncMsFlow.asStateFlow()
+
+    /** Último sync contínuo do histórico, em epoch ms (0 = nunca). */
+    var histContLastSyncMs: Long
+        get() = prefs.getLong(sk("hist_cont_last_sync_v1"), 0L)
+        set(value) { prefs.edit().putLong(sk("hist_cont_last_sync_v1"), value).apply(); _histContLastSyncMsFlow.value = value }
 
     private val _forcedSubsAuto = MutableStateFlow(prefs.getBoolean(sk("pref_forced_subs"), true))
     /** Legenda forçada automática ligada, que avisa quem observa. */

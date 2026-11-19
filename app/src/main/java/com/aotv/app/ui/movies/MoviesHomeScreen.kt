@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Check
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -66,6 +68,7 @@ import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
 import com.aotv.app.ui.common.Badge
 import com.aotv.app.ui.common.FilterChipPill
+import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.AotvEmptyState
 import com.aotv.app.ui.common.MediaPosterCard
 import com.aotv.app.ui.common.ScreenTopHeader
@@ -158,6 +161,23 @@ fun MoviesHomeScreen(
             onDismiss = { recordGame = null },
             onScheduled = { recordGame = null },
         )
+    }
+
+    // ── Lote 25 (v1.35.0), item 4 — Tour de boas-vindas ───────────────────
+    // Primeira abertura após a v1.35.0 (pref global) ou pedido (paleta /
+    // Configurações → Aparência). Fechar marca a pref como vista.
+    val tourContext = LocalContext.current
+    val tourPrefs = remember(tourContext) { com.aotv.app.data.local.PlatformPrefs(tourContext) }
+    var showTour by remember { mutableStateOf(false) }
+    val tourRequested by OnboardingTourRequest.show.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { if (!tourPrefs.onboardingTourSeenV1) showTour = true }
+    LaunchedEffect(tourRequested) { if (tourRequested) showTour = true }
+    if (showTour) {
+        OnboardingTourDialog(onDone = {
+            showTour = false
+            OnboardingTourRequest.consume()
+            tourPrefs.onboardingTourSeenV1 = true
+        })
     }
 
     // SEM bottom bar aqui — a barra é a única do MoviesNavigation (Início, Descobrir, Minha Lista, Downloads, Busca e Config).
@@ -774,6 +794,48 @@ private fun HomeSectionsTab(
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeSectionSpacing(display.density)),
     ) {
+        // ── Lote 25 (v1.35.0), itens 1–2 ────────────────────────────────
+        // Entrada discreta no topo: pill de busca (abre a busca) + assistente + paleta.
+        item(key = "lote25_entry") {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    Modifier.weight(1f)
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Surface2)
+                        .clickable(onClick = onSearchClick)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(20.dp))
+                    Text(
+                        "Buscar filmes ou séries...",
+                        color = TextTertiary,
+                        fontSize = 15.sp,
+                        fontFamily = ManropeFontFamily,
+                    )
+                }
+                GlassCircleButton(
+                    icon = Icons.Default.AutoAwesome,
+                    onClick = { AssistantRequest.open() },
+                    size = 44.dp,
+                    iconTint = TextSecondary,
+                    contentDescription = "Assistente",
+                )
+                GlassCircleButton(
+                    icon = Icons.Default.Terminal,
+                    onClick = { CommandPaletteRequest.open() },
+                    size = 44.dp,
+                    iconTint = TextSecondary,
+                    contentDescription = "Comandos",
+                )
+            }
+        }
         // Sem chave TMDB as fileiras do sistema voltam vazias em silêncio — avisa no topo.
         if (!state.hasTmdbKey) {
             item(key = "no_tmdb_key") {
@@ -805,7 +867,10 @@ private fun HomeSectionsTab(
                 val atTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 300 } }
                 HeroCarousel(
                     heroItems, state.heroLogos, onItemClick,
-                    trailerOn = state.heroTrailer && atTop,
+                    // Lote 25 item 8 (Frente C): com o modo economia
+                    // ativo na sessão, a prévia do herói/trailer fica
+                    // desligada (ver BatteryGovernorSession).
+                    trailerOn = state.heroTrailer && atTop && !BatteryGovernorSession.economyActive,
                     trailerFor = viewModel::heroTrailerStream,
                     heroStyle = display.heroStyle,
                     autoRotate = heroAutoRotateOn && heroAutoRotateAllowed(heroSensoryOn),

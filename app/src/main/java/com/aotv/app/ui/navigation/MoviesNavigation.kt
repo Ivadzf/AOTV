@@ -95,12 +95,19 @@ private sealed class MoviesRoute(val route: String) {
     object AddonStore : MoviesRoute("movies_addon_store")
     object MinhaLista : MoviesRoute("movies_minha_lista")
     object Descobrir : MoviesRoute("movies_descobrir")
+    // Lote 25 (v1.35.0) — Frente D, item 10: tela Streaming (títulos por provedor).
+    object Streaming : MoviesRoute("movies_streaming")
+    // Lote 25 (v1.35.0) — Frente D, item 11: vídeos grátis (CCC, Blender, PeerTube).
+    object FreeVideos : MoviesRoute("movies_free_videos")
     object Downloads : MoviesRoute("movies_downloads")
     // Estatísticas de consumo + recap (Lote 23, v1.33.0 — Frente 1).
     object Stats : MoviesRoute("movies_stats")
     object Profiles : MoviesRoute("movies_profiles")
     object HomeCustomize : MoviesRoute("movies_home_customize")
     object Debrid : MoviesRoute("movies_debrid")
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+    object ReportProblem : MoviesRoute("movies_report_problem")
+    object AddonHealth : MoviesRoute("movies_addon_health")
     // Servidores de mídia (Lote 10, v1.20.0) — Jellyfin, Emby e Plex do usuário.
     object MediaServers : MoviesRoute("movies_media_servers")
     object Accounts : MoviesRoute("movies_accounts")
@@ -306,6 +313,9 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.AddonStore.route ||
         currentRoute == MoviesRoute.HomeCustomize.route ||
         currentRoute == MoviesRoute.Debrid.route ||
+        // Lote 25 (v1.35.0) — Frente B: telas de fluxo, sem a pílula.
+        currentRoute == MoviesRoute.ReportProblem.route ||
+        currentRoute == MoviesRoute.AddonHealth.route ||
         currentRoute == MoviesRoute.MediaServers.route ||
         currentRoute == MoviesRoute.Accounts.route ||
         currentRoute == MoviesRoute.LiveSources.route ||
@@ -595,7 +605,29 @@ fun MoviesNavigation(
                         onItemClick = openItem,
                         onBack = { navController.popBackStack() },
                         columns = 3,
+                        onStreamingClick = { navController.navigate(MoviesRoute.Streaming.route) },
+                        onFreeVideosClick = { navController.navigate(MoviesRoute.FreeVideos.route) },
                     )
+            }
+
+            // Lote 25 (v1.35.0) — Frente D, item 10: tela Streaming.
+            composable(MoviesRoute.Streaming.route) {
+                val openItem: (MovieItem) -> Unit = { item ->
+                    movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
+                    navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
+                }
+                StreamingScreen(
+                    onItemClick = openItem,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            // Lote 25 (v1.35.0) — Frente D, item 11: vídeos grátis.
+            composable(MoviesRoute.FreeVideos.route) {
+                FreeVideosScreen(
+                    onPlayUrl = { url, title -> navigateToPlayer(url, title, type = "MOVIE") },
+                    onBack = { navController.popBackStack() },
+                )
             }
 
             composable(MoviesRoute.MinhaLista.route) {
@@ -666,6 +698,9 @@ fun MoviesNavigation(
                         // junto" abre a tela da Watch Party (a sessão é do
                         // bloco dela; o hub só navega p/ lá).
                         onOpenWatchParty = { navController.navigate(MoviesRoute.SettingsPage.create(com.aotv.app.ui.settings.SettingsPageIds.WatchParty)) },
+                        // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+                        onOpenReportProblem = { navController.navigate(MoviesRoute.ReportProblem.route) },
+                        onOpenAddonHealth = { navController.navigate(MoviesRoute.AddonHealth.route) },
                     )
                 }
             }
@@ -685,6 +720,8 @@ fun MoviesNavigation(
                         onBack = { navController.popBackStack() },
                         onExplore = { navController.navigate(MoviesRoute.AddonStore.route) },
                         onCustomizeHome = { navController.navigate(MoviesRoute.HomeCustomize.route) },
+                        // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+                        onOpenAddonHealth = { navController.navigate(MoviesRoute.AddonHealth.route) },
                     )
                 }
             }
@@ -933,6 +970,14 @@ fun MoviesNavigation(
             // Debrid (Real-Debrid, TorBox, Premiumize e AllDebrid). Torrent vira link direto.
             composable(MoviesRoute.Debrid.route) {
                 tvScale(isTV) { com.aotv.app.ui.settings.DebridScreen(onBack = { navController.popBackStack() }) }
+            }
+
+            // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+            composable(MoviesRoute.ReportProblem.route) {
+                tvScale(isTV) { com.aotv.app.ui.settings.ReportProblemScreen(onBack = { navController.popBackStack() }) }
+            }
+            composable(MoviesRoute.AddonHealth.route) {
+                tvScale(isTV) { com.aotv.app.ui.settings.AddonHealthScreen(onBack = { navController.popBackStack() }) }
             }
 
             // Servidores de mídia (Lote 10, v1.20.0) — Jellyfin, Emby e Plex do
@@ -1399,6 +1444,70 @@ fun MoviesNavigation(
                 },
                 dismissButton = {
                     TextButton(onClick = { settingsVm.dismissUpdatePermission() }) { Text("Agora não") }
+                },
+            )
+        }
+        // ── Lote 25 (v1.35.0), itens 1–2 — Assistente + paleta de comandos ──
+        // Overlays (Dialog) por cima do NavHost — nenhuma rota nova. Os
+        // botões da Início e da busca só pedem a abertura (os holders).
+        val navContext = androidx.compose.ui.platform.LocalContext.current
+        val palettePrefs = remember { com.aotv.app.data.local.PlatformPrefs(navContext) }
+        val amoledOn by palettePrefs.homeAmoledFlow.collectAsStateWithLifecycle()
+        val paletteOpen by com.aotv.app.ui.movies.CommandPaletteRequest.open.collectAsStateWithLifecycle()
+        val assistantOpen by com.aotv.app.ui.movies.AssistantRequest.open.collectAsStateWithLifecycle()
+        // Rota de cada destino do assistente (MoviesRoute é privado a este arquivo).
+        fun assistantRoute(dest: com.aotv.app.ui.movies.AssistantDestination): String = when (dest) {
+            com.aotv.app.ui.movies.AssistantDestination.HOME -> MoviesRoute.Home.route
+            com.aotv.app.ui.movies.AssistantDestination.SEARCH -> MoviesRoute.Search.route
+            com.aotv.app.ui.movies.AssistantDestination.DISCOVER -> MoviesRoute.Descobrir.route
+            com.aotv.app.ui.movies.AssistantDestination.LIBRARY -> MoviesRoute.MinhaLista.route
+            com.aotv.app.ui.movies.AssistantDestination.DOWNLOADS -> MoviesRoute.Downloads.route
+            com.aotv.app.ui.movies.AssistantDestination.LIVE -> MoviesRoute.Live.route
+            com.aotv.app.ui.movies.AssistantDestination.SPORTS -> MoviesRoute.SportsTab.route
+            com.aotv.app.ui.movies.AssistantDestination.SETTINGS -> MoviesRoute.Settings.route
+            com.aotv.app.ui.movies.AssistantDestination.PROFILES -> MoviesRoute.Profiles.route
+            com.aotv.app.ui.movies.AssistantDestination.ADDONS -> MoviesRoute.Addons.route
+        }
+        val paletteActions = remember(amoledOn) {
+            listOf(
+                com.aotv.app.ui.movies.PaletteAction("home", "Ir para Início", "A tela principal", "inicio home", onRun = { navTab(MoviesRoute.Home.route) }),
+                com.aotv.app.ui.movies.PaletteAction("search", "Ir para Busca", "Buscar filmes e séries", "busca pesquisa procurar", onRun = { navTab(MoviesRoute.Search.route) }),
+                com.aotv.app.ui.movies.PaletteAction("discover", "Ir para Descobrir", "Explorar o catálogo por gênero", "descobrir explorar catalogo", onRun = { navTab(MoviesRoute.Descobrir.route) }),
+                com.aotv.app.ui.movies.PaletteAction("library", "Ir para Minha Lista", "Biblioteca e listas salvas", "biblioteca minha lista salvos", onRun = { navTab(MoviesRoute.MinhaLista.route) }),
+                com.aotv.app.ui.movies.PaletteAction("downloads", "Ir para Downloads", "Arquivos baixados", "downloads baixados baixar", onRun = { navTab(MoviesRoute.Downloads.route) }),
+                com.aotv.app.ui.movies.PaletteAction("live", "Ir para Ao vivo", "Canais de TV ao vivo", "ao vivo live canais tv", onRun = { navTab(MoviesRoute.Live.route) }),
+                com.aotv.app.ui.movies.PaletteAction("sports", "Ir para Esportes", "Jogos, placares e tabelas", "esportes jogos placar futebol", onRun = { navTab(MoviesRoute.SportsTab.route) }),
+                com.aotv.app.ui.movies.PaletteAction("settings", "Ir para Configurações", "Ajustes do app", "configuracoes ajustes settings", onRun = { navTab(MoviesRoute.Settings.route) }),
+                com.aotv.app.ui.movies.PaletteAction("profiles", "Trocar de perfil", "Quem está assistindo", "perfis perfil trocar quem", onRun = { navTab(MoviesRoute.Profiles.route) }),
+                com.aotv.app.ui.movies.PaletteAction("addons", "Ir para Addons", "Catálogos e fontes de conteúdo", "addons catalogos fontes", onRun = { navTab(MoviesRoute.Addons.route) }),
+                com.aotv.app.ui.movies.PaletteAction("continue", "Continuar assistindo", "Abre a Início, na fileira Continuar assistindo", "continuar retomar onde parei", onRun = { navTab(MoviesRoute.Home.route) }),
+                com.aotv.app.ui.movies.PaletteAction("assistant", "Assistente por comandos", "Play Dune, pausa, volta 30 s…", "assistente comando voz play pausa", onRun = { com.aotv.app.ui.movies.AssistantRequest.open() }),
+                com.aotv.app.ui.movies.PaletteAction("tour", "Tour de boas-vindas", "Rever os 5 capítulos do tour", "tour onboarding boas-vindas ajuda", onRun = { com.aotv.app.ui.movies.OnboardingTourRequest.request(); navTab(MoviesRoute.Home.route) }),
+                com.aotv.app.ui.movies.PaletteAction("amoled", "Preto puro (AMOLED)", "Fundo preto puro por cima do tema", "amoled preto puro escuro bateria oled", stateLabel = if (amoledOn) "Ligado" else "Desligado", onRun = { palettePrefs.homeAmoled = !palettePrefs.homeAmoled }),
+            )
+        }
+        if (paletteOpen) {
+            com.aotv.app.ui.movies.CommandPaletteDialog(
+                actions = paletteActions,
+                onDismiss = { com.aotv.app.ui.movies.CommandPaletteRequest.close() },
+            )
+        }
+        if (assistantOpen) {
+            com.aotv.app.ui.movies.AssistantDialog(
+                onDismiss = { com.aotv.app.ui.movies.AssistantRequest.close() },
+                onPlayTitle = { title ->
+                    com.aotv.app.ui.movies.AssistantRequest.close()
+                    com.aotv.app.ui.movies.AssistantQueryRequest.request(title, autoPlayFirst = true)
+                    navController.navigate(MoviesRoute.Search.route) { launchSingleTop = true }
+                },
+                onNavigate = { dest ->
+                    com.aotv.app.ui.movies.AssistantRequest.close()
+                    navTab(assistantRoute(dest))
+                },
+                onSearchQuery = { query ->
+                    com.aotv.app.ui.movies.AssistantRequest.close()
+                    com.aotv.app.ui.movies.AssistantQueryRequest.request(query, autoPlayFirst = false)
+                    navController.navigate(MoviesRoute.Search.route) { launchSingleTop = true }
                 },
             )
         }

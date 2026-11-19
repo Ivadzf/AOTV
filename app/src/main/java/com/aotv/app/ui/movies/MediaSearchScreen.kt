@@ -21,12 +21,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.outlined.LocalMovies
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -136,6 +140,14 @@ class MediaSearchViewModel @Inject constructor(
     private val _noTmdbKey = MutableStateFlow(false)
     val noTmdbKey: StateFlow<Boolean> = _noTmdbKey.asStateFlow()
 
+    /**
+     * Última query cuja busca TERMINOU (com ou sem resultados). O assistente
+     * ("Play X", Lote 25 item 1) espera por ela p/ decidir se abre o único
+     * resultado — sem ela, os resultados ainda seriam os da query anterior.
+     */
+    private val _lastCompletedQuery = MutableStateFlow("")
+    val lastCompletedQuery: StateFlow<String> = _lastCompletedQuery.asStateFlow()
+
     fun onQueryChange(q: String) {
         _query.value = q
         // Link colado (Lote 18 item 3): magnet ou vídeo direto vira o
@@ -173,7 +185,7 @@ class MediaSearchViewModel @Inject constructor(
         searchJob = viewModelScope.launch {
             if (delayMs > 0) delay(delayMs)
             val apiKey = prefs.tmdbApiKey
-            if (apiKey.isBlank()) { _noTmdbKey.value = true; return@launch }
+            if (apiKey.isBlank()) { _noTmdbKey.value = true; _lastCompletedQuery.value = q; return@launch }
             _noTmdbKey.value = false
             _isLoading.value = true
             val results = runCatching {
@@ -190,6 +202,7 @@ class MediaSearchViewModel @Inject constructor(
             }.getOrDefault(emptyList())
             _results.value = results
             _isLoading.value = false
+            _lastCompletedQuery.value = q
             // Só grava no histórico o que realmente achou algo (evita salvar termo digitado pela metade).
             if (results.isNotEmpty()) {
                 prefs.pushRecentSearch(q)
@@ -253,6 +266,37 @@ fun MediaSearchScreen(
     }
     val discoverState by discoverVm.uiState.collectAsStateWithLifecycle()
 
+    // ── Lote 25 (v1.35.0), itens 1 e 3 ──────────────────────────────────────
+    // Pedido do assistente ("Play X" / busca): a busca consome 1x, busca na
+    // hora, e com autoPlayFirst abre o detalhe se houver UM só resultado.
+    val assistantQuery by AssistantQueryRequest.pending.collectAsStateWithLifecycle()
+    var pendingAutoPlay by remember { mutableStateOf<String?>(null) }
+    val lastCompletedQuery by viewModel.lastCompletedQuery.collectAsStateWithLifecycle()
+    LaunchedEffect(assistantQuery) {
+        val requested = assistantQuery ?: return@LaunchedEffect
+        AssistantQueryRequest.consume()
+        viewModel.onQueryChange(requested.text)
+        if (requested.autoPlayFirst) pendingAutoPlay = requested.text
+    }
+    // "Play X": a busca terminou p/ a query pedida — 1 resultado abre o
+    // detalhe (o play é de lá, onde as fontes são resolvidas); 0 avisa;
+    // mais de 1 deixa a busca aberta p/ escolher.
+    val searchContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(lastCompletedQuery, pendingAutoPlay, results) {
+        val target = pendingAutoPlay ?: return@LaunchedEffect
+        if (lastCompletedQuery != target) return@LaunchedEffect
+        pendingAutoPlay = null
+        when {
+            results.size == 1 -> onItemClick(results[0])
+            results.isEmpty() -> android.widget.Toast.makeText(
+                searchContext, "Nada encontrado para \"$target\".", android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+    // QR da query atual (item 3): o botão fica na pill; sem texto, não abre.
+    var qrOpen by remember { mutableStateOf(false) }
+    if (qrOpen) SearchQrDialog(query = query, onDismiss = { qrOpen = false })
+
     // TV. Teclado do controle à esquerda e resultados à direita, como o search.js do webOS.
     // Lote 22 (v1.32.0, item 8 — teste da faixa bege, reportada pelo Davi
     // na v1.31.0): NÃO há mais foco automático ao entrar na busca. Antes,
@@ -276,7 +320,7 @@ fun MediaSearchScreen(
                 // ele; o teclado em tela continua embaixo e os dois escrevem
                 // no mesmo texto (query). Sem foco automático ao entrar (Lote 22).
                 com.aotv.app.ui.common.TvTextFieldGate { gate ->
-                    SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = false, onSearch = viewModel::searchNow, fieldModifier = gate)
+                    SearchPill(value = query, onValueChange = viewModel::onQueryChange, readOnly = false, onSearch = viewModel::searchNow, fieldModifier = gate, onQrClick = { qrOpen = true })
                 }
                 com.aotv.app.ui.common.TvKeyboard(
                     onKey = { viewModel.onQueryChange(com.aotv.app.ui.common.typeKey(query, it)) },
@@ -329,6 +373,23 @@ fun MediaSearchScreen(
                 // Aparelho sem reconhecimento de voz: sem botão, sem erro.
                 onVoiceClick = if (voiceSearch.available) voiceSearch.start else null,
                 voiceListening = voiceSearch.listening,
+                onQrClick = { qrOpen = true },
+            )
+            // Lote 25 (v1.35.0), itens 1–2: assistente e paleta de comandos.
+            // Os diálogos vivem na navegação (overlay); aqui só o pedido de abertura.
+            GlassCircleButton(
+                icon = Icons.Default.AutoAwesome,
+                onClick = { AssistantRequest.open() },
+                size = 44.dp,
+                iconTint = TextSecondary,
+                contentDescription = "Assistente",
+            )
+            GlassCircleButton(
+                icon = Icons.Default.Terminal,
+                onClick = { CommandPaletteRequest.open() },
+                size = 44.dp,
+                iconTint = TextSecondary,
+                contentDescription = "Comandos",
             )
         }
         SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
@@ -577,6 +638,12 @@ private fun SearchEmptyState(
         dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancelar", color = TextSecondary) } },
     )
 
+    // Populares (Lote 25, item 3): os títulos em alta do Descobrir (a ordem
+    // padrão dele é Popular). O toque busca o título. Vazio some a seção.
+    val popularTitles = remember(discoverState.items) {
+        discoverState.items.take(8).map { it.title }.filter { it.isNotBlank() }.distinct()
+    }
+
     Column(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(com.aotv.app.ui.common.posterWidth()),
@@ -598,6 +665,11 @@ private fun SearchEmptyState(
                         onRemove = viewModel::removeRecent,
                         onClearRequest = { confirmClear = true },
                     )
+                }
+            }
+            if (popularTitles.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SearchPopularSection(titles = popularTitles, onPick = viewModel::onQueryChange)
                 }
             }
             if (heroItems.isNotEmpty()) {
@@ -658,6 +730,40 @@ private fun SearchEmptyState(
                     }
                 }
             }
+        }
+    }
+}
+
+/** "Populares" na busca vazia: chips com os títulos em alta do Descobrir; o toque busca o título. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchPopularSection(
+    titles: List<String>,
+    onPick: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Icon(
+                Icons.Default.TrendingUp,
+                contentDescription = null,
+                tint = Accent,
+                modifier = Modifier.size(15.dp),
+            )
+            Text(
+                "POPULARES",
+                color = Accent,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = ManropeFontFamily,
+                letterSpacing = 1.2.sp,
+            )
+        }
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            titles.forEach { title -> FilterChipPill(title, false, onClick = { onPick(title) }) }
         }
     }
 }
@@ -993,6 +1099,8 @@ private fun SearchPill(
     onVoiceClick: (() -> Unit)? = null,
     /** O reconhecedor do sistema está aberto: o microfone acende. */
     voiceListening: Boolean = false,
+    /** QR da query atual (só com texto no campo). */
+    onQrClick: (() -> Unit)? = null,
 ) {
     val src = remember { MutableInteractionSource() }
     val focused by src.collectIsFocusedAsState()
@@ -1094,6 +1202,30 @@ private fun SearchPill(
                     contentDescription = "Limpar",
                     tint = TextSecondary,
                     modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+        // QR da query (Lote 25, item 3): só com texto — sem query não há o que mostrar.
+        if (onQrClick != null && value.isNotEmpty() && !readOnly) {
+            val qrSrc = remember { MutableInteractionSource() }
+            Box(
+                Modifier
+                    .pressScale(qrSrc)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(FillSubtle)
+                    .clickable(
+                        interactionSource = qrSrc,
+                        indication = null,
+                        onClick = onQrClick,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.QrCode2,
+                    contentDescription = "Mostrar QR desta busca",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }

@@ -62,13 +62,20 @@ data class TechInfo(
      * saída — aí a linha some, sem inventar valor.
      */
     val audioOutput: String? = null,
+    /**
+     * Bateria (Lote 25 item 8, v1.35.0 — Frente C): nível em % e se
+     * está carregando, lidos do BatteryManager (ver [readBatteryStatus]).
+     * Null = não deu p/ ler — aí a seção some, sem inventar valor.
+     */
+    val batteryLevelPercent: Int? = null,
+    val batteryCharging: Boolean? = null,
 )
 
 /** Tem ao menos um dado do stream atual (sem ele o painel mostra "ainda sem dados"). */
 val TechInfo.isEmpty: Boolean
     get() = videoCodec == null && videoResolution == null && videoFps == null &&
         videoDecoder == null && videoBitrateKbps == null && audioCodec == null &&
-        audioOutput == null
+        audioOutput == null && batteryLevelPercent == null
 
 /**
  * Stats do torrent durante a reprodução P2P (Lote 5 item 2, v1.14.0) —
@@ -133,6 +140,9 @@ fun collectTechInfo(player: ExoPlayer, context: android.content.Context? = null,
     val fps = video?.frameRate?.takeIf { it > 0f }?.let {
         "%.3f".format(it).trimEnd('0').trimEnd('.')
     }
+    // Lote 25 item 8 (Frente C): bateria lida 1x (o nível e o
+    // carregamento vêm da mesma leitura — ver readBatteryStatus).
+    val battery = context?.let { readBatteryStatus(it) }
     TechInfo(
         videoCodec = video?.let { codecLabel(it) },
         videoResolution = video?.let {
@@ -152,6 +162,10 @@ fun collectTechInfo(player: ExoPlayer, context: android.content.Context? = null,
         audioCodec = audio?.let { codecLabel(it) },
         audioDecoder = audioDecoder,
         audioOutput = collectAudioOutput(context, casting),
+        // Lote 25 item 8 (Frente C): nível da bateria no painel de infos
+        // técnicas (só quando dá p/ ler — sem leitura, a seção some).
+        batteryLevelPercent = battery?.levelPercent,
+        batteryCharging = battery?.isCharging,
     )
 }.getOrDefault(TechInfo())
 
@@ -278,6 +292,12 @@ private fun TechInfoPanelBody(
                 // informou alguma — sem saída detectável, a linha some.
                 info?.audioOutput?.let { "Saída" to it },
             ).takeIf { it.isNotEmpty() }?.let { "AUDIO STREAM" to it },
+            // Bateria (Lote 25 item 8, Frente C): só quando deu p/ ler —
+            // sem leitura, a seção some, sem inventar valor.
+            listOfNotNull(
+                info?.batteryLevelPercent?.let { "Nível" to "$it%" },
+                info?.batteryCharging?.let { "Carregando" to if (it) "Sim" else "Não" },
+            ).takeIf { it.isNotEmpty() }?.let { "BATERIA" to it },
             // Torrent P2P (Lote 5 item 2): só quando há status real — os 4
             // valores vêm do motor + ExoPlayer, sem nada inventado.
             torrent?.let {

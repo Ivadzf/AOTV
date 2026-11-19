@@ -195,6 +195,9 @@ class DiagnosticsViewModel @Inject constructor(
 fun DiagnosticsScreen(
     onBack: () -> Unit,
     highlightAnchor: String? = null,
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+    onOpenReportProblem: () -> Unit = {},
+    onOpenAddonHealth: () -> Unit = {},
     viewModel: DiagnosticsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.ui.collectAsStateWithLifecycle()
@@ -229,6 +232,8 @@ fun DiagnosticsScreen(
             "O resumo das fontes é o que os selos de qualidade do pôster mostram (4K, Remux, BluRay, WEB-DL, DV, HDR10+). Sem fonte lida, sem selo.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
+        // Lote 25 (v1.35.0) — Frente B, item 6: saúde dos addons.
+        AotvButton("Saúde dos addons", onOpenAddonHealth, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
         VpnPartySection("Último crash", anchor = SettingsAnchors.DIAG_CRASH)
         // `state` é propriedade delegada (by): smart cast não funciona nela —
         // ler para um val local antes do teste de null (build #248).
@@ -253,6 +258,15 @@ fun DiagnosticsScreen(
             )
             AotvButton("Limpar registro", { viewModel.clearCrashLog() }, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
         }
+        // Lote 25 (v1.35.0) — Frente B, item 5: "Report a problem".
+        VpnPartySection("Reportar um problema", anchor = SettingsAnchors.DIAG_REPORT)
+        DiagCard {
+            Text(
+                "Monta um relato pré-preenchido (versão, aparelho e o último crash) p/ compartilhar ou copiar — sem nenhuma chave, token ou senha. Inclui teste de velocidade, só sob demanda.",
+                fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+            )
+        }
+        AotvButton("Reportar um problema", onOpenReportProblem, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
         VpnPartySection("Quadros", anchor = SettingsAnchors.DIAG_FRAMES)
         DiagCard {
             val stats = state.frameStats

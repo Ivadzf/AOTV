@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -178,6 +179,44 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
                         dismissButton = { TextButton(onClick = { confirmNuvioLogout = false }) { Text("Cancelar", color = TextSecondary) } },
                     )
                 }
+                // Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do histórico.
+                val histSyncOn by viewModel.histContSyncEnabled.collectAsStateWithLifecycle()
+                val histLastSync by viewModel.histContLastSyncMs.collectAsStateWithLifecycle()
+                com.aotv.app.ui.common.SettingsSection("Sincronia contínua")
+                com.aotv.app.ui.common.SummaryCard {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Histórico sempre atualizado", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (histSyncOn) "Ligada: o histórico (Continuar assistindo, vistos, Minha Lista) sincroniza com Trakt e Simkl — na abertura e a cada 15 min."
+                                else "Desligada: o histórico só sincroniza quando você pedir.",
+                                color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                            )
+                        }
+                        Switch(
+                            checked = histSyncOn,
+                            onCheckedChange = {
+                                viewModel.setHistContSyncEnabled(it)
+                                com.aotv.app.data.sync.HistoryContinuousSync.applyEnabled(context)
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    ActionRow {
+                        AotvButton(
+                            "Sincronizar agora", viewModel::syncHistoryNow,
+                            icon = Icons.Default.Sync, tone = ButtonTone.SECONDARY,
+                            busy = st.busy == "hist_sync", busyLabel = "Sincronizando…",
+                            enabled = st.busy == null || st.busy == "hist_sync", compact = true,
+                        )
+                    }
+                    if (histLastSync > 0L) {
+                        Text(
+                            "Último sync: ${formatHistSyncDate(histLastSync)}.",
+                            color = TextTertiary, fontSize = 12.sp, lineHeight = 16.sp,
+                        )
+                    }
+                }
                 below?.let { Spacer(Modifier.height(8.dp)); it() }
             }
         }
@@ -213,6 +252,11 @@ fun AccountsScreen(onBack: () -> Unit, viewModel: AccountsViewModel = hiltViewMo
 
 /** Cartão de uma conta. Fora dela mostra o login. Conectado mostra as ações em [connectedContent]. */
 @Composable
+/** Data no formato do app (dd/MM/yyyy, pt-BR). Sem data, não inventa nada. */
+private fun formatHistSyncDate(at: Long): String = runCatching {
+    java.text.SimpleDateFormat("dd/MM/yyyy", java.util.Locale("pt", "BR")).format(java.util.Date(at))
+}.getOrNull().orEmpty()
+
 internal fun AccountCard(
     badge: String,
     title: String,

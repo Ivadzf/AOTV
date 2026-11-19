@@ -118,6 +118,8 @@ object SettingsAnchors {
     const val DIAG_SUGGESTION = "diagnostico-sugestao"
     // Último crash (Lote 13, v1.23.0 — Frente 3, Bug 1 da TV).
     const val DIAG_CRASH = "diagnostico-ultimo-crash"
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem".
+    const val DIAG_REPORT = "diagnostico-reportar-problema"
     // Controle remoto e TV (Lote 22, v1.32.0).
     const val REMOTE_SERVER = "remotetv-servidor"
     const val REMOTE_CLIENT = "remotetv-cliente"
@@ -1055,6 +1057,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.APPEAR_UPDATE,
         kidsHidden = true,
     ),
+    // Lote 25 (v1.35.0), item 4 — Tour de boas-vindas (Frente A).
+    SettingOptionEntry(
+        title = "Tour de boas-vindas",
+        sub = "Rever os 5 capítulos: boas-vindas, Início, busca, player e perfis",
+        keywords = listOf("tour", "boas-vindas", "onboarding", "ajuda", "começar", "tutorial"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_UPDATE,
+        kidsHidden = true,
+    ),
     // ── Reprodução ───────────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Áudio preferido",
@@ -1089,6 +1100,36 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Qualidade máxima",
         sub = "Sem limite, 4K, 1080p ou 720p",
         keywords = listOf("qualidade", "resolução", "4k", "1080p", "720p"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    // Lote 25 (v1.35.0), itens 7–9 — Frente C: gate de dados móveis,
+    // governador de bateria e saída de áudio.
+    SettingOptionEntry(
+        title = "Dados móveis ao dar play",
+        sub = "Perguntar sempre, liberar sempre ou só Wi-Fi",
+        keywords = listOf("dados móveis", "3g", "4g", "5g", "wifi", "wi-fi", "play", "gate"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    SettingOptionEntry(
+        title = "Governador de bateria",
+        sub = "Com bateria fraca, sugere o modo economia (até 720p)",
+        keywords = listOf("bateria", "economia", "720p", "qualidade", "fraca"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    SettingOptionEntry(
+        title = "Saída de áudio (TV ou receiver)",
+        sub = "Automática, alto-falantes ou receiver (HDMI)",
+        keywords = listOf("áudio", "saída", "receiver", "hdmi", "alto-falante", "caixa de som"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_MAIN,
+    ),
+    SettingOptionEntry(
+        title = "Passthrough Dolby/DTS",
+        sub = "Manda o bitstream direto p/ o receiver (vale na próxima reprodução)",
+        keywords = listOf("passthrough", "dolby", "dts", "bitstream", "receiver", "atmos"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_MAIN,
     ),
@@ -1621,6 +1662,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Trackers,
         kidsHidden = true,
     ),
+    // Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do histórico.
+    SettingOptionEntry(
+        title = "Sincronia contínua do histórico",
+        sub = "Trakt e Simkl sempre atualizados — em Contas",
+        keywords = listOf("sincronia contínua", "histórico", "sync", "trakt", "simkl", "contínuo"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_ACCOUNTS,
+        kidsHidden = true,
+    ),
     // ── VPN (Lote 10, v1.20.0) ────────────────────────────────────────────
     SettingOptionEntry(
         title = "Importar perfil VPN",
@@ -1786,6 +1836,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("crash", "erro", "fechou", "travou", "registro", "stack trace"),
         pageId = SettingsPageIds.Diagnostico,
         anchor = SettingsAnchors.DIAG_CRASH,
+        kidsHidden = true,
+    ),
+    // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
+    SettingOptionEntry(
+        title = "Reportar um problema",
+        sub = "Relato pré-preenchido com versão e aparelho, sem chaves, + teste de velocidade",
+        keywords = listOf("reportar", "problema", "bug", "issue", "erro", "relato", "velocidade", "teste de velocidade", "compartilhar", "copiar"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_REPORT,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Saúde dos addons",
+        sub = "Latência de cada addon, o que está lento, Addon Studio e Addon Lab",
+        keywords = listOf("saúde", "saude", "addon", "latência", "latencia", "lento", "manifest", "studio", "lab", "log", "repetir"),
+        pageId = SettingsPageIds.Conteudo,
+        anchor = SettingsAnchors.CONTENT_ADDONS,
         kidsHidden = true,
     ),
     // ── Controle remoto e TV (Lote 22, v1.32.0) ──────────────────────────
