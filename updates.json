@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "5f29a1ac6e750a13f56c8e0d932fbaaa5e6682ba77ef910658cf5d382016119d",
-        "size": 81442091,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.33.0/AOTV-v1.33.0.apk"
+        "sha256": "9c1dca07e87483441a617646debb16f5fab5cad86f56e54dc91e34add2f9d594",
+        "size": 81659603,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.34.0/AOTV-v1.34.0.apk"
       }
     },
-    "changelog": "v1.33.0 \u2014 Lote 23: estat\u00edsticas e recap, perfil infantil, g\u00eaneros bloqueados, My List com ordena\u00e7\u00e3o e teto de 250, marcar temporada inteira, Abandon Series, sync 2 vias com Trakt/Simkl, sync cont\u00ednuo de addons, revoke do Simkl, PIN V2, Simkl pull e 'N\u00e3o hoje' no Continuar. Fun\u00e7\u00f5es do JOTV 1.0.22: selo Assistido, aviso de pr\u00f3ximo epis\u00f3dio sem pular o fim, legenda for\u00e7ada autom\u00e1tica, filtros das fontes dentro do player, Ao Vivo filtrado por fonte e busca da TV pelo teclado do Google. Obs.: a rolagem da lista de fontes de epis\u00f3dio no celular n\u00e3o foi corrigida \u2014 precisa de reprodu\u00e7\u00e3o no aparelho.",
-    "published_at": "2026-11-19T03:43:00Z",
-    "tag": "v1.33.0",
-    "version": "1.33.0",
-    "versionCode": 70
+    "changelog": "v1.34.0 \u2014 Lote 24: temas da tela inicial + AMOLED puro (Normal, Netflixy, Cyberpunk, Primefly), her\u00f3i auto-rotativo com pr\u00e9via de cena, pastas na Home, esconder/mostrar abas, MK Channel, Peak Cinema, modos de aspecto Original/Zoom/Bands, Ambilight, modo sensory-friendly, 'Still watching?' e arrastar pra reordenar no Personalizar In\u00edcio. Fontes da nota dos epis\u00f3dios: TMDB, Trakt, OMDb e TVmaze \u2014 m\u00e9dia dos 4 ou uma fonte s\u00f3 (OMDb com chave gratuita do usu\u00e1rio). Obs.: Ambilight em HLS/torrent fica nas cores do p\u00f4ster; menu da TV e rail do tablet n\u00e3o filtram as abas escondidas.",
+    "published_at": "2026-11-19T06:11:00Z",
+    "tag": "v1.34.0",
+    "version": "1.34.0",
+    "versionCode": 71
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "9c1dca07e87483441a617646debb16f5fab5cad86f56e54dc91e34add2f9d594",
+          "size": 81659603,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.34.0/AOTV-v1.34.0.apk"
+        }
+      },
+      "changelog": "v1.34.0 \u2014 Lote 24: temas da tela inicial + AMOLED puro (Normal, Netflixy, Cyberpunk, Primefly), her\u00f3i auto-rotativo com pr\u00e9via de cena, pastas na Home, esconder/mostrar abas, MK Channel, Peak Cinema, modos de aspecto Original/Zoom/Bands, Ambilight, modo sensory-friendly, 'Still watching?' e arrastar pra reordenar no Personalizar In\u00edcio. Fontes da nota dos epis\u00f3dios: TMDB, Trakt, OMDb e TVmaze \u2014 m\u00e9dia dos 4 ou uma fonte s\u00f3 (OMDb com chave gratuita do usu\u00e1rio). Obs.: Ambilight em HLS/torrent fica nas cores do p\u00f4ster; menu da TV e rail do tablet n\u00e3o filtram as abas escondidas.",
+      "published_at": "2026-11-19T06:11:00Z",
+      "tag": "v1.34.0",
+      "version": "1.34.0",
+      "versionCode": 71
+    },
     {
       "assets": {
         "universal": {
@@ -55,20 +69,6 @@
       "tag": "v1.31.0",
       "version": "1.31.0",
       "versionCode": 68
-    },
-    {
-      "assets": {
-        "universal": {
-          "sha256": "a4cfdc6db8073fcb934d04ede6726fa022eaca9e7868d37a5a3e6873ffa446e1",
-          "size": 81040835,
-          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.30.0/AOTV-v1.30.0.apk"
-        }
-      },
-      "changelog": "v1.30.0 \u2014 Lote 20: Live TV parte 3 + esportes: grava\u00e7\u00f5es em rede/USB com miniaturas, dicion\u00e1rio de esportes, Multiview com placares, logos de canais, catch-up Xtream, tabelas multi-grupo (Champions/Libertadores), alertas do Seguindo e placar por per\u00edodo. Fixes: atualizador autom\u00e1tico, Testar chave do MDBList, olho nas chaves de API, packs de selos formato Fusion do Nuvio.",
-      "published_at": "2026-11-17T22:44:00Z",
-      "tag": "v1.30.0",
-      "version": "1.30.0",
-      "versionCode": 67
     }
   ]
 }
