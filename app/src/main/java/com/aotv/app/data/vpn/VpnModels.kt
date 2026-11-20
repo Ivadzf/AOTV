@@ -1,49 +1,48 @@
 package com.aotv.app.data.vpn
 
+import android.content.Intent
 import org.json.JSONObject
 
 /**
- * VPN (Lote 10, v1.20.0) — modelos.
+ * VPN (Lote 10, v1.20.0; conexão no Lote VPN, v1.40.0) — modelos.
  *
  * O AOTV só GERENCIA perfis trazidos pelo usuário (arquivo .conf do
  * WireGuard ou .ovpn do OpenVPN, importado por SAF). Nada de servidor
  * próprio, nada embutido: o perfil é do provedor do usuário.
  *
- * ── CONEXÃO BLOQUEADA NESTA FRENTE ──────────────────────────────────────
- * A conexão de verdade (subir o túnel) NÃO está implementada, e a tela
- * mostra isso em vez de fingir que conecta (ver [VPN_BLOCKED_REASON]).
- * Motivos exatos:
- * 1. Falta a dependência do motor no gradle — WireGuard:
- *    `com.wireguard.android:tunnel:1.0.20260102` (Maven Central, AAR com
- *    as .so embutidas, sem NDK no CI) e OpenVPN:
- *    `io.github.tim06:openvpn:1.1.3` (Maven Central, fork Apache-2.0 do
- *    ics-openvpn com o motor OpenVPN3). Esta frente NÃO edita
- *    `app/build.gradle.kts` (versão e dependências são de outra frente).
- * 2. Falta o `VpnService` do app (`BIND_VPN_SERVICE` + foreground service
- *    + `VpnService.prepare()` p/ o consentimento do usuário + ciclo de
- *    vida do túnel) — integração grande, sem como testar na VM (não há
- *    runtime Android aqui e o Gradle nem roda nela).
- * 3. Os escopos "só HTTP" e "HTTP+HTTPS" da fork PlusIPTV NÃO existem no
- *    Android: um `VpnService` tunela o aparelho inteiro ou só os apps da
- *    allowlist (`addAllowedApplication`) — não dá p/ filtrar por
- *    protocolo. Por isso o escopo aqui é só "app" (só o AOTV) ou "device"
- *    (todo o aparelho).
- * O que uma frente futura precisa: somar as 2 dependências acima, criar
- * o `VpnService` (com o `GoBackend` do tunnel p/ WireGuard e o
- * `OpenVPNThreadv3` do tim06 p/ OpenVPN), pedir `BIND_VPN_SERVICE` no
- * Manifest e ligar o `connect()` do [VpnProfileStore] ao serviço.
+ * ── CONEXÃO (Lote VPN, v1.40.0) ──────────────────────────────────────────
+ * O túnel existe de verdade, com os motores das dependências do gradle:
+ * WireGuard `com.wireguard.android:tunnel:1.0.20260102` (Maven Central,
+ * AAR com as .so embutidas, sem NDK no CI) e OpenVPN
+ * `io.github.tim06:openvpn:1.1.3` (Maven Central, fork Apache-2.0 do
+ * ics-openvpn com o motor OpenVPN3). Os dois motores trazem o PRÓPRIO
+ * `VpnService` declarado no manifesto do AAR (merge automático) — o
+ * WireGuard usa `GoBackend$VpnService` e o OpenVPN usa
+ * `com.tim.openvpn.service.OpenVPNService` (processo `:openvpn`); o app
+ * NÃO declara um terceiro `VpnService`, que ficaria sem túnel e poderia
+ * conflitar com os dois. O que o app faz é orquestrar (ver
+ * [VpnConnectionManager]): `VpnService.prepare()` p/ o consentimento do
+ * usuário, `GoBackend.setState(UP/DOWN)` p/ WireGuard e
+ * `OpenVPNService.Companion.startService/stopService` p/ OpenVPN, com o
+ * estado espelhado em [VpnProfileStore].
+ * Escopos "só HTTP" e "HTTP+HTTPS" da fork PlusIPTV NÃO existem no
+ * Android: um `VpnService` tunela o aparelho inteiro ou só os apps da
+ * allowlist (`addAllowedApplication`) — não dá p/ filtrar por
+ * protocolo. Por isso o escopo aqui é só "app" (só o AOTV) ou "device"
+ * (todo o aparelho).
  *
  * ── ONDE FICA CADA COISA (contrato pré-existente, ver SCOPED_KEYS) ────
  * [VpnProfile] guarda metadados + segredos juntos no JSON de
  * `vpn_profiles_v1` (nome, tipo, escopo, servidor + chave privada/senha/
- * certificados em "secrets"). A chave inteira está em
+ * certificados em "secrets" + o texto bruto do config em "rawConfig").
+ * A chave inteira está em
  * [com.aotv.app.data.backup.AotvBackup.SECRET_SCOPED_KEYS]: só entra no
  * backup/sync com o toggle de segredos ligado (mesma regra do Trakt/
  * Simkl). O escopo ("app"/"device") vive DENTRO de cada perfil — não há
  * pref `vpn_scope` separada. `vpn_active_profile_v1` é o id do perfil
- * ativo e `vpn_auto_connect_v1` é o ligar automático (só vale quando a
- * conexão existir). A UI nunca mostra o valor de um segredo, só se ele
- * existe.
+ * ativo e `vpn_auto_connect_v1` é o ligar automático (vale desde a
+ * v1.40.0 — ver [VpnAutoConnect]). A UI nunca mostra o valor de um
+ * segredo, só se ele existe.
  */
 
 /** Tipo do perfil de VPN (vem do arquivo importado). */
@@ -56,19 +55,39 @@ enum class VpnType { WIREGUARD, OPENVPN }
  */
 enum class VpnScope { APP, DEVICE }
 
-/** Estado da conexão. Sem motor nativo, só existe DESCONECTADO. */
-enum class VpnConnectionState { DISCONNECTED }
+/**
+ * Estado da conexão (Lote VPN, v1.40.0). FAILED guarda o motivo legível
+ * em [VpnProfileStore.lastErrorFlow] — nunca um "conectado" inventado.
+ */
+enum class VpnConnectionState { DISCONNECTED, CONNECTING, CONNECTED, DISCONNECTING, FAILED }
 
-/** Motivo exato da conexão estar indisponível (mostrado na tela, sem inventar). */
-const val VPN_BLOCKED_REASON =
-    "Conexão indisponível nesta versão: falta o motor nativo da VPN " +
-        "(biblioteca WireGuard/OpenVPN + serviço de VPN do Android). " +
-        "Os perfis importados ficam salvos e a conexão entra numa próxima versão."
+/**
+ * Resultado de uma tentativa de conexão ([VpnProfileStore.connectAttempt]).
+ * [NeedsConsent] carrega o Intent do `VpnService.prepare()` — a UI lança
+ * a activity de consentimento do sistema e só conecta depois da
+ * autorização (ver [VpnConnectionManager]).
+ */
+sealed class VpnConnectOutcome {
+    /** O sistema ainda não autorizou a VPN — lançar [intent] e tentar de novo. */
+    data class NeedsConsent(val intent: Intent) : VpnConnectOutcome()
 
-/** Coordenada Maven do motor WireGuard (p/ a frente que ligar a conexão). */
+    /** Tentativa despachada (o estado vai p/ CONNECTING e depois CONNECTED/FAILED). */
+    data object Started : VpnConnectOutcome()
+
+    /** Não deu nem p/ tentar — [message] é o que a tela mostra. */
+    data class Failed(val message: String) : VpnConnectOutcome()
+
+    /** Nenhum perfil ativo p/ conectar. */
+    data object NoProfile : VpnConnectOutcome()
+
+    /** O perfil pede usuário/senha do OpenVPN e eles não estão guardados. */
+    data object NeedsCredentials : VpnConnectOutcome()
+}
+
+/** Coordenada Maven do motor WireGuard. */
 const val VPN_WIREGUARD_MAVEN = "com.wireguard.android:tunnel:1.0.20260102"
 
-/** Coordenada Maven do motor OpenVPN (p/ a frente que ligar a conexão). */
+/** Coordenada Maven do motor OpenVPN. */
 const val VPN_OPENVPN_MAVEN = "io.github.tim06:openvpn:1.1.3"
 
 /** Tamanho máximo de um arquivo de perfil importado (256 KB — .conf/.ovpn são texto curto). */
@@ -80,8 +99,15 @@ const val VPN_MAX_CONFIG_BYTES = 256 * 1024
  * arquivo ("host:porta" ou "host:porta (udp)"). [needsCredentials] é true
  * quando o .ovpn pede usuário e senha (`auth-user-pass`) e o arquivo não
  * os traz — aí a tela pede p/ digitar. [secrets] guarda chave privada,
- * senha e certificados (nunca vai p/ log nem p/ tela). [createdAt] é ms
- * desde epoch.
+ * senha e certificados (nunca vai p/ log nem p/ tela). [rawConfig] é o
+ * texto bruto do arquivo importado (Lote VPN, v1.40.0): o túnel precisa
+ * do config completo — o WireGuard precisa de Address/DNS/AllowedIPs/
+ * Endpoint/PublicKey/PresharedKey/PersistentKeepalive e o OpenVPN do
+ * .ovpn inteiro + certs inline — e o parser do Lote 10 não guardava
+ * esses campos. Fica DENTRO da mesma chave secreta (`vpn_profiles_v1`),
+ * então não muda nenhuma regra de backup/sync; perfis importados antes
+ * da v1.40.0 têm [rawConfig] vazio e precisam ser importados de novo
+ * p/ conectar. [createdAt] é ms desde epoch.
  */
 data class VpnProfile(
     val id: String,
@@ -91,6 +117,7 @@ data class VpnProfile(
     val endpoint: String = "",
     val needsCredentials: Boolean = false,
     val secrets: VpnSecrets = VpnSecrets(),
+    val rawConfig: String = "",
     val createdAt: Long = 0L,
 ) {
     fun toJson(): JSONObject {
@@ -103,6 +130,7 @@ data class VpnProfile(
             .put("needsCredentials", needsCredentials)
             .put("createdAt", createdAt)
         if (secrets.hasAny) o.put("secrets", secrets.toJson())
+        if (rawConfig.isNotBlank()) o.put("rawConfig", rawConfig)
         return o
     }
 
@@ -121,6 +149,7 @@ data class VpnProfile(
                 endpoint = o.optString("endpoint", ""),
                 needsCredentials = o.optBoolean("needsCredentials", false),
                 secrets = VpnSecrets.fromJson(o.optJSONObject("secrets")),
+                rawConfig = o.optString("rawConfig", ""),
                 createdAt = o.optLong("createdAt", 0L),
             )
         }

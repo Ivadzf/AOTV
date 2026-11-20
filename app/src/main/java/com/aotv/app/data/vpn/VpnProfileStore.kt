@@ -9,28 +9,32 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Perfis de VPN (Lote 10, v1.20.0) — CRUD sobre as prefs do perfil.
+ * Perfis de VPN (Lote 10, v1.20.0; conexão no Lote VPN, v1.40.0) — CRUD
+ * sobre as prefs do perfil + estado da conexão.
  *
  * Contrato de chaves (pré-existente em SCOPED_KEYS / AotvBackup, esta
  * frente é dona de quem ESCREVE):
  * - `vpn_profiles_v1`: JSON array de [VpnProfile] (metadados + segredos
- *   embutidos em "secrets"). Chave SECRETA (ver
+ *   embutidos em "secrets" + texto bruto do config em "rawConfig").
+ *   Chave SECRETA (ver
  *   [com.aotv.app.data.backup.AotvBackup.SECRET_SCOPED_KEYS]): só viaja no
  *   backup/sync com o toggle de segredos ligado.
  * - `vpn_active_profile_v1`: id do perfil ativo ("" = nenhum).
- * - `vpn_auto_connect_v1`: ligar o perfil ativo ao abrir o app (só vale
- *   quando a conexão existir — hoje não faz nada sozinho).
+ * - `vpn_auto_connect_v1`: ligar o perfil ativo ao abrir o app (vale
+ *   desde a v1.40.0 — ver [VpnAutoConnect]).
  * O escopo ("app" = só o AOTV, "device" = todo o aparelho) vive DENTRO de
  * cada perfil; não há pref `vpn_scope` separada.
  *
- * Conexão: NÃO há motor nativo nesta versão (ver [VPN_BLOCKED_REASON] em
- * VpnModels.kt). [connectionState] é sempre DESCONECTADO e [connectAttempt]
- * não tenta nada — só devolve o motivo real p/ a tela mostrar. Nada aqui
- * finge que o túnel subiu.
+ * Conexão: o túnel é do [VpnConnectionManager] (WireGuard via GoBackend,
+ * OpenVPN via OpenVPNService do tim06). [connectionStateFlow] espelha o
+ * estado real — CONNECTING/CONNECTED/DISCONNECTING/FAILED — e
+ * [connectAttempt] despacha a conexão (ou o consentimento do sistema).
+ * Nada aqui finge que o túnel subiu.
  */
 @Singleton
 class VpnProfileStore @Inject constructor(
     private val prefs: PlatformPrefs,
+    private val manager: VpnConnectionManager,
 ) {
     private fun readProfiles(): List<VpnProfile> = runCatching {
         val arr = JSONArray(prefs.vpnProfilesJson)
@@ -46,17 +50,26 @@ class VpnProfileStore @Inject constructor(
     val activeProfileIdFlow: StateFlow<String> = _activeProfileId.asStateFlow()
 
     private val _autoConnect = MutableStateFlow(prefs.vpnAutoConnect)
-    /** Ligar o perfil ativo ao abrir o app, que avisa quem observa. Hoje sem efeito (sem motor de VPN). */
+    /** Ligar o perfil ativo ao abrir o app, que avisa quem observa. */
     val autoConnectFlow: StateFlow<Boolean> = _autoConnect.asStateFlow()
+
+    /** Estado da conexão (do [VpnConnectionManager] — CONNECTING/CONNECTED/DISCONNECTING/FAILED). */
+    val connectionStateFlow: StateFlow<VpnConnectionState> = manager.stateFlow
+
+    /** Estado atual da conexão (atalho p/ o valor do [connectionStateFlow]). */
+    val connectionState: VpnConnectionState get() = manager.stateFlow.value
+
+    /** Motivo legível da última falha (null = sem falha recente). */
+    val lastErrorFlow: StateFlow<String?> = manager.lastErrorFlow
+
+    /** Servidor do perfil conectado ("" = sem túnel). */
+    val connectedEndpointFlow: StateFlow<String> = manager.connectedEndpointFlow
+
+    /** Intent de consentimento do sistema aguardando a UI (null = nenhum). */
+    val pendingConsentFlow: StateFlow<android.content.Intent?> = manager.pendingConsentFlow
 
     /** Perfil ativo, ou null sem perfil ativo (ou id órfão). */
     val activeProfile: VpnProfile? get() = _profiles.value.firstOrNull { it.id == _activeProfileId.value }
-
-    /**
-     * Estado da conexão. Sem motor nativo, é sempre DESCONECTADO — a tela
-     * mostra [VPN_BLOCKED_REASON] junto, nunca um "conectado" inventado.
-     */
-    val connectionState: VpnConnectionState get() = VpnConnectionState.DISCONNECTED
 
     /** O perfil tem algum segredo guardado (só p/ mostrar "chave configurada" — o valor nunca sai daqui). */
     fun hasSecrets(id: String): Boolean =
@@ -103,7 +116,7 @@ class VpnProfileStore @Inject constructor(
         _activeProfileId.value = clean
     }
 
-    /** Liga/desliga o conectar automático do perfil ativo ao abrir o app (só vale com o motor de VPN). */
+    /** Liga/desliga o conectar automático do perfil ativo ao abrir o app (vale desde a v1.40.0). */
     fun setAutoConnect(on: Boolean) {
         prefs.vpnAutoConnect = on
         _autoConnect.value = on
@@ -130,11 +143,40 @@ class VpnProfileStore @Inject constructor(
     }
 
     /**
-     * Tentativa de conexão — BLOQUEADA (sem motor nativo). Não abre túnel
-     * nenhum: devolve o motivo real p/ a tela mostrar. Quando a frente do
-     * motor existir, é aqui que o `VpnService` entra (ver VpnModels.kt).
+     * Tentativa de conexão (Lote VPN, v1.40.0) — despacha o túnel do
+     * perfil ativo pelo [VpnConnectionManager]. [VpnConnectOutcome.Started]
+     * = tentativa rodando (o estado chega pelo [connectionStateFlow]);
+     * [VpnConnectOutcome.NeedsConsent] = o sistema ainda não autorizou —
+     * a UI lança o Intent e chama de novo. Nada aqui finge que o túnel
+     * subiu: sem perfil, sem credenciais ou sem o arquivo completo, volta
+     * o motivo real sem tentar nada.
      */
-    fun connectAttempt(): String = VPN_BLOCKED_REASON
+    fun connectAttempt(): VpnConnectOutcome {
+        val profile = activeProfile ?: return VpnConnectOutcome.NoProfile
+        return manager.connect(profile)
+    }
+
+    /** Desconecta o túnel (sem efeito se já desconectado). */
+    fun disconnect() {
+        manager.disconnect()
+    }
+
+    /** Limpa o Intent de consentimento pendente (a UI já lançou ou desistiu). */
+    fun clearPendingConsent() {
+        manager.clearPendingConsent()
+    }
+
+    /**
+     * Ligar automático ao abrir o app: só tenta quando o toggle está
+     * ligado E há perfil ativo E não há túnel. Se o sistema ainda não
+     * autorizou, a tentativa fica pendente (consentimento na tela da VPN).
+     */
+    fun tryAutoConnect() {
+        if (!prefs.vpnAutoConnect) return
+        if (manager.stateFlow.value != VpnConnectionState.DISCONNECTED) return
+        val profile = activeProfile ?: return
+        manager.connect(profile)
+    }
 
     private fun saveProfiles(list: List<VpnProfile>) {
         val arr = JSONArray()

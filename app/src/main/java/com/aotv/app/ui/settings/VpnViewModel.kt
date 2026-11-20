@@ -1,8 +1,9 @@
 package com.aotv.app.ui.settings
 
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.aotv.app.data.vpn.VPN_BLOCKED_REASON
+import com.aotv.app.data.vpn.VpnConnectOutcome
 import com.aotv.app.data.vpn.VpnConnectionState
 import com.aotv.app.data.vpn.VpnParseResult
 import com.aotv.app.data.vpn.VpnProfile
@@ -16,11 +17,19 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** Estado da tela "VPN" (Lote 10, v1.20.0). */
+/** Estado da tela "VPN" (Lote 10, v1.20.0; conexão no Lote VPN, v1.40.0). */
 data class VpnUiState(
     val profiles: List<VpnProfile> = emptyList(),
     val activeProfileId: String = "",
     val autoConnect: Boolean = false,
+    /** Estado da conexão (espelha o [VpnProfileStore.connectionStateFlow]). */
+    val connectionState: VpnConnectionState = VpnConnectionState.DISCONNECTED,
+    /** Motivo legível da última falha (null = sem falha recente). */
+    val lastError: String? = null,
+    /** Servidor do perfil conectado ("" = sem túnel). */
+    val connectedEndpoint: String = "",
+    /** Intent de consentimento do sistema aguardando a UI lançar (null = nenhum). */
+    val pendingConsent: Intent? = null,
     /** Perfil aberto no diálogo de edição (null = sem diálogo). */
     val editingProfile: VpnProfile? = null,
     /** Perfil aguardando confirmação de remoção (null = sem diálogo). */
@@ -58,9 +67,29 @@ class VpnViewModel @Inject constructor(
                 _ui.update { it.copy(autoConnect = on) }
             }
         }
+        viewModelScope.launch {
+            store.connectionStateFlow.collect { state ->
+                _ui.update { it.copy(connectionState = state) }
+            }
+        }
+        viewModelScope.launch {
+            store.lastErrorFlow.collect { error ->
+                _ui.update { it.copy(lastError = error) }
+            }
+        }
+        viewModelScope.launch {
+            store.connectedEndpointFlow.collect { endpoint ->
+                _ui.update { it.copy(connectedEndpoint = endpoint) }
+            }
+        }
+        viewModelScope.launch {
+            store.pendingConsentFlow.collect { intent ->
+                _ui.update { it.copy(pendingConsent = intent) }
+            }
+        }
     }
 
-    /** Estado da conexão — sempre DESCONECTADO (sem motor nativo, ver VpnModels.kt). */
+    /** Estado da conexão — espelha o túnel (nunca um "conectado" inventado). */
     val connectionState: VpnConnectionState get() = store.connectionState
 
     /** O perfil tem chave/senha guardada (só p/ mostrar "chave configurada" — o valor nunca sai do store). */
@@ -70,7 +99,7 @@ class VpnViewModel @Inject constructor(
     fun importConfig(text: String, fileName: String) {        when (val result = store.importConfig(text, fileName)) {
             is VpnParseResult.Ok -> _ui.update {
                 it.copy(
-                    message = "Perfil \"${result.profile.name}\" importado. Conexão indisponível nesta versão.",
+                    message = "Perfil \"${result.profile.name}\" importado.",
                     error = null,
                 )
             }
@@ -88,18 +117,18 @@ class VpnViewModel @Inject constructor(
         _ui.update { it.copy(error = "Arquivo grande demais (limite de 256 KB).", message = null) }
     }
 
-    /** Ativa um perfil (o túnel só sobe quando o motor existir). */
+    /** Ativa um perfil (o túnel sobe no Conectar — trocar o ativo não conecta sozinho). */
     fun setActiveProfile(id: String) {
         store.setActiveProfile(id)
         _ui.update { it.copy(message = null, error = null) }
     }
 
-    /** Liga/desliga o conectar automático do perfil ativo (só vale com o motor de VPN). */
+    /** Liga/desliga o conectar automático do perfil ativo ao abrir o app. */
     fun setAutoConnect(on: Boolean) {
         store.setAutoConnect(on)
         _ui.update {
             it.copy(
-                message = if (on) "Ligar automático ativado — só vale quando a conexão existir." else null,
+                message = if (on) "Ligar automático ativado — conecta o perfil ativo ao abrir o app." else null,
                 error = null,
             )
         }
@@ -147,12 +176,65 @@ class VpnViewModel @Inject constructor(
     }
 
     /**
-     * Tentativa de conexão — BLOQUEADA (sem motor nativo). Não abre túnel
-     * nenhum: mostra o motivo real. Quando a frente do motor existir, é o
-     * [VpnProfileStore.connectAttempt] que vira a conexão de verdade.
+     * Tentativa de conexão (Lote VPN, v1.40.0) — despacha o túnel do perfil
+     * ativo. Se o sistema ainda não autorizou a VPN, o [VpnUiState.pendingConsent]
+     * carrega o Intent e a tela lança a activity de consentimento; o
+     * [onConsentResult] tenta de novo depois da autorização.
      */
     fun connectAttempt() {
-        _ui.update { it.copy(error = VPN_BLOCKED_REASON, message = null) }
+        when (val outcome = store.connectAttempt()) {
+            is VpnConnectOutcome.Started -> _ui.update {
+                it.copy(message = "Conectando…", error = null)
+            }
+            is VpnConnectOutcome.NeedsConsent -> _ui.update {
+                it.copy(message = "Autorize a VPN na tela do sistema para conectar.", error = null)
+            }
+            is VpnConnectOutcome.Failed -> _ui.update {
+                it.copy(error = outcome.message, message = null)
+            }
+            is VpnConnectOutcome.NoProfile -> _ui.update {
+                it.copy(error = "Escolha um perfil acima para conectar.", message = null)
+            }
+            is VpnConnectOutcome.NeedsCredentials -> _ui.update {
+                it.copy(error = "Este perfil precisa de usuário e senha — edite o perfil e preencha.", message = null)
+            }
+        }
+    }
+
+    /** Desconecta o túnel. */
+    fun disconnect() {
+        store.disconnect()
+        _ui.update { it.copy(message = "Desconectando…", error = null) }
+    }
+
+    /**
+     * Resultado da activity de consentimento do sistema. Autorizado =
+     * tenta conectar de novo (o `VpnService.prepare()` agora devolve null);
+     * negado = mostra o motivo sem tentar nada.
+     */
+    fun onConsentResult(granted: Boolean) {
+        if (granted) {
+            connectAttempt()
+        } else {
+            _ui.update {
+                it.copy(error = "Permissão de VPN negada — sem ela o túnel não sobe.", message = null)
+            }
+        }
+    }
+
+    /** Limpa o Intent de consentimento pendente (a tela já lançou). */
+    fun clearPendingConsent() {
+        store.clearPendingConsent()
+    }
+
+    /** Abre as configurações de VPN do sistema (always-on + "Bloquear conexões sem VPN"). */
+    fun openSystemVpnSettings(context: android.content.Context) {
+        runCatching {
+            context.startActivity(
+                Intent(android.provider.Settings.ACTION_VPN_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
     }
 
     /** Limpa a mensagem/erro da tela. */

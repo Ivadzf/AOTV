@@ -32,6 +32,11 @@ class AotvApplication : Application(), ImageLoaderFactory {
         // só fica p/ o próximo ciclo (ver ContinuousSync).
         ContinuousSync.applyEnabled(this)
         ContinuousSync.maybeSyncOnOpen(this)
+        // Lote VPN (v1.40.0): ligar automático da VPN — conecta o perfil
+        // ativo ao abrir o app quando o toggle está ligado. Sem travar a
+        // abertura: se o sistema ainda não autorizou, fica pendente p/ a
+        // tela da VPN (ver VpnAutoConnect).
+        runCatching { com.aotv.app.data.vpn.VpnAutoConnect.maybeConnectOnOpen(this) }
     }
 
     // ImageLoader afinado para TV box / aparelhos fracos (Android 9+):

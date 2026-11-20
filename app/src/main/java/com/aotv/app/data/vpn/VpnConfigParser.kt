@@ -9,10 +9,13 @@ package com.aotv.app.data.vpn
  *   blocos embutidos `<ca>`, `<cert>`, `<key>`.
  *
  * O parser valida o mínimo p/ o perfil ser usável depois (chave privada e
- * servidor presentes); o resto (DNS, AllowedIPs, cipher) é ignorado de
- * propósito — sem motor nativo, nada disso é aplicado ainda. Erro de
- * validação vira mensagem real p/ a tela, nunca perfil pela metade.
- * Nenhum segredo é logado: as mensagens de erro nunca incluem valores.
+ * servidor presentes) e guarda o TEXTO BRUTO do arquivo em
+ * [VpnProfile.rawConfig] (Lote VPN, v1.40.0): o túnel precisa do config
+ * completo — Address/DNS/AllowedIPs/PersistentKeepalive no WireGuard, o
+ * .ovpn inteiro + certs inline no OpenVPN — e só os campos parseados não
+ * bastam. Erro de validação vira mensagem real p/ a tela, nunca perfil
+ * pela metade. Nenhum segredo é logado: as mensagens de erro nunca
+ * incluem valores.
  */
 
 /** Resultado da importação de um arquivo de perfil. */
@@ -101,6 +104,7 @@ private fun parseWireGuard(text: String, fileName: String): VpnParseResult {
         name = sanitizeProfileName(fileName),
         type = VpnType.WIREGUARD,
         endpoint = endpoint,
+        rawConfig = text.trim(),
         createdAt = System.currentTimeMillis(),
     )
     val secrets = VpnSecrets(
@@ -162,6 +166,7 @@ private fun parseOpenVpn(text: String, fileName: String): VpnParseResult {
         type = VpnType.OPENVPN,
         endpoint = endpoint,
         needsCredentials = needsCredentials,
+        rawConfig = text.trim(),
         createdAt = System.currentTimeMillis(),
     )
     val secrets = VpnSecrets(

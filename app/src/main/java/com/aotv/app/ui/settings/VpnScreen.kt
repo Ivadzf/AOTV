@@ -1,5 +1,6 @@
 package com.aotv.app.ui.settings
 
+import android.app.Activity
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.AlertDialog
@@ -35,6 +37,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,8 +55,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.aotv.app.data.vpn.VPN_BLOCKED_REASON
 import com.aotv.app.data.vpn.VPN_MAX_CONFIG_BYTES
+import com.aotv.app.data.vpn.VpnConnectionState
 import com.aotv.app.data.vpn.VpnScope
 import com.aotv.app.data.vpn.VpnType
 import com.aotv.app.ui.common.AotvButton
@@ -74,14 +77,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Tela "VPN" (Lote 10, v1.20.0) — gerenciar perfis WireGuard/OpenVPN
- * trazidos pelo usuário.
- *
- * Importa por SAF (.conf/.ovpn, formato detectado pelo conteúdo), lista,
- * edita (nome, escopo, usuário/senha do OpenVPN) e remove perfis, ativa
- * um perfil e mostra o status. A CONEXÃO não existe nesta versão (falta o
- * motor nativo — ver `VpnModels.kt`): o status é sempre "Desconectado" e
- * o botão Conectar mostra o motivo real em vez de fingir que conecta.
+ * Tela "VPN" (Lote 10, v1.20.0; conexão no Lote VPN, v1.40.0) — gerenciar
+ * perfis WireGuard/OpenVPN trazidos pelo usuário e conectar/desconectar
+ * o túnel (motores WireGuard/OpenVPN3 + `VpnService` dos AARs, ver
+ * `VpnConnectionManager`). O primeiro Conectar pede o consentimento do
+ * sistema (`VpnService.prepare()`) — a tela lança a activity e só
+ * conecta depois da autorização.
  *
  * Ponto de entrada p/ a navegação (o coordenador faz a fiação da rota e do
  * hub; esta tela NÃO se conecta à navegação sozinha):
@@ -141,6 +142,20 @@ fun VpnScreen(
         focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent,
     )
 
+    // Consentimento do sistema (VpnService.prepare()): a primeira conexão
+    // devolve o Intent e a tela lança a activity; o resultado volta aqui
+    // e o ViewModel tenta conectar de novo (ou mostra a negativa).
+    val consentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        viewModel.onConsentResult(result.resultCode == Activity.RESULT_OK)
+    }
+    val pendingConsent = st.pendingConsent
+    if (pendingConsent != null) {
+        LaunchedEffect(pendingConsent) {
+            consentLauncher.launch(pendingConsent)
+            viewModel.clearPendingConsent()
+        }
+    }
+
     VpnPartyScaffold(
         title = "VPN",
         sub = "Perfis WireGuard e OpenVPN do seu provedor",
@@ -172,13 +187,20 @@ fun VpnScreen(
         SummaryCard {
             Text("Status", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
             Spacer(Modifier.height(10.dp))
-            SummaryRow("Conexão", "Desconectado", TextPrimary)
+            SummaryRow("Conexão", vpnStateLabel(st.connectionState), TextPrimary)
             SummaryRow("Perfil ativo", active?.name ?: "Nenhum", TextPrimary)
+            if (st.connectionState == VpnConnectionState.CONNECTED) {
+                SummaryRow("Servidor", st.connectedEndpoint.ifBlank { active?.endpoint ?: "—" }, TextPrimary)
+            }
             SummaryRow("Perfis", "${st.profiles.size} importado(s)", TextPrimary)
+            if (st.connectionState == VpnConnectionState.FAILED && st.lastError != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(st.lastError, color = DangerText, fontSize = 13.sp, lineHeight = 18.sp)
+            }
             Spacer(Modifier.height(12.dp))
             Text(
                 "A VPN protege a reprodução sem app externo: o perfil é do seu provedor, nada de servidor do AOTV. " +
-                    "Nesta versão a conexão ainda não existe — falta o motor nativo (biblioteca WireGuard/OpenVPN + serviço de VPN do Android).",
+                    "Na primeira conexão o sistema pede autorização — sem ela o túnel não sobe.",
                 color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
             )
         }
@@ -266,7 +288,7 @@ fun VpnScreen(
         SettingsRow(
             icon = Icons.Default.VpnKey,
             title = "Ligar automaticamente",
-            sub = if (st.autoConnect) "Ligado: conecta o perfil ativo ao abrir o app (só vale quando a conexão existir)"
+            sub = if (st.autoConnect) "Ligado: conecta o perfil ativo ao abrir o app"
             else "Desligado: a VPN só conecta quando você tocar em Conectar",
             trailing = { Switch(checked = st.autoConnect, onCheckedChange = viewModel::setAutoConnect, modifier = Modifier.focusProperties { canFocus = false }) },
             onClick = { viewModel.setAutoConnect(!st.autoConnect) },
@@ -274,7 +296,8 @@ fun VpnScreen(
 
         VpnPartySection("Conexão", anchor = SettingsAnchors.VPN_STATUS)
         Text(
-            "Sem motor nativo, não há conexão p/ desconectar. O botão abaixo mostra o motivo real da indisponibilidade.",
+            "Conecta o perfil ativo. Na primeira vez o sistema pede autorização p/ a VPN — autorize e o túnel sobe. " +
+                "Perfis importados antes da v1.40.0 não guardam o arquivo completo: importe o .conf/.ovpn de novo p/ conectar.",
             color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -283,7 +306,17 @@ fun VpnScreen(
                 onClick = viewModel::connectAttempt,
                 icon = Icons.Default.CheckCircle,
                 tone = ButtonTone.PRIMARY,
-                enabled = active != null,
+                enabled = active != null &&
+                    (st.connectionState == VpnConnectionState.DISCONNECTED ||
+                        st.connectionState == VpnConnectionState.FAILED),
+            )
+            AotvButton(
+                "Desconectar",
+                onClick = viewModel::disconnect,
+                icon = Icons.Default.Close,
+                tone = ButtonTone.DANGER,
+                enabled = st.connectionState == VpnConnectionState.CONNECTED ||
+                    st.connectionState == VpnConnectionState.CONNECTING,
             )
         }
         if (active == null) {
@@ -292,9 +325,19 @@ fun VpnScreen(
                 color = TextTertiary, fontSize = 13.sp,
             )
         }
+
+        VpnPartySection("Kill switch", anchor = null)
         Text(
-            VPN_BLOCKED_REASON,
-            color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+            "Enquanto conectado, o túnel WireGuard bloqueia o tráfego fora da VPN (o motor aplica o bloqueio no túnel). " +
+                "No OpenVPN o bloqueio total depende do sistema: ligue \"Sempre ligada\" + \"Bloquear conexões sem VPN\" nas configurações de VPN — " +
+                "o app não pode ligar isso sozinho, e sem ele o aparelho volta p/ a rede normal se o túnel cair.",
+            color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+        )
+        AotvButton(
+            "Abrir configurações de VPN do sistema",
+            onClick = { viewModel.openSystemVpnSettings(context) },
+            icon = Icons.Default.Settings,
+            tone = ButtonTone.SECONDARY,
         )
     }
 
@@ -390,4 +433,13 @@ fun VpnScreen(
 private fun vpnTypeLabel(type: VpnType): String = when (type) {
     VpnType.WIREGUARD -> "WireGuard"
     VpnType.OPENVPN -> "OpenVPN"
+}
+
+/** Rótulo do estado da conexão. */
+private fun vpnStateLabel(state: VpnConnectionState): String = when (state) {
+    VpnConnectionState.DISCONNECTED -> "Desconectado"
+    VpnConnectionState.CONNECTING -> "Conectando…"
+    VpnConnectionState.CONNECTED -> "Conectado"
+    VpnConnectionState.DISCONNECTING -> "Desconectando…"
+    VpnConnectionState.FAILED -> "Falhou"
 }

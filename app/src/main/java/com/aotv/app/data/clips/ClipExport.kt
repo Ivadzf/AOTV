@@ -64,20 +64,37 @@ class ClipExporter(context: Context) {
             val fileName = exportFileName(localUri, fallbackTitle)
             val shareUri = resolveShareUri(localUri, fileName)
                 ?: return@withContext ClipExportResult.Failed("Arquivo do trecho não encontrado.")
+            // Lote VPN (v1.40.0): .ts NÃO compartilha como `video/mp2t` —
+            // nenhum app no celular do Davi aceita MPEG-TS e o
+            // createChooser lançava ActivityNotFoundException (toast "Não
+            // deu para abrir o compartilhamento."). Tenta `video/*` e, se
+            // a folha ainda lançar, `*/*`; só então devolve Failed. .mp4
+            // continua `video/mp4` (só tem 1 tentativa — já é específico).
             var launchFailed = false
+            var triedMimes = ""
             withContext(Dispatchers.Main) {
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = mimeFor(fileName)
-                    putExtra(Intent.EXTRA_STREAM, shareUri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                for (mime in shareMimeCandidates(fileName)) {
+                    triedMimes = mime
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = mime
+                        putExtra(Intent.EXTRA_STREAM, shareUri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val opened = runCatching {
+                        appContext.startActivity(Intent.createChooser(send, "Compartilhar trecho"))
+                    }.isSuccess
+                    if (opened) {
+                        launchFailed = false
+                        break
+                    }
+                    launchFailed = true
                 }
-                runCatching {
-                    appContext.startActivity(Intent.createChooser(send, "Compartilhar trecho"))
-                }.onFailure { launchFailed = true }
             }
             if (launchFailed) {
-                ClipExportResult.Failed("Não deu para abrir o compartilhamento.")
+                ClipExportResult.Failed(
+                    "Não deu para abrir o compartilhamento: nenhum app no aparelho aceita este formato ($triedMimes).",
+                )
             } else {
                 ClipExportResult.Shared
             }
@@ -184,10 +201,26 @@ class ClipExporter(context: Context) {
         }
     }.getOrNull()
 
-    /** Mime do trecho pelo nome do arquivo (.ts = MPEG-TS, .mp4 = MP4). */
+    /** Mime do trecho pelo nome do arquivo (.ts = MPEG-TS, .mp4 = MP4).
+     *  Vale p/ CRIAR o documento na pasta SAF ([copyClipToFolder]) — p/
+     *  COMPARTILHAR, ver [shareMimeCandidates] (o `.ts` não vai como
+     *  `video/mp2t`, que nenhum app aceita). */
     private fun mimeFor(fileName: String): String = when {
         fileName.endsWith(".mp4", ignoreCase = true) -> "video/mp4"
         fileName.endsWith(".ts", ignoreCase = true) -> "video/mp2t"
         else -> "video/*"
+    }
+
+    /**
+     * Mimes p/ COMPARTILHAR, em ordem de tentativa (Lote VPN, v1.40.0):
+     * .mp4 vai como `video/mp4` (1 tentativa); .ts vai como `video/*` e,
+     * se a folha lançar ActivityNotFoundException, como `*/*` — o
+     * `video/mp2t` não entra na lista (nenhum app no aparelho aceita
+     * MPEG-TS e era ele que quebrava o compartilhamento).
+     */
+    private fun shareMimeCandidates(fileName: String): List<String> = when {
+        fileName.endsWith(".mp4", ignoreCase = true) -> listOf("video/mp4")
+        fileName.endsWith(".ts", ignoreCase = true) -> listOf("video/*", "*/*")
+        else -> listOf("video/*", "*/*")
     }
 }

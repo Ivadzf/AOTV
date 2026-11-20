@@ -43,6 +43,10 @@ import kotlinx.coroutines.currentCoroutineContext
  *   salva tudo num único arquivo .ts, na ordem. O início/fim exato do arquivo
  *   cai na borda do segmento (em geral alguns segundos de diferença do ponto
  *   pedido) — o arquivo cobre o trecho inteiro pedido, nunca menos.
+ *   Lote VPN (v1.40.0): os timestamps (PTS/DTS/PCR) são re-basificados
+ *   por segmento ([TsRebase]) p/ a linha do tempo ficar contínua desde
+ *   ~0 — sem isso o player externo lia duração e relógio errados no
+ *   trecho concatenado (começava em 1:57, voltava ~30 s a cada ~5 s).
  * - HLS cifrado (AES-128, `#EXT-X-KEY`): DÁ (v1.37.0). A chave é buscada na
  *   URI do tag e cada segmento é descriptografado com javax.crypto
  *   (AES/CBC, IV do tag ou nº do segmento) antes de concatenar no .ts.
@@ -899,8 +903,18 @@ class ClipDownloader(context: Context) {
         val keyCache = HashMap<String, ByteArray>()
         // Baixa init + segmentos do intervalo com os headers dados (suspend:
         // o ensureActive() cancela o download quando o usuário sai).
+        // Lote VPN (v1.40.0): .ts re-basifica os timestamps por segmento
+        // (ver [TsRebase]) — sem isso o trecho concatenado tinha duração
+        // e relógio errados no player externo (começava em 1:57, voltava
+        // ~30 s a cada ~5 s). O offset de cada segmento é (duração
+        // acumulada dos anteriores − base do segmento) mod 2^33, então
+        // descontinuidade entre segmentos também cai no lugar certo; se
+        // os timestamps já forem contínuos desde 0, o offset é ~0 e o
+        // fix vira no-op. fMP4 NÃO passa por aqui (os tempos vivem nos
+        // boxes moof — continua o caminho direto de antes).
         suspend fun downloadAll(hdrs: Map<String, String>): Long {
             var total = 0L
+            var accumulated90k = 0L
             partFile.outputStream().buffered().use { out ->
                 if (isFmp4) {
                     // Init segment primeiro: sem ele os .m4s não tocam.
@@ -911,7 +925,18 @@ class ClipDownloader(context: Context) {
                 }
                 wanted.forEachIndexed { index, segment ->
                     currentCoroutineContext().ensureActive()
-                    total += fetchClipSegmentTo(segment, hdrs, out, keyCache, cookies)
+                    total += if (isFmp4) {
+                        fetchClipSegmentTo(segment, hdrs, out, keyCache, cookies)
+                    } else {
+                        val raw = fetchClipSegmentBytes(segment, hdrs, keyCache, cookies)
+                        val offset = TsRebase.offsetForSegment(
+                            TsRebase.firstTimestamp90k(raw), accumulated90k,
+                        )
+                        val rebased = if (offset == 0L) raw else TsRebase.rebase(raw, offset)
+                        out.write(rebased)
+                        accumulated90k += segment.durationMs * TsRebase.TICKS_PER_MS
+                        rebased.size.toLong()
+                    }
                     onProgress?.invoke(index + 1, wanted.size)
                 }
             }
@@ -1005,11 +1030,13 @@ class ClipDownloader(context: Context) {
     }
 
     /**
-     * Baixa um segmento do clipe: em claro, copia os bytes crus; com
-     * AES-128, busca a chave (cacheada por URI neste download), valida
+     * Baixa um segmento do clipe p/ o `out`: em claro, copia os bytes crus;
+     * com AES-128, busca a chave (cacheada por URI neste download), valida
      * chave (16 bytes) e IV (16 bytes) e escreve o segmento
      * descriptografado. Lança IOException com motivo legível em qualquer
      * falha — o chamador marca o clipe como "failed" com esse texto.
+     * (Lote VPN, v1.40.0: o .ts usa [fetchClipSegmentBytes] p/ re-basificar
+     * antes de escrever; o fMP4 continua por aqui, sem re-basing.)
      */
     private fun fetchClipSegmentTo(
         segment: ClipSegment,
@@ -1018,7 +1045,25 @@ class ClipDownloader(context: Context) {
         keyCache: MutableMap<String, ByteArray>,
         cookies: String? = null,
     ): Long {
-        val keyUri = segment.keyUri ?: return fetchSegmentTo(segment.url, headers, out, cookies)
+        val bytes = fetchClipSegmentBytes(segment, headers, keyCache, cookies)
+        out.write(bytes)
+        return bytes.size.toLong()
+    }
+
+    /**
+     * Baixa um segmento do clipe EM MEMÓRIA (p/ o .ts re-basificar antes
+     * de escrever — ver [TsRebase]): em claro, os bytes crus; com
+     * AES-128, o segmento descriptografado. O re-basing acontece DEPOIS
+     * da descriptografia, nunca sobre o cifrado. Lança IOException com
+     * motivo legível em qualquer falha.
+     */
+    private fun fetchClipSegmentBytes(
+        segment: ClipSegment,
+        headers: Map<String, String>,
+        keyCache: MutableMap<String, ByteArray>,
+        cookies: String? = null,
+    ): ByteArray {
+        val keyUri = segment.keyUri ?: return fetchBytes(segment.url, headers, cookies)
         val key = keyCache.getOrPut(keyUri) { fetchKeyBytes(keyUri, headers, cookies) }
         if (key.size != 16) {
             throw IOException("Chave AES-128 inválida (não tem 16 bytes).")
@@ -1026,21 +1071,27 @@ class ClipDownloader(context: Context) {
         val ivHex = segment.keyIvHex ?: throw IOException("Segmento cifrado sem IV.")
         val iv = ClipDownload.hexToBytes(ivHex)?.takeIf { it.size == 16 }
             ?: throw IOException("IV inválido no segmento cifrado.")
-        val req = Request.Builder().url(segment.url).apply {
+        val cipherBytes = fetchBytes(segment.url, headers, cookies)
+        return try {
+            ClipDownload.decryptAes128Segment(cipherBytes, key, iv)
+        } catch (e: Exception) {
+            throw IOException("Não deu para descriptografar o segmento (chave ou IV inválido).")
+        }
+    }
+
+    /** Baixa um arquivo inteiro (segmento, init ou chave) p/ a memória. */
+    private fun fetchBytes(
+        url: String,
+        headers: Map<String, String>,
+        cookies: String? = null,
+    ): ByteArray {
+        val req = Request.Builder().url(url).apply {
             headers.forEach { (k, v) -> header(k, v) }
             if (cookies != null) header("Cookie", cookies)
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} no segmento")
-            val body = resp.body ?: throw IOException("Resposta sem corpo no segmento")
-            val cipherBytes = body.bytes()
-            val plain = try {
-                ClipDownload.decryptAes128Segment(cipherBytes, key, iv)
-            } catch (e: Exception) {
-                throw IOException("Não deu para descriptografar o segmento (chave ou IV inválido).")
-            }
-            out.write(plain)
-            return plain.size.toLong()
+            return resp.body?.bytes() ?: throw IOException("Resposta sem corpo no segmento")
         }
     }
 

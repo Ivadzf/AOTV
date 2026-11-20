@@ -843,8 +843,11 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
 
     // Resume de SÉRIE: as fontes recebidas vêm do estado de FILME (vazias p/ série). Carrega
     // as fontes Stremio do episódio e toca a salva (ou a melhor) — corrige "não carrega a fonte".
+    // Lote VPN (v1.40.0): reprodução LOCAL não entra aqui — o arquivo já
+    // está tocando e trocar p/ a "melhor" fonte do addon seria sair do
+    // arquivo sem ninguém pedir (o clipe baixado sumia no meio do play).
     LaunchedEffect(Unit) {
-        if (type == "SERIES" && episode > 0 && currentSources.none { it.url == activeUrl }) {
+        if (type == "SERIES" && episode > 0 && !isLocalPlayback && currentSources.none { it.url == activeUrl }) {
             // Sem preferência ainda nesta sessão (abriu fresco pelo detalhe) → herda o addon
             // da última vez que essa série tocou, pra não perguntar nos episódios seguintes.
             // Última fonte escolhida À MÃO neste título (Lote 4 item 6): addon +
@@ -1496,7 +1499,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(movieErrored) {
         if (!movieErrored) return@LaunchedEffect
         movieErrored = false
-        if (userLockedSource || !autoSwitchEnabled) sourceFailed = true
+        // Lote VPN (v1.40.0): arquivo local nunca auto-troca — o erro
+        // aparece (sourceFailed) e o usuário escolhe; sem isso o player
+        // pulava do clipe baixado p/ uma fonte de addon.
+        if (userLockedSource || isLocalPlayback || !autoSwitchEnabled) sourceFailed = true
         else if (!nextMovieSource()) sourceFailed = true
     }
     // Fonte que não inicia. Os espelhos do mesmo arquivo às vezes demoram 15 s para entregar o
@@ -1535,11 +1541,12 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         }
         // Lote mpv 3: com "Procurar outra fonte no começo" desligado, a
         // fonte que não inicia fica esperando — sem trocar sozinha (nem p/
-        // espelho).
-        val hasMirror = !userLockedSource && autoSwitchAtStart && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
+        // espelho). Lote VPN (v1.40.0): arquivo local também nunca troca
+        // sozinho — o timeout só marca indisponível.
+        val hasMirror = !userLockedSource && !isLocalPlayback && autoSwitchAtStart && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
         kotlinx.coroutines.delay(if (hasMirror) 5_000 else sourceTimeoutSec * 1_000L)
         if (movieStarted || streamUrl != u) return@LaunchedEffect
-        if (userLockedSource || !autoSwitchEnabled || !autoSwitchAtStart) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
+        if (userLockedSource || isLocalPlayback || !autoSwitchEnabled || !autoSwitchAtStart) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
         val m = sameMirror(facts(), currentSourceIdx, triedUrls)
         if (m >= 0) {
             toastMsg = "Servidor lento. Tentando outro espelho da mesma fonte."
@@ -1555,7 +1562,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         val u = readyUrl ?: return@LaunchedEffect
         if (u != streamUrl) return@LaunchedEffect
         val sec = exoPlayer.duration.takeIf { it > 0 }?.div(1000.0) ?: 0.0
-        if (type != "SERIES" && !userLockedSource && durationMismatch(runtimeMin, sec)) {
+        // Lote VPN (v1.40.0): "filme errado" não vale p/ arquivo local —
+        // a duração do clipe cortado nunca bate com a do TMDB e o player
+        // pularia do arquivo p/ uma fonte de addon no meio do trecho.
+        if (type != "SERIES" && !userLockedSource && !isLocalPlayback && durationMismatch(runtimeMin, sec)) {
             wrongUrls += u
             val f = facts()
             // Lote 19 item 7 (f): a troca por filme errado também é automática —
@@ -1572,12 +1582,15 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         // upgrade 1x não roda — o player fica na qualidade que começou.
         // Lote mpv 3: com "Procurar outra fonte no começo" desligado, o
         // upgrade também não roda (é uma procura de fonte no começo).
-        if (upgradeDone || userLockedSource || !autoUpgradeEnabled || !autoSwitchAtStart) return@LaunchedEffect
+        // Lote VPN (v1.40.0): arquivo local NUNCA sofre upgrade — era o
+        // bug do teste da v1.39.0 (4 s depois o player trocava o clipe
+        // baixado por KingVod/VêTela/FrostStream, uma diferente a cada vez).
+        if (upgradeDone || userLockedSource || isLocalPlayback || !autoUpgradeEnabled || !autoSwitchAtStart) return@LaunchedEffect
         delay(4_000)
         val cur = currentSources.getOrNull(currentSourceIdx) ?: return@LaunchedEffect
         val lang = langOf(cur.label)
         fun consider(): Boolean {
-            if (upgradeDone || userLockedSource || !autoUpgradeEnabled || !autoSwitchAtStart || casting || streamUrl != u) return true
+            if (upgradeDone || userLockedSource || isLocalPlayback || !autoUpgradeEnabled || !autoSwitchAtStart || casting || streamUrl != u) return true
             // Lote mpv 3: em fonte P2P/torrent o upgrade NUNCA roda sozinho
             // — a fonte "melhor" pode ser outro torrent que não carregou
             // (o probe só mede resposta, não se o stream toca).
@@ -1636,8 +1649,9 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // ou com a troca automática desligada — v1.8.1).
             // Lote mpv 3: em P2P a troca automática NUNCA roda sozinha —
             // marca indisponível e o usuário escolhe (o overlay tem ações).
+            // Lote VPN (v1.40.0): arquivo local também nunca troca sozinho.
             val bufferingMsg = "Timeout: o stream travou no buffering por ${sourceTimeoutSec}s (sem erro do player)"
-            if (p2p || userLockedSource || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
+            if (p2p || userLockedSource || isLocalPlayback || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
             else if (!nextMovieSource(slow = true)) { noteTimeout(bufferingMsg); sourceFailed = true }
             return@LaunchedEffect
         }
@@ -2498,6 +2512,17 @@ class PlayerSession(
     // (episódio aberto sem URL, o player busca nos addons).
     var activeUrl by run { mutableStateOf(embedUrl) }
     var streamUrl by run { mutableStateOf(embedUrl.ifBlank { null }) }
+    // Lote VPN (v1.40.0) — reprodução LOCAL (arquivo já baixado, `file://`
+    // ou `content://`): o player NUNCA sai do arquivo sozinho — nem por
+    // timeout, nem upgrade, nem buffering, nem "filme errado", nem erro
+    // (ver os gates em PlayerSourceEffects/PlayerPlaybackEffects e em
+    // [nextMovieSource]). A escolha À MÃO no seletor continua valendo
+    // (ela passa por [applyMovieSource], não pelo auto-fallback).
+    val isLocalPlayback: Boolean get() = isLocalUrl(streamUrl)
+
+    /** `true` p/ arquivo local (`file://` ou `content://`); resto = stream de addon. */
+    fun isLocalUrl(url: String?): Boolean =
+        url != null && (url.startsWith("file://") || url.startsWith("content://"))
     // Abre LIMPO (sem controles) — mostra logo + animação de carregamento; controles só ao mexer.
     var controlsVisible by run { mutableStateOf(false) }
     // Velocidade de reprodução (chip "1x") — presets 0,5x a 2x (PLAYBACK_SPEEDS),
@@ -5024,6 +5049,12 @@ class PlayerSession(
     // [slow] = troca por lentidão. Aí só vale fonte que não seja de outro filme, senão é melhor
     // seguir esperando a atual do que abrir o filme errado.
     fun nextMovieSource(slow: Boolean = false): Boolean {
+        // Lote VPN (v1.40.0): reprodução LOCAL nunca tem "próxima fonte" —
+        // o arquivo é a única fonte e o auto-fallback não pode sair dele.
+        // É o guarda central: cobre o erro, o timeout, o buffering e o
+        // NotCached do debrid, que chamam daqui. A escolha À MÃO continua
+        // passando por [applyMovieSource]/[selectMovieSource], não por aqui.
+        if (isLocalPlayback) return false
         // Failover (Lote 17 item 1): a fonte atual falhou — o host ganha uma
         // falha na saúde aprendida; se foi travada (slow), conta a travada
         // p/ o downgrade adaptativo. A próxima vem do RANKING (não da ordem

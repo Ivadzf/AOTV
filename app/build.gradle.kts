@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 78
-        versionName    = "1.39.0"
+        versionCode    = 79
+        versionName    = "1.40.0"
         // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
         // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
         // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com
@@ -253,6 +253,19 @@ dependencies {
     // libplayer.so p/ arm64-v8a E armeabi-v7a (APK universal, TV 32 bits).
     // SEM NDK no CI, SEM compilar código nativo. Maven Central, MIT.
     implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.12")
+
+    // VPN (Lote VPN, v1.40.0) — conexão de verdade (só gerenciamento até
+    // a v1.39.0). Coordenadas conferidas no Maven Central em 2026-11-20
+    // (POM 200 nas 4): o motor WireGuard traz o próprio VpnService
+    // (GoBackend$VpnService, merge do manifesto do AAR) e o OpenVPN
+    // traz o OpenVPNService (processo :openvpn, specialUse) + a notificação.
+    // O openvpn 1.1.3 fixa basevpnprotocols/vpnprotocolsnotification 1.1.0
+    // no POM — o pin 1.1.1 é a mais recente (latest) e é o que o
+    // VpnServiceConnection/OpenVPNService do artefato inspecionado usa.
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
+    implementation("io.github.tim06:openvpn:1.1.3")
+    implementation("io.github.tim06:basevpnprotocols:1.1.1")
+    implementation("io.github.tim06:vpnprotocolsnotification:1.1.1")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
