@@ -193,9 +193,12 @@ fun VpnScreen(
                 SummaryRow("Servidor", st.connectedEndpoint.ifBlank { active?.endpoint ?: "—" }, TextPrimary)
             }
             SummaryRow("Perfis", "${st.profiles.size} importado(s)", TextPrimary)
-            if (st.connectionState == VpnConnectionState.FAILED && st.lastError != null) {
-                Spacer(Modifier.height(10.dp))
-                Text(st.lastError, color = DangerText, fontSize = 13.sp, lineHeight = 18.sp)
+            if (st.connectionState == VpnConnectionState.FAILED) {
+                val lastError = st.lastError
+                if (lastError != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(lastError, color = DangerText, fontSize = 13.sp, lineHeight = 18.sp)
+                }
             }
             Spacer(Modifier.height(12.dp))
             Text(
