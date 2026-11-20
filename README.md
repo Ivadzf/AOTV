@@ -11,15 +11,12 @@
 
 Baseado no JOTV (Apache 2.0), de LucasR0cha.
 
-Um app só para celular, tablet, Android TV, LG webOS, Samsung Tizen e Windows.<br>
+Um app só para celular, tablet e Android TV.<br>
 O catálogo vem do TMDB, em português. Os vídeos vêm dos addons que você escolhe.
 
 [![Baixar para Android](https://img.shields.io/badge/Android-baixar%20o%20APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](../../releases/latest)
-[![Baixar para LG webOS](https://img.shields.io/badge/LG%20webOS-baixar%20o%20IPK-A50034?style=for-the-badge&logo=lg&logoColor=white)](../../releases/latest)
-[![Baixar para Samsung Tizen](https://img.shields.io/badge/Samsung%20Tizen-baixar%20o%20WGT-1428A0?style=for-the-badge&logo=samsung&logoColor=white)](../../releases/latest)
-[![Baixar para Windows](https://img.shields.io/badge/Windows-baixar%20o%20instalador-0078D4?style=for-the-badge&logo=windows&logoColor=white)](../../releases/latest)
 
-[Novidades](#novidades) · [Na TV](#na-tv) · [No celular](#no-celular) · [No Windows](#no-windows) · [Tudo o que o app faz](#tudo-o-que-o-app-faz) · [Instalação](#instalação) · [Para desenvolvedores](#para-desenvolvedores)
+[Novidades](#novidades) · [Na TV](#na-tv) · [No celular](#no-celular) · [Tudo o que o app faz](#tudo-o-que-o-app-faz) · [Instalação](#instalação) · [Para desenvolvedores](#para-desenvolvedores)
 
 </div>
 
@@ -89,8 +86,7 @@ e o OK mostra o que está passando.
 
 ## Na TV
 
-Versões próprias para **LG webOS** e **Samsung Tizen**, leves e feitas para o controle remoto, e o
-mesmo APK do celular na **Android TV**.
+O mesmo APK do celular na **Android TV**, feito para o controle remoto.
 
 <table>
   <tr>
@@ -116,13 +112,6 @@ mais o editor de coleções, downloads, Chromecast e Picture in Picture.
   <img src="docs/readme/celular.jpg" alt="Cinco telas do AOTV no celular" width="100%"><br>
   <sub>Início com a coleção fixada, pasta Marvel com a aba Tudo, detalhe, lista de fontes e TV ao vivo</sub>
 </p>
-
-## No Windows
-
-O mesmo app da TV no computador, leve e em tela cheia, com o vídeo tocando no mpv e os controles do
-player iguais aos da TV. Funciona com teclado (setas, Enter e Esc) e com mouse. Para sair da tela
-cheia, aperte F11 ou leve o mouse ao topo da tela, que aparecem os botões de sair da tela cheia,
-minimizar e fechar.
 
 ## Tudo o que o app faz
 
@@ -192,7 +181,7 @@ minimizar e fechar.
 <summary><b>TV ao vivo</b></summary>
 
 - Listas M3U, contas Xtream e addons com canais
-- Guia XMLTV (inclusive compactado em .gz no celular e na LG)
+- Guia XMLTV (inclusive compactado em .gz no celular)
 - Categorias, favoritos, recentes e busca de canal
 - Troca de canal pelas setas ou pelo CH+ e CH-, com o programa atual na tela
 - A aba Ao vivo só aparece depois que você cadastra uma fonte
@@ -213,8 +202,6 @@ minimizar e fechar.
 <summary><b>Feito para cada tela</b></summary>
 
 - Celular, tablet e Android TV no mesmo APK, com layout próprio para o controle remoto na TV
-- LG webOS e Samsung Tizen em app próprio, leve e sem framework
-- Windows 10 e 11 em app próprio, com a interface da TV e o player mpv
 - Navegação inteira pelo controle, com foco sempre visível e retorno ao card de onde você saiu
 - Temas Grafite, Azul e Verde e opção de movimento reduzido (TV)
 
@@ -228,9 +215,6 @@ Todos os arquivos ficam na página de **[Releases](../../releases/latest)**. Nã
 |---|---|---|
 | Celular ou tablet Android | `AOTV-v*.apk` | Android 6 ou mais novo |
 | Android TV e Google TV | `AOTV-v*.apk` | Android TV 6 ou mais novo |
-| TV LG | `AOTV-webOS-v*.ipk` | webOS 4 ou mais novo, em modo desenvolvedor |
-| TV Samsung | `AOTV-Tizen-v*.wgt` | Tizen 5.5 ou mais novo (TVs de 2020 em diante), em modo desenvolvedor |
-| Computador | `AOTV-Windows-v*-setup.exe` | Windows 10 ou 11 de 64 bits |
 
 <details>
 <summary><b>Celular ou tablet Android</b></summary>
@@ -261,52 +245,7 @@ baixe o `.apk` por ele e instale.
 </details>
 
 <details>
-<summary><b>TV LG (webOS)</b></summary>
-
-1. Na TV, instale o app **Developer Mode** pela LG Content Store, entre com uma conta grátis de [developer.lge.com](https://developer.lge.com) e ligue o modo desenvolvedor e o Key Server. Anote o IP e a frase (passphrase) que aparecem na tela.
-2. No computador, instale a [CLI do webOS TV](https://webostv.developer.lge.com/develop/tools/cli-installation) (precisa do Node.js) e cadastre a TV uma vez.
-   ```sh
-   npm install -g @webos-tools/cli
-   ares-setup-device
-   ```
-3. Instale e abra o app.
-   ```sh
-   ares-install --device <nome-da-tv> AOTV-webOS-v<versão>.ipk
-   ares-launch --device <nome-da-tv> com.aotv.app
-   ```
-
-O modo desenvolvedor desliga sozinho depois de alguns dias. Se o app sumir, abra o Developer Mode e
-renove a sessão (o IP e a frase podem mudar).
-
-</details>
-
-<details>
-<summary><b>TV Samsung (Tizen)</b></summary>
-
-1. Na TV, abra a área de Apps, digite **1 2 3 4 5** no controle e ligue o modo desenvolvedor com o IP do seu computador. Reinicie a TV.
-2. No computador, instale o [Tizen Studio](https://samsungtizenos.com/tools-download/) (o instalador de linha de comando basta). Ele traz o `sdb`.
-3. Conecte e instale.
-   ```sh
-   sdb connect <ip-da-tv>:26101
-   sdb install AOTV-Tizen-v<versão>.wgt
-   ```
-
-O `.wgt` sai assinado com certificado de desenvolvedor, o que basta para uso pessoal em modo
-desenvolvedor. Ele não serve para a loja da Samsung.
-
-</details>
-
-<details>
-<summary><b>Windows</b></summary>
-
-1. Baixe o `AOTV-Windows-v<versão>-setup.exe` da Release e abra.
-2. O instalador não tem assinatura digital paga, então o Windows pode avisar que protegeu o computador. Clique em **Mais informações** e depois em **Executar assim mesmo**.
-3. O AOTV abre em tela cheia. F11 ou Alt+Enter alternam a tela cheia, e o mouse no topo da tela mostra os botões de sair da tela cheia, minimizar e fechar.
-
-</details>
-
-<details>
-<summary><b>Roku, Apple TV ou outra TV sem Android, webOS ou Tizen</b></summary>
+<summary><b>Roku, Apple TV ou outra TV sem Android</b></summary>
 
 Essas não têm versão própria. Ligue um aparelho com Android TV na entrada HDMI (um Chromecast com
 Google TV, um TV Box Android ou um Fire TV Stick) e instale o APK nele. A TV vira só a tela.
@@ -315,8 +254,7 @@ Google TV, um TV Box Android ou um Fire TV Stick) e instale o APK nele. A TV vir
 
 ## Para desenvolvedores
 
-Este repositório traz o código do app Android (celular, tablet e Android TV). As versões de LG,
-Samsung e Windows saem como pacote pronto nas Releases.
+Este repositório traz o código do app Android (celular, tablet e Android TV).
 
 <details>
 <summary><b>Como o app é feito</b></summary>
@@ -401,7 +339,3 @@ numa fonte de demonstração.
 ## Licença
 
 [Apache License 2.0](LICENSE)
-
-O instalador de Windows leva o [mpv](https://mpv.io) como programa separado, que é software livre
-sob a GPL. O código do mpv fica em [mpv-player/mpv](https://github.com/mpv-player/mpv) e a build
-usada vem de [zhongfly/mpv-winbuild](https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-10-26-baa3e11d42).

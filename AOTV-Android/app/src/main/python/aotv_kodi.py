@@ -1,0 +1,1673 @@
+"""Ponte do runtime Kodi do AOTV (v1.1, Fase 1).
+
+Liga os stubs xbmc* ao app: resolve os caminhos special://, despacha
+plugins (plugin://...), coleta os itens devolvidos e a URL resolvida,
+traduz ListItem para dict (que o Kotlin lê via Chaquopy) e lê os
+settings/addon.xml dos addons instalados.
+
+Clean-room: reimplementação a partir dos contratos públicos da API
+Python do Kodi (docs.kodi.tv) e do formato de addon.xml/settings.xml
+do Kodi. Não é código do Kodi (GPLv2) nem dos addons.
+
+Caminhos (configurados pelo Kotlin depois do Python.start):
+    special://home    -> <filesDir>/kodi
+    special://profile -> <filesDir>/kodi/userdata
+    special://temp    -> <cacheDir>/kodi
+    special://home/addons      -> <filesDir>/kodi/addons
+    special://profile/addon_data -> <filesDir>/kodi/userdata/addon_data
+
+Decisões do Davi (§9) aplicadas aqui:
+    - Vulgata: analytics_enabled e automatic_updates sempre "false"
+      (presença/analytics e self-update DESLIGADOS).
+    - getCondVisibility('System.HasAddon(inputstream.ffmpegdirect)')
+      responde False (em xbmc.py) para o addon cair no fallback do
+      player Kodi (que é o ExoPlayer).
+"""
+
+import os
+import sys
+import threading
+import time
+import xml.etree.ElementTree as ET
+
+from _aotv_kodi_log import log as _log
+
+# Execução Python SERIALIZADA: um addon por vez. O dispatch muta
+# sys.argv global e o coletor por handle — duas execuções simultâneas
+# misturariam os dois. O lock garante que nunca haja concorrência,
+# mesmo que o Kotlin chame de threads diferentes (o KodiRuntime da
+# Fase 2 também serializa, mas a garantia vive aqui).
+_run_lock = threading.Lock()
+
+# Fetch do proxy local (v1.2.9): flag thread-local que desliga SÓ a
+# guarda do fake probe p/ a thread do fetch (ver _probed_request).
+# O proxy busca o upstream via requests, mas a sonda (v1.2.6) finge o
+# probe de espelho do Vulgata p/ qualquer GET com Range p/
+# *.null-null.shop/tos-alisg-avt-0068/proxy* — sem o bypass, o fetch
+# do proxy receberia um 206 SINTÉTICO de 4096 bytes em vez do stream
+# real. A gravação do diag e o retry de SSLError continuam (só o
+# fake é pulado). Thread-local: o proxy roda nas threads dele, o
+# addon nas do dispatch — um não afeta o outro.
+_proxy_fetch_tls = threading.local()
+
+# ---------------------------------------------------------------------------
+# special:// — raízes (configuradas pelo Kotlin; sem configure, devolve o
+# caminho como veio, para o addon não quebrar em teste sem Android).
+# ---------------------------------------------------------------------------
+
+_roots = {
+    "home": None,      # <filesDir>/kodi
+    "profile": None,   # <filesDir>/kodi/userdata
+    "temp": None,      # <cacheDir>/kodi
+}
+_addons_dir = None     # <filesDir>/kodi/addons
+_current_addon = ""    # id do addon em execução (sys.argv / Addon() sem id)
+
+# (addon_id, setting_id) -> valor forçado. Decisão do Davi (§9): no
+# Vulgata, presença/analytics e self-update são DESLIGADOS — o addon lê
+# "false" mesmo que o default dele seja "true".
+_FORCED_SETTINGS = {
+    ("plugin.video.vulgata", "analytics_enabled"): "false",
+    ("plugin.video.vulgata", "automatic_updates"): "false",
+}
+
+
+# ---------------------------------------------------------------------------
+# Sonda HTTP (v1.2.4) — o que o addon buscou na rede durante o dispatch.
+# ---------------------------------------------------------------------------
+# O diag da v1.2.3 provou que o roteamento começa (Carregando...) mas o
+# fetch volta vazio sem erro e sem guarda, no Destaques E na TV (a TV dá
+# 12 itens na VM). O addon usa requests (script.module.requests, com
+# timeout (10, 25) e UA de Chrome — provado na VM) e ENGLOBE qualquer
+# exceção do fetch: ConnectTimeout, SSLError, ConnectionError ou 403
+# viram "0 itens, endDir=falso, sem erro" — idêntico ao sintoma do
+# celular (probes /tmp/probe_http_fail.py e /tmp/probe_http_sel.py).
+# O .so não deixa ver o erro por dentro; a única forma de distinguir
+# as causas no celular é observar as chamadas HTTP por fora: o
+# Chaquopy tem UM interpretador, então envolver
+# requests.Session.request (e urllib.request.urlopen) em configure()
+# intercepta também as chamadas do addon. A sonda registra método,
+# URL, status ou tipo da exceção, tamanho e tempo — e nunca levanta
+# (um erro na sonda não pode quebrar o fetch do addon).
+#
+# A mesma sonda aplica um piso de timeout nos fetches de conteúdo:
+# as páginas têm 330–600 KB e levam 1,1–1,8 s num link rápido; na
+# internet lenta do Davi, o (10, 25) do addon pode estourar por
+# stalls (o read timeout é por leitura, não total — basta uma pausa
+# > 25 s entre pacotes). O piso (30, 60) só vale p/ timeouts já
+# "longos" (o fetch de conteúdo); o check rápido (1,5, 2) do gist
+# continua rápido. O Kotlin não tem timeout na chamada Python
+# (KodiPluginRunner usa withContext sem withTimeout), então o piso
+# não é cortado pelo app.
+#
+# v1.2.5 — o play falhou com SSLError no celular (VPN ligada, browse
+# funcionando, mesmo host, mesma lib, mesma sessão). Descoberta: o
+# addon passa verify=False em TODAS as chamadas (provado na VM,
+# probe /tmp/probe_play_ssl.py) — então a verificação de certificado
+# NÃO acontece e o CA store (certifi vs sistema) é irrelevante p/
+# os fetches do addon. Um SSLError com verify=False só pode ser
+# falha no handshake: WRONG_VERSION_NUMBER (o servidor responde
+# HTTP puro na porta 443 — middlebox/bloqueio da operadora) ou EOF
+# (a conexão é derrubada no handshake). Por isso o diag agora
+# mostra o MOTIVO exato do SSLError (_http_error_detail) — é o que
+# separa interceptação de problema de certificado. E o wrapper
+# tenta 1x de novo um GET que falhe com SSLError (transitório —
+# a VPN oscilando, ou a rota mudando entre o browse e o play).
+# ---------------------------------------------------------------------------
+#
+# v1.2.6 — o play falhou no celular (VPN ligada, navegação OK):
+#   * TV: o dispatch levou 11,2s com "http: nenhuma". Duas causas:
+#     (a) o play de TV chama Dialog.select("Escolha a qualidade",
+#     ["FHD", "SD"]) e aborta se devolver -1 — o stub devolvia
+#     sempre -1, então o addon nem buscava a página do canal;
+#     (b) o diag fatiava _http_calls por índice absoluto e a lista
+#     cheia (30) fazia a fatia ficar vazia — "http: nenhuma" era
+#     artefato do diag, não prova de ausência de HTTP.
+#   * Filme: o player abriu e mostrou "Fonte indisponível". O play
+#     resolve um URL de proxy single-use: o addon sonda os espelhos
+#     (Range 0-4095) antes de resolver e esse probe CONSOME o token
+#     (re-fetch imediato dá 404 "Content deleted"; o mesmo token,
+#     buscado 2x, deu 206 e depois 404). O ExoPlayer recebe o 404.
+#   Fixes: Dialog.select devolve 0 (1ª opção) quando há opções;
+#   _http_calls com seq monotônico + teto 120; a sonda REPRODUZ o
+#   padrão de probe que o addon espera SEM tocar na rede (o host
+#   `...kerberos...` falha no socket como antes, o de underscores
+#   devolve 404 sintético, o `xn--` devolve 206 sintético de 4096
+#   bytes) p/ o token chegar fresco ao player; o diag ganha
+#   "play: select(...)" e "resolveu=<url> ok=...". Ver
+#   _fake_proxy_probe_response (fingir 206 p/ o host de underscores
+#   QUEBRA o addon — ele para sem resolver; e um 206 curto, de 24
+#   bytes, também é rejeitado).
+# ---------------------------------------------------------------------------
+
+_http_calls = []          # (seq, método, url, resultado, ms) — últimas 120
+_HTTP_MAX_CALLS = 120
+_HTTP_TIMEOUT_FLOOR = (30, 60)   # (connect, read) p/ fetches de conteúdo
+_HTTP_MIN_CONNECT = 5            # a partir daqui é "fetch de conteúdo"
+_HTTP_MIN_READ = 10
+_http_probe_state = {"requests": "?", "urllib": "?"}
+# Sequência monotônica das chamadas HTTP (v1.2.6): o diag fatiava
+# _http_calls por ÍNDICE absoluto (n_http0 = len() no início do
+# dispatch). Quando a lista estava CHEIA (30) no início e novas
+# chamadas chegavam, o trim apagava as mais antigas e a fatia [n0:]
+# ficava vazia — o diag mostrava "http: nenhuma" mesmo com chamadas
+# acontecendo (é o "http: nenhuma" do play da TV no celular da
+# v1.2.5, provado por teste unitário). Com seq monotônico, o resumo
+# filtra por seq > seq0 e nunca perde chamadas por causa do trim; o
+# teto subiu p/ 120 p/ caber um play inteiro (filme ~7, TV ~18-26).
+_http_seq = 0
+
+
+def _http_record(method, url, outcome, ms):
+    """Guarda uma chamada HTTP (nunca levanta)."""
+    global _http_seq
+    try:
+        _http_seq += 1
+        _http_calls.append((_http_seq, method, url, outcome, int(ms)))
+        if len(_http_calls) > _HTTP_MAX_CALLS:
+            del _http_calls[:len(_http_calls) - _HTTP_MAX_CALLS]
+    except Exception:
+        pass
+
+
+def _http_seq_now():
+    """Seq da próxima chamada HTTP (marca o início de um dispatch)."""
+    try:
+        return _http_seq
+    except Exception:
+        return 0
+
+
+def _http_error_detail(exc, url):
+    """Detalhe curto de um erro HTTP p/ o diag (nunca levanta).
+
+    Ex.: "SSLError:WRONG_VERSION_NUMBER",
+    "SSLError:CERTIFICATE_VERIFY_FAILED",
+    "SSLError:EOF@outro-host" (o host que falhou não é o pedido —
+    ex.: redirect p/ outro host),
+    "ConnectionError" (sem detalhe útil).
+
+    O motivo exato separa interceptação da operadora (o servidor
+    responde HTTP puro na porta 443 -> WRONG_VERSION_NUMBER; a
+    conexão é derrubada no handshake -> EOF) de problema de
+    certificado (CERTIFICATE_VERIFY_FAILED). Importante: o addon
+    passa verify=False em TODAS as chamadas (provado na VM, probe
+    /tmp/probe_play_ssl.py), então a verificação de certificado
+    NÃO acontece — um CERTIFICATE_VERIFY_FAILED significaria outro
+    caminho de fetch (ou um .so arm64 diferente), e o CA store
+    (certifi vs sistema) é irrelevante p/ os fetches do addon.
+    """
+    import re
+    name = type(exc).__name__
+    try:
+        msg = str(exc)
+    except Exception:
+        return name
+    reason = ""
+    try:
+        m = re.search(r"\[SSL:\s*([A-Z0-9_]+)\]", msg)
+        if m:
+            reason = m.group(1)
+        elif "certificate verify failed" in msg:
+            reason = "CERTIFICATE_VERIFY_FAILED"
+        elif "self-signed certificate" in msg:
+            reason = "SELF_SIGNED"
+        elif "hostname" in msg and "match" in msg:
+            reason = "HOSTNAME_MISMATCH"
+        elif "EOF occurred" in msg:
+            reason = "EOF"
+    except Exception:
+        reason = ""
+    host = ""
+    try:
+        from urllib.parse import urlparse
+        # hostname sem porta: o PoolError traz o host sem porta
+        # (netloc traria a porta e o sufixo apareceria sempre).
+        want = urlparse(url).hostname if isinstance(url, str) else ""
+        m2 = re.search(r"host='([^']+)'", msg)
+        if m2 and m2.group(1) and m2.group(1) != want:
+            host = "@" + m2.group(1)
+    except Exception:
+        host = ""
+    if reason:
+        return "%s:%s%s" % (name, reason, host)
+    return name + host
+
+
+def _http_floor_timeout(timeout):
+    """Piso de timeout p/ fetches de conteúdo. Devolve o timeout a usar.
+
+    Só mexe em tupla (connect, read) já "longa" (connect >= 5 ou
+    read >= 10 — o (10, 25) do conteúdo); timeout curto (o (1,5, 2)
+    do check de update), número único ou None passam intactos.
+    Nunca levanta: qualquer dúvida, devolve o timeout original.
+    """
+    try:
+        if isinstance(timeout, (tuple, list)) and len(timeout) == 2:
+            c, r = timeout
+            if (c is not None and c >= _HTTP_MIN_CONNECT) or \
+               (r is not None and r >= _HTTP_MIN_READ):
+                nc = max(c, _HTTP_TIMEOUT_FLOOR[0]) if c is not None else c
+                nr = max(r, _HTTP_TIMEOUT_FLOOR[1]) if r is not None else r
+                return (nc, nr)
+    except Exception:
+        pass
+    return timeout
+
+
+def _pad_fake_body(base, total, marker):
+    """Completa `base` até `total` bytes com linhas de comentário.
+
+    `marker` é o byte que abre a linha (b"#" p/ playlist — linhas
+    `#...` são ignoradas por parsers HLS). Nunca levanta.
+    """
+    try:
+        if len(base) >= total:
+            return base[:total]
+        out = bytearray(base)
+        # Linha de comentário: marker + espaços + "\n". A última
+        # linha é ajustada p/ fechar exatamente em `total`.
+        while len(out) < total:
+            room = total - len(out)
+            if room <= 2:
+                out += b"\n" * room
+                break
+            line_len = min(room, 64)
+            out += marker + b" " * (line_len - 2) + b"\n"
+        return bytes(out)
+    except Exception:
+        return base
+
+
+def _fake_response(method, url, kwargs, status, body, ctype, content_range=None,
+                   encoding="utf-8"):
+    """Monta uma Response sintética o mais fiel possível à real.
+
+    v1.2.6 — o addon distingue um 404/206 "de mentira" de um real
+    e PARA depois de uma só rodada se faltar algo (provado na VM:
+    com o 404 fake mínimo — só Content-Type/Content-Length, raw
+    None, elapsed 0 — o addon fez 1 rodada e parou; com o 404
+    real, faz várias e resolve). O 404 real do proxy traz:
+    `Server: cloudflare`, `Cf-Ray`, `Cache-Control: no-store...`,
+    `X-Frame-Options`, `alt-svc`, corpo `Content deleted` (15 B),
+    `raw` presente e elapsed ~40-900ms. A sintética reproduz
+    esses headers (Date atual, Cf-Ray aleatório), um `raw` urllib3
+    e elapsed ~50ms. Nunca levanta (qualquer dúvida, None).
+    """
+    try:
+        import requests as _rq
+        from requests.models import Response as _Resp
+        from requests.structures import CaseInsensitiveDict as _CID
+        import datetime as _dt
+        import email.utils as _eu
+        import random as _rnd
+        import io as _io
+        from urllib3.response import HTTPResponse as _HR
+        headers = {
+            "Date": _eu.formatdate(usegmt=True),
+            "Content-Type": ctype,
+            "Content-Length": str(len(body)),
+            "Connection": "keep-alive",
+            "Cf-Ray": "%016x-EWR" % _rnd.getrandbits(64),
+            "Cache-Control": ("no-store, no-cache, must-revalidate, "
+                              "proxy-revalidate, max-age=0, s-maxage=0"),
+            "Expires": "Thu, 01 Jan 1970 00:00:01 GMT",
+            "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Server": "cloudflare",
+            "alt-svc": 'h3=":443"; ma=86400',
+        }
+        if content_range is not None:
+            headers["Content-Range"] = content_range
+            headers["Accept-Ranges"] = "bytes"
+        resp = _Resp()
+        resp.status_code = status
+        resp.url = url
+        resp.headers = _CID(headers)
+        resp._content = body
+        resp.encoding = encoding
+        try:
+            req = _rq.Request(method, url,
+                              headers=dict(kwargs.get("headers") or {})).prepare()
+            resp.request = req
+        except Exception:
+            pass
+        try:
+            resp.raw = _HR(body=_io.BytesIO(body), preload_content=False,
+                           status=status, headers=dict(headers))
+        except Exception:
+            pass
+        try:
+            resp.elapsed = _dt.timedelta(milliseconds=50)
+        except Exception:
+            pass
+        return resp
+    except Exception:
+        return None
+
+
+def _fake_404_response(method, url, kwargs):
+    """Resposta 404 SINTÉTICA p/ o probe do espelho de underscores.
+
+    v1.2.6 — o addon espera 404 desse host (é o que o servidor
+    devolve de verdade). Responder sem tocar na rede mantém o
+    padrão esperado E não queima o token com um probe real. O corpo
+    é o MESMO do 404 real do proxy (`Content deleted`, visto nos
+    re-fetches e capturado no probe /tmp/probe_u404_v126.py) e os
+    headers reproduzem os do Cloudflare (ver _fake_response).
+    Nunca levanta (qualquer dúvida, devolve None).
+    """
+    try:
+        return _fake_response(method, url, kwargs, 404,
+                              b'Content deleted', "application/json")
+    except Exception:
+        return None
+
+
+def _fake_proxy_probe_response(method, url, kwargs):
+    """Resposta 206 SINTÉTICA p/ o probe de espelho do Vulgata — ou None.
+
+    v1.2.6 — o play do Vulgata resolve um URL de proxy single-use:
+    o addon sonda os espelhos com `Range: bytes=0-4095` antes de
+    resolver, e esse probe CONSOME o token (o re-fetch imediato do
+    URL resolvido dá 404 "Content deleted" — provado na VM p/ o
+    .mp4 do filme e o .m3u8 da TV, com os mesmos headers/cookies/
+    Range; e o mesmo token, buscado 2x pelo addon, deu 206 e
+    depois 404). O ExoPlayer depois recebe o 404 → "Fonte
+    indisponível" no celular. O probe existe só p/ achar um
+    espelho vivo; responder 206 sem tocar na rede deixa o token
+    fresco p/ o player (o 1º fetch real passa a ser o do player).
+
+    Só responde quando É o probe de espelho (tudo junto):
+      * GET com header Range (o probe é sempre Range 0-4095);
+      * host *.null-null.shop, caminho /tos-alisg-avt-0068/proxy*;
+      * host NÃO começando com "-" (o host `...kerberos...` é uma
+        isca que nem resolve em DNS — o request real falha no
+        socket sem queimar o token, então deixa acontecer).
+    E reproduz o padrão que o addon ESPERA (não muda o padrão):
+      * host de underscores → 404 sintético (é o que o servidor
+        devolve de verdade p/ ele; fingir 206 aqui QUEBRA o addon
+        — ele para sem resolver, provado na VM). O 404 sintético
+        não toca na rede, então o token não é queimado pelo probe
+        real.
+      * host `xn--` (punycode) → 206 sintético (é o espelho que
+        devolve 206 de verdade). Corpo de EXATAMENTE 4096 bytes
+        (o Range pedido é 0-4095 — um 206 curto é rejeitado pelo
+        addon): playlist mestre (FHD/SD) p/ .m3u8, ftyp + caixa
+        `free` p/ .mp4.
+    O addon escolhe o host resolvido pela lógica dele (às vezes o
+    de underscores, às vezes o `xn--`); como nenhum probe real
+    acontece, o token chega fresco ao player qualquer que seja o
+    host resolvido.
+    Fora disso devolve None (o fetch real acontece). As respostas
+    sintéticas são registradas na sonda como "206 FAKE" / "404
+    FAKE" (transparentes no diag).
+    Nunca levanta: qualquer dúvida, devolve None.
+    """
+    try:
+        if str(method).upper() != "GET":
+            return None
+        if not isinstance(url, str):
+            return None
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+        if host.startswith("-") or not host.endswith(".null-null.shop"):
+            return None
+        if not (p.path or "").startswith("/tos-alisg-avt-0068/proxy"):
+            return None
+        headers = kwargs.get("headers") or {}
+        try:
+            has_range = any(str(k).lower() == "range" for k in headers.keys())
+        except Exception:
+            has_range = False
+        if not has_range:
+            return None
+        # Host de underscores → 404 sintético (o padrão que o addon
+        # espera; sem tocar na rede, o token não é queimado).
+        if host.startswith("_"):
+            return _fake_404_response(method, url, kwargs)
+        # Só o xn-- leva 206 sintético (espelho real).
+        if not host.startswith("xn--"):
+            return None
+        is_m3u8 = ".m3u8" in (p.path or "").lower() or ".m3u8" in url.lower()
+        # Corpo com EXATAMENTE 4096 bytes (o Range pedido é 0-4095):
+        # o addon rejeita um 206 "curto" (um .mp4 real devolve os
+        # 4096 bytes do início do arquivo; um corpo de 24 bytes com
+        # Content-Range 0-23/24 não passa na validação do probe — a
+        # v1.2.6 inicial devolvia corpo mínimo e o addon não
+        # resolveu). O .mp4 leva ftyp + caixa `free` (estrutura MP4
+        # válida); o .m3u8 leva playlist mínima + linhas de comentário
+        # `#` (ignoradas por parsers HLS) até 4096.
+        if is_m3u8:
+            # Playlist MESTRE com as duas qualidades que o addon
+            # oferece no Dialog.select (FHD/SD): se o addon lê o
+            # .m3u8 p/ montar a lista de qualidades, um media
+            # playlist sem STREAM-INF não devolve nenhuma e o play
+            # aborta antes do select (é o que acontecia com o corpo
+            # mínimo). As URLs das variantes são relativas (padrão
+            # HLS); o addon resolve o .m3u8 mestre em si, não busca
+            # as variantes (provado no probe real — o fluxo vai
+            # direto p/ o Dialog.select).
+            base = (b"#EXTM3U\n#EXT-X-VERSION:3\n"
+                    b"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080\n"
+                    b"fhd.m3u8\n"
+                    b"#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n"
+                    b"sd.m3u8\n")
+            body = _pad_fake_body(base, 4096, b"#")
+            ctype = "application/vnd.apple.mpegurl"
+        else:
+            # ftyp (24 bytes) + caixa free até 4096 bytes.
+            ftyp = b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2"
+            free_size = 4096 - len(ftyp)
+            body = ftyp + free_size.to_bytes(4, "big") + b"free" + \
+                b"\x00" * (free_size - 8)
+            ctype = "video/mp4"
+        content_range = "bytes 0-%d/%d" % (len(body) - 1, len(body))
+        return _fake_response(method, url, kwargs, 206, body, ctype,
+                              content_range=content_range,
+                              encoding=("utf-8" if is_m3u8 else None))
+    except Exception:
+        return None
+
+
+def _install_http_probe():
+    """Instala a sonda HTTP (idempotente, com marcador no wrapper).
+
+    Envolve requests.Session.request e urllib.request.urlopen. Se o
+    requests não estiver instalado, registra o estado e continua só
+    com o urllib (o diag mostra "requests ausente").
+
+    Cada wrapper é criado por uma fábrica própria: sem ela, os dois
+    fechariam sobre a MESMA variável `orig` do escopo desta função
+    (rebinding tardio — o wrapper do requests passaria a chamar o
+    urlopen).
+    """
+    import functools
+
+    def _wrap_session_request(orig):
+        import requests.exceptions as _rexc
+
+        @functools.wraps(orig)
+        def _probed_request(self, method, url, **kwargs):
+            t0 = time.monotonic()
+            try:
+                kwargs["timeout"] = _http_floor_timeout(
+                    kwargs.get("timeout", None))
+            except Exception:
+                pass
+            # Guarda do probe (v1.2.6): responde 206 sintético ao
+            # probe de espelho do Vulgata sem tocar na rede (ver
+            # _fake_proxy_probe_response) — o token single-use não
+            # é consumido e o player recebe um URL fresco. Registrado
+            # como "206 FAKE" na sonda (transparente no diag).
+            # v1.2.9: o fetch do proxy (flag thread-local ativa) NÃO
+            # passa pela guarda — ele quer o stream real, não o 206
+            # sintético de 4096 bytes. Só o fake é pulado; a gravação
+            # do diag e o retry de SSLError continuam.
+            if getattr(_proxy_fetch_tls, "active", False):
+                fake = None
+            else:
+                try:
+                    fake = _fake_proxy_probe_response(method, url, kwargs)
+                except Exception:
+                    fake = None
+            if fake is not None:
+                ms = (time.monotonic() - t0) * 1000
+                try:
+                    outcome = "%d FAKE" % int(fake.status_code)
+                except Exception:
+                    outcome = "FAKE"
+                _http_record(method, url, outcome, ms)
+                return fake
+            # Retry (v1.2.5): um SSLError no handshake é transitório
+            # (a operadora interceptando, ou a VPN oscilando) — o
+            # browse funciona e o play falha no mesmo host, mesma
+            # lib, mesma sessão. Uma 2a tentativa, só p/ GET
+            # (idempotente) e só 1x, pode atravessar. O addon vê só
+            # o resultado final; as duas tentativas ficam no diag.
+            # Só SSLError (não ConnectionError: o addon já tenta
+            # vários hosts-proxy e esses falham de propósito).
+            max_tries = 2 if str(method).upper() == "GET" else 1
+            attempt = 0
+            while True:
+                attempt += 1
+                t1 = time.monotonic()
+                try:
+                    resp = orig(self, method, url, **kwargs)
+                    ms = (time.monotonic() - t1) * 1000
+                    try:
+                        # _content já está em memória p/ respostas
+                        # não-streaming (é o caso do addon); False
+                        # significa streaming — não dispara download.
+                        body = getattr(resp, "_content", None)
+                        if body is None or body is False:
+                            kb = "?"
+                        else:
+                            n = len(body)
+                            kb = ("%dKB" % (n // 1024)) if n >= 1024 \
+                                else ("%dB" % n)
+                    except Exception:
+                        kb = "?"
+                    _http_record(method, url,
+                                 "%s %s" % (resp.status_code, kb), ms)
+                    return resp
+                except BaseException as e:
+                    ms = (time.monotonic() - t1) * 1000
+                    _http_record(method, url,
+                                 "ERRO %s" % _http_error_detail(e, url),
+                                 ms)
+                    if attempt < max_tries and \
+                            isinstance(e, _rexc.SSLError):
+                        try:
+                            time.sleep(1.5)
+                        except Exception:
+                            pass
+                        continue
+                    raise
+
+        _probed_request._aotv_http_probe = True
+        return _probed_request
+
+    def _wrap_urlopen(orig):
+        @functools.wraps(orig)
+        def _probed_urlopen(url, *args, **kwargs):
+            t0 = time.monotonic()
+            u = url if isinstance(url, str) else getattr(
+                url, "full_url", str(url))
+            try:
+                r = orig(url, *args, **kwargs)
+                ms = (time.monotonic() - t0) * 1000
+                try:
+                    st = getattr(r, "status", "?")
+                except Exception:
+                    st = "?"
+                _http_record("urllib", u, "%s" % st, ms)
+                return r
+            except BaseException as e:
+                ms = (time.monotonic() - t0) * 1000
+                _http_record("urllib", u,
+                             "ERRO %s" % _http_error_detail(e, u), ms)
+                raise
+
+        _probed_urlopen._aotv_http_probe = True
+        return _probed_urlopen
+
+    # --- requests (o Vulgata e o BrazucaPlay usam) ---
+    try:
+        import requests.sessions
+        cur = requests.sessions.Session.request
+        if not getattr(cur, "_aotv_http_probe", False):
+            requests.sessions.Session.request = \
+                _wrap_session_request(cur)
+            _http_probe_state["requests"] = "ok"
+        else:
+            _http_probe_state["requests"] = "ok"
+    except Exception as e:
+        _http_probe_state["requests"] = "ausente: %s" % type(e).__name__
+    # --- urllib (rede de segurança; ex.: BrazucaPlay) ---
+    try:
+        import urllib.request
+        cur = urllib.request.urlopen
+        if not getattr(cur, "_aotv_http_probe", False):
+            urllib.request.urlopen = _wrap_urlopen(cur)
+            _http_probe_state["urllib"] = "ok"
+        else:
+            _http_probe_state["urllib"] = "ok"
+    except Exception as e:
+        _http_probe_state["urllib"] = "ausente: %s" % type(e).__name__
+
+
+def _http_summary(seq0):
+    """Resumo das chamadas HTTP durante um dispatch (p/ o diag).
+
+    seq0 é o seq da última chamada ANTES do dispatch (ver
+    _http_seq_now): devolve só as chamadas com seq > seq0. Por
+    chamada: "GET host/path STATUS TAM MS" ou
+    "GET host/path ERRO Tipo MS". Sem chamadas: "nenhuma" (+ aviso
+    se o requests estiver ausente — aí o fetch nem aconteceu por
+    falta da biblioteca). Nunca levanta.
+    """
+    try:
+        calls = [c for c in _http_calls if c[0] > seq0]
+    except Exception:
+        return "http: ?"
+    if not calls:
+        extra = ""
+        try:
+            if _http_probe_state.get("requests", "?") != "ok":
+                extra = " (requests %s)" % _http_probe_state["requests"]
+        except Exception:
+            pass
+        return "http: nenhuma%s" % extra
+    parts = []
+    for _seq, method, url, outcome, ms in calls:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(url)
+            short = (p.netloc + p.path)[:64]
+        except Exception:
+            short = (url or "")[:64]
+        parts.append("%s %s %s %dms" % (method, short, outcome, ms))
+    return "http: " + "; ".join(parts)
+
+
+def configure(files_dir, cache_dir):
+    """Define as raízes special:// a partir dos dirs do app (Kotlin)."""
+    global _addons_dir
+    home = os.path.join(files_dir, "kodi")
+    _roots["home"] = home
+    _roots["profile"] = os.path.join(home, "userdata")
+    _roots["temp"] = os.path.join(cache_dir, "kodi")
+    _addons_dir = os.path.join(home, "addons")
+    for d in (home, _roots["profile"], _roots["temp"], _addons_dir,
+              os.path.join(_roots["profile"], "addon_data")):
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+    # Sonda HTTP (v1.2.4): intercepta os fetches dos addons p/ o diag
+    # (e aplica o piso de timeout nos fetches de conteúdo). O Kotlin
+    # chama configure() logo após o Python.start, antes de qualquer
+    # dispatch — o addon importa o requests depois, já sondado.
+    _install_http_probe()
+    _log("aotv_kodi.configure", "home=%s temp=%s" % (home, _roots["temp"]))
+
+
+def set_addons_dir(path):
+    """Sobrescreve o dir de addons (só para teste local sem Android)."""
+    global _addons_dir
+    _addons_dir = path
+
+
+def get_addons_dir():
+    return _addons_dir or ""
+
+
+def translate_special(path):
+    """Resolve special://... para caminho real. Sem raiz, devolve como veio."""
+    if not isinstance(path, str) or not path.startswith("special://"):
+        return path
+    rest = path[len("special://"):]
+    # special://home/addons/x -> raiz "home" + resto "addons/x".
+    parts = rest.split("/", 1)
+    scheme = parts[0].lower()
+    tail = parts[1] if len(parts) > 1 else ""
+    # Atalhos conhecidos do Kodi.
+    if scheme == "home":
+        root = _roots.get("home")
+    elif scheme == "profile":
+        root = _roots.get("profile")
+    elif scheme == "temp":
+        root = _roots.get("temp")
+    elif scheme == "masterprofile":
+        root = _roots.get("profile")
+    elif scheme == "userdata":
+        root = _roots.get("profile")
+    elif scheme == "xbmcbin":
+        # Não existe no AOTV (o Elementum cai para o próximo candidato).
+        return path
+    else:
+        return path
+    if root is None:
+        return path
+    return os.path.join(root, tail) if tail else root
+
+
+def addon_data_dir(addon_id):
+    """Dir de dados de um addon (settings/cookies/cache)."""
+    profile = _roots.get("profile")
+    base = os.path.join(profile, "addon_data") if profile else None
+    if base is None:
+        return ""
+    d = os.path.join(base, addon_id)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Contexto do addon em execução.
+# ---------------------------------------------------------------------------
+
+def set_current_addon(addon_id):
+    global _current_addon
+    _current_addon = addon_id or ""
+
+
+def get_current_addon():
+    return _current_addon
+
+
+# ---------------------------------------------------------------------------
+# addon.xml — leitura (id, nome, versão, extension points, requires).
+# ---------------------------------------------------------------------------
+
+def find_addon_dir(addon_id):
+    """Acha o dir de um addon instalado (ou "" se não instalado)."""
+    if not addon_id:
+        return ""
+    base = _addons_dir
+    if base:
+        d = os.path.join(base, addon_id)
+        if os.path.isfile(os.path.join(d, "addon.xml")):
+            return d
+    return ""
+
+
+def _parse_addon_xml(addon_dir):
+    """Devolve um dict com os campos do addon.xml (ou {} se falhar)."""
+    info = {}
+    try:
+        tree = ET.parse(os.path.join(addon_dir, "addon.xml"))
+        root = tree.getroot()
+    except Exception:
+        return info
+    if root.tag != "addon":
+        return info
+    info["id"] = root.get("id", "")
+    info["name"] = root.get("name", "")
+    info["version"] = root.get("version", "")
+    info["provider-name"] = root.get("provider-name", "")
+    # Extension points: [(point, library)].
+    exts = []
+    for ext in root.findall("extension"):
+        exts.append((ext.get("point", ""), ext.get("library", "")))
+    info["extensions"] = exts
+    # Requires: [(addon, version, optional)].
+    reqs = []
+    req_el = root.find("requires")
+    if req_el is not None:
+        for imp in req_el.findall("import"):
+            reqs.append((imp.get("addon", ""), imp.get("version", ""),
+                         imp.get("optional", "false") == "true"))
+    info["requires"] = reqs
+    # Metadata: assets (icon/fanart) e summary.
+    meta = root.find("extension[@point='xbmc.addon.metadata']")
+    if meta is not None:
+        assets = meta.find("assets")
+        if assets is not None:
+            icon = assets.find("icon")
+            fanart = assets.find("fanart")
+            if icon is not None and icon.text:
+                info["icon"] = icon.text.strip()
+            if fanart is not None and fanart.text:
+                info["fanart"] = fanart.text.strip()
+        summary = meta.find("summary")
+        if summary is not None and summary.text:
+            info["summary"] = summary.text.strip()
+    return info
+
+
+def get_addon_info(addon_id, info_id):
+    """xbmcaddon.Addon.getAddonInfo — lê do addon.xml (string)."""
+    addon_id = addon_id or _current_addon
+    if not addon_id:
+        return ""
+    d = find_addon_dir(addon_id)
+    if not d:
+        return ""
+    info = _parse_addon_xml(d)
+    key = str(info_id or "").lower()
+    if key == "id":
+        return info.get("id", addon_id)
+    if key == "name":
+        return info.get("name", addon_id)
+    if key == "version":
+        return info.get("version", "")
+    if key == "author":
+        return info.get("provider-name", "")
+    if key == "path":
+        return d
+    if key == "profile":
+        return addon_data_dir(addon_id)
+    if key == "icon":
+        icon = info.get("icon", "")
+        return os.path.join(d, icon) if icon else ""
+    if key == "fanart":
+        fanart = info.get("fanart", "")
+        return os.path.join(d, fanart) if fanart else ""
+    if key == "summary":
+        return info.get("summary", "")
+    if key == "type":
+        return "xbmc.python.pluginsource"
+    return ""
+
+
+def get_plugin_library(addon_id):
+    """Biblioteca do extension point xbmc.python.pluginsource (main.py)."""
+    d = find_addon_dir(addon_id)
+    if not d:
+        return ""
+    info = _parse_addon_xml(d)
+    for point, library in info.get("extensions", []):
+        if point == "xbmc.python.pluginsource" and library:
+            return os.path.join(d, library)
+    return ""
+
+
+def get_service_library(addon_id):
+    """Biblioteca do extension point xbmc.service (service.py, Fase 3)."""
+    d = find_addon_dir(addon_id)
+    if not d:
+        return ""
+    info = _parse_addon_xml(d)
+    for point, library in info.get("extensions", []):
+        if point == "xbmc.service" and library:
+            return os.path.join(d, library)
+    return ""
+
+
+def has_service(addon_id):
+    """True se o addon declara um xbmc.service (service.py)."""
+    return bool(get_service_library(addon_id))
+
+
+# ---------------------------------------------------------------------------
+# settings.xml — definições + valores persistidos (formato do Kodi).
+# ---------------------------------------------------------------------------
+
+def _parse_settings_xml(addon_dir):
+    """Devolve {setting_id: (type, default, values)} de resources/settings.xml."""
+    defs = {}
+    path = os.path.join(addon_dir, "resources", "settings.xml")
+    if not os.path.isfile(path):
+        return defs
+    try:
+        tree = ET.parse(path)
+        root = tree.getroot()
+    except Exception:
+        return defs
+    for el in root.iter("setting"):
+        sid = el.get("id")
+        if not sid:
+            continue
+        defs[sid] = (el.get("type", "text"), el.get("default", ""),
+                     el.get("values", ""))
+    return defs
+
+
+def _read_user_settings(addon_id):
+    """Valores persistidos em addon_data/<id>/settings.xml (formato Kodi)."""
+    values = {}
+    d = addon_data_dir(addon_id)
+    if not d:
+        return values
+    path = os.path.join(d, "settings.xml")
+    if not os.path.isfile(path):
+        return values
+    try:
+        tree = ET.parse(path)
+        root = tree.getroot()
+    except Exception:
+        return values
+    for el in root.iter("setting"):
+        sid = el.get("id")
+        if sid:
+            values[sid] = el.get("value", "")
+    return values
+
+
+def get_setting(addon_id, setting_id):
+    """xbmcaddon.Addon.getSetting — sempre string (formato do Kodi).
+
+    Ordem: valor forçado (decisão do Davi) > valor persistido >
+    default do settings.xml > "".
+    """
+    addon_id = addon_id or _current_addon
+    if not addon_id or not setting_id:
+        return ""
+    forced = _FORCED_SETTINGS.get((addon_id, str(setting_id)))
+    if forced is not None:
+        return forced
+    user = _read_user_settings(addon_id)
+    if str(setting_id) in user:
+        return user[str(setting_id)]
+    d = find_addon_dir(addon_id)
+    if d:
+        defs = _parse_settings_xml(d)
+        entry = defs.get(str(setting_id))
+        if entry is not None:
+            return entry[1]
+    return ""
+
+
+def set_setting(addon_id, setting_id, value):
+    """Persiste um setting em addon_data/<id>/settings.xml (formato Kodi)."""
+    addon_id = addon_id or _current_addon
+    if not addon_id or not setting_id:
+        return False
+    d = addon_data_dir(addon_id)
+    if not d:
+        return False
+    path = os.path.join(d, "settings.xml")
+    values = _read_user_settings(addon_id)
+    values[str(setting_id)] = str(value)
+    try:
+        root = ET.Element("settings")
+        for sid in sorted(values):
+            el = ET.SubElement(root, "setting")
+            el.set("id", sid)
+            el.set("value", values[sid])
+        tree = ET.ElementTree(root)
+        tree.write(path, encoding="utf-8", xml_declaration=True)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Dispatch de plugin + coleta dos itens devolvidos.
+# ---------------------------------------------------------------------------
+
+def _ensure_simplejson():
+    """simplejson não tem wheel Android p/ o Chaquopy (--only-binary).
+    Se o pacote real não estiver disponível, instala um shim em
+    sys.modules que mapeia simplejson -> json (stdlib). A API usada
+    pelos addons (loads/dumps/load/dump) é compatível."""
+    try:
+        import simplejson  # noqa: F401
+        return
+    except Exception:
+        pass
+    try:
+        import json
+        sys.modules["simplejson"] = json
+        _log("aotv_kodi", "simplejson -> shim json (stdlib)")
+    except Exception:
+        pass
+
+
+def _collector():
+    """O coletor do xbmcplugin (itens por handle + URL resolvida)."""
+    try:
+        import xbmcplugin
+        return xbmcplugin
+    except Exception:
+        return None
+
+
+def run_plugin(addon_id, path="", query="", handle=1):
+    """Executa um plugin como o Kodi faria e devolve o resultado.
+
+    Serializado (_run_lock): um addon por vez, nunca em paralelo.
+    sys.argv = ["plugin://<id>/<path>", "<handle>", "<query>"].
+    Retorna dict: {"items": [dict...], "resolved_url": str,
+    "succeeded": bool, "error": str, "handle": int}.
+    Os itens são a tradução de cada ListItem (ver listitem_to_dict).
+    """
+    with _run_lock:
+        return _run_plugin_inner(addon_id, path, query, handle)
+
+
+def _run_arity(run):
+    """Confere se run aceita 1 arg posicional. Devolve (ok, nota).
+
+    Camadas, da mais estrita p/ a mais tolerante: __code__.co_argcount
+    (cyfunction de Cython 3 tem); inspect.signature (cobre builtins e
+    cyfunction sem __code__); se nenhuma introspecção funcionar, aceita
+    e deixa a chamada decidir — um TypeError vira erro visível no
+    resultado, não um vazio silencioso. Um .so arm64 compilado com
+    Cython antigo pode não expor __code__; rejeitar por isso era o
+    que deixava o 2º dispatch cair no runpy (no-op) sem erro.
+    """
+    try:
+        code = run.__code__
+    except Exception:
+        code = None
+    if code is not None:
+        try:
+            argc = code.co_argcount
+            return (argc == 1, "argc=%d" % argc)
+        except Exception:
+            pass
+    try:
+        import inspect
+        sig = inspect.signature(run)
+        params = [p for p in sig.parameters.values()
+                  if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        required = [p for p in params if p.default is p.empty]
+        has_varargs = any(p.kind == p.VAR_POSITIONAL
+                          for p in sig.parameters.values())
+        ok = len(required) <= 1 and (len(params) >= 1 or has_varargs)
+        return (ok, "sig=%s" % sig)
+    except Exception:
+        pass
+    return (True, "assinatura? (tentar)")
+
+
+def _entry_run_from_module(mod, lib_real, exact_file=True):
+    """Valida o run(argv) de um módulo candidato. Devolve (run, nota)."""
+    try:
+        f = getattr(mod, "__file__", None) or ""
+    except Exception:
+        return None, "sem __file__"
+    if exact_file:
+        try:
+            if os.path.realpath(f) != lib_real:
+                return None, "__file__=%s" % os.path.basename(f)
+        except Exception:
+            return None, "__file__?"
+    run = getattr(mod, "run", None)
+    if run is None:
+        return None, "sem run"
+    if not callable(run):
+        return None, "run nao-chamavel"
+    ok, note = _run_arity(run)
+    if not ok:
+        return None, "run %s" % note
+    return run, "%s %s" % (type(run).__name__, note)
+
+
+def _find_entry_run(lib, diag=None):
+    """Devolve o run(argv) do módulo de entrada já carregado (ou None).
+
+    Addons com .so (ex.: Vulgata) registram o módulo de entrada em
+    sys.modules na 1ª execução, e o .so guarda o objeto do módulo em
+    cache (Cython): re-executar via runpy é no-op — a guarda de
+    re-inicialização impede o corpo do módulo de rodar de novo — e o
+    2º dispatch volta vazio, sem erro. O módulo em cache expõe
+    run(argv), a função de roteamento, que lê o argv novo e despacha
+    de novo. Addons Python puros não registram o módulo de entrada
+    (o runpy roda como __main__), então caem no runpy normal.
+
+    O lookup é robusto e não depende de um único caminho (o .so
+    arm64 pode registrar o módulo com outro nome, ou o run pode não
+    expor __code__ se o .so foi compilado com Cython antigo):
+    1. nomes prováveis (basename do lib, "main", "default", "__main__")
+       com __file__ == lib e run(argv) válido;
+    2. varredura de sys.modules por qualquer módulo com
+       __file__ == lib e run(argv) válido;
+    3. fallback: módulo com nome de entrada dentro do diretório do
+       addon (mesmo que o __file__ não bata exatamente).
+    Só aceita run de módulo DESTE addon (__file__ dentro do dir do
+    addon), p/ nunca chamar o run de outro addon. Cada passo é
+    registrado em diag (lista, se fornecida) p/ o diagnóstico visível.
+    """
+    if diag is None:
+        diag = []
+    lib_real = os.path.realpath(lib or "")
+    base = os.path.splitext(os.path.basename(lib or ""))[0]
+    addon_dir = os.path.dirname(lib_real)
+    names = []
+    for n in (base, "main", "default", "__main__"):
+        if n and n not in names:
+            names.append(n)
+    for name in names:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        run, note = _entry_run_from_module(mod, lib_real)
+        if run is not None:
+            diag.append("mod=%s file=OK run=%s" % (name, note))
+            return run
+        diag.append("mod=%s: %s" % (name, note))
+    found = 0
+    for name, mod in list(sys.modules.items()):
+        if name in names:
+            continue
+        try:
+            f = getattr(mod, "__file__", None)
+        except Exception:
+            continue
+        if not f:
+            continue
+        try:
+            if os.path.realpath(f) != lib_real:
+                continue
+        except Exception:
+            continue
+        found += 1
+        run, note = _entry_run_from_module(mod, lib_real)
+        if run is not None:
+            diag.append("sweep mod=%s file=OK run=%s" % (name, note))
+            return run
+        diag.append("sweep mod=%s: %s" % (name, note))
+    if found == 0:
+        diag.append("sweep: nenhum modulo com __file__==lib")
+    for name in names:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        try:
+            f = getattr(mod, "__file__", None) or ""
+            if not f:
+                continue
+            if os.path.commonpath((addon_dir, os.path.realpath(f))) != addon_dir:
+                continue
+        except Exception:
+            continue
+        run, note = _entry_run_from_module(mod, lib_real, exact_file=False)
+        if run is not None:
+            diag.append("fallback mod=%s file~dir run=%s" % (name, note))
+            return run
+        diag.append("fallback mod=%s: %s" % (name, note))
+    diag.append("sem run reutilizavel (procurou: %s)" % ", ".join(names))
+    return None
+
+
+def _dispatch_call_summary(n0):
+    """Resumo das chamadas xbmc* feitas durante um dispatch.
+
+    Lê o log em memória (_aotv_kodi_log._calls) e resume o que o
+    addon fez DURANTE este dispatch — é ele que distingue os três
+    motivos de um 2º nível vazio sem erro:
+    - guarda do addon ("Aguarde, essa ação já foi recebida"): o run
+      recusou a ação repetida — só checks do loader + endOfDirectory
+      ok=False, sem "Carregando..." e sem addDirectoryItem;
+    - falha de rede/servidor: "Carregando..." + setContent, mas nenhum
+      addDirectoryItem (o fetch não devolveu nada);
+    - sucesso: vários addDirectoryItem.
+    Nunca levanta (o diagnóstico não pode quebrar o dispatch).
+    """
+    try:
+        import _aotv_kodi_log as _lm
+        calls = _lm._calls
+    except Exception:
+        return "chamadas: ?"
+    try:
+        n = len(calls)
+        new = calls[n0:] if n >= n0 else calls[-100:]
+    except Exception:
+        return "chamadas: ?"
+    try:
+        n_add = 0
+        end_ok = None
+        notes = []
+        for name, args, _result in new:
+            if name == "xbmcplugin.addDirectoryItem":
+                n_add += 1
+            elif name == "xbmcplugin.endOfDirectory":
+                # args: repr dos args (handle, succeeded, ...) ou kwargs.
+                if "succeeded=False" in args or "succeeded = False" in args:
+                    end_ok = False
+                else:
+                    parts = [p.strip() for p in args.split(",")]
+                    if len(parts) >= 2:
+                        end_ok = (parts[1] != "False")
+                    else:
+                        end_ok = True
+            elif name == "xbmcgui.Dialog.notification":
+                # args traz heading e message em repr.
+                if "Aguarde" in args:
+                    notes.append("guarda!")
+                elif "Carregando" in args:
+                    notes.append("carregando")
+        end_s = "?" if end_ok is None else ("ok" if end_ok else "falso")
+        note_s = (" " + ",".join(notes)) if notes else ""
+        return "chamadas: addDir=%d endDir=%s%s" % (n_add, end_s, note_s)
+    except Exception:
+        return "chamadas: ?"
+
+
+def _run_plugin_inner(addon_id, path="", query="", handle=1):
+    result = {"items": [], "resolved_url": "", "succeeded": False,
+              "error": "", "handle": int(handle), "diag": ""}
+    _ensure_simplejson()
+    # Sonda HTTP (v1.2.4): garante instalada mesmo se configure() não
+    # foi chamado (idempotente — reinstalar não duplica o wrapper).
+    _install_http_probe()
+    t_start = time.monotonic()
+    d = find_addon_dir(addon_id)
+    if not d:
+        result["error"] = "addon não instalado: %s" % addon_id
+        return result
+    lib = get_plugin_library(addon_id)
+    if not lib or not os.path.isfile(lib):
+        result["error"] = "biblioteca do plugin não encontrada: %s" % addon_id
+        return result
+    # sys.argv como o Kodi invoca um plugin de vídeo.
+    url = "plugin://%s/%s" % (addon_id, path.lstrip("/"))
+    argv = [url, str(handle), query or ""]
+    sys.argv = argv
+    set_current_addon(addon_id)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    # Limpa a coleta deste handle antes de rodar.
+    mod = _collector()
+    if mod is not None:
+        try:
+            mod.clear_handle(int(handle))
+        except Exception:
+            pass
+    diag = []
+    # Diagnóstico profundo (v1.2.3): o que EXATAMENTE foi passado ao
+    # run e o que ele fez durante o dispatch. O diag da v1.2.2 provou
+    # que o lookup funciona (mod=main, via run() direto) mas o 2º
+    # nível volta vazio sem erro — sem o argv exato, sem saber se o
+    # sys.argv global bate com o parâmetro, e sem as chamadas xbmc*
+    # durante o dispatch, não dá p/ distinguir a guarda do addon
+    # ("Aguarde, essa ação já foi recebida") de falha de rede/servidor.
+    diag.append("argv=[%s | %s | %s]" % (url, handle, (query or "")[:120]))
+    try:
+        import _aotv_kodi_log as _lm
+        n0 = len(_lm._calls)
+    except Exception:
+        n0 = None
+    # Seq das chamadas HTTP no início deste dispatch (sonda v1.2.4,
+    # seq monotônico v1.2.6 — ver _http_seq_now).
+    try:
+        n_http0 = _http_seq_now()
+    except Exception:
+        n_http0 = None
+    # Escolhas de Dialog.select no início deste dispatch (v1.2.6).
+    try:
+        import xbmcgui as _xg_sel
+        n_sel0 = len(_xg_sel.get_dialog_select_calls())
+    except Exception:
+        n_sel0 = None
+    run_exc = None
+    try:
+        entry_run = _find_entry_run(lib, diag)
+        if entry_run is not None:
+            # Módulo de entrada já carregado com run(argv) reutilizável
+            # (addons com .so — ver _find_entry_run). Chamar run(argv)
+            # direto também evita o runpy, que sobrescreve sys.argv[0]
+            # com o caminho do arquivo (e o addon montava URLs de
+            # arquivo em vez de plugin:// no 1º dispatch).
+            diag.append("via: run() direto")
+            # O run lê o argv do PARÂMETRO (provado na VM: param=raiz
+            # com sys.argv=browse devolve o menu raiz, não o browse).
+            # Conferir se o global bate com o parâmetro no momento
+            # da chamada — se algo o trocou no meio do caminho, o
+            # run pode estar recebendo outro argv. Reafirmar o global
+            # aqui (é a mesma lista; no-op se nada o trocou) p/ o
+            # run que porventura leia o sys.argv global em vez do
+            # parâmetro.
+            diag.append("sys.argv==argv: %s" % (list(sys.argv) == list(argv)))
+            sys.argv = argv
+            entry_run(argv)
+        else:
+            diag.append("via: runpy (sem run)")
+            import runpy
+            runpy.run_path(lib, run_name="__main__")
+    except BaseException as e:
+        import traceback
+        run_exc = e
+        result["error"] = "%s: %s\n%s" % (
+            type(e).__name__, e, traceback.format_exc(limit=12))
+        _log("aotv_kodi.run_plugin", "ERRO %s: %s" % (addon_id, e))
+    # Resumo das chamadas xbmc* DURANTE este dispatch (ver
+    # _dispatch_call_summary): é ele que diz se o roteamento nem
+    # começou (guarda), se começou e travou no fetch (rede), ou se
+    # adicionou itens que se perderam na coleta.
+    if n0 is not None:
+        diag.append(_dispatch_call_summary(n0))
+    # Tempo total do dispatch + resultado do fetch (sonda v1.2.4): é
+    # ele que distingue, no celular, "fetch falhou" (timeout/SSL/
+    # DNS/403, com o tempo gasto) de "fetch nem aconteceu" (nenhuma
+    # chamada HTTP) e de "fetch OK mas parse vazio" (200 + 0 itens).
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    if n_http0 is not None:
+        diag.append(_http_summary(n_http0))
+    if run_exc is not None:
+        diag.append("run levantou: %s: %s" % (type(run_exc).__name__, run_exc))
+    # O diag vai sempre (mesmo com erro) — é ele que explica o vazio.
+    result["diag"] = "\n".join(diag)
+    # Coleta o que o plugin devolveu (mesmo com erro parcial).
+    if mod is not None:
+        try:
+            items = mod.get_items(int(handle))
+            collected = []
+            for entry in items:
+                # (url, listitem, isFolder) — o coletor guarda a tupla.
+                try:
+                    url, li, is_folder = entry[0], entry[1], entry[2]
+                except Exception:
+                    continue
+                d = listitem_to_dict(li)
+                d["url"] = url
+                d["is_folder"] = bool(is_folder)
+                collected.append(d)
+            result["items"] = collected
+            resolved = mod.get_resolved(int(handle))
+            if resolved:
+                result["resolved_url"] = resolved.get("url", "")
+                result["succeeded"] = bool(resolved.get("succeeded", False))
+        except Exception as e:
+            if not result["error"]:
+                result["error"] = "coleta falhou: %s" % e
+    # Diagnóstico do play (v1.2.6): o que o play fez — qual diálogo
+    # o addon pediu e o que escolhemos, e o que foi resolvido. É o
+    # que distingue "o addon abortou no diálogo" (select -> -1) de
+    # "resolveu um URL que o player não carrega".
+    try:
+        import xbmcgui as _xg_sel2
+        if n_sel0 is not None:
+            for heading, n, choice in \
+                    _xg_sel2.get_dialog_select_calls()[n_sel0:]:
+                diag.append("play: select(%r, %d) -> %d" % (heading, n, choice))
+    except Exception:
+        pass
+    try:
+        if result.get("resolved_url"):
+            u = result["resolved_url"]
+            diag.append("resolveu=%s ok=%s" % (
+                (u[:90] + "…") if len(u) > 90 else u,
+                result.get("succeeded")))
+    except Exception:
+        pass
+    result["diag"] = "\n".join(diag)
+    return result
+
+
+def run_script(addon_id, func_name):
+    """Entrada script (RunScript) — Fase 3.
+
+    Executa a entrada script do addon com sys.argv=[lib, func_name],
+    como o Kodi invoca um script (o BrazucaPlay despacha no top-level
+    por `if sys.argv[1] == '<func>':` — ex.: limparFavoritos).
+
+    Entrada: o extension point xbmc.python.script, se existir; senão
+    o pluginsource (o BrazucaPlay só declara pluginsource, e o
+    default.py dele atende os dois modos pelo sys.argv[1]).
+
+    Serializado (_run_lock), como o run_plugin: um addon por vez.
+    SystemExit (o script chamou exit() depois de agir — é o caso do
+    limparFavoritos) é sucesso, não erro. ValueError cuja mensagem
+    contenha o func_name é o fall-through conhecido: o script agiu e
+    depois caiu no dispatch de plugin (`addon_handle =
+    int(sys.argv[1])`), que rejeita o nome da função — a ação já
+    aconteceu, então também é sucesso (anotado no diag).
+    """
+    result = {"ok": False, "error": "", "diag": ""}
+    _ensure_simplejson()
+    _install_http_probe()
+    t_start = time.monotonic()
+    d = find_addon_dir(addon_id)
+    if not d:
+        result["error"] = "addon não instalado: %s" % addon_id
+        return result
+    lib = ""
+    info = _parse_addon_xml(d)
+    for point, library in info.get("extensions", []):
+        if point == "xbmc.python.script" and library:
+            lib = os.path.join(d, library)
+            break
+    if not lib:
+        lib = get_plugin_library(addon_id)
+    if not lib or not os.path.isfile(lib):
+        result["error"] = "biblioteca de script não encontrada: %s" % addon_id
+        return result
+    argv = [lib, func_name or ""]
+    diag = ["script=%s func=%s" % (os.path.basename(lib), func_name or "")]
+    with _run_lock:
+        sys.argv = argv
+        set_current_addon(addon_id)
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        try:
+            import runpy
+            runpy.run_path(lib, run_name="__main__")
+            result["ok"] = True
+        except SystemExit as e:
+            # O script terminou com exit() (código 0/None = normal).
+            result["ok"] = True
+            diag.append("exit(%s)" % (e.code,))
+        except ValueError as e:
+            # Fall-through p/ o dispatch de plugin depois da ação
+            # (int(sys.argv[1]) com o nome da função).
+            if func_name and func_name in str(e):
+                result["ok"] = True
+                diag.append("fall-through plugin apos acao: %s" % e)
+            else:
+                result["error"] = "ValueError: %s" % e
+        except BaseException as e:
+            import traceback
+            result["error"] = "%s: %s\n%s" % (
+                type(e).__name__, e, traceback.format_exc(limit=12))
+            _log("aotv_kodi.run_script", "ERRO %s: %s" % (addon_id, e))
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    result["diag"] = "\n".join(diag)
+    return result
+
+
+def run_service(addon_id):
+    """Executa o service.py de um addon na thread atual (Fase 3).
+
+    É o que o KodiServiceRunner (Kotlin) chama numa thread de fundo:
+    o serviço roda até o fim (normalmente até o abort do Monitor) e
+    esta função bloqueia até lá — por isso NÃO usa o _run_lock (o
+    serviço não pode segurar o lock do dispatch de plugin nem ser
+    travado por ele; navegação/play continuam em paralelo).
+
+    sys.argv=[service_lib], como o Kodi invoca um serviço. SystemExit
+    é término normal do serviço. O diag traz o tempo e o resumo HTTP
+    (é ele que mostra, no teste, se o serviço fez algum fetch —
+    presença/analytics e self-update do Vulgata DEVEM ficar em zero,
+    porque a Fase 1 força esses settings off).
+    """
+    result = {"ok": False, "error": "", "diag": ""}
+    _ensure_simplejson()
+    _install_http_probe()
+    t_start = time.monotonic()
+    d = find_addon_dir(addon_id)
+    if not d:
+        result["error"] = "addon não instalado: %s" % addon_id
+        return result
+    lib = get_service_library(addon_id)
+    if not lib or not os.path.isfile(lib):
+        result["error"] = "service.py não encontrado: %s" % addon_id
+        return result
+    diag = ["service=%s" % os.path.basename(lib)]
+    try:
+        n_http0 = _http_seq_now()
+    except Exception:
+        n_http0 = None
+    sys.argv = [lib]
+    set_current_addon(addon_id)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    try:
+        import runpy
+        runpy.run_path(lib, run_name="__main__")
+        result["ok"] = True
+    except SystemExit as e:
+        result["ok"] = True
+        diag.append("exit(%s)" % (e.code,))
+    except BaseException as e:
+        import traceback
+        result["error"] = "%s: %s\n%s" % (
+            type(e).__name__, e, traceback.format_exc(limit=12))
+        _log("aotv_kodi.run_service", "ERRO %s: %s" % (addon_id, e))
+    try:
+        diag.append("tempo=%dms" % int((time.monotonic() - t_start) * 1000))
+    except Exception:
+        pass
+    if n_http0 is not None:
+        diag.append(_http_summary(n_http0))
+    result["diag"] = "\n".join(diag)
+    return result
+
+
+def request_service_abort():
+    """Pede o abort de todo Monitor (o serviço sai do waitForAbort)."""
+    try:
+        import xbmc
+        xbmc.request_abort()
+    except Exception:
+        pass
+
+
+def clear_service_abort():
+    """Limpa o pedido de abort (antes de iniciar um serviço novo)."""
+    try:
+        import xbmc
+        xbmc.clear_abort()
+    except Exception:
+        pass
+
+
+def listitem_to_dict(item):
+    """Traduz um xbmcgui.ListItem para dict (o Kotlin lê via Chaquopy).
+
+    Campos: label, label2, path, is_folder, art {dict}, info {dict},
+    properties {dict}, mime_type, context_menu [[label, action]...].
+    """
+    if item is None:
+        return {}
+    try:
+        import xbmcgui
+        is_listitem = isinstance(item, xbmcgui.ListItem)
+    except Exception:
+        is_listitem = False
+    if not is_listitem:
+        # Não é ListItem (ex.: string) — devolve como label/path cru.
+        return {"label": str(item), "label2": "", "path": str(item),
+                "is_folder": False, "art": {}, "info": {},
+                "properties": {}, "mime_type": "", "context_menu": []}
+    return {
+        "label": item.getLabel(),
+        "label2": item.getLabel2(),
+        "path": item.getPath(),
+        "is_folder": bool(item.isFolder()),
+        "art": dict(item.getArt()),
+        "info": dict(item.getInfo()),
+        "properties": dict(item.getProperties()),
+        "mime_type": item.getMimeType(),
+        "context_menu": list(item.getContextMenuItems()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fetch do proxy local (v1.2.9)
+# ---------------------------------------------------------------------------
+
+class _ProxyFetchResult:
+    """Resposta do fetch p/ o Kotlin (KodiLocalProxy).
+
+    status: código HTTP; headers: dict str->str; o corpo é lido em
+    chunks via read(n) (streaming — o corpo pode ter GBs, não cabe em
+    memória). close() libera a conexão. read/close nunca levantam
+    (devolvem b"" / ignoram) — o Kotlin trata o fim do stream.
+    """
+    def __init__(self, resp):
+        self.status = int(resp.status_code)
+        try:
+            self.headers = {str(k): str(v) for k, v in resp.headers.items()}
+        except Exception:
+            self.headers = {}
+        self._resp = resp
+        self._raw = resp.raw
+
+    def read(self, n):
+        try:
+            n = int(n)
+            if n <= 0:
+                return b""
+            data = self._raw.read(n)
+            return data if data else b""
+        except Exception:
+            return b""
+
+    def close(self):
+        try:
+            self._resp.close()
+        except Exception:
+            pass
+
+
+def proxy_fetch(url, headers, range_header=""):
+    """Busca o upstream do proxy local via requests (verify=False).
+
+    v1.2.9 — fallback (b) do KodiLocalProxy: o fetch Java
+    (HttpsURLConnection) falha no celular com IllegalArgumentException
+    (IDN.toASCII rejeita o hostname punycode com underscores — a
+    suposição da v1.2.8 estava errada). O requests NÃO faz validação
+    STD3/IDNA: passa o hostname direto p/ o socket (provado na VM:
+    fetch real com verify=OFF no host exato retornou 404 'Content
+    deleted' = TLS + HTTP completos; o 404 era o token IP-bound, não
+    falha de conexão). No celular o fetch sai pelo mesmo egresso WARP
+    da resolução, então o token vale.
+
+    Retorna dict {"status": int, "headers": str ("K: V\n..."),
+    "stream": _ProxyFetchResult} — o Kotlin lê via Chaquopy (mesmo
+    padrão do parseResult: __getitem__ + toString()). Levanta na falha
+    (o Kotlin cai p/ o 502 e registra no diag). NÃO usa o _run_lock:
+    o run do addon já terminou quando o player toca; o fetch é uma
+    chamada separada e não pode travar contra o dispatch.
+
+    headers: dict do sufixo Kodi (Referer/Origin/User-Agent/
+    Accept-Language). range_header: "bytes=a-b" ou "" (repassado
+    como header Range). Redirects: manual, até 5 (301/302/303/307/
+    308), preservando Range + headers — igual ao openUpstream do
+    Kotlin (o requests com allow_redirects=True também preservaria,
+    mas o manual é explícito). Timeouts (10, 30) iguais ao
+    openUpstream — na prática o piso da sonda (v1.2.4) eleva p/
+    (30, 60), igual aos fetches do addon; mais tempo, não menos.
+    verify=False: o addon usa em tudo; o cert é válido p/
+    *.null-null.shop, só o hostname é rejeitado — e aqui nem há
+    check de hostname. Accept-Encoding: identity — o requests
+    anuncia gzip por padrão, e o corpo cru (raw) chegaria
+    comprimido; o proxy serve os bytes como vieram e reescreve
+    .m3u8 como texto, então o upstream não pode comprimir.
+    O cookie __Host-rc-player da resolução NÃO é enviado: o fetch
+    real na VM sem cookie retornou 404 (token morto), não 403 —
+    o token na URL é a autenticação, e o addon cria sessão nova
+    por request mesmo.
+    """
+    import requests
+    from urllib.parse import urljoin
+
+    hdrs = {}
+    try:
+        for k, v in dict(headers or {}).items():
+            if k is not None and v is not None:
+                hdrs[str(k)] = str(v)
+    except Exception:
+        hdrs = {}
+    if range_header:
+        hdrs["Range"] = str(range_header)
+    # Sem gzip: o corpo cru precisa chegar sem compressão (ver acima).
+    hdrs["Accept-Encoding"] = "identity"
+    # User-Agent padrão se o sufixo não trouxer um (o upstream espera
+    # um UA de navegador; sem ele pode responder diferente).
+    if not any(str(k).lower() == "user-agent" for k in hdrs):
+        hdrs["User-Agent"] = (
+            "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+
+    # Bypass da guarda do fake probe SÓ nesta thread (ver o flag no
+    # topo): sem ele, este fetch — GET com Range p/ o host do proxy —
+    # receberia o 206 sintético em vez do stream real. O finally
+    # sempre desliga (mesmo com exceção).
+    _proxy_fetch_tls.active = True
+    try:
+        session = requests.Session()
+        session.trust_env = False  # sem proxy do ambiente
+        cur_url = str(url)
+        resp = None
+        for _ in range(6):  # 1 tentativa + até 5 redirects
+            resp = session.get(cur_url, headers=hdrs, stream=True,
+                               timeout=(10, 30), verify=False,
+                               allow_redirects=False)
+            loc = resp.headers.get("Location")
+            if loc and resp.status_code in (301, 302, 303, 307, 308):
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                cur_url = urljoin(cur_url, loc)
+                continue
+            break
+        # Headers como texto "K: V\n..." — o Kotlin lê via toString()
+        # (padrão dictStr, provado). NÃO devolver dict: o toJava(Map)
+        # do Chaquopy falha no celular (v1.2.9: "Cannot convert dict
+        # object to java.util.Map"), e os headers são essenciais
+        # (Content-Length/Content-Range/Content-Type), então o
+        # fallback vazio do dictStrMap não serve aqui.
+        headers_txt = "\n".join(
+            f"{k}: {v}" for k, v in resp.headers.items())
+        return {"status": int(resp.status_code),
+                "headers": headers_txt,
+                "stream": _ProxyFetchResult(resp)}
+    finally:
+        _proxy_fetch_tls.active = False
