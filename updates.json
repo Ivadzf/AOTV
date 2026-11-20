@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "9470249e5adef8ff9723b0023c47759260432362bdbe4d908d480439fa62c518",
-        "size": 114348464,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.37.0/AOTV-v1.37.0.apk"
+        "sha256": "aebf372b86e1f48a4358d7abb71b504e98ead25e84b42edeea71fbdcff2dbce3",
+        "size": 114384040,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.0/AOTV-v1.38.0.apk"
       }
     },
-    "changelog": "v1.37.0 \u2014 Lote mpv 2: painel Melhorar imagem no player (libmpv) com 3 abas, 29 etapas, presets Auto + Anime4K, Auto por placa, vigia que desce a qualidade, Testar a minha placa, Comparar, shaders GLSL, gerenciamento de cores e daltonismo. Fixes: engasgo do mpv (display-resample), se\u00e7\u00e3o TVmaze nos Trackers, nota do Trakt sem login (s\u00f3 o Client ID), clipes HLS AES-128/fMP4, barra de busca fora do topo da Home. Obs.: corte de MP4 direto continua sem suporte; o mpv e os shaders ainda precisam de teste ao vivo.",
-    "published_at": "2026-11-20T11:58:00Z",
-    "tag": "v1.37.0",
-    "version": "1.37.0",
-    "versionCode": 75
+    "changelog": "v1.38.0 — Lote mpv 3: playback avançado no libmpv (interpolação de quadros, velocidade sem distorcer a voz, atraso de áudio, capítulos MKV, posição vertical da legenda) e correções do teste da v1.37.0: display-fps manual para o engasgo, log de passos do mpv em Diagnóstico, detecção automática de hardware para o upscaling, trocas de fonte desligadas em torrent/P2P, retry da temporada recarregando de verdade, formato de fonte preferido (HLS/MP4) e corte HLS com variante em reprodução e fallback no 403. Obs.: engasgo, crash e corte no ALYA ainda precisam de teste ao vivo.",
+    "published_at": "2026-11-20T15:26:00Z",
+    "tag": "v1.38.0",
+    "version": "1.38.0",
+    "versionCode": 76
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "aebf372b86e1f48a4358d7abb71b504e98ead25e84b42edeea71fbdcff2dbce3",
+          "size": 114384040,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.0/AOTV-v1.38.0.apk"
+        }
+      },
+      "changelog": "v1.38.0 — Lote mpv 3: playback avançado no libmpv (interpolação de quadros, velocidade sem distorcer a voz, atraso de áudio, capítulos MKV, posição vertical da legenda) e correções do teste da v1.37.0: display-fps manual para o engasgo, log de passos do mpv em Diagnóstico, detecção automática de hardware para o upscaling, trocas de fonte desligadas em torrent/P2P, retry da temporada recarregando de verdade, formato de fonte preferido (HLS/MP4) e corte HLS com variante em reprodução e fallback no 403. Obs.: engasgo, crash e corte no ALYA ainda precisam de teste ao vivo.",
+      "published_at": "2026-11-20T15:26:00Z",
+      "tag": "v1.38.0",
+      "version": "1.38.0",
+      "versionCode": 76
+    },
     {
       "assets": {
         "universal": {
@@ -22,7 +36,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.37.0/AOTV-v1.37.0.apk"
         }
       },
-      "changelog": "v1.37.0 \u2014 Lote mpv 2: painel Melhorar imagem no player (libmpv) com 3 abas, 29 etapas, presets Auto + Anime4K, Auto por placa, vigia que desce a qualidade, Testar a minha placa, Comparar, shaders GLSL, gerenciamento de cores e daltonismo. Fixes: engasgo do mpv (display-resample), se\u00e7\u00e3o TVmaze nos Trackers, nota do Trakt sem login (s\u00f3 o Client ID), clipes HLS AES-128/fMP4, barra de busca fora do topo da Home. Obs.: corte de MP4 direto continua sem suporte; o mpv e os shaders ainda precisam de teste ao vivo.",
+      "changelog": "v1.37.0 — Lote mpv 2: painel Melhorar imagem no player (libmpv) com 3 abas, 29 etapas, presets Auto + Anime4K, Auto por placa, vigia que desce a qualidade, Testar a minha placa, Comparar, shaders GLSL, gerenciamento de cores e daltonismo. Fixes: engasgo do mpv (display-resample), seção TVmaze nos Trackers, nota do Trakt sem login (só o Client ID), clipes HLS AES-128/fMP4, barra de busca fora do topo da Home. Obs.: corte de MP4 direto continua sem suporte; o mpv e os shaders ainda precisam de teste ao vivo.",
       "published_at": "2026-11-20T11:58:00Z",
       "tag": "v1.37.0",
       "version": "1.37.0",
@@ -36,7 +50,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.36.0/AOTV-v1.36.0.apk"
         }
       },
-      "changelog": "v1.36.0 \u2014 Lote mpv 1: player mpv (libmpv) como engine alternativa ao ExoPlayer com fallback autom\u00e1tico, engine selecion\u00e1vel nas configura\u00e7\u00f5es do player, controles b\u00e1sicos no mpv (play/pause, seek, velocidade, faixas de \u00e1udio e legenda). Corre\u00e7\u00f5es: campo de chave da OMDb na aba de Trackers, Continuar assistindo acima do Peak Cinema, classifica\u00e7\u00e3o mais perto das op\u00e7\u00f5es no detalhe de s\u00e9rie, assistente e paleta de comandos s\u00f3 na aba de pesquisa. Obs.: APK maior (~109 MB) por causa do FFmpeg do libmpv; o mpv no aparelho/TV ainda precisa de teste ao vivo.",
+      "changelog": "v1.36.0 — Lote mpv 1: player mpv (libmpv) como engine alternativa ao ExoPlayer com fallback automático, engine selecionável nas configurações do player, controles básicos no mpv (play/pause, seek, velocidade, faixas de áudio e legenda). Correções: campo de chave da OMDb na aba de Trackers, Continuar assistindo acima do Peak Cinema, classificação mais perto das opções no detalhe de série, assistente e paleta de comandos só na aba de pesquisa. Obs.: APK maior (~109 MB) por causa do FFmpeg do libmpv; o mpv no aparelho/TV ainda precisa de teste ao vivo.",
       "published_at": "2026-11-20T10:13:00Z",
       "tag": "v1.36.0",
       "version": "1.36.0",
@@ -50,7 +64,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.35.0/AOTV-v1.35.0.apk"
         }
       },
-      "changelog": "v1.35.0 \u2014 Lote 25: assistente por comandos, command palette, voz + QR + populares na busca, tour de onboarding, Report a problem com teste de velocidade, addon health check, gate de dados m\u00f3veis, governador de bateria, sa\u00edda de \u00e1udio (TV/receiver + passthrough Dolby/DTS), aba Streaming (Onde assistir), v\u00eddeos gr\u00e1tis (CCC, Blender, PeerTube) e sincronia cont\u00ednua Nuvio/Stremio. Inclui o hotfix v1.34.1 (crash ao tocar num perfil). Obs.: passthrough sem receiver HDMI real ainda precisa de teste no aparelho; assistente, paleta, Streaming e v\u00eddeos gr\u00e1tis s\u00f3 no celular (n\u00e3o na TV); voz e QR s\u00f3 na busca e no guia ao vivo.",
+      "changelog": "v1.35.0 — Lote 25: assistente por comandos, command palette, voz + QR + populares na busca, tour de onboarding, Report a problem com teste de velocidade, addon health check, gate de dados móveis, governador de bateria, saída de áudio (TV/receiver + passthrough Dolby/DTS), aba Streaming (Onde assistir), vídeos grátis (CCC, Blender, PeerTube) e sincronia contínua Nuvio/Stremio. Inclui o hotfix v1.34.1 (crash ao tocar num perfil). Obs.: passthrough sem receiver HDMI real ainda precisa de teste no aparelho; assistente, paleta, Streaming e vídeos grátis só no celular (não na TV); voz e QR só na busca e no guia ao vivo.",
       "published_at": "2026-11-19T21:22:00Z",
       "tag": "v1.35.0",
       "version": "1.35.0",
@@ -64,7 +78,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.34.0/AOTV-v1.34.0.apk"
         }
       },
-      "changelog": "v1.34.0 \u2014 Lote 24: temas da tela inicial + AMOLED puro (Normal, Netflixy, Cyberpunk, Primefly), her\u00f3i auto-rotativo com pr\u00e9via de cena, pastas na Home, esconder/mostrar abas, MK Channel, Peak Cinema, modos de aspecto Original/Zoom/Bands, Ambilight, modo sensory-friendly, 'Still watching?' e arrastar pra reordenar no Personalizar In\u00edcio. Fontes da nota dos epis\u00f3dios: TMDB, Trakt, OMDb e TVmaze \u2014 m\u00e9dia dos 4 ou uma fonte s\u00f3 (OMDb com chave gratuita do usu\u00e1rio). Obs.: Ambilight em HLS/torrent fica nas cores do p\u00f4ster; menu da TV e rail do tablet n\u00e3o filtram as abas escondidas.",
+      "changelog": "v1.34.0 — Lote 24: temas da tela inicial + AMOLED puro (Normal, Netflixy, Cyberpunk, Primefly), herói auto-rotativo com prévia de cena, pastas na Home, esconder/mostrar abas, MK Channel, Peak Cinema, modos de aspecto Original/Zoom/Bands, Ambilight, modo sensory-friendly, 'Still watching?' e arrastar pra reordenar no Personalizar Início. Fontes da nota dos episódios: TMDB, Trakt, OMDb e TVmaze — média dos 4 ou uma fonte só (OMDb com chave gratuita do usuário). Obs.: Ambilight em HLS/torrent fica nas cores do pôster; menu da TV e rail do tablet não filtram as abas escondidas.",
       "published_at": "2026-11-19T06:11:00Z",
       "tag": "v1.34.0",
       "version": "1.34.0",
@@ -78,7 +92,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.33.0/AOTV-v1.33.0.apk"
         }
       },
-      "changelog": "v1.33.0 \u2014 Lote 23: estat\u00edsticas e recap, perfil infantil, g\u00eaneros bloqueados, My List com ordena\u00e7\u00e3o e teto de 250, marcar temporada inteira, Abandon Series, sync 2 vias com Trakt/Simkl, sync cont\u00ednuo de addons, revoke do Simkl, PIN V2, Simkl pull e 'N\u00e3o hoje' no Continuar. Fun\u00e7\u00f5es do JOTV 1.0.22: selo Assistido, aviso de pr\u00f3ximo epis\u00f3dio sem pular o fim, legenda for\u00e7ada autom\u00e1tica, filtros das fontes dentro do player, Ao Vivo filtrado por fonte e busca da TV pelo teclado do Google. Obs.: a rolagem da lista de fontes de epis\u00f3dio no celular n\u00e3o foi corrigida \u2014 precisa de reprodu\u00e7\u00e3o no aparelho.",
+      "changelog": "v1.33.0 — Lote 23: estatísticas e recap, perfil infantil, gêneros bloqueados, My List com ordenação e teto de 250, marcar temporada inteira, Abandon Series, sync 2 vias com Trakt/Simkl, sync contínuo de addons, revoke do Simkl, PIN V2, Simkl pull e 'Não hoje' no Continuar. Funções do JOTV 1.0.22: selo Assistido, aviso de próximo episódio sem pular o fim, legenda forçada automática, filtros das fontes dentro do player, Ao Vivo filtrado por fonte e busca da TV pelo teclado do Google. Obs.: a rolagem da lista de fontes de episódio no celular não foi corrigida — precisa de reprodução no aparelho.",
       "published_at": "2026-11-19T03:43:00Z",
       "tag": "v1.33.0",
       "version": "1.33.0",
@@ -92,7 +106,7 @@
           "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.32.0/AOTV-v1.32.0.apk"
         }
       },
-      "changelog": "v1.32.0 \u2014 Lote 22: controle remoto por QR com monitor ao vivo e 'Reproduzir na TV', Send to TV (Chromecast, AirPlay, DLNA), instalar addon na TV por pareamento, Watch Next no launcher da Google TV, gamepads mape\u00e1veis, player externo com progresso salvo. Fixes: trailer com autoplay desligado por padr\u00e3o, faixa bege da busca, atualizador autom\u00e1tico em todo cold start. Obs.: o AirPlay aparece na lista, mas o v\u00eddeo n\u00e3o funciona (AirPlay 2 exige FairPlay).",
+      "changelog": "v1.32.0 — Lote 22: controle remoto por QR com monitor ao vivo e 'Reproduzir na TV', Send to TV (Chromecast, AirPlay, DLNA), instalar addon na TV por pareamento, Watch Next no launcher da Google TV, gamepads mapeáveis, player externo com progresso salvo. Fixes: trailer com autoplay desligado por padrão, faixa bege da busca, atualizador automático em todo cold start. Obs.: o AirPlay aparece na lista, mas o vídeo não funciona (AirPlay 2 exige FairPlay).",
       "published_at": "2026-11-18T23:12:00Z",
       "tag": "v1.32.0",
       "version": "1.32.0",
