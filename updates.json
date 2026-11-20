@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "5fb9dbbd447c7943b4408d2f2b3ca58ce6a8953d68b7652ecf527e0ffc76c4dc",
-        "size": 114389532,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.1/AOTV-v1.38.1.apk"
+        "sha256": "32e873664ccb531c762903496996a1d41921d75bad41ea4691f7181a1da9da98",
+        "size": 114426217,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.39.0/AOTV-v1.39.0.apk"
       }
     },
-    "changelog": "v1.38.1 — Hotfix: temporadas não descarregam mais, aviso falso do log do mpv corrigido, Diagnóstico mostra o começo do erro, botões do player nas Configurações (12 para 24, com migração de listas salvas), corte HLS com altura fresca e retry com Referer (o corte no ALYA funciona), chip Motor no player para trocar ExoPlayer e Libmpv sem ir nas Configurações. Obs.: o Libmpv ainda pode fechar o app na primeira abertura de uma fonte — a correção (pré-carregar o motor) vai para o Lote 4 (v1.39.0).",
-    "published_at": "2026-11-20T16:51:00Z",
-    "tag": "v1.38.1",
-    "version": "1.38.1",
-    "versionCode": 77
+    "changelog": "v1.39.0 — Lote mpv 4: pré-carregar o mpv (piscina quente com 1 instância reutilizada, warmup ao abrir o detalhe, expira em 120 s sem uso; observer removido no destroy; log com surface: ok), exportar trecho (share sheet e cópia para a pasta pública via SAF) e vídeo inteiro (HLS com todos os segmentos, MP4 direto, id :full), scripts Lua com 2 exemplos, observação de propriedades no Diagnóstico e IPC por socket (desligado por padrão). Obs.: yt-dlp nativo fora (sem binário no AAR) e scripts JS não funcionam (só Lua); o crash do mpv na primeira abertura ainda não está provado como resolvido — só o teste no celular valida.",
+    "published_at": "2026-11-20T17:34:00Z",
+    "tag": "v1.39.0",
+    "version": "1.39.0",
+    "versionCode": 78
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "32e873664ccb531c762903496996a1d41921d75bad41ea4691f7181a1da9da98",
+          "size": 114426217,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.39.0/AOTV-v1.39.0.apk"
+        }
+      },
+      "changelog": "v1.39.0 — Lote mpv 4: pré-carregar o mpv (piscina quente com 1 instância reutilizada, warmup ao abrir o detalhe, expira em 120 s sem uso; observer removido no destroy; log com surface: ok), exportar trecho (share sheet e cópia para a pasta pública via SAF) e vídeo inteiro (HLS com todos os segmentos, MP4 direto, id :full), scripts Lua com 2 exemplos, observação de propriedades no Diagnóstico e IPC por socket (desligado por padrão). Obs.: yt-dlp nativo fora (sem binário no AAR) e scripts JS não funcionam (só Lua); o crash do mpv na primeira abertura ainda não está provado como resolvido — só o teste no celular valida.",
+      "published_at": "2026-11-20T17:34:00Z",
+      "tag": "v1.39.0",
+      "version": "1.39.0",
+      "versionCode": 78
+    },
     {
       "assets": {
         "universal": {
