@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "aebf372b86e1f48a4358d7abb71b504e98ead25e84b42edeea71fbdcff2dbce3",
-        "size": 114384040,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.0/AOTV-v1.38.0.apk"
+        "sha256": "5fb9dbbd447c7943b4408d2f2b3ca58ce6a8953d68b7652ecf527e0ffc76c4dc",
+        "size": 114389532,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.1/AOTV-v1.38.1.apk"
       }
     },
-    "changelog": "v1.38.0 — Lote mpv 3: playback avançado no libmpv (interpolação de quadros, velocidade sem distorcer a voz, atraso de áudio, capítulos MKV, posição vertical da legenda) e correções do teste da v1.37.0: display-fps manual para o engasgo, log de passos do mpv em Diagnóstico, detecção automática de hardware para o upscaling, trocas de fonte desligadas em torrent/P2P, retry da temporada recarregando de verdade, formato de fonte preferido (HLS/MP4) e corte HLS com variante em reprodução e fallback no 403. Obs.: engasgo, crash e corte no ALYA ainda precisam de teste ao vivo.",
-    "published_at": "2026-11-20T15:26:00Z",
-    "tag": "v1.38.0",
-    "version": "1.38.0",
-    "versionCode": 76
+    "changelog": "v1.38.1 — Hotfix: temporadas não descarregam mais, aviso falso do log do mpv corrigido, Diagnóstico mostra o começo do erro, botões do player nas Configurações (12 para 24, com migração de listas salvas), corte HLS com altura fresca e retry com Referer (o corte no ALYA funciona), chip Motor no player para trocar ExoPlayer e Libmpv sem ir nas Configurações. Obs.: o Libmpv ainda pode fechar o app na primeira abertura de uma fonte — a correção (pré-carregar o motor) vai para o Lote 4 (v1.39.0).",
+    "published_at": "2026-11-20T16:51:00Z",
+    "tag": "v1.38.1",
+    "version": "1.38.1",
+    "versionCode": 77
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "5fb9dbbd447c7943b4408d2f2b3ca58ce6a8953d68b7652ecf527e0ffc76c4dc",
+          "size": 114389532,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.38.1/AOTV-v1.38.1.apk"
+        }
+      },
+      "changelog": "v1.38.1 — Hotfix: temporadas não descarregam mais, aviso falso do log do mpv corrigido, Diagnóstico mostra o começo do erro, botões do player nas Configurações (12 para 24, com migração de listas salvas), corte HLS com altura fresca e retry com Referer (o corte no ALYA funciona), chip Motor no player para trocar ExoPlayer e Libmpv sem ir nas Configurações. Obs.: o Libmpv ainda pode fechar o app na primeira abertura de uma fonte — a correção (pré-carregar o motor) vai para o Lote 4 (v1.39.0).",
+      "published_at": "2026-11-20T16:51:00Z",
+      "tag": "v1.38.1",
+      "version": "1.38.1",
+      "versionCode": 77
+    },
     {
       "assets": {
         "universal": {
