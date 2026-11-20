@@ -1477,8 +1477,8 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Scripts Lua do mpv",
-        sub = "Carrega os .lua da pasta de scripts — lista os scripts presentes",
-        keywords = listOf("scripts", "lua", "mpv", "libmpv", "pasta", "exemplo"),
+        sub = "Instala um .lua do celular, liga/desliga e exclui — lista os scripts presentes",
+        keywords = listOf("scripts", "lua", "mpv", "libmpv", "pasta", "exemplo", "instalar", "excluir"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_ENGINE,
     ),

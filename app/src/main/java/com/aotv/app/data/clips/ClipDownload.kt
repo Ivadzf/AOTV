@@ -97,7 +97,11 @@ import kotlinx.coroutines.currentCoroutineContext
  * entidade do clipe ([DownloadEntity.sourceUrl], gravada pelo
  * [ClipDownloader.downloadClip] desde a v1.28.0) — sem mudança de esquema
  * do Room e sem codificar URL no id. Clipes antigos sem `sourceUrl` não
- * têm de onde baixar o vídeo inteiro: a opção avisa, nunca crasha.
+ * têm de onde baixar o vídeo inteiro, e não dá p/ re-resolver a fonte:
+ * o clipe só guarda tmdbId/tipo/episódio — sem o addon nem o rótulo da
+ * fonte que o gerou — e a resolução vive no player. A opção diz o que
+ * falta (e o caminho que funciona: cortar um trecho novo da mesma
+ * fonte), nunca crasha.
  */
 
 /** Uma variante de um master playlist HLS (ver [ClipDownload.listMasterVariants]). */

@@ -112,6 +112,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToLong
 
 import com.aotv.app.data.live.LiveSource
@@ -919,7 +922,11 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     // Legenda externa é desenhada pelo próprio player (ver externalCues), então trocar de
     // legenda não recarrega o vídeo.
     LaunchedEffect(streamUrl, mobileGatePass, mpvFallback, s.engineSwitchNonce) {
-        val url = streamUrl ?: return@LaunchedEffect
+        val url = streamUrl
+        // Lote de correções (v1.42.0) — Problema 3: sem fonte p/ carregar
+        // não há "pronto" que limpe a troca de motor — limpa aqui, senão
+        // o flag ficaria preso e bloquearia a próxima troca.
+        if (url == null) { engineSwitching = false; return@LaunchedEffect }
         // Lote 25 item 7 (Frente C) — gate de dados móveis: segura a
         // preparação do stream em dados móveis até o usuário liberar
         // (o diálogo) ou o modo permitir. O retrigger por mobileGatePass
@@ -981,6 +988,12 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                     mpvFallback = true
                     toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
                 } else {
+                    // Lote de correções (v1.42.0) — Problema 4 (a): marca
+                    // o load pedido — o FILE_LOADED marca o mesmo número
+                    // (ver onMpvFileLoaded). Um END_FILE sem EOF que chegue
+                    // com um load MAIS NOVO pendente é do arquivo anterior
+                    // (loadfile de troca/retry), não da fonte atual.
+                    mpvLoadSeq++
                     mpv.load(
                         MpvPlayer.playUrlFor(context, playUrl),
                         STREAM_HEADERS + factoryHeaders,
@@ -1018,6 +1031,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                     streamUrl?.let { noteSourceReady(it) }
                     readyUrl = streamUrl
                     switching = false // novo episódio no ar, tira o loading da troca
+                    // Lote de correções (v1.42.0) — Problema 3: a troca de
+                    // motor terminou (o motor novo está tocando) — tira o
+                    // "Trocando de motor…" e confirma o motor em vigor.
+                    if (engineSwitching) { engineSwitching = false; toastMsg = "Motor: ExoPlayer." }
                     refreshTechInfo()
                     // Frame-rate matching (Lote 16 item 4) + medidor de FPS.
                     applyFrameRate()
@@ -1029,6 +1046,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 movieErrored = true // fonte direta falhou → tenta a próxima
                 playerError = shortPlayerError(error) // v1.2.7: vai p/ a tela de erro
+                // Lote de correções (v1.42.0) — Problema 3: o motor novo
+                // (ExoPlayer) falhou ao abrir — a troca terminou em falha
+                // e o fallback/timeout decide; o flag não fica preso.
+                engineSwitching = false
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 audioGroups = tracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO && it.length > 0 }
@@ -1540,12 +1561,16 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(streamUrl) {
         movieStarted = false
         val u = streamUrl ?: return@LaunchedEffect
+        // Lote de correções (v1.42.0) — Problema 4 (b): base p/ o teste
+        // de "está tocando de verdade" (ver isActuallyPlayingNow) — a
+        // posição do vídeo ANTES desta fonte começar a contar o tempo.
+        val startPos = position.coerceAtLeast(0L)
         triedUrls += u
         if (TorrentMagnet.isMagnet(u)) {
             // Espera o debrid decidir entre link direto e P2P antes de contar o tempo.
             var w = 0L
             while (playVia == "" && streamUrl == u && w < 40_000) { delay(250); w += 250 }
-            if (movieStarted || streamUrl != u) return@LaunchedEffect
+            if (movieStarted || isActuallyPlayingNow(startPos) || streamUrl != u) return@LaunchedEffect
         }
         if (TorrentMagnet.isMagnet(u) && playVia != "debrid") {
             // P2P precisa achar pares e baixar o começo. Desiste aos 45 s só se nunca apareceu par nem
@@ -1554,12 +1579,12 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             var alive = false
             while (waited < 120_000) {
                 delay(5_000); waited += 5_000
-                if (movieStarted || streamUrl != u) return@LaunchedEffect
+                if (movieStarted || isActuallyPlayingNow(startPos) || streamUrl != u) return@LaunchedEffect
                 val st = Torrents.ifStarted()?.status(u)
                 if (st != null && (st.peers > 0 || st.hasMetadata)) alive = true
                 if (waited >= 45_000 && !alive) break
             }
-            if (movieStarted || streamUrl != u) return@LaunchedEffect
+            if (movieStarted || isActuallyPlayingNow(startPos) || streamUrl != u) return@LaunchedEffect
             // Lote mpv 3 (v1.38.0): em fonte P2P/torrent a troca automática
             // NUNCA roda sozinha — trocar sem a outra fonte ter carregado
             // trava o vídeo (relato do Davi). Marca indisponível: o overlay
@@ -1572,8 +1597,35 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         // espelho). Lote VPN (v1.40.0): arquivo local também nunca troca
         // sozinho — o timeout só marca indisponível.
         val hasMirror = !userLockedSource && !isLocalPlayback && autoSwitchAtStart && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
-        kotlinx.coroutines.delay(if (hasMirror) 5_000 else sourceTimeoutSec * 1_000L)
-        if (movieStarted || streamUrl != u) return@LaunchedEffect
+        // Lote de correções (v1.42.0) — Problema 4 (b): o delay único de
+        // 12 s disparava mesmo com a fonte tocando no fundo. O movieStarted
+        // é zerado pela troca de motor (switchEngine) e pelo retry, então o
+        // flag sozinho mente no momento do disparo. O relógio agora é
+        // rearmado em ticks de 500 ms e, no fim, re-checa AO VIVO se algo
+        // está tocando (activeIsPlaying / posição avançando) antes de
+        // declarar falha. Troca de motor em curso estende o prazo em até
+        // mais uma janela (o motor novo precisa de segundos p/ preparar) —
+        // sem troca, o prazo continua sourceTimeoutSec e a fonte morta
+        // continua caindo p/ a próxima fonte.
+        val waitMs = if (hasMirror) 5_000L else sourceTimeoutSec * 1_000L
+        var waitedMs = 0L
+        var deadlineMs = waitMs
+        var switchGraceMs = 0L
+        while (waitedMs < deadlineMs) {
+            kotlinx.coroutines.delay(500)
+            waitedMs += 500
+            if (movieStarted || streamUrl != u) return@LaunchedEffect
+            if (isActuallyPlayingNow(startPos)) return@LaunchedEffect
+            if (engineSwitching && switchGraceMs < sourceTimeoutSec * 1_000L) {
+                deadlineMs += 500
+                switchGraceMs += 500
+            }
+        }
+        if (movieStarted || streamUrl != u || isActuallyPlayingNow(startPos)) return@LaunchedEffect
+        // Lote de correções (v1.42.0) — Problema 3: a fonte morreu mesmo —
+        // a troca (se havia uma) terminou em falha; o flag não fica preso
+        // e a próxima troca não é bloqueada.
+        engineSwitching = false
         if (userLockedSource || isLocalPlayback || !autoSwitchEnabled || !autoSwitchAtStart) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
         val m = sameMirror(facts(), currentSourceIdx, triedUrls)
         if (m >= 0) {
@@ -1670,7 +1722,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         var startPos = position
         while (true) {
             kotlinx.coroutines.delay(if (p2p) 30_000 else sourceTimeoutSec * 1_000L)
-            if (!buffering || streamUrl != u || position > startPos + 500) return@LaunchedEffect
+            // Lote de correções (v1.42.0) — Problema 4 (b): no mpv o
+            // buffering vem de paused-for-cache, que pode ficar true com
+            // o vídeo andando. Se o motor diz AO VIVO que está tocando,
+            // não é stall — cancela o timeout em vez de trocar de fonte.
+            if (!buffering || streamUrl != u || position > startPos + 500 || activeIsPlaying()) return@LaunchedEffect
             // P2P que ainda recebe dado num ritmo razoável segue esperando em vez de trocar.
             if (p2p && (Torrents.ifStarted()?.status(u)?.downloadBps ?: 0) > 64_000) { startPos = position; continue }
             // Ainda travando na mesma fonte e sem progredir → troca (ou avisa, se travada à mão
@@ -1679,6 +1735,9 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // marca indisponível e o usuário escolhe (o overlay tem ações).
             // Lote VPN (v1.40.0): arquivo local também nunca troca sozinho.
             val bufferingMsg = "Timeout: o stream travou no buffering por ${sourceTimeoutSec}s (sem erro do player)"
+            // Lote de correções (v1.42.0) — Problema 3: stall de verdade —
+            // a troca (se havia uma) terminou em falha; o flag não fica preso.
+            engineSwitching = false
             if (p2p || userLockedSource || isLocalPlayback || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
             else if (!nextMovieSource(slow = true)) { noteTimeout(bufferingMsg); sourceFailed = true }
             return@LaunchedEffect
@@ -2125,7 +2184,10 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 }
 
                 val p2pText = rememberP2pStatus(if (playVia == "p2p") streamUrl else null, buffering || switching)
-                val p2pStatus = debridStatus ?: p2pText
+                // Lote de correções (v1.42.0) — Problema 3: a troca de motor
+                // mostra o próprio estado ("Trocando de motor…") no overlay
+                // de loading, em vez de só o spinner genérico.
+                val p2pStatus = if (engineSwitching) "Trocando de motor…" else debridStatus ?: p2pText
                 if (buffering || switching) {
                     PlayerLoadingOverlay(
                         bannerUrl = metaBg.ifBlank { backdropUrl }, logoUrl = logoUrl, posterUrl = posterUrl, title = title,
@@ -2793,7 +2855,11 @@ class PlayerSession(
     var playerError by run { mutableStateOf<String?>(null) }
     /** Marca falha por timeout (stream não iniciou/travou) sem sobrescrever um erro real do player. */
     fun noteTimeout(msg: String = "Timeout: o stream não iniciou em ${sourceTimeoutSec}s (sem erro do player)") {
-        if (playerError == null) playerError = msg
+        // Lote de correções (v1.42.0) — Problema 4 (b): defesa em
+        // profundidade — um timeout que dispara com o vídeo tocando AO
+        // VIVO não registra falha nenhuma (o erro na tela sumia junto da
+        // fonte que estava tocando no fundo).
+        if (playerError == null && !activeIsPlaying()) playerError = msg
     }
     /** v1.2.8: linha do proxy p/ o diag da tela de erro ("" se o proxy
      *  nunca buscou — o diag original já cobre o resto). */
@@ -3824,6 +3890,19 @@ class PlayerSession(
         else -> exoPlayer.isPlaying
     }
 
+    /**
+     * Reprodução REAL em curso, lida AO VIVO no motor ativo (Lote de
+     * correções, v1.42.0 — Problema 4): o motor diz que está tocando, ou a
+     * posição avançou mais de 1 s desde [sinceMs]. NÃO usa o flag
+     * [movieStarted] — ele é zerado pela troca de motor e pelo retry e
+     * mente no momento em que o timeout/erro dispara — nem o state
+     * [isPlaying], que o poll só atualiza a cada 500 ms.
+     */
+    fun isActuallyPlayingNow(sinceMs: Long = 0L): Boolean {
+        if (activeIsPlaying()) return true
+        return activePositionMs() > sinceMs + 1_000L
+    }
+
     fun activeSeekTo(ms: Long) {
         when {
             casting && castPlayer != null -> {
@@ -3902,7 +3981,12 @@ class PlayerSession(
         private set
 
     /** Cria o wrapper do libmpv (null quando o motor não é o mpv ou o MPV() falhou). */
-    private fun createMpvPlayer(): MpvPlayer? = if (useMpv) runCatching {
+    private fun createMpvPlayer(): MpvPlayer? = createMpvPlayerFor(currentEngineMode)
+
+    /** Cria o wrapper do libmpv p/ o motor dado (null quando não é o mpv
+     * ou o MPV() falhou). Separado p/ a troca em etapas: a etapa 2 cria o
+     * motor NOVO antes de o currentEngineMode mudar (ver switchEngine). */
+    private fun createMpvPlayerFor(mode: PlayerEngineMode): MpvPlayer? = if (mode == PlayerEngineMode.LIBMPV) runCatching {
         val listener = object : MpvPlayer.MpvListener {
             override fun onFileLoaded() = onMpvFileLoaded()
             override fun onEndFile(eofReached: Boolean) = onMpvEndFile(eofReached)
@@ -3914,13 +3998,12 @@ class PlayerSession(
     }.getOrNull() else null
 
     /**
-     * Solta o mpv atual e limpa a referência (troca de motor). Lote mpv 4:
+     * Solta o mpv dado e limpa a referência (troca de motor). Lote mpv 4:
      * o motor saudável volta p/ a piscina quente (se o usuário voltar p/ o
      * Libmpv, reabre sem construir a frio); o que não presta é destruído.
+     * Recebe a instância (a troca em etapas já nulou o campo na etapa 1).
      */
-    private fun releaseMpvPlayer() {
-        val mpv = mpvPlayer ?: return
-        mpvPlayer = null
+    private fun releaseMpvPlayer(mpv: MpvPlayer) {
         runCatching { MpvWarmPool.giveBack(mpv) }
     }
 
@@ -3928,11 +4011,47 @@ class PlayerSession(
     var onEngineChange: (String) -> Unit = {}
     /** Contador de trocas de motor: o efeito de load da tela o usa como chave p/ recarregar a fonte no motor novo. */
     var engineSwitchNonce by run { mutableIntStateOf(0) }
+    /** true enquanto a troca de motor está em curso (parar → preparar →
+     * seek → play). Mostra "Trocando de motor…" no overlay, bloqueia
+     * outra troca no meio e estende o timeout da fonte (o motor novo
+     * precisa de segundos p/ preparar). Só o "pronto" do motor novo (ou
+     * a falha dele) limpa — ver onMpvFileLoaded / STATE_READY. */
+    var engineSwitching by run { mutableStateOf(false) }
+    /** Contador de loads pedidos ao mpv p/ a URL atual (ver o efeito de
+     * load) e o contador no último FILE_LOADED (ver onMpvFileLoaded).
+     * Um END_FILE sem EOF com load mais novo que o pronto é do arquivo
+     * anterior — não da fonte atual (Problema 4 (a)). */
+    private var mpvLoadSeq = 0
+    private var mpvReadySeq = 0
+    /** true depois que releaseAll() rodou: uma troca em curso não entrega
+     * motor novo a uma sessão morta (ver switchEngine, etapa 3). */
+    @Volatile
+    private var released = false
 
     /**
-     * Troca o motor dentro do player (hotfix v1.38.1 — como no Nuvio):
-     * salva a posição, para o motor atual, recria no motor novo e retoma
-     * no mesmo ponto. A escolha persiste na pref `pref_player_engine`.
+     * Troca o motor dentro do player (Lote de correções, v1.42.0 —
+     * Problema 3): em ETAPAS, sem travar a main — como no Nuvio, que
+     * demora alguns segundos p/ trocar de reprodutor (hipótese do Davi).
+     *
+     * Causa do travamento (v1.41.0): o switchEngine() antigo fazia TUDO
+     * síncrono no onClick (main): releaseMpvPlayer() → giveBack (detach
+     * da superfície + `stop` nativo com o vídeo tocando), createMpvPlayer()
+     * e, pelo nonce, o efeito de load — que p/ o mpv frio chama
+     * initIfNeeded() (mpv.create + ~20 opções + mpv.init() + cópia de
+     * scripts) na main. Teardown + init nativo na main, com o motor
+     * antigo ainda renderizando, = ANR.
+     *
+     * Etapa 1 (main, instantânea): captura a posição, pausa o estado
+     * visível (switching + "Trocando de motor…") e zera os flags da fonte
+     * anterior. O ExoPlayer para aqui (stop é barato); o mpv NÃO — o
+     * teardown dele vai p/ a etapa 2.
+     * Etapa 2 (Dispatchers.Default, sem cancelamento no meio): solta o
+     * motor velho (giveBack) e, se o alvo é o Libmpv, constrói E inicia o
+     * motor novo — o init nativo fora da main, como o warmup da piscina
+     * quente já faz (MpvWarmPool.warmup).
+     * Etapa 3 (main): entrega o motor novo, persiste a pref e SÓ ENTÃO
+     * sobe o nonce — o efeito de load nunca re-roda no meio da troca.
+     * A reprodução retoma no mesmo ponto (pendingSeekMs) no motor novo.
      * Transmitindo (Cast) ou com player externo aberto, não troca.
      */
     fun switchEngine() {
@@ -3944,32 +4063,85 @@ class PlayerSession(
             toastMsg = "Player externo aberto: troque o motor depois de voltar."
             return
         }
+        if (engineSwitching) {
+            toastMsg = "Já trocando de motor…"
+            return
+        }
         val target = if (useMpv) PlayerEngineMode.EXOPLAYER else PlayerEngineMode.LIBMPV
+        val wasMpv = useMpv
+        val oldMpv = if (wasMpv) mpvPlayer else null
         val pos = activePositionMs().coerceAtLeast(0L)
         position = pos
         saveNow()
-        // Para o motor atual: o mpv volta p/ a piscina quente (solta a
-        // superfície e o contexto GL); o ExoPlayer só para (ele sobrevive
-        // à troca e volta no próximo load — criá-lo de novo custaria o
-        // decoder).
-        if (useMpv) releaseMpvPlayer() else runCatching { exoPlayer.stop() }
-        currentEngineMode = target
-        mpvFallback = false
-        if (target == PlayerEngineMode.LIBMPV) {
-            mpvPlayer = createMpvPlayer()
-            if (mpvPlayer == null) {
-                mpvFallback = true
-                toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
-            }
-        }
-        onEngineChange(target.id)
-        pendingSeekMs = pos
-        didSeek = false
+        // Etapa 1 — main, instantânea (nada de nativo aqui).
+        engineSwitching = true
         switching = true
         movieStarted = false
-        engineSwitchNonce++
-        if (mpvFallback) return // toast de falha já avisou; o efeito cai p/ o ExoPlayer.
-        toastMsg = if (target == PlayerEngineMode.LIBMPV) "Motor: Libmpv." else "Motor: ExoPlayer."
+        movieErrored = false
+        playerError = null
+        pendingSeekMs = pos
+        didSeek = false
+        toastMsg = "Trocando de motor…"
+        if (!wasMpv) runCatching { exoPlayer.stop() }
+        // O motor velho sai do campo da UI já aqui (mpvActive = false):
+        // o poll e os callbacks de erro não o veem mais, e a superfície
+        // velha não o toca — o teardown em si corre na etapa 2.
+        if (wasMpv) mpvPlayer = null
+        scope.launch {
+            // Etapa 2 — fora da main e sem cancelamento no meio: o motor
+            // velho não pode ficar órfão se o usuário sair do player
+            // durante a troca.
+            val newMpv = withContext(NonCancellable + Dispatchers.Default) {
+                if (oldMpv != null) releaseMpvPlayer(oldMpv)
+                if (target == PlayerEngineMode.LIBMPV) {
+                    val created = createMpvPlayerFor(target)
+                    created?.initIfNeeded()
+                    created
+                } else null
+            }
+            val newMpvOk = newMpv?.isWarm == true
+            if (released) {
+                // A sessão foi liberada enquanto a troca corria: destrói o
+                // motor novo em vez de entregá-lo a uma sessão morta.
+                withContext(NonCancellable + Dispatchers.Default) {
+                    runCatching { newMpv?.destroy() }
+                }
+                engineSwitching = false
+                return@launch
+            }
+            if (target == PlayerEngineMode.LIBMPV && !newMpvOk) {
+                withContext(NonCancellable + Dispatchers.Default) {
+                    runCatching { newMpv?.destroy() }
+                }
+            }
+            // Etapa 3 — main: entrega o motor novo e SÓ ENTÃO dispara o
+            // load (nonce). Nada aqui chama código nativo pesado.
+            currentEngineMode = target
+            if (target == PlayerEngineMode.LIBMPV) {
+                if (newMpvOk) {
+                    mpvPlayer = newMpv
+                    mpvFallback = false
+                } else {
+                    mpvPlayer = null
+                    mpvFallback = true
+                    engineSwitching = false
+                    toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
+                }
+            } else {
+                mpvPlayer = null
+                mpvFallback = false
+            }
+            onEngineChange(target.id)
+            pendingSeekMs = pos
+            didSeek = false
+            movieStarted = false
+            if (streamUrl == null) {
+                // Sem fonte p/ carregar, não há "pronto" que limpe o flag.
+                engineSwitching = false
+                switching = false
+            }
+            engineSwitchNonce++
+        }
     }
 
     /** SurfaceView do mpv pronta: anexa (e dispara load pendente). */
@@ -3991,6 +4163,10 @@ class PlayerSession(
     /** Arquivo carregado no mpv: faixas, duração, flags de pronto — o mesmo que o listener do ExoPlayer faz no STATE_READY. */
     fun onMpvFileLoaded() {
         val mpv = mpvPlayer ?: return
+        // Lote de correções (v1.42.0) — Problema 4 (a): este load chegou
+        // a tocar — um END_FILE sem EOF posterior, com load mais novo que
+        // este, é do arquivo anterior, não da fonte atual.
+        mpvReadySeq = mpvLoadSeq
         val (audio, text) = mpv.readTracks()
         audioGroups = audio
         textGroups = text
@@ -4003,6 +4179,10 @@ class PlayerSession(
         duration = mpv.durationMs().coerceAtLeast(0L)
         movieStarted = true
         switching = false
+        // Lote de correções (v1.42.0) — Problema 3: a troca de motor
+        // terminou (o motor novo está tocando) — tira o "Trocando de
+        // motor…" e confirma o motor em vigor.
+        if (engineSwitching) { engineSwitching = false; toastMsg = "Motor: Libmpv." }
         readyUrl = streamUrl
         streamUrl?.let { noteSourceReady(it) }
         refreshTechInfo()
@@ -4037,6 +4217,32 @@ class PlayerSession(
         if (eofReached) {
             playbackEnded = true
         } else {
+            // Lote de correções (v1.42.0) — Problema 4 (a): END_FILE sem
+            // EOF NÃO é, sozinho, "não conseguiu abrir a fonte". Causa
+            // provada: o mpv dispara o MESMO evento ao parar — o `stop`
+            // da devolução à piscina quente (MpvWarmPool.giveBack →
+            // MpvPlayer.stopPlayback → mpv.command("stop")) e ao trocar
+            // de arquivo (loadfile) — e o evento chega na Main por post
+            // assíncrono (MpvPlayer.eventObserver), podendo cair DEPOIS
+            // do motor novo já estar tocando. Só é erro de fonte quando o
+            // mpv ainda é o motor ativo, nenhuma troca está em curso,
+            // nenhum load novo foi pedido depois do arquivo que chegou a
+            // tocar e nada está tocando agora. Nos outros casos o evento
+            // é descartado em silêncio (o motor novo reporta o próprio
+            // estado se ele falhar de verdade).
+            if (!mpvActive) return
+            // Troca em curso: o END_FILE pode ser o `stop` do motor velho
+            // (chegou atrasado) ou a falha do load do motor novo. Sem load
+            // novo pedido ainda, é o velho — descarta. Com o load novo
+            // pedido e sem FILE_LOADED, o motor novo falhou: tira o
+            // "Trocando…" e deixa o timeout da fonte declarar a falha (o
+            // erro falso não é registrado aqui).
+            if (engineSwitching) {
+                if (mpvLoadSeq > mpvReadySeq) engineSwitching = false
+                return
+            }
+            if (mpvReadySeq > 0 && mpvLoadSeq > mpvReadySeq) return
+            if (activeIsPlaying()) return
             movieErrored = true
             playerError = "O Libmpv não conseguiu abrir esta fonte."
         }
@@ -4044,6 +4250,9 @@ class PlayerSession(
 
     /** O libmpv não iniciou neste aparelho: cai p/ o ExoPlayer e avisa. */
     fun onMpvInitFailed() {
+        // Lote de correções (v1.42.0) — Problema 3: o init falhou no meio
+        // de uma troca — a etapa 3 cai p/ o ExoPlayer; o flag não fica preso.
+        engineSwitching = false
         if (!mpvFallback) {
             mpvFallback = true
             toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
@@ -4675,6 +4884,9 @@ class PlayerSession(
      * O dispose da tela chama isso, EXCETO ao minimizar (ver [minimizedByUser]);
      * o fechar do mini player chama direto. */
     fun releaseAll() {
+        // Lote de correções (v1.42.0) — Problema 3: uma troca de motor em
+        // curso não entrega motor novo a esta sessão depois daqui.
+        released = true
         extSync?.release()
         releaseVolBoost()
         releaseEqualizer()

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Download
@@ -398,6 +399,206 @@ private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(16.dp),
         content = content,
     )
+}
+
+/**
+ * Gerenciador de scripts Lua do mpv (Lote de correções, v1.42.0 — Frente 2):
+ * instala um `.lua` do celular pelo seletor de arquivos do sistema (SAF,
+ * mesmo padrão do perfil VPN e do backup), lista os instalados com
+ * ligar/desligar e excluir — tudo de dentro do app, sem acesso por fora à
+ * pasta interna (`filesDir/mpv/scripts`).
+ *
+ * O launcher é registrado no escopo deste @Composable (nunca dentro de
+ * `remember {}`) e a cópia roda em Dispatchers.IO com null check no
+ * `openInputStream`. O script instalado entra no mesmo caminho dos
+ * exemplos: o mpv carrega os `.lua` da pasta no próximo init com
+ * `load-scripts=yes` (ver o init em MpvPlayer) — vale a partir da
+ * próxima reprodução com o Libmpv. Desligar renomeia p/
+ * `<nome>.lua.disabled`, que o mpv ignora.
+ */
+@Composable
+private fun MpvScriptsManager() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var scripts by remember { mutableStateOf(emptyList<MpvScripts.ScriptInfo>()) }
+    var refreshTick by remember { mutableStateOf(0) }
+    var installing by remember { mutableStateOf(false) }
+    var pendingOverwrite by remember { mutableStateOf<Pair<Uri, String>?>(null) }
+    var scriptToDelete by remember { mutableStateOf<MpvScripts.ScriptInfo?>(null) }
+
+    fun refreshScripts() {
+        refreshTick++
+    }
+    LaunchedEffect(refreshTick) {
+        scripts = MpvScripts.listScripts(context)
+    }
+
+    // Seletor de arquivos do sistema (SAF): "*/*" porque nem todo
+    // gerenciador devolve MIME de .lua — a extensão é validada em
+    // MpvScripts.installScript, que rejeita o que não é .lua.
+    val pickLuaScript = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        installing = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val displayName = MpvScripts.displayName(context, uri)
+                val input = context.contentResolver.openInputStream(uri)
+                if (input == null) {
+                    MpvScripts.InstallResult.Failed("Não foi possível abrir o arquivo escolhido")
+                } else {
+                    input.use { stream -> MpvScripts.installScript(context, displayName, stream) }
+                }
+            }
+            installing = false
+            when (result) {
+                is MpvScripts.InstallResult.Installed -> {
+                    Toast.makeText(context, "Script ${result.name} instalado — vale na próxima reprodução com o Libmpv", Toast.LENGTH_LONG).show()
+                    refreshScripts()
+                }
+                is MpvScripts.InstallResult.Duplicate -> {
+                    pendingOverwrite = uri to result.name
+                }
+                MpvScripts.InstallResult.InvalidName -> {
+                    Toast.makeText(context, "Nome de arquivo inválido — escolha um arquivo .lua com nome", Toast.LENGTH_LONG).show()
+                }
+                MpvScripts.InstallResult.InvalidExtension -> {
+                    Toast.makeText(context, "Só arquivos .lua — o arquivo escolhido não é um script Lua", Toast.LENGTH_LONG).show()
+                }
+                MpvScripts.InstallResult.TooLarge -> {
+                    Toast.makeText(context, "Script muito grande (limite de 1 MB)", Toast.LENGTH_LONG).show()
+                }
+                is MpvScripts.InstallResult.Failed -> {
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // Duplicado: substituir só com confirmação.
+    val pending = pendingOverwrite
+    if (pending != null) {
+        AlertDialog(
+            onDismissRequest = { pendingOverwrite = null },
+            containerColor = BackgroundCard,
+            title = { Text("Substituir script?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+            text = {
+                Text(
+                    "Já existe um script chamado ${pending.second}. Substituir pelo arquivo escolhido?",
+                    color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingOverwrite = null
+                    scope.launch {
+                        val overwritten = withContext(Dispatchers.IO) {
+                            val input = context.contentResolver.openInputStream(pending.first)
+                            if (input == null) {
+                                MpvScripts.InstallResult.Failed("Não foi possível abrir o arquivo escolhido")
+                            } else {
+                                input.use { stream -> MpvScripts.installScriptOverwrite(context, pending.second, stream) }
+                            }
+                        }
+                        if (overwritten is MpvScripts.InstallResult.Installed) {
+                            Toast.makeText(context, "Script ${overwritten.name} substituído — vale na próxima reprodução com o Libmpv", Toast.LENGTH_LONG).show()
+                            refreshScripts()
+                        } else if (overwritten is MpvScripts.InstallResult.Failed) {
+                            Toast.makeText(context, overwritten.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }) { Text("Substituir", color = Danger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingOverwrite = null }) { Text("Cancelar", color = TextSecondary) }
+            },
+        )
+    }
+
+    // Excluir: confirma antes de apagar.
+    val toDelete = scriptToDelete
+    if (toDelete != null) {
+        AlertDialog(
+            onDismissRequest = { scriptToDelete = null },
+            containerColor = BackgroundCard,
+            title = { Text("Excluir script?", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+            text = {
+                Text(
+                    "Excluir ${toDelete.name} da pasta de scripts? O script some na próxima reprodução com o Libmpv.",
+                    color = TextSecondary, fontSize = 14.sp, lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scriptToDelete = null
+                    scope.launch {
+                        val deleted = withContext(Dispatchers.IO) { MpvScripts.deleteScript(context, toDelete) }
+                        if (deleted) {
+                            Toast.makeText(context, "Script ${toDelete.name} excluído", Toast.LENGTH_SHORT).show()
+                            refreshScripts()
+                        } else {
+                            Toast.makeText(context, "Não foi possível excluir ${toDelete.name}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }) { Text("Excluir", color = Danger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { scriptToDelete = null }) { Text("Cancelar", color = TextSecondary) }
+            },
+        )
+    }
+
+    SettingsCard {
+        Text(
+            "Scripts Lua instalados",
+            fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Instale um arquivo .lua do celular — ele carrega na próxima reprodução com o Libmpv. Desligar deixa o script na pasta sem carregar.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = { pickLuaScript.launch(arrayOf("*/*")) }, enabled = !installing) {
+            Text("Instalar script .lua", color = Accent, fontWeight = FontWeight.Bold)
+        }
+        if (scripts.isEmpty()) {
+            Text(
+                "Nenhum script — os 2 exemplos são copiados na 1ª reprodução com o Libmpv.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+        } else {
+            scripts.forEach { script ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(script.name, fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        if (!script.enabled) {
+                            Text("Desligado — não carrega", fontSize = 13.sp, color = TextSecondary)
+                        }
+                    }
+                    Switch(
+                        checked = script.enabled,
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                val ok = withContext(Dispatchers.IO) { MpvScripts.setScriptEnabled(context, script, enabled) }
+                                if (ok) {
+                                    refreshScripts()
+                                } else {
+                                    Toast.makeText(context, "Não foi possível ${if (enabled) "ligar" else "desligar"} ${script.name}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.focusProperties { canFocus = false },
+                    )
+                    IconButton(onClick = { scriptToDelete = script }) {
+                        Icon(Icons.Default.Delete, "Excluir ${script.name}", tint = Danger)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ── Downloads (Lote 5, v1.14.0) ─────────────────────────────────────────────
@@ -3418,32 +3619,9 @@ private fun ReproducaoPage(
                 grouped = true,
             )
         }
-        // Scripts presentes na pasta (lida na hora de abrir a tela; muda ao
-        // reabrir). Os 2 exemplos são copiados na 1ª reprodução com o
-        // Libmpv, quando a pasta está vazia.
-        val scriptsContext = LocalContext.current
-        val mpvScriptNames = remember(scriptsContext) {
-            MpvScripts.scriptsDir(scriptsContext).listFiles()
-                ?.filter { it.isFile && it.name.endsWith(".lua") }
-                ?.map { it.name }
-                ?.sorted() ?: emptyList()
-        }
-        SettingsCard {
-            Text(
-                "Scripts Lua na pasta",
-                fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Bold,
-            )
-            if (mpvScriptNames.isEmpty()) {
-                Text(
-                    "Nenhum script — os 2 exemplos são copiados na 1ª reprodução com o Libmpv.",
-                    fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-                )
-            } else {
-                mpvScriptNames.forEach { name ->
-                    Text(name, fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp)
-                }
-            }
-        }
+        // Scripts Lua do mpv (Lote de correções, v1.42.0 — Frente 2):
+        // instalar/ligar/desligar/excluir de dentro do app.
+        MpvScriptsManager()
         Text(
             "yt-dlp não disponível nesta versão do motor (o AAR não traz o binário) — as fontes já chegam resolvidas pelos addons, então nada muda.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,

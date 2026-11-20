@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.clips.ClipDownload
 import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.entity.DownloadEntity
 import com.aotv.app.data.repository.OrphanFile
@@ -254,6 +255,10 @@ fun DownloadsScreen(
                         onShare = { vm.shareClip(clip) },
                         onSaveToFolder = { vm.copyClipToFolder(clip) },
                         onDownloadFull = { vm.downloadFullClip(clip) },
+                        // Vídeo inteiro em andamento (Lote v1.42.0 — Frente 1):
+                        // a % vive no ViewModel com a chave ":full:" do clipe
+                        // — a linha mostra o progresso aqui, na aba Completos.
+                        fullDownloadPercent = fullProgress[ClipDownload.fullId(clip.tmdbId, clip.type, clip.lastEpisode)],
                     )
                 }
             } else {
@@ -353,7 +358,12 @@ private fun DownloadRow(
  * "Compartilhar" (share sheet), "Salvar na pasta" (cópia p/ a pasta de
  * Downloads, sem mover o original) e "Vídeo inteiro" (baixa o vídeo
  * completo da fonte do clipe); sem fonte guardada, o "Vídeo inteiro"
- * avisa em vez de falhar (ver [DownloadsViewModel.downloadFullClip]).
+ * diz o que falta em vez de falhar (ver [DownloadsViewModel.downloadFullClip]).
+ * Lote v1.42.0 — Frente 1: com o vídeo inteiro baixando, a linha mostra
+ * "Baixando vídeo inteiro… X%" com barra AQUI (a entrada ":full:" mora
+ * na aba Restos — sem isso o toque parecia não fazer nada) e o botão
+ * "Vídeo inteiro" some até terminar; Compartilhar e Salvar na pasta
+ * continuam valendo, e o play do card não muda.
  */
 @Composable
 private fun ClipDownloadRow(
@@ -363,15 +373,23 @@ private fun ClipDownloadRow(
     onShare: (() -> Unit)? = null,
     onSaveToFolder: (() -> Unit)? = null,
     onDownloadFull: (() -> Unit)? = null,
+    /** % do vídeo inteiro em andamento (null = sem download completo — ver DownloadsScreen). */
+    fullDownloadPercent: Int? = null,
 ) {
     val interval = clip.intervalLabel.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-    val sub = when (clip.status) {
+    // Vídeo inteiro baixando: % lida p/ um val local (sem smart cast —
+    // o parâmetro é nullable e o `when` abaixo não o estreita sozinho).
+    val fullDownloading = fullDownloadPercent != null
+    val fullPct = fullDownloadPercent ?: 0
+    val sub = if (fullDownloading) {
+        if (fullPct > 0) "Baixando vídeo inteiro… $fullPct%" else "Baixando vídeo inteiro…"
+    } else when (clip.status) {
         "done"        -> "Trecho$interval — pronto p/ assistir"
         "downloading" -> if (clip.percent > 0) "Baixando trecho$interval… ${clip.percent}%" else "Baixando trecho$interval…"
         "queued"      -> "Trecho$interval — na fila"
         else          -> "Falha no trecho$interval"
     }
-    val subColor = when (clip.status) {
+    val subColor = if (fullDownloading) Accent else when (clip.status) {
         "done" -> Ok
         "downloading" -> Accent
         "queued" -> Accent
@@ -382,18 +400,20 @@ private fun ClipDownloadRow(
         title = clip.title,
         subtitle = sub,
         subtitleColor = subColor,
-        showProgress = clip.status == "downloading",
-        percent = clip.percent,
+        showProgress = clip.status == "downloading" || fullDownloading,
+        percent = if (fullDownloading) fullPct else clip.percent,
         showPlay = clip.status == "done" && clip.localUri.isNotBlank(),
         showDownloadingRing = clip.status == "downloading",
         onClick = onClick,
         onResume = null,
         onDelete = onDelete,
         // Exportar só com arquivo local; o vídeo inteiro só com o clipe
-        // concluído (a fonte dele é o que alimenta o download completo).
+        // concluído (a fonte dele é o que alimenta o download completo)
+        // e sem outro download completo em andamento (o botão some e a
+        // linha vira o progresso — toque duplo não recomeça nada).
         onShare = if (clip.status == "done" && clip.localUri.isNotBlank()) onShare else null,
         onSaveToFolder = if (clip.status == "done" && clip.localUri.isNotBlank()) onSaveToFolder else null,
-        onDownloadFull = if (clip.status == "done") onDownloadFull else null,
+        onDownloadFull = if (clip.status == "done" && !fullDownloading) onDownloadFull else null,
     )
 }
 
@@ -495,19 +515,23 @@ private fun DownloadRowShell(
             }
             // Ações do trecho (Lote mpv 4 — Frente 2): só a linha do clipe
             // preenche — download e resto passam null e não mostram nada.
+            // Lote v1.42.0 — Frente 1: área de toque larga (16.dp x 8.dp):
+            // os botões moram dentro do card clicável (o toque toca o
+            // trecho) — um toque que errasse o texto por poucos dp caía
+            // no card e reproduzia o vídeo em vez de baixar.
             if (onShare != null || onSaveToFolder != null || onDownloadFull != null) {
                 Row(
                     Modifier.fillMaxWidth().padding(top = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     if (onShare != null) {
-                        TextButton(onClick = onShare) { Text("Compartilhar", color = Accent, fontSize = 13.sp) }
+                        TextButton(onClick = onShare, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { Text("Compartilhar", color = Accent, fontSize = 13.sp) }
                     }
                     if (onSaveToFolder != null) {
-                        TextButton(onClick = onSaveToFolder) { Text("Salvar na pasta", color = Accent, fontSize = 13.sp) }
+                        TextButton(onClick = onSaveToFolder, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { Text("Salvar na pasta", color = Accent, fontSize = 13.sp) }
                     }
                     if (onDownloadFull != null) {
-                        TextButton(onClick = onDownloadFull) { Text("Vídeo inteiro", color = Accent, fontSize = 13.sp) }
+                        TextButton(onClick = onDownloadFull, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) { Text("Vídeo inteiro", color = Accent, fontSize = 13.sp) }
                     }
                 }
             }

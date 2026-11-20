@@ -260,15 +260,36 @@ class DownloadsViewModel @Inject constructor(
      * MP4 = arquivo direto — ver [ClipDownloader.downloadFull]). A entrada
      * ":full:" aparece na lista principal de Downloads com "(completo)" no
      * título; o progresso vem por [fullProgress] e a tela mescla com o do
-     * DownloadManager. Sem `sourceUrl` no clipe, avisa sem crash.
+     * DownloadManager. O progresso é marcado 0 NA HORA (antes do
+     * primeiro segmento): a linha do clipe mostra "Baixando vídeo
+     * inteiro…" na aba Completos — sem isso o toque parecia não fazer
+     * nada, porque a entrada ":full:" mora na aba Restos. Toque duplo
+     * não recomeça o download (a % já está na linha do clipe).
+     *
+     * Sem `sourceUrl` no clipe, NÃO re-resolve a fonte: o clipe só guarda
+     * tmdbId/tipo/episódio — sem o addon nem o rótulo da fonte que o
+     * gerou — e a resolução de fontes vive no player (lista de fontes +
+     * preferência de addon/qualidade). A mensagem diz exatamente o que
+     * falta e o caminho que funciona: cortar um trecho novo da mesma
+     * fonte grava a URL e o "Vídeo inteiro" passa a valer.
      */
     fun downloadFullClip(entry: ClipDownloadEntry) {
         viewModelScope.launch {
             if (entry.sourceUrl.isBlank()) {
-                _message.value = "Este trecho foi salvo sem a fonte — não dá para baixar o vídeo inteiro."
+                _message.value = "Trecho antigo sem a fonte salva (sem URL nem addon de origem): corte um trecho novo da mesma fonte e toque em “Vídeo inteiro” nele."
                 return@launch
             }
             val fullId = ClipDownload.fullId(entry.tmdbId, entry.type, entry.lastEpisode)
+            // Já baixando (toque duplo): não recomeça — o progresso já
+            // está na linha do clipe.
+            if (_fullProgress.value.containsKey(fullId)) {
+                _message.value = "O vídeo inteiro já está baixando."
+                return@launch
+            }
+            // Progresso 0 NA HORA: a linha do clipe mostra "Baixando vídeo
+            // inteiro…" antes do primeiro segmento (ver o KDoc acima).
+            _fullProgress.value = _fullProgress.value + (fullId to 0)
+            _message.value = "Baixando o vídeo inteiro…"
             val result = clipDownloader.downloadFull(
                 tmdbId = entry.tmdbId,
                 type = entry.type,
