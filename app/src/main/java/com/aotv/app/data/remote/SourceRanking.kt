@@ -48,6 +48,33 @@ const val SOURCE_LANG_LEG = "leg"
 const val SOURCE_LANG_ORIGINAL = "original"
 
 /**
+ * Formato de fonte preferido (Lote mpv 3, v1.38.0): "auto" (sem bônus),
+ * "hls" ou "mp4". A detecção é pela URL — ".m3u8" (antes de ?/#) é HLS,
+ * ".mp4" é MP4; magnet e o resto caem em OTHER e nunca ganham o bônus.
+ * A pref vive em [com.aotv.app.data.local.PlatformPrefs.sourceFormat].
+ */
+enum class SourceFormat(val id: String, val label: String) {
+    AUTO("auto", "Automático"),
+    HLS("hls", "HLS"),
+    MP4("mp4", "MP4"),
+    OTHER("other", "Outro"),
+    ;
+    companion object {
+        fun of(id: String): SourceFormat = entries.firstOrNull { it.id == id } ?: AUTO
+    }
+}
+
+/** Formato da fonte pela URL (sem baixar nada). */
+fun sourceFormatOf(url: String): SourceFormat {
+    val base = url.trim().substringBefore('?').substringBefore('#').lowercase()
+    return when {
+        ".m3u8" in base -> SourceFormat.HLS
+        base.endsWith(".mp4") -> SourceFormat.MP4
+        else -> SourceFormat.OTHER
+    }
+}
+
+/**
  * Saúde aprendida de um host (Lote 17 item 1): o que funciona NAQUELE
  * aparelho. A chave é o host (nunca a URL inteira — pode ter token).
  * Só contagens e tempos; nada de credencial.
@@ -234,6 +261,8 @@ fun scoreSource(
     originalFirst: Boolean = false,
     /** Duração do título no TMDB (min). 0 = desconhecida (desliga o corte por tamanho). */
     runtimeMin: Int = 0,
+    /** Formato de fonte preferido (Lote mpv 3, v1.38.0): AUTO não muda nada. */
+    formatPref: SourceFormat = SourceFormat.AUTO,
 ): SourceScore {
     if (fact.dead) return SourceScore(0, "não respondeu no teste", suspicious = false)
     if (fact.wrongTitle) return SourceScore(0, "parece outro título", suspicious = false)
@@ -358,6 +387,13 @@ fun scoreSource(
         parts += "última escolha"
     }
 
+    // Formato preferido (Lote mpv 3, v1.38.0): +8 quando o formato da fonte
+    // casa com a pref; "auto" não muda nada e magnet/OTHER nunca ganha.
+    if (formatPref != SourceFormat.AUTO && sourceFormatOf(fact.url) == formatPref) {
+        score += 8
+        parts += "formato preferido"
+    }
+
     if (suspicious) {
         score -= 30
         parts += "suspeita (CAM/sample)"
@@ -397,10 +433,12 @@ fun rankSources(
     lastPick: LastSourcePick? = null,
     originalFirst: Boolean = false,
     runtimeMin: Int = 0,
+    /** Formato de fonte preferido (Lote mpv 3, v1.38.0): AUTO não muda nada. */
+    formatPref: SourceFormat = SourceFormat.AUTO,
 ): List<RankedSource> {
     val manualIdx = manualOrder.withIndex().associate { it.value.lowercase() to it.index }
     val scored = facts.mapIndexed { i, fact ->
-        val s = scoreSource(fact, health[sourceHost(fact.url)], preset, strategy, langPref, maxQuality, lastPick, originalFirst, runtimeMin)
+        val s = scoreSource(fact, health[sourceHost(fact.url)], preset, strategy, langPref, maxQuality, lastPick, originalFirst, runtimeMin, formatPref)
         RankedSource(fact, i, s.score, s.reason, 0, s.suspicious)
     }.filter { r ->
         when (langFilter) {

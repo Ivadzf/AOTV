@@ -8,6 +8,8 @@ import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.Tracks
+import com.aotv.app.data.local.MpvStepLog
+import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.torrent.TorrentMagnet
 import com.aotv.app.data.torrent.Torrents
 import `is`.xyz.mpv.MPV
@@ -85,6 +87,8 @@ class MpvPlayer(
     )
 
     init {
+        MpvStepLog.beginSession(appContext)
+        MpvStepLog.append(appContext, "create: MpvPlayer")
         mpv.addObserver(object : MPV.EventObserver {
             override fun eventProperty(property: String) = Unit
             override fun eventProperty(property: String, value: Long) = Unit
@@ -110,9 +114,87 @@ class MpvPlayer(
 
     // ── Ciclo de vida ────────────────────────────────────────────────────
 
+    /** Opções de playback do mpv (Lote mpv 3, v1.38.0) — valem no init e são reaplicadas ao vivo por [applyPlaybackOptions]. */
+    var playbackOptions: MpvPlaybackOptions = MpvPlaybackOptions()
+        private set
+
+    /**
+     * Aplica as opções de playback do mpv. Antes do init, só guarda (o init
+     * lê o que está guardado); depois do init, aplica como propriedades —
+     * todas valem sem reiniciar o vídeo (hwdec/cache valem no próximo
+     * loadfile). A sessão chama isto quando as prefs mudam em Configurações.
+     */
+    fun applyPlaybackOptions(opts: MpvPlaybackOptions) {
+        playbackOptions = opts
+        if (!initialized || destroyed) return
+        runCatching {
+            mpv.setPropertyString("video-sync", opts.videoSync)
+            mpv.setPropertyDouble("display-fps", opts.displayFps.toDouble())
+            mpv.setPropertyString("hwdec", opts.hwdec)
+            if (opts.cacheSecs > 0) mpv.setPropertyInt("cache-secs", opts.cacheSecs)
+            mpv.setPropertyString("audio-pitch-correction", if (opts.pitchCorrection) "yes" else "no")
+            mpv.setPropertyInt("sub-pos", opts.subPos.coerceIn(0, 100))
+        }
+    }
+
+    /** Atraso de áudio do mpv, em segundos (Lote mpv 3: a mesma barra de sincronia do ExoPlayer). */
+    fun applyAudioDelay(seconds: Double) {
+        if (!initialized || destroyed) return
+        runCatching { mpv.setPropertyDouble("audio-delay", seconds) }
+    }
+
+    /** Posição vertical das legendas (sub-pos, 0..100; 100 = embaixo). */
+    fun applySubPos(pos: Int) {
+        if (!initialized || destroyed) return
+        runCatching { mpv.setPropertyInt("sub-pos", pos.coerceIn(0, 100)) }
+    }
+
+    /** Correção de tom ao mudar a velocidade (audio-pitch-correction). */
+    fun applyPitchCorrection(enabled: Boolean) {
+        if (!initialized || destroyed) return
+        runCatching { mpv.setPropertyString("audio-pitch-correction", if (enabled) "yes" else "no") }
+    }
+
+    /**
+     * Capítulos do arquivo (MKV e outros — Lote mpv 3, v1.38.0), lidos das
+     * propriedades escalares `chapter-list/N/...` do mpv (mesmo padrão do
+     * [readTracks]). Título vazio vira "" (a barra usa "Capítulo N").
+     * O ExoPlayer (Media3 1.6.0) NÃO expõe capítulos MKV — lá a lista é
+     * sempre vazia (ver [PlayerSession.progressMarkers]).
+     */
+    fun readChapters(): List<MpvChapter> {
+        val out = ArrayList<MpvChapter>()
+        val count = runCatching { mpv.getPropertyInt("chapter-list/count") }.getOrNull() ?: 0
+        for (i in 0 until count) {
+            val time = runCatching { mpv.getPropertyDouble("chapter-list/$i/time") }.getOrNull() ?: continue
+            val title = runCatching { mpv.getPropertyString("chapter-list/$i/title") }.getOrNull().orEmpty()
+            out += MpvChapter(title, (time * 1000).toLong().coerceAtLeast(0L))
+        }
+        return out
+    }
+
     /** create + opções de init + init. Idempotente; falha → onInitFailed. */
     fun initIfNeeded() {
         if (initialized || initFailed || destroyed) return
+        // Lote mpv 3: o init lê as prefs persistidas (são as mesmas que a
+        // sessão aplica ao vivo) — o init pode correr antes do primeiro
+        // LaunchedEffect da tela, então depender só da sessão deixaria a
+        // 1ª reprodução com os padrões.
+        runCatching {
+            val p = PlatformPrefs(appContext)
+            playbackOptions = MpvPlaybackOptions(
+                displayFps = p.mpvDisplayFps,
+                videoSync = p.mpvVideoSync,
+                hwdec = p.mpvHwdec,
+                cacheSecs = p.mpvCacheSecs,
+                pitchCorrection = p.mpvPitchCorrection,
+                subPos = p.mpvSubPos,
+            )
+        }
+        MpvStepLog.append(
+            appContext,
+            "init: opções vo=${preferredVo} hwdec=${playbackOptions.hwdec} video-sync=${playbackOptions.videoSync} display-fps=${playbackOptions.displayFps}",
+        )
         val ok = runCatching {
             val configDir = File(appContext.filesDir, "mpv").apply { mkdirs() }
             val cacheDir = File(appContext.cacheDir, "mpv").apply { mkdirs() }
@@ -123,9 +205,11 @@ class MpvPlayer(
             mpv.setOptionString("icc-cache-dir", cacheDir.absolutePath)
             // Renderizador em contexto próprio (vo=gpu, contexto EGL do mpv).
             mpv.setOptionString("vo", preferredVo)
-            // Decodificação por hardware no Android (MediaCodec); se o
-            // decoder de hardware falhar, o mpv cai p/ software sozinho.
-            mpv.setOptionString("hwdec", "mediacodec")
+            // Decodificação por hardware no Android (MediaCodec por padrão);
+            // "mediacodec-copy" ou "no" (software) só por escolha nas
+            // Configurações — NUNCA mediacodec-copy como padrão em aparelho
+            // fraco (copia cada quadro p/ a CPU e satura o SoC).
+            mpv.setOptionString("hwdec", playbackOptions.hwdec)
             // Correcao A (Lote mpv 2, v1.37.0) — video engasgando: o video
             // ficava lento em partes apos alguns segundos, como perda de FPS
             // em jogo, sem travar tudo. Causa mais provavel: o padrao do mpv
@@ -149,7 +233,23 @@ class MpvPlayer(
             //   de REDE (pausa p/ cache); o sintoma e de ritmo de quadro,
             //   nao de buffer — e o isBuffering ja cobre a pausa p/ cache.
             // A prova final e o teste do Davi na TV/celular (ver o reporte).
-            mpv.setOptionString("video-sync", "display-resample")
+            // Lote mpv 3 (v1.38.0): o engasgo PERSISTIU na v1.37.0 mesmo com
+            // display-resample — os valores acima agora vêm das prefs
+            // (video-sync e display-fps manual nas Configurações do mpv) e
+            // o display-fps pode ser fixado à mão quando a detecção
+            // automática do mpv erra no painel do aparelho.
+            mpv.setOptionString("video-sync", playbackOptions.videoSync)
+            if (playbackOptions.displayFps > 0) {
+                mpv.setOptionString("display-fps", playbackOptions.displayFps.toString())
+            }
+            if (playbackOptions.cacheSecs > 0) {
+                mpv.setOptionString("cache-secs", playbackOptions.cacheSecs.toString())
+            }
+            mpv.setOptionString(
+                "audio-pitch-correction",
+                if (playbackOptions.pitchCorrection) "yes" else "no",
+            )
+            mpv.setOptionString("sub-pos", playbackOptions.subPos.coerceIn(0, 100).toString())
             mpv.setOptionString("force-window", "no")
             // Precisa ficar idle 1x p/ o loadfile funcionar antes da superfície.
             mpv.setOptionString("idle", "once")
@@ -161,7 +261,10 @@ class MpvPlayer(
             mpv.init()
             initialized = true
         }.isSuccess
-        if (!ok) {
+        if (ok) {
+            MpvStepLog.append(appContext, "init: ok")
+        } else {
+            MpvStepLog.append(appContext, "init: falhou")
             initFailed = true
             mainHandler.post { listener.onInitFailed() }
         }
@@ -174,6 +277,7 @@ class MpvPlayer(
         if (!initialized) return
         runCatching {
             mpv.attachSurface(surface)
+            MpvStepLog.append(appContext, "attachSurface: ok")
             mpv.setOptionString("force-window", "yes")
             surfaceAttached = true
             val pending = pendingLoad
@@ -198,6 +302,7 @@ class MpvPlayer(
             mpv.setPropertyString("vo", "null")
             mpv.setPropertyString("force-window", "no")
             mpv.detachSurface()
+            MpvStepLog.append(appContext, "detachSurface: ok")
             surfaceAttached = false
         }
     }
@@ -214,6 +319,7 @@ class MpvPlayer(
             }
         }
         runCatching { mpv.destroy() }
+        MpvStepLog.markCleanShutdown(appContext)
     }
 
     // ── Carregar ─────────────────────────────────────────────────────────
@@ -243,6 +349,10 @@ class MpvPlayer(
     }
 
     private fun doLoad(req: PendingLoad) {
+        // O log registra só o host (nunca a URL inteira — pode ter token).
+        val host = runCatching { java.net.URL(req.url).host }.getOrNull()
+            ?: if (TorrentMagnet.isMagnet(req.url)) "magnet" else "?"
+        MpvStepLog.append(appContext, "loadfile: $host")
         runCatching {
             val fields = (STREAM_HEADERS + req.headers).entries
                 .joinToString(",") { (k, v) -> "$k: ${escapeMpvListValue(v)}" }
@@ -485,7 +595,18 @@ class MpvPlayer(
             mpv.setPropertyDouble("deband-threshold", deband.threshold.toDouble())
             mpv.setPropertyDouble("deband-range", deband.range.toDouble())
             mpv.setPropertyDouble("deband-grain", deband.grain.toDouble())
-            mpv.setPropertyBoolean("interpolation", state.smoothMotion)
+            // Interpolação de quadros (Lote mpv 3, v1.38.0): o "Movimento
+            // suave" liga/desliga e o estilo (interpPreset) escolhe o tscale.
+            // "off" desliga mesmo com o toggle ligado; sem estilo conhecido
+            // cai no "linear" (padrão do mpv). Custo: interpolar pesa na GPU
+            // — em aparelho fraco o Auto já trava o preset no mais leve e o
+            // vigia desce a cadeia (ver EnhanceCatalog.autoPickPreset).
+            if (state.smoothMotion && state.interpPreset != "off") {
+                mpv.setPropertyBoolean("interpolation", true)
+                interpTscale(state.interpPreset)?.let { mpv.setPropertyString("tscale", it) }
+            } else {
+                mpv.setPropertyBoolean("interpolation", false)
+            }
             if (state.toneMapping != "auto" && state.toneMapping in ENHANCE_TONE_MAPPINGS) {
                 mpv.setPropertyString("tone-mapping", state.toneMapping)
             }
@@ -600,6 +721,24 @@ class MpvPlayer(
         }
     }
 }
+
+/** Um capítulo do arquivo (ver [MpvPlayer.readChapters]). */
+data class MpvChapter(val title: String, val timeMs: Long)
+
+/**
+ * Opções de playback do mpv (Lote mpv 3, v1.38.0). Padrões = o comportamento
+ * de hoje: display-fps 0 (o mpv detecta), video-sync display-resample,
+ * hwdec mediacodec zero-copy, cache 0 (padrão do mpv), correção de tom
+ * ligada, legenda embaixo (sub-pos 100).
+ */
+data class MpvPlaybackOptions(
+    val displayFps: Float = 0f,
+    val videoSync: String = "display-resample",
+    val hwdec: String = "mediacodec",
+    val cacheSecs: Int = 0,
+    val pitchCorrection: Boolean = true,
+    val subPos: Int = 100,
+)
 
 /** Uma passada do VO do mpv (ver [MpvPlayer.readPerf]): tempos em ms por quadro. */
 data class MpvPass(val desc: String, val avgMs: Double, val peakMs: Double)

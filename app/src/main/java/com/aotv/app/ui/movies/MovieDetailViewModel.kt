@@ -22,6 +22,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
@@ -222,6 +223,7 @@ class MovieDetailViewModel @Inject constructor(
             lastPick = lastPickForTitle(),
             originalFirst = prefs.sourceOriginalFirst,
             runtimeMin = _uiState.value.runtimeMin,
+            formatPref = com.aotv.app.data.remote.SourceFormat.of(prefs.sourceFormat),
         )
 
     /** Diagnóstico honesto quando não há fonte tocável (Lote 17 item 7). */
@@ -914,11 +916,37 @@ class MovieDetailViewModel @Inject constructor(
 
     /**
      * Reexecuta o carregamento do detalhe (botão "Tentar novamente" do cartão de
-     * erro). Usa o stub guardado em [load].
+     * erro e da tela de temporada vazia). Usa o stub guardado em [load].
+     *
+     * Lote mpv 3 (v1.38.0): o retry também recarrega a temporada selecionada.
+     * Antes só o detalhe era recarregado e uma lista vazia cacheada em
+     * `seasons` nunca era refeita — o botão não resolvia (o Davi viu isso
+     * na Temporada 6 de O Mentalista). A entrada vazia é limpa na hora e a
+     * temporada é recarregada depois que o detalhe assenta (o load() repõe
+     * `seasons` com a temporada 1; recarregar antes seria apagado por ele).
      */
     fun retry() {
         _uiState.update { it.copy(error = null) }
-        stubItem?.let { load(it) }
+        stubItem?.let { item ->
+            if (item.type == MediaType.SERIES) {
+                val season = _uiState.value.selectedSeason
+                if (season > 0) {
+                    _uiState.update { it.copy(seasons = it.seasons - season) }
+                }
+            }
+            load(item)
+            if (item.type == MediaType.SERIES) {
+                val season = _uiState.value.selectedSeason
+                val tmdbId = item.tmdbId
+                if (season > 0) {
+                    viewModelScope.launch {
+                        withTimeoutOrNull(60_000) { _uiState.first { !it.isLoading } }
+                        val current = _uiState.value.seasons[season]
+                        if (current.isNullOrEmpty()) loadSeason(tmdbId, season)
+                    }
+                }
+            }
+        }
     }
 
     // ───────────────────────── (B) MINHA LISTA ─────────────────────────
@@ -1292,10 +1320,14 @@ class MovieDetailViewModel @Inject constructor(
             val episodes = runCatching {
                 tmdb.getSeason(tmdbId, season, apiKey = apiKey).episodes.map { it.toDomain() }
             }.getOrNull()
-            if (episodes != null) {
+            if (episodes != null && episodes.isNotEmpty()) {
                 _uiState.update { it.copy(seasons = it.seasons + (season to episodes)) }
                 enrichSeasonRatings(tmdbId, season, episodes)
             } else {
+                // Lote mpv 3 (v1.38.0): lista vazia NÃO é cacheada — pode ser
+                // resposta transitória (conexão lenta) e um `[]` em `seasons`
+                // nunca seria refeito (ver [retry]). Temporada que o TMDB
+                // lista sem episódios de verdade cai no mesmo erro (rara).
                 // Antes a falha sobrescrevia a temporada com lista vazia e não avisava
                 // nada — os episódios sumiam sem explicação.
                 _uiState.update { it.copy(error = "Não foi possível carregar a Temporada $season. Toque em Tentar novamente.") }

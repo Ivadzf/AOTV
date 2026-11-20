@@ -1564,6 +1564,7 @@ private fun StreamsPage(
         val manualOrder by viewModel.sourceManualOrder.collectAsStateWithLifecycle()
         val hideUnplayable by viewModel.sourceHideUnplayable.collectAsStateWithLifecycle()
         val rememberPick by viewModel.sourceRememberPick.collectAsStateWithLifecycle()
+        val sourceFormat by viewModel.sourceFormat.collectAsStateWithLifecycle()
         SettingsSection("Ranking de fontes", anchor = SettingsAnchors.STREAMS_RANKING)
         Text(
             "Cada fonte ganha um score de 0 a 100 com o motivo (ex.: \"#1 · 84 — 1080p · rápido · 0 falhas\"). O mesmo score vale no detalhe e na folha do player.",
@@ -1584,6 +1585,11 @@ private fun StreamsPage(
                 "Idioma das fontes",
                 listOf("" to "Todos", "dub" to "Dublado", "leg" to "Legendado", "original" to "Original"),
                 langFilter, viewModel::setSourceLangFilter,
+            )
+            PrefRow(
+                "Formato preferido",
+                listOf("auto" to "Automático", "hls" to "HLS", "mp4" to "MP4"),
+                sourceFormat, viewModel::setSourceFormat,
             )
         }
         com.aotv.app.ui.common.SettingsGroup {
@@ -2680,6 +2686,8 @@ private fun ReproducaoPage(
     val autoNext by playerPrefs.autoNext.collectAsStateWithLifecycle()
     val autoNextDelay by playerPrefs.autoNextDelay.collectAsStateWithLifecycle()
     val autoSwitch by playerPrefs.autoSwitch.collectAsStateWithLifecycle()
+    // Lote mpv 3 (v1.38.0): "Procurar outra fonte no começo".
+    val autoSwitchAtStart by playerPrefs.autoSwitchAtStart.collectAsStateWithLifecycle()
     val durationGuard by playerPrefs.durationGuard.collectAsStateWithLifecycle()
     val sourceTimeout by playerPrefs.sourceTimeout.collectAsStateWithLifecycle()
     // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
@@ -2711,6 +2719,15 @@ private fun ReproducaoPage(
     val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
     // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
     val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
+    // Lote mpv 3 (v1.38.0) — Playback avançado: opções do mpv e detecção de hardware do upscaling.
+    val mpvDisplayFps by playerPrefs.mpvDisplayFps.collectAsStateWithLifecycle()
+    val mpvVideoSync by playerPrefs.mpvVideoSync.collectAsStateWithLifecycle()
+    val mpvHwdec by playerPrefs.mpvHwdec.collectAsStateWithLifecycle()
+    val mpvCacheSecs by playerPrefs.mpvCacheSecs.collectAsStateWithLifecycle()
+    val mpvPitchCorrection by playerPrefs.mpvPitchCorrection.collectAsStateWithLifecycle()
+    val mpvSubPos by playerPrefs.mpvSubPos.collectAsStateWithLifecycle()
+    val enhanceHwMode by playerPrefs.enhanceHwMode.collectAsStateWithLifecycle()
+    val enhanceHwClass by playerPrefs.enhanceHwClass.collectAsStateWithLifecycle()
     // Lote 9 — Player parte 3 (v1.19.0): AutoSync, pular abertura automático,
     // cartão "A seguir" e equalizador.
     val autoSync by playerPrefs.autoSync.collectAsStateWithLifecycle()
@@ -3142,6 +3159,20 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Lote mpv 3 (v1.38.0) — "Procurar outra fonte no começo": desliga
+            // a procura automática ao abrir (a troca quando a fonte não
+            // inicia + o upgrade 1x). Em fonte P2P/torrent as duas trocas
+            // NUNCA rodam sozinhas, mesmo com este toggle ligado.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Search,
+                title = "Procurar outra fonte no começo",
+                sub = if (autoSwitchAtStart) "Ao abrir, procura outra fonte se a atual não iniciar ou se achar uma melhor"
+                    else "Fica na fonte que começou — sem trocar sozinha no começo",
+                trailing = { Switch(checked = autoSwitchAtStart, onCheckedChange = { playerPrefs.setAutoSwitchAtStart(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setAutoSwitchAtStart(!autoSwitchAtStart) },
+                grouped = true,
+                divider = true,
+            )
             // Lote 19 item 7 (f), v1.29.0 — "Debrid só com arquivo pronto": a
             // troca automática nunca abre torrent que o debrid ativo ainda não
             // tem pronto, p/ a conta não começar downloads sozinha. Sem conta
@@ -3295,6 +3326,77 @@ private fun ReproducaoPage(
         )
         Text(
             "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        // Opções do Libmpv (Lote mpv 3, v1.38.0): só valem com o Libmpv
+        // ativo; valem a partir da próxima reprodução (ou na hora, com o
+        // player na pilha). A taxa da tela fixa o display-fps quando a
+        // detecção automática do mpv erra no painel do aparelho.
+        Text(
+            "Opções do Libmpv:",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        SettingsCard {
+            PrefRow(
+                "Taxa da tela do mpv",
+                listOf(0f to "Automática", 24f to "24 Hz", 25f to "25 Hz", 30f to "30 Hz", 50f to "50 Hz", 60f to "60 Hz", 120f to "120 Hz"),
+                mpvDisplayFps, playerPrefs::setMpvDisplayFps,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Sincronização de vídeo",
+                listOf("display-resample" to "Display (resample)", "display-vdrop" to "Display (vdrop)", "audio" to "Áudio"),
+                mpvVideoSync, playerPrefs::setMpvVideoSync,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Decodificação por hardware",
+                listOf("mediacodec" to "Hardware (zero-copy)", "mediacodec-copy" to "Hardware (com cópia)", "no" to "Software"),
+                mpvHwdec, playerPrefs::setMpvHwdec,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Cache do mpv",
+                listOf(0 to "Padrão do mpv", 10 to "10 s", 30 to "30 s", 60 to "60 s", 120 to "120 s"),
+                mpvCacheSecs, playerPrefs::setMpvCacheSecs,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Posição das legendas",
+                listOf(100 to "Embaixo", 90 to "Um pouco acima", 80 to "Acima", 70 to "Mais acima", 50 to "Meio da tela"),
+                mpvSubPos, playerPrefs::setMpvSubPos,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Speed,
+                title = "Manter o tom da voz ao mudar a velocidade",
+                sub = if (mpvPitchCorrection) "A voz não distorce quando a velocidade muda (mpv e ExoPlayer)"
+                    else "A voz acompanha a velocidade (efeito \"voz de esquilo\")",
+                trailing = { Switch(checked = mpvPitchCorrection, onCheckedChange = { playerPrefs.setMpvPitchCorrection(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvPitchCorrection(!mpvPitchCorrection) },
+                grouped = true,
+            )
+        }
+        SettingsCard {
+            PrefRow(
+                "Detecção de hardware do upscaling",
+                listOf("auto" to "Automática", "weak" to "Fraca", "strong" to "Forte"),
+                enhanceHwMode, playerPrefs::setEnhanceHwMode,
+            )
+        }
+        Text(
+            "Força do aparelho: " + when {
+                enhanceHwMode == "weak" -> "Fraca (forçada aqui) — o Auto do upscaling fica no preset mais leve."
+                enhanceHwMode == "strong" -> "Forte (forçada aqui)."
+                enhanceHwClass == "weak" -> "Fraca (medida) — o Auto do upscaling fica no preset mais leve."
+                enhanceHwClass == "strong" -> "Forte (medida)."
+                else -> "Ainda não medida — mede sozinha na 1ª vez que o mpv é usado."
+            },
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Taxa da tela: Automática deixa o mpv detectar; se o vídeo engasgar depois de alguns segundos, fixe a taxa do seu painel. Hardware com cópia copia cada quadro p/ a CPU e pode travar aparelho fraco — só use se o zero-copy falhar.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
         // Equalizador (Lote 9 item 3, v1.19.0): presets do aparelho e 5

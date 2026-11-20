@@ -31,7 +31,13 @@ import kotlinx.coroutines.currentCoroutineContext
  * Baixar trechos específicos (clipes) — Lote 18 item 10 (v1.28.0).
  *
  * DESENHO HONESTO (o que dá e o que não dá, sem inventar) — Lote mpv 2
- * (v1.37.0) amplia o HLS; o resto continua como era:
+ * (v1.37.0) amplia o HLS; o resto continua como era. Lote mpv 3 (v1.38.0):
+ * o download tenta as variantes do master EM ORDEM (a em reprodução
+ * primeiro, quando a altura dela é conhecida — ver [downloadClip]) e, no
+ * 403 de segmento, cai p/ a próxima variante antes de falhar (o ALYA
+ * protegia a variante de maior bandwidth); e os cookies da resposta da
+ * playlist (Set-Cookie) são repassados p/ os segmentos (o OkHttp do app
+ * não tem CookieJar).
  * - HLS (.m3u8) com segmentos MPEG-TS: DÁ. A playlist lista cada segmento com
  *   duração; o clipe baixa só os segmentos que cobrem o intervalo escolhido e
  *   salva tudo num único arquivo .ts, na ordem. O início/fim exato do arquivo
@@ -77,6 +83,14 @@ import kotlinx.coroutines.currentCoroutineContext
  * a fila como download .mp4 inteiro. A pasta SAF escolhida é respeitada
  * (o arquivo é movido para lá na conclusão, como o Lote 5 faz).
  */
+
+/** Uma variante de um master playlist HLS (ver [ClipDownload.listMasterVariants]). */
+data class HlsVariant(
+    val url: String,
+    val bandwidth: Long,
+    /** Altura da variante (RESOLUTION), 0 = o master não informa. */
+    val height: Int,
+)
 
 /** Um segmento HLS com seu início (ms desde o começo do conteúdo). */
 data class ClipSegment(
@@ -189,29 +203,52 @@ object ClipDownload {
      * for um master (aí a própria playlist já é a de mídia). Empate de
      * BANDWIDTH fica com a primeira variante.
      */
-    fun masterVariantUrl(playlistText: String, baseUrl: String): String? {
+    fun masterVariantUrl(playlistText: String, baseUrl: String): String? =
+        listMasterVariants(playlistText, baseUrl).maxByOrNull { it.bandwidth }?.url
+
+    /**
+     * Todas as variantes de um master playlist (Lote mpv 3, v1.38.0), com
+     * BANDWIDTH e altura (RESOLUTION). Lista vazia = não é um master (a
+     * própria playlist já é a de mídia). A ordem é a do master.
+     */
+    fun listMasterVariants(playlistText: String, baseUrl: String): List<HlsVariant> {
+        val out = ArrayList<HlsVariant>()
         val lines = playlistText.lines()
-        var bestBandwidth = -1L
-        var bestUri: String? = null
         var i = 0
         while (i < lines.size) {
             val line = lines[i].trim()
             if (line.startsWith("#EXT-X-STREAM-INF:")) {
-                val bw = Regex("BANDWIDTH=(\\d+)").find(line)
-                    ?.groupValues?.getOrNull(1)?.toLongOrNull() ?: -1L
+                val attrs = parseHlsAttributes(line.substringAfter("#EXT-X-STREAM-INF:"))
+                val bw = attrs.get("BANDWIDTH")?.toLongOrNull() ?: -1L
+                val height = attrs.get("RESOLUTION")?.substringAfter('x', "")?.toIntOrNull() ?: 0
                 var j = i + 1
                 while (j < lines.size && (lines[j].isBlank() || lines[j].trim().startsWith("#"))) j++
                 val uri = lines.getOrNull(j)?.trim()
-                if (uri != null && bw > bestBandwidth) {
-                    bestBandwidth = bw
-                    bestUri = uri
-                }
+                if (uri != null) out += HlsVariant(resolveUrl(baseUrl, uri), bw, height)
                 i = j
             } else {
                 i++
             }
         }
-        return bestUri?.let { resolveUrl(baseUrl, it) }
+        return out
+    }
+
+    /**
+     * Ordem das variantes p/ o download do trecho (Lote mpv 3, v1.38.0):
+     * com a altura em reprodução conhecida, a variante de altura mais
+     * próxima dela vem primeiro (é a que o player está tocando — no ALYA
+     * a de maior bandwidth é protegida e devolve 403 nos segmentos); sem
+     * ela, vale o maior BANDWIDTH primeiro (comportamento de antes).
+     * Variantes sem RESOLUTION vão p/ o fim (só com o BANDWIDTH de desempate).
+     */
+    fun orderVariantsForPlayback(variants: List<HlsVariant>, playingHeight: Int?): List<HlsVariant> {
+        if (playingHeight == null || playingHeight <= 0) {
+            return variants.sortedByDescending { it.bandwidth }
+        }
+        val known = variants.filter { it.height > 0 }
+            .sortedWith(compareBy({ kotlin.math.abs(it.height - playingHeight) }, { -it.bandwidth }))
+        val unknown = variants.filter { it.height <= 0 }.sortedByDescending { it.bandwidth }
+        return known + unknown
     }
 
     /**
@@ -412,6 +449,13 @@ class ClipDownloader(context: Context) {
         startMs: Long,
         endMs: Long,
         onProgress: ((downloaded: Int, total: Int) -> Unit)? = null,
+        /**
+         * Altura do vídeo em reprodução (Lote mpv 3, v1.38.0): com ela, o
+         * clipe tenta primeiro a variante de altura mais próxima (a que
+         * está tocando); sem ela, vale o maior BANDWIDTH (como antes).
+         * null = desconhecida.
+         */
+        playingHeight: Int? = null,
     ): ClipResult = withContext(Dispatchers.IO) {
         when (val eligibility = ClipDownload.classifyClipSource(streamUrl)) {
             ClipDownload.ClipEligibility.Hls -> { /* segue */ }
@@ -447,65 +491,51 @@ class ClipDownloader(context: Context) {
         var tmpFile: File? = null
         var finalFile: File? = null
         try {
-            // Master playlist → variante de maior BANDWIDTH (até 3 saltos).
-            var playlistUrl = cleanUrl
-            var playlistText = fetchText(playlistUrl, headers)
-            repeat(3) {
-                val variant = ClipDownload.masterVariantUrl(playlistText, playlistUrl) ?: return@repeat
-                playlistUrl = variant
-                playlistText = fetchText(playlistUrl, headers)
+            // Master playlist → variantes. A playlist carrega, mas os
+            // segmentos podem dar 403 numa variante protegida (BESTCINE/
+            // ALYA na v1.37.0): por isso o download tenta as variantes em
+            // ordem (a em reprodução primeiro, quando conhecida), não só a
+            // de maior BANDWIDTH — e repassa os cookies da playlist p/ os
+            // segmentos (o OkHttp do app não tem CookieJar).
+            val (masterText, masterCookies) = fetchText(cleanUrl, headers)
+            val variants = ClipDownload.listMasterVariants(masterText, cleanUrl)
+            // Candidatos: (URL da playlist de mídia, texto já buscado).
+            // Sem master, a própria playlist já é a de mídia (sem refetch).
+            val candidates: List<Pair<String, String?>> = if (variants.isEmpty()) {
+                listOf(cleanUrl to masterText)
+            } else {
+                ClipDownload.orderVariantsForPlayback(variants, playingHeight).map { it.url to null }
             }
-            val playlist = ClipDownload.parseHlsSegments(playlistText, playlistUrl)
-            if (playlist.unsupportedEncryption) {
-                throw IOException(
-                    "HLS com cifra que o app não descriptografa (SAMPLE-AES ou formato de chave desconhecido).",
-                )
-            }
-            val wanted = ClipDownload.selectClipSegments(playlist.segments, startMs, endMs)
-            if (wanted.isEmpty()) {
-                throw IOException("Nenhum segmento cobre esse intervalo.")
-            }
-            val isFmp4 = playlist.hasInitMap
-            if (isFmp4 && playlist.initSegmentUrl == null) {
-                throw IOException(
-                    "HLS fragmentado (fMP4) sem init segment utilizável (#EXT-X-MAP sem URI ou com BYTERANGE).",
-                )
-            }
-            val fileName = ClipDownload.clipFileName(title, startMs, endMs, if (isFmp4) "mp4" else "ts")
-            val moviesDir = appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-                ?: appContext.filesDir
-            moviesDir.mkdirs()
-            val partFile = File(moviesDir, "$fileName.part")
-            val destFile = File(moviesDir, fileName)
-            tmpFile = partFile
-            finalFile = destFile
-            var bytes = 0L
-            val keyCache = HashMap<String, ByteArray>()
-            partFile.outputStream().buffered().use { out ->
-                if (isFmp4) {
-                    // Init segment primeiro: sem ele os .m4s não tocam.
-                    val initUrl = playlist.initSegmentUrl
-                    if (initUrl != null) {
-                        bytes += fetchSegmentTo(initUrl, headers, out)
-                    }
-                }
-                wanted.forEachIndexed { index, segment ->
-                    currentCoroutineContext().ensureActive()
-                    bytes += fetchClipSegmentTo(segment, headers, out, keyCache)
-                    onProgress?.invoke(index + 1, wanted.size)
+            var lastError: String? = null
+            var attempt: VariantAttempt? = null
+            for ((variantUrl, prefetchedText) in candidates) {
+                try {
+                    attempt = downloadVariantAttempt(
+                        variantUrl, headers, masterCookies, title, startMs, endMs,
+                        onProgress, playingHeight, prefetchedText,
+                    )
+                    break
+                } catch (e: IOException) {
+                    lastError = e.message
+                    // Só o 403 troca de variante: outro erro (timeout,
+                    // playlist inválida, intervalo sem segmento) falharia
+                    // igual em toda variante — desiste na hora.
+                    if (!e.message.orEmpty().contains("HTTP 403")) throw e
                 }
             }
-            if (!partFile.renameTo(destFile)) {
-                partFile.copyTo(destFile, overwrite = true)
-                partFile.delete()
-            }
+            val done = attempt ?: throw IOException(
+                "Nenhuma variante baixou o trecho (tentei ${candidates.size} variante(s); último erro: ${lastError ?: "desconhecido"})." +
+                    if (playingHeight == null) " A variante em reprodução era desconhecida." else "",
+            )
+            tmpFile = null
+            finalFile = done.destFile
             // Pasta SAF escolhida (Lote 5): move na conclusão; se falhar, o
             // arquivo fica na pasta do app — nunca se perde um clipe por isso.
             val localUri = moveToDownloadFolder(
-                fileName, destFile, if (isFmp4) "video/mp4" else "video/mp2t",
-            ) ?: "file://${destFile.absolutePath}"
+                done.fileName, done.destFile, if (done.isFmp4) "video/mp4" else "video/mp2t",
+            ) ?: "file://${done.destFile.absolutePath}"
             dao.updateStatus(id, "done", localUri)
-            ClipResult.Done(displayTitle, fileName, wanted.size, bytes)
+            ClipResult.Done(displayTitle, done.fileName, done.segments, done.bytes)
         } catch (e: CancellationException) {
             runCatching { tmpFile?.delete() }
             runCatching { dao.updateStatus(id, "failed", "") }
@@ -518,19 +548,138 @@ class ClipDownloader(context: Context) {
         }
     }
 
-    private fun fetchText(url: String, headers: Map<String, String>): String {
+    /** Resultado de uma tentativa de variante (o arquivo já está no disco). */
+    private data class VariantAttempt(
+        val fileName: String,
+        val isFmp4: Boolean,
+        val segments: Int,
+        val bytes: Long,
+        val destFile: File,
+    )
+
+    /**
+     * Uma tentativa de download do trecho numa variante: lê a playlist de
+     * mídia, baixa os segmentos do intervalo e salva o arquivo. Lança
+     * IOException em qualquer falha — o chamador decide se tenta outra
+     * variante (só o 403) ou desiste. O parcial é apagado na falha.
+     * [prefetchedText] evita buscar de novo uma playlist já lida (o master
+     * que já é mídia). [playingHeight] só vale p/ descer um master aninhado.
+     */
+    private suspend fun downloadVariantAttempt(
+        variantUrl: String,
+        headers: Map<String, String>,
+        masterCookies: String?,
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        onProgress: ((downloaded: Int, total: Int) -> Unit)?,
+        playingHeight: Int?,
+        prefetchedText: String?,
+    ): VariantAttempt {
+        val moviesDir = appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+            ?: appContext.filesDir
+        moviesDir.mkdirs()
+        var playlistUrl = variantUrl
+        var (playlistText, mediaCookies) = if (prefetchedText != null) {
+            prefetchedText to null
+        } else {
+            fetchText(variantUrl, headers)
+        }
+        var playlist = ClipDownload.parseHlsSegments(playlistText, playlistUrl)
+        if (playlist.segments.isEmpty()) {
+            // A "variante" era outro master aninhado: desce um nível (1x).
+            val nested = ClipDownload.listMasterVariants(playlistText, playlistUrl)
+            if (nested.isNotEmpty()) {
+                val top = ClipDownload.orderVariantsForPlayback(nested, playingHeight).first()
+                playlistUrl = top.url
+                fetchText(playlistUrl, headers).let {
+                    playlistText = it.first
+                    mediaCookies = mergeCookies(mediaCookies, it.second)
+                }
+                playlist = ClipDownload.parseHlsSegments(playlistText, playlistUrl)
+            }
+        }
+        val cookies = mergeCookies(masterCookies, mediaCookies)
+        if (playlist.unsupportedEncryption) {
+            throw IOException(
+                "HLS com cifra que o app não descriptografa (SAMPLE-AES ou formato de chave desconhecido).",
+            )
+        }
+        val wanted = ClipDownload.selectClipSegments(playlist.segments, startMs, endMs)
+        if (wanted.isEmpty()) {
+            throw IOException("Nenhum segmento cobre esse intervalo.")
+        }
+        val isFmp4 = playlist.hasInitMap
+        if (isFmp4 && playlist.initSegmentUrl == null) {
+            throw IOException(
+                "HLS fragmentado (fMP4) sem init segment utilizável (#EXT-X-MAP sem URI ou com BYTERANGE).",
+            )
+        }
+        val fileName = ClipDownload.clipFileName(title, startMs, endMs, if (isFmp4) "mp4" else "ts")
+        val partFile = File(moviesDir, "$fileName.part")
+        val destFile = File(moviesDir, fileName)
+        var bytes = 0L
+        val keyCache = HashMap<String, ByteArray>()
+        try {
+            partFile.outputStream().buffered().use { out ->
+                if (isFmp4) {
+                    // Init segment primeiro: sem ele os .m4s não tocam.
+                    val initUrl = playlist.initSegmentUrl
+                    if (initUrl != null) {
+                        bytes += fetchSegmentTo(initUrl, headers, out, cookies)
+                    }
+                }
+                wanted.forEachIndexed { index, segment ->
+                    currentCoroutineContext().ensureActive()
+                    bytes += fetchClipSegmentTo(segment, headers, out, keyCache, cookies)
+                    onProgress?.invoke(index + 1, wanted.size)
+                }
+            }
+        } catch (e: Exception) {
+            runCatching { partFile.delete() }
+            throw e
+        }
+        if (!partFile.renameTo(destFile)) {
+            partFile.copyTo(destFile, overwrite = true)
+            partFile.delete()
+        }
+        return VariantAttempt(fileName, isFmp4, wanted.size, bytes, destFile)
+    }
+
+    /**
+     * Lê uma playlist (texto + cookies da resposta). Os cookies voltam
+     * como um header "Cookie" pronto ("a=b; c=d") — o OkHttp do app não tem
+     * CookieJar, então sem isto um CDN que assina a sessão na playlist
+     * recusaria os segmentos (403). Só o name=value de cada Set-Cookie.
+     */
+    private fun fetchText(url: String, headers: Map<String, String>): Pair<String, String?> {
         val req = Request.Builder().url(url).apply {
             headers.forEach { (k, v) -> header(k, v) }
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} na playlist")
-            return resp.body?.string() ?: throw IOException("Resposta sem corpo na playlist")
+            val cookies = resp.headers("Set-Cookie")
+                .mapNotNull { it.substringBefore(';').trim().takeIf { part -> part.isNotEmpty() } }
+                .joinToString("; ").takeIf { it.isNotBlank() }
+            return (resp.body?.string() ?: throw IOException("Resposta sem corpo na playlist")) to cookies
         }
     }
 
-    private fun fetchSegmentTo(url: String, headers: Map<String, String>, out: OutputStream): Long {
+    /** Junta dois headers "Cookie" (null some). */
+    private fun mergeCookies(a: String?, b: String?): String? =
+        listOfNotNull(a?.takeIf { it.isNotBlank() }, b?.takeIf { it.isNotBlank() })
+            .joinToString("; ").takeIf { it.isNotBlank() }
+
+    /** Baixa um arquivo (segmento ou init) p/ o `out`, com os cookies da playlist quando houver. */
+    private fun fetchSegmentTo(
+        url: String,
+        headers: Map<String, String>,
+        out: OutputStream,
+        cookies: String? = null,
+    ): Long {
         val req = Request.Builder().url(url).apply {
             headers.forEach { (k, v) -> header(k, v) }
+            if (cookies != null) header("Cookie", cookies)
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} no segmento")
@@ -551,9 +700,10 @@ class ClipDownloader(context: Context) {
         headers: Map<String, String>,
         out: OutputStream,
         keyCache: MutableMap<String, ByteArray>,
+        cookies: String? = null,
     ): Long {
-        val keyUri = segment.keyUri ?: return fetchSegmentTo(segment.url, headers, out)
-        val key = keyCache.getOrPut(keyUri) { fetchKeyBytes(keyUri, headers) }
+        val keyUri = segment.keyUri ?: return fetchSegmentTo(segment.url, headers, out, cookies)
+        val key = keyCache.getOrPut(keyUri) { fetchKeyBytes(keyUri, headers, cookies) }
         if (key.size != 16) {
             throw IOException("Chave AES-128 inválida (não tem 16 bytes).")
         }
@@ -562,6 +712,7 @@ class ClipDownloader(context: Context) {
             ?: throw IOException("IV inválido no segmento cifrado.")
         val req = Request.Builder().url(segment.url).apply {
             headers.forEach { (k, v) -> header(k, v) }
+            if (cookies != null) header("Cookie", cookies)
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} no segmento")
@@ -578,9 +729,10 @@ class ClipDownloader(context: Context) {
     }
 
     /** Baixa a chave AES-128 da URI do #EXT-X-KEY (mesmos headers do stream). */
-    private fun fetchKeyBytes(url: String, headers: Map<String, String>): ByteArray {
+    private fun fetchKeyBytes(url: String, headers: Map<String, String>, cookies: String? = null): ByteArray {
         val req = Request.Builder().url(url).apply {
             headers.forEach { (k, v) -> header(k, v) }
+            if (cookies != null) header("Cookie", cookies)
         }.build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} na chave AES-128")

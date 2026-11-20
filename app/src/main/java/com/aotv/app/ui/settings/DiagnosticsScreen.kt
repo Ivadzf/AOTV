@@ -27,6 +27,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DeviceFacts
 import com.aotv.app.data.local.CrashLog
+import com.aotv.app.data.local.MpvStepLog
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.local.PosterInfo
 import com.aotv.app.data.local.TuningSuggestion
@@ -129,6 +130,8 @@ data class DiagnosticsUiState(
     val applied: Boolean = false,
     /** Registro do último crash (Lote 13, v1.23.0), ou null sem crash. */
     val lastCrash: String? = null,
+    /** Últimos passos do libmpv (Lote mpv 3, v1.38.0), ou "" sem registro. */
+    val mpvSteps: String = "",
 )
 
 @HiltViewModel
@@ -159,12 +162,19 @@ class DiagnosticsViewModel @Inject constructor(
             suggestion = suggestTuning(facts, prefs.playerBuffer, prefs.downloadsWifiOnly),
             applied = false,
             lastCrash = CrashLog.read(appContext),
+            mpvSteps = MpvStepLog.read(appContext),
         )
     }
 
     /** Apaga o registro do último crash e atualiza a tela. */
     fun clearCrashLog() {
         CrashLog.clear(appContext)
+        refresh()
+    }
+
+    /** Apaga os passos do mpv e atualiza a tela. */
+    fun clearMpvSteps() {
+        MpvStepLog.clear(appContext)
         refresh()
     }
 
@@ -257,6 +267,32 @@ fun DiagnosticsScreen(
                 fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
             )
             AotvButton("Limpar registro", { viewModel.clearCrashLog() }, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
+        }
+        // Lote mpv 3 (v1.38.0) — Últimos passos do mpv: o crash nativo do
+        // libmpv mata o processo antes do handler JVM (o "Último crash"
+        // acima fica vazio). Os passos mostram até onde o mpv chegou
+        // (create/init/attachSurface/loadfile/destroy) e, se a sessão
+        // anterior não terminou limpa, o aviso de possível crash nativo.
+        VpnPartySection("Últimos passos do mpv", anchor = SettingsAnchors.DIAG_MPV_STEPS)
+        if (state.mpvSteps.isBlank()) {
+            DiagCard {
+                Text(
+                    "Nenhum passo do mpv registrado ainda. Abra um vídeo com o motor Libmpv: os passos aparecem aqui.",
+                    fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+                )
+            }
+        } else {
+            DiagCard {
+                Text(
+                    state.mpvSteps.take(4000),
+                    fontSize = 13.sp, color = TextPrimary, lineHeight = 18.sp,
+                )
+            }
+            Text(
+                "Só fica no aparelho: nada deste registro sai do app. Se o app fechou na 1ª abertura de uma fonte com o Libmpv, o último passo antes do aviso diz onde o mpv parou.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            AotvButton("Limpar passos do mpv", { viewModel.clearMpvSteps() }, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
         }
         // Lote 25 (v1.35.0) — Frente B, item 5: "Report a problem".
         VpnPartySection("Reportar um problema", anchor = SettingsAnchors.DIAG_REPORT)

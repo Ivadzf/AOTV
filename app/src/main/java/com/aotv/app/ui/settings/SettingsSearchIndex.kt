@@ -118,6 +118,8 @@ object SettingsAnchors {
     const val DIAG_SUGGESTION = "diagnostico-sugestao"
     // Último crash (Lote 13, v1.23.0 — Frente 3, Bug 1 da TV).
     const val DIAG_CRASH = "diagnostico-ultimo-crash"
+    // Últimos passos do mpv (Lote mpv 3, v1.38.0).
+    const val DIAG_MPV_STEPS = "diagnostico-passos-mpv"
     // Lote 25 (v1.35.0) — Frente B: "Report a problem".
     const val DIAG_REPORT = "diagnostico-reportar-problema"
     // Controle remoto e TV (Lote 22, v1.32.0).
@@ -548,6 +550,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Idioma das fontes",
         sub = "Todos, Dublado, Legendado ou Original",
         keywords = listOf("idioma", "fontes", "dublado", "legendado", "original", "filtro"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_RANKING,
+    ),
+    // Lote mpv 3 (v1.38.0): formato de fonte preferido (HLS/MP4) — bônus no score do ranking.
+    SettingOptionEntry(
+        title = "Formato preferido das fontes",
+        sub = "Automático, HLS ou MP4 — o formato preferido ganha pontos no ranking",
+        keywords = listOf("formato", "HLS", "MP4", "m3u8", "fontes", "ranking"),
         pageId = SettingsPageIds.Streams,
         anchor = SettingsAnchors.STREAMS_RANKING,
     ),
@@ -1313,6 +1323,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
+    // Lote mpv 3 (v1.38.0): desligar a procura automática de fonte no começo.
+    SettingOptionEntry(
+        title = "Procurar outra fonte no começo",
+        sub = "Ao abrir, procura outra fonte se a atual não iniciar ou se achar uma melhor — em P2P nunca troca sozinha",
+        keywords = listOf("procurar", "fonte", "começo", "troca automática", "upgrade", "torrent", "P2P"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
     SettingOptionEntry(
         title = "Debrid só com arquivo pronto",
         sub = "A troca automática nunca abre torrent que o debrid ainda não tem",
@@ -1391,6 +1409,58 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Buffer do player",
         sub = "Baixo, Normal ou Alto",
         keywords = listOf("buffer", "carregamento", "travando", "exoplayer"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    // Lote mpv 3 (v1.38.0) — Opções do Libmpv: display-fps, video-sync,
+    // hwdec, cache, correção de tom, posição das legendas e detecção de
+    // hardware do upscaling.
+    SettingOptionEntry(
+        title = "Taxa da tela do mpv",
+        sub = "Automática ou fixa (24 a 120 Hz) — fixe a taxa do painel se o vídeo engasgar",
+        keywords = listOf("display-fps", "taxa", "tela", "Hz", "engasgando", "mpv", "libmpv", "fps"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Sincronização de vídeo do mpv",
+        sub = "Display (resample/vdrop) ou Áudio",
+        keywords = listOf("video-sync", "sincronização", "resample", "vdrop", "áudio", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Decodificação por hardware do mpv",
+        sub = "Hardware (zero-copy), Hardware (com cópia) ou Software",
+        keywords = listOf("hwdec", "hardware", "mediacodec", "software", "decoder", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Cache do mpv",
+        sub = "Padrão do mpv ou 10 a 120 segundos",
+        keywords = listOf("cache", "demuxer", "buffer", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Posição das legendas (mpv)",
+        sub = "Embaixo, acima ou no meio da tela",
+        keywords = listOf("legenda", "posição", "sub-pos", "vertical", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Manter o tom da voz ao mudar a velocidade",
+        sub = "A voz não distorce quando a velocidade muda (mpv e ExoPlayer)",
+        keywords = listOf("tom", "voz", "pitch", "velocidade", "distorcer", "mpv", "scaletempo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Detecção de hardware do upscaling",
+        sub = "Automática, Fraca ou Forte — em aparelho fraco o Auto fica no preset mais leve",
+        keywords = listOf("hardware", "upscaling", "fraca", "forte", "automática", "placa", "melhorar imagem", "mpv"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_ENGINE,
     ),
@@ -1846,6 +1916,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("crash", "erro", "fechou", "travou", "registro", "stack trace"),
         pageId = SettingsPageIds.Diagnostico,
         anchor = SettingsAnchors.DIAG_CRASH,
+        kidsHidden = true,
+    ),
+    // Lote mpv 3 (v1.38.0): os passos do mpv (create/init/attachSurface/
+    // loadfile/destroy) — o crash nativo do libmpv não deixa diagnóstico JVM.
+    SettingOptionEntry(
+        title = "Últimos passos do mpv",
+        sub = "O que o Libmpv fez antes do app fechar — p/ investigar crash na 1ª abertura de fonte",
+        keywords = listOf("mpv", "libmpv", "passos", "crash", "nativo", "fechou", "abertura", "init"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_MPV_STEPS,
         kidsHidden = true,
     ),
     // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.

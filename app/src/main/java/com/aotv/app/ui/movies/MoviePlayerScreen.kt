@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -667,8 +668,40 @@ fun MoviePlayerScreen(
         playerPrefsVm.setEnhanceAntiring(ns.antiring)
         playerPrefsVm.setEnhanceGamma(ns.gamma)
         playerPrefsVm.setEnhanceVo(ns.vo)
+        playerPrefsVm.setEnhanceInterpPreset(ns.interpPreset)
     }
     s.onEnhanceWatchdogCapSave = { playerPrefsVm.setEnhanceWatchdogCap(it) }
+    // Lote mpv 3 (v1.38.0): estilo da interpolação, detecção de hardware do
+    // upscaling e as opções do mpv — a tela lê os fluxos e entrega à sessão,
+    // como o resto do painel Melhorar imagem.
+    val playerEnhanceInterpPreset by playerPrefsVm.enhanceInterpPreset.collectAsState()
+    val playerEnhanceHwMode by playerPrefsVm.enhanceHwMode.collectAsState()
+    val playerEnhanceHwClass by playerPrefsVm.enhanceHwClass.collectAsState()
+    val playerMpvDisplayFps by playerPrefsVm.mpvDisplayFps.collectAsState()
+    val playerMpvVideoSync by playerPrefsVm.mpvVideoSync.collectAsState()
+    val playerMpvHwdec by playerPrefsVm.mpvHwdec.collectAsState()
+    val playerMpvCacheSecs by playerPrefsVm.mpvCacheSecs.collectAsState()
+    val playerMpvPitchCorrection by playerPrefsVm.mpvPitchCorrection.collectAsState()
+    val playerMpvSubPos by playerPrefsVm.mpvSubPos.collectAsState()
+    val playerAutoSwitchAtStart by playerPrefsVm.autoSwitchAtStart.collectAsState()
+    s.enhanceInterpPreset = playerEnhanceInterpPreset
+    s.enhanceHwMode = playerEnhanceHwMode
+    s.enhanceHwClass = playerEnhanceHwClass
+    s.mpvDisplayFps = playerMpvDisplayFps
+    s.mpvVideoSync = playerMpvVideoSync
+    s.mpvHwdec = playerMpvHwdec
+    s.mpvCacheSecs = playerMpvCacheSecs
+    s.mpvPitchCorrection = playerMpvPitchCorrection
+    s.mpvSubPos = playerMpvSubPos
+    s.autoSwitchAtStart = playerAutoSwitchAtStart
+    s.onEnhanceHwClassSave = { playerPrefsVm.setEnhanceHwClass(it) }
+    // Opções do mpv ao vivo: quando mudam em Configurações com o player na
+    // pilha, reaplica sem reiniciar o vídeo (o init lê as mesmas prefs).
+    LaunchedEffect(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos) {
+        s.mpvPlayer?.applyPlaybackOptions(
+            MpvPlaybackOptions(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos),
+        )
+    }
     // Modo noturno + Clear Dialogue (Lote 16 item 1): estado por título,
     // carregado ao abrir e ao trocar de episódio; a sessão aplica no
     // ExoPlayer quando a sessão de áudio fica pronta ou o estado muda.
@@ -1107,7 +1140,10 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         delay(450)
         extSync?.setDelay(audioDelay)
         if (extUrl != null) saveExt()
-        else {
+        else if (mpvActive) {
+            // Lote mpv 3: a mesma barra de sincronia, no mpv (audio-delay).
+            mpvPlayer?.applyAudioDelay(audioDelay)
+        } else {
             // Áudio próprio (Lote 14 item 3 + Lote 17 item 10): atraso positivo vai
             // p/ o processador de PCM; adianto (−) atrasa o vídeo pelo mesmo valor.
             ownAudioDelayProcessor.setDelayMs((audioDelay.coerceAtLeast(0.0) * 1000).roundToLong())
@@ -1482,14 +1518,20 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
                 if (waited >= 45_000 && !alive) break
             }
             if (movieStarted || streamUrl != u) return@LaunchedEffect
-            if (userLockedSource || !autoSwitchEnabled) sourceFailed = true
-            else if (!nextMovieSource(slow = true)) sourceFailed = true
+            // Lote mpv 3 (v1.38.0): em fonte P2P/torrent a troca automática
+            // NUNCA roda sozinha — trocar sem a outra fonte ter carregado
+            // trava o vídeo (relato do Davi). Marca indisponível: o overlay
+            // tem "Tentar novamente" e "Escolher outra fonte".
+            sourceFailed = true
             return@LaunchedEffect
         }
-        val hasMirror = !userLockedSource && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
+        // Lote mpv 3: com "Procurar outra fonte no começo" desligado, a
+        // fonte que não inicia fica esperando — sem trocar sozinha (nem p/
+        // espelho).
+        val hasMirror = !userLockedSource && autoSwitchAtStart && sameMirror(facts(), currentSourceIdx, triedUrls) >= 0
         kotlinx.coroutines.delay(if (hasMirror) 5_000 else sourceTimeoutSec * 1_000L)
         if (movieStarted || streamUrl != u) return@LaunchedEffect
-        if (userLockedSource || !autoSwitchEnabled) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
+        if (userLockedSource || !autoSwitchEnabled || !autoSwitchAtStart) { noteTimeout(); sourceFailed = true; return@LaunchedEffect }
         val m = sameMirror(facts(), currentSourceIdx, triedUrls)
         if (m >= 0) {
             toastMsg = "Servidor lento. Tentando outro espelho da mesma fonte."
@@ -1520,19 +1562,31 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         }
         // Lote 19 item 7 (e): com "Subir a qualidade sozinho" desligado, o
         // upgrade 1x não roda — o player fica na qualidade que começou.
-        if (upgradeDone || userLockedSource || !autoUpgradeEnabled) return@LaunchedEffect
+        // Lote mpv 3: com "Procurar outra fonte no começo" desligado, o
+        // upgrade também não roda (é uma procura de fonte no começo).
+        if (upgradeDone || userLockedSource || !autoUpgradeEnabled || !autoSwitchAtStart) return@LaunchedEffect
         delay(4_000)
         val cur = currentSources.getOrNull(currentSourceIdx) ?: return@LaunchedEffect
         val lang = langOf(cur.label)
         fun consider(): Boolean {
-            if (upgradeDone || userLockedSource || !autoUpgradeEnabled || casting || streamUrl != u) return true
-            val curH = exoPlayer.videoSize.height
+            if (upgradeDone || userLockedSource || !autoUpgradeEnabled || !autoSwitchAtStart || casting || streamUrl != u) return true
+            // Lote mpv 3: em fonte P2P/torrent o upgrade NUNCA roda sozinho
+            // — a fonte "melhor" pode ser outro torrent que não carregou
+            // (o probe só mede resposta, não se o stream toca).
+            if (TorrentMagnet.isMagnet(u) && playVia != "debrid") return true
+            // videoHeight vale nos dois motores (o exoPlayer.videoSize é 0
+            // com o mpv ativo — antes o upgrade nunca rodava no mpv).
+            val curH = videoHeight
             if (curH <= 0) return false
             var best = -1
             var bestH = Math.round(curH * 1.25f)
             facts().forEachIndexed { i, f ->
                 val h = f.probe?.height ?: 0
                 if (i == currentSourceIdx || f.dead || f.wrongTitle || f.url in triedUrls || h == 0 || f.lang != lang) return@forEachIndexed
+                // Lote mpv 3: o upgrade nunca sobe p/ um torrent que tocaria
+                // via P2P (sem conta de debrid, o magnet abre o motor local
+                // e pode não carregar — o probe não prova que o stream toca).
+                if (TorrentMagnet.isMagnet(f.url) && episodeVm.debridLabel() == null) return@forEachIndexed
                 // Lote 19 item 7 (b+e): o upgrade respeita a qualidade máxima do
                 // perfil (não sobe p/ 4K com teto de 720p) e o gate do debrid (f).
                 if (maxQuality > 0 && f.rank > maxQuality) return@forEachIndexed
@@ -1572,8 +1626,10 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             if (p2p && (Torrents.ifStarted()?.status(u)?.downloadBps ?: 0) > 64_000) { startPos = position; continue }
             // Ainda travando na mesma fonte e sem progredir → troca (ou avisa, se travada à mão
             // ou com a troca automática desligada — v1.8.1).
+            // Lote mpv 3: em P2P a troca automática NUNCA roda sozinha —
+            // marca indisponível e o usuário escolhe (o overlay tem ações).
             val bufferingMsg = "Timeout: o stream travou no buffering por ${sourceTimeoutSec}s (sem erro do player)"
-            if (userLockedSource || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
+            if (p2p || userLockedSource || !autoSwitchEnabled) { noteTimeout(bufferingMsg); sourceFailed = true }
             else if (!nextMovieSource(slow = true)) { noteTimeout(bufferingMsg); sourceFailed = true }
             return@LaunchedEffect
         }
@@ -2261,6 +2317,8 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 effectivePreset = effPreset,
                 effectiveQuality = effQuality,
                 watchdogCap = enhanceWatchdogCap,
+                hwClass = enhanceHwClass,
+                hwMode = enhanceHwMode,
                 benchRunning = enhanceBenchRunning,
                 benchResult = enhanceBenchResult,
                 videoW = videoWidth,
@@ -2530,6 +2588,10 @@ class PlayerSession(
     // Troca automática de fonte (v1.8.1): toggle + tempo do watchdog (segundos).
     var autoSwitchEnabled by run { mutableStateOf(true) }
     var sourceTimeoutSec by run { mutableIntStateOf(12) }
+    // Lote mpv 3 (v1.38.0): "Procurar outra fonte no começo" — com o toggle
+    // desligado, a troca automática ao abrir e o upgrade 1x não rodam. Em
+    // fonte P2P/torrent as duas trocas NUNCA rodam sozinhas, mesmo ligado.
+    var autoSwitchAtStart by run { mutableStateOf(true) }
     // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
     // qualidade sozinho (e) e debrid só com arquivo pronto (f). A tela
     // entrega as prefs aqui (ver MoviePlayerScreen, junto ao autoSwitch).
@@ -2632,7 +2694,10 @@ class PlayerSession(
         val url = streamUrl ?: return
         showClipDialog = false
         scope.launch {
-            val result = clipDownloader.downloadClip(tmdbId, type, title, posterUrl, lastEpisode, url, startMs, endMs)
+            // Lote mpv 3: a altura em reprodução vai p/ o clipe escolher a
+            // variante que está tocando (o downloader caía sempre na de maior
+            // bandwidth e o ALYA devolvia 403 nos segmentos dela).
+            val result = clipDownloader.downloadClip(tmdbId, type, title, posterUrl, lastEpisode, url, startMs, endMs, playingHeight = videoHeight.takeIf { it > 0 })
             toastMsg = when (result) {
                 is com.aotv.app.data.clips.ClipResult.Done ->
                     "Trecho salvo em Downloads: ${result.displayTitle}"
@@ -3240,13 +3305,34 @@ class PlayerSession(
     var enhanceGamma by run { mutableFloatStateOf(0f) }
     var enhanceVo by run { mutableStateOf("gpu") }
     var enhanceWatchdogCap by run { mutableStateOf("") }
+    /** Estilo da interpolação de quadros (Lote mpv 3, v1.38.0). */
+    var enhanceInterpPreset by run { mutableStateOf("standard") }
+    /** Detecção de hardware do upscaling (Lote mpv 3): "auto", "weak" ou "strong". */
+    var enhanceHwMode by run { mutableStateOf("auto") }
+    /** Força medida do hardware: "" = ainda não medida, "weak" ou "strong". */
+    var enhanceHwClass by run { mutableStateOf("") }
+    /** A tela liga ao PlayerPrefsViewModel (salva a força medida do hardware). */
+    var onEnhanceHwClassSave: (String) -> Unit = {}
+    /** Medição automática de hardware já rodada nesta sessão (1ª vez que o mpv é usado). */
+    var mpvHwBenchDone by run { mutableStateOf(false) }
+    // Opções do mpv (Lote mpv 3, v1.38.0) — a tela lê das prefs e entrega à
+    // sessão; o MpvPlayer lê as mesmas prefs no init e aplica ao vivo por
+    // [MpvPlayer.applyPlaybackOptions].
+    var mpvDisplayFps by run { mutableFloatStateOf(0f) }
+    var mpvVideoSync by run { mutableStateOf("display-resample") }
+    var mpvHwdec by run { mutableStateOf("mediacodec") }
+    var mpvCacheSecs by run { mutableIntStateOf(0) }
+    var mpvPitchCorrection by run { mutableStateOf(true) }
+    var mpvSubPos by run { mutableIntStateOf(100) }
+    /** Capítulos do arquivo em reprodução (mpv; vazio no ExoPlayer — ver [MpvPlayer.readChapters]). */
+    var mpvChapters by run { mutableStateOf<List<MpvChapter>>(emptyList()) }
     /** Estado atual do painel, p/ aplicar e p/ o painel. */
     val enhanceState
         get() = EnhanceState(
             enhancePreset, enhanceQuality, enhanceOutput, enhanceChainJson,
             enhanceDeband, enhanceDebandCfg, enhanceSmoothMotion, enhanceToneMapping,
             enhanceHdrPeak, enhanceDeinterlace, enhanceScale, enhanceCscale,
-            enhanceDscale, enhanceAntiring, enhanceGamma, enhanceVo,
+            enhanceDscale, enhanceAntiring, enhanceGamma, enhanceVo, enhanceInterpPreset,
         )
     /** A tela liga ao PlayerPrefsViewModel (salva as prefs do perfil). */
     var onEnhanceSave: (EnhanceState) -> Unit = {}
@@ -3278,6 +3364,7 @@ class PlayerSession(
         enhanceHdrPeak = ns.hdrPeak; enhanceDeinterlace = ns.deinterlace
         enhanceScale = ns.scale; enhanceCscale = ns.cscale; enhanceDscale = ns.dscale
         enhanceAntiring = ns.antiring; enhanceGamma = ns.gamma; enhanceVo = ns.vo
+        enhanceInterpPreset = ns.interpPreset
         if (presetChanged) {
             enhanceWatchdogPreset = null
             enhanceWatchdogQuality = null
@@ -3293,8 +3380,16 @@ class PlayerSession(
         if (enhanceState.presetEnum != EnhancePreset.AUTO) return enhancePreset to enhanceQuality
         val dm = context.resources.displayMetrics
         val fps = mpvPlayer?.videoFps()?.toDouble()
-        return autoPickPreset(videoWidth, videoHeight, dm.widthPixels, dm.heightPixels, fps, enhanceWatchdogCap)
+        return autoPickPreset(videoWidth, videoHeight, dm.widthPixels, dm.heightPixels, fps, enhanceWatchdogCap, effectiveHwClass())
     }
+
+    /**
+     * Força do hardware em vigor p/ o Auto do upscaling (Lote mpv 3,
+     * v1.38.0): o override manual ("weak"/"strong") vale por cima da
+     * medição; em "auto" vale a força medida ("" = ainda não medida).
+     */
+    fun effectiveHwClass(): String =
+        if (enhanceHwMode != "auto") enhanceHwMode else enhanceHwClass
 
     /** (Re)aplica o estado do painel no mpv (cadeia + filtros + VO). */
     fun applyEnhanceEffects() {
@@ -3358,8 +3453,19 @@ class PlayerSession(
         applyEnhanceEffects()
     }
 
-    /** "Testar a minha placa": mede ~4 s com a cadeia atual e diz qual preset o aparelho sustenta. */
-    fun startEnhanceBench() {
+    /**
+     * "Testar a minha placa": mede ~4 s com a cadeia atual e diz qual preset o aparelho sustenta.
+     *
+     * Lote mpv 3 (v1.38.0): com [auto] = true (medição automática na 1ª vez
+     * que o mpv é usado), o resultado também CLASSIFICA o hardware e guarda
+     * a força medida ([enhanceHwClass]): "weak" quando o aparelho perde
+     * quadros demais na janela (ou perde mesmo no preset mais leve), "strong"
+     * quando sustenta a cadeia atual. É uma heurística de 4 s com a cadeia
+     * em uso — não um benchmark de GPU; o override manual nas Configurações
+     * vale por cima. Nunca trava a abertura do player: a medição roda em
+     * 2º plano enquanto o vídeo toca.
+     */
+    fun startEnhanceBench(auto: Boolean = false) {
         if (!mpvActive || enhanceBenchRunning) return
         enhanceBenchRunning = true
         enhanceBenchResult = null
@@ -3393,7 +3499,27 @@ class PlayerSession(
                     "O aparelho perdeu $bad quadros em 4 s com $presetLabel — tente ${EnhancePreset.byId(down.first).label} (${EnhanceQuality.byId(down.second).label})."
                 }
             }
+            if (auto && enhanceHwMode == "auto" && enhanceHwClass.isEmpty()) {
+                val measured = if (bad <= 0 || rate < ENHANCE_WATCHDOG_BAD_FRACTION) "strong" else "weak"
+                enhanceHwClass = measured
+                onEnhanceHwClassSave(measured)
+                val label = if (measured == "weak") "Fraca" else "Forte"
+                enhanceBenchResult = (enhanceBenchResult ?: "") +
+                    "\nForça do aparelho (automático): $label — o upscaler foi ajustado p/ ela."
+            }
         }
+    }
+
+    /**
+     * Medição automática de hardware (Lote mpv 3): roda o benchmark 1x na
+     * 1ª vez que o mpv é usado, sem bloquear a reprodução, p/ definir o
+     * padrão do enhance (desligado/leve em aparelho fraco). Só vale em modo
+     * "auto" e enquanto a força ainda não foi medida.
+     */
+    fun maybeAutoEnhanceBench() {
+        if (!mpvActive || enhanceHwMode != "auto" || enhanceHwClass.isNotEmpty() || mpvHwBenchDone) return
+        mpvHwBenchDone = true
+        startEnhanceBench(auto = true)
     }
 
     // ── Modo noturno + Clear Dialogue (Lote 16 item 1) ─────────────────────
@@ -3471,7 +3597,12 @@ class PlayerSession(
     private val introDbService = com.aotv.app.data.remote.IntroDbService()
     /** Marcadores da barra de progresso (intro + créditos + capítulos — sem capítulos ainda). */
     val progressMarkers: List<ProgressMarker>
-        get() = introDbSegments?.let { buildProgressMarkers(it, emptyList(), duration) } ?: emptyList()
+        get() = introDbSegments?.let {
+            // Lote mpv 3: os capítulos do mpv viram marcadores na barra
+            // (no ExoPlayer a lista é sempre vazia — a Media3 1.6.0 não
+            // expõe capítulos MKV).
+            buildProgressMarkers(it, mpvChapters.map { ch -> ChapterMark(ch.timeMs, ch.title) }, duration)
+        } ?: emptyList()
     /** Aviso de pós-créditos mostrado 1x por episódio (evita repetir o toast a cada poll). */
     private var postCreditsNoticedEp by run { mutableIntStateOf(-1) }
     fun maybePostCreditsNotice() {
@@ -3644,8 +3775,16 @@ class PlayerSession(
                 val cp = castPlayer
                 runCatching { cp.setPlaybackSpeed(rate) }
             }
-            mpvActive -> mpvPlayer?.setSpeed(rate)
-            else -> runCatching { exoPlayer.setPlaybackSpeed(rate) }
+            mpvActive -> {
+                mpvPlayer?.setSpeed(rate)
+                mpvPlayer?.applyPitchCorrection(mpvPitchCorrection)
+            }
+            // Lote mpv 3: com a correção de tom ligada, o pitch fica em 1
+            // (a voz não distorce ao mudar a velocidade); desligada, o
+            // pitch acompanha a velocidade (efeito "voz de esquilo").
+            else -> runCatching {
+                exoPlayer.playbackParameters = PlaybackParameters(rate, if (mpvPitchCorrection) 1f else rate)
+            }
         }
     }
 
@@ -3726,6 +3865,14 @@ class PlayerSession(
         mpv.applySubStyle(subSize, subColor, subBg, subBgOpacity, subOutline, subFont)
         // Lote mpv 2: cadeia de shaders + filtros do painel Melhorar imagem.
         applyEnhanceEffects()
+        // Lote mpv 3: capítulos do arquivo (MKV), posição das legendas,
+        // correção de tom, atraso de áudio e a medição automática de
+        // hardware (1ª vez que o mpv é usado).
+        mpvChapters = mpv.readChapters()
+        mpv.applySubPos(mpvSubPos)
+        mpv.applyPitchCorrection(mpvPitchCorrection)
+        mpv.applyAudioDelay(audioDelay)
+        maybeAutoEnhanceBench()
         if (!didSeek && pendingSeekMs > 0) {
             mpv.seekAfterLoad(pendingSeekMs)
             didSeek = true
@@ -4545,6 +4692,7 @@ class PlayerSession(
             lastPick = if (prefs.sourceRememberPick) item else null,
             originalFirst = prefs.sourceOriginalFirst,
             runtimeMin = runtimeMin,
+            formatPref = com.aotv.app.data.remote.SourceFormat.of(prefs.sourceFormat),
         ).map { it.index }
     }
 
@@ -4563,6 +4711,7 @@ class PlayerSession(
             lastPick = if (prefs.sourceRememberPick) progressVm.lastSourcePick(tmdbId, type) else null,
             originalFirst = prefs.sourceOriginalFirst,
             runtimeMin = runtimeMin,
+            formatPref = com.aotv.app.data.remote.SourceFormat.of(prefs.sourceFormat),
         ).associateBy { it.fact.url }
     }
 

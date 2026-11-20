@@ -102,11 +102,11 @@ internal val SCOPED_KEYS = listOf(
     // que o aparelho não toca e lembrar a escolha por título.
     "pref_source_preset_v1", "pref_source_strategy_v1", "pref_source_lang_filter_v1",
     "pref_source_original_first_v1", "pref_source_manual_order_v1", "pref_source_health_v1",
-    "pref_source_hide_unplayable_v1", "pref_source_remember_pick_v1",
+    "pref_source_hide_unplayable_v1", "pref_source_remember_pick_v1", "pref_source_format_v1",
     "pref_player_buttons", "pref_player_top_actions", "pref_player_tap_seek",
     "pref_player_vol_boost", "pref_player_vol_boost_level", "pref_player_mini",
     "pref_player_auto_next", "pref_player_auto_next_delay",
-    "pref_player_auto_switch", "pref_player_source_timeout",
+    "pref_player_auto_switch", "pref_player_auto_switch_start_v1", "pref_player_source_timeout",
     // Lote 19 item 7 (v1.29.0) — Opções de Reprodução do JOTV: subir a
     // qualidade sozinho e debrid só com arquivo pronto.
     "pref_player_auto_upgrade", "pref_player_debrid_ready_only",
@@ -278,6 +278,13 @@ internal val SCOPED_KEYS = listOf(
     "pref_enhance_deinterlace_v1", "pref_enhance_scale_v1", "pref_enhance_cscale_v1",
     "pref_enhance_dscale_v1", "pref_enhance_antiring_v1", "pref_enhance_gamma_v1",
     "pref_enhance_vo_v1", "pref_enhance_watchdog_cap_v1",
+    // Lote mpv 3 (v1.38.0) — Playback avançado: estilo da interpolação,
+    // detecção de hardware do upscaling (modo + força medida) e as opções
+    // do mpv (display-fps, video-sync, hwdec, cache, correção de tom e
+    // posição vertical das legendas). Tudo por perfil.
+    "pref_enhance_interp_preset_v1", "pref_enhance_hw_mode_v1", "pref_enhance_hw_class_v1",
+    "pref_mpv_display_fps_v1", "pref_mpv_video_sync_v1", "pref_mpv_hwdec_v1",
+    "pref_mpv_cache_secs_v1", "pref_mpv_pitch_correction_v1", "pref_mpv_sub_pos_v1",
 )
 
 /**
@@ -2502,6 +2509,13 @@ class PlatformPrefs @Inject constructor(
         get() = _sourceRememberPick.value
         set(value) { prefs.edit().putBoolean(sk("pref_source_remember_pick_v1"), value).apply(); _sourceRememberPick.value = value }
 
+    private val _sourceFormat = MutableStateFlow(prefs.getString(sk("pref_source_format_v1"), "auto") ?: "auto")
+    /** Formato de fonte preferido (Lote mpv 3, v1.38.0): "auto" (sem bônus), "hls" ou "mp4" — vale como bônus no score do ranking (ver SourceRanking). */
+    val sourceFormatFlow: StateFlow<String> = _sourceFormat.asStateFlow()
+    var sourceFormat: String
+        get() = _sourceFormat.value
+        set(value) { prefs.edit().putString(sk("pref_source_format_v1"), value).apply(); _sourceFormat.value = value }
+
     /** Saúde aprendida por host (ver [SourceHealth]): o que funciona neste aparelho. */
     var sourceHealth: Map<String, com.aotv.app.data.remote.SourceHealth>
         get() = com.aotv.app.data.remote.decodeHealthMap(prefs.getString(sk("pref_source_health_v1"), null))
@@ -2758,6 +2772,76 @@ class PlatformPrefs @Inject constructor(
         get() = _enhanceWatchdogCap.value
         set(value) { prefs.edit().putString(sk("pref_enhance_watchdog_cap_v1"), value).apply(); _enhanceWatchdogCap.value = value }
 
+    private val _enhanceInterpPreset = MutableStateFlow(prefs.getString(sk("pref_enhance_interp_preset_v1"), "standard") ?: "standard")
+    /** Estilo da interpolação de quadros do mpv (Lote mpv 3, v1.38.0): "off", "light", "standard", "smooth" ou "cinema" — mapeia p/ o tscale do mpv (ver EnhanceCatalog). Só vale com o Movimento suave ligado. */
+    val enhanceInterpPresetFlow: StateFlow<String> = _enhanceInterpPreset.asStateFlow()
+    var enhanceInterpPreset: String
+        get() = _enhanceInterpPreset.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_interp_preset_v1"), value).apply(); _enhanceInterpPreset.value = value }
+
+    private val _enhanceHwMode = MutableStateFlow(prefs.getString(sk("pref_enhance_hw_mode_v1"), "auto") ?: "auto")
+    /** Detecção de hardware do upscaling (Lote mpv 3, v1.38.0): "auto" (mede na 1ª vez que o mpv é usado), "weak" ou "strong" — o override manual vale por cima da medição. */
+    val enhanceHwModeFlow: StateFlow<String> = _enhanceHwMode.asStateFlow()
+    var enhanceHwMode: String
+        get() = _enhanceHwMode.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_hw_mode_v1"), value).apply(); _enhanceHwMode.value = value }
+
+    private val _enhanceHwClass = MutableStateFlow(prefs.getString(sk("pref_enhance_hw_class_v1"), "") ?: "")
+    /** Força medida do hardware (Lote mpv 3, v1.38.0): "" = ainda não medida, "weak" ou "strong" — medida pelo "Testar a minha placa" (ou pela medição automática na 1ª vez que o mpv é usado). */
+    val enhanceHwClassFlow: StateFlow<String> = _enhanceHwClass.asStateFlow()
+    var enhanceHwClass: String
+        get() = _enhanceHwClass.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_hw_class_v1"), value).apply(); _enhanceHwClass.value = value }
+
+    // ── Opções do mpv (Lote mpv 3, v1.38.0) — por perfil ───────────────────
+    // display-fps, video-sync, hwdec, cache e tom da voz: valem no init do
+    // mpv (ou na próxima reprodução) e são reaplicadas ao vivo quando mudam
+    // em Configurações com o player na pilha. Padrões = o comportamento de
+    // hoje (display-fps 0 = detectar, video-sync display-resample, hwdec
+    // mediacodec zero-copy, cache 0 = padrão do mpv, correção de tom ligada).
+
+    private val _mpvDisplayFps = MutableStateFlow(prefs.getFloat(sk("pref_mpv_display_fps_v1"), 0f))
+    /** Taxa da tela p/ o video-sync do mpv, em Hz (0 = deixar o mpv detectar). */
+    val mpvDisplayFpsFlow: StateFlow<Float> = _mpvDisplayFps.asStateFlow()
+    var mpvDisplayFps: Float
+        get() = _mpvDisplayFps.value
+        set(value) { prefs.edit().putFloat(sk("pref_mpv_display_fps_v1"), value).apply(); _mpvDisplayFps.value = value }
+
+    private val _mpvVideoSync = MutableStateFlow(prefs.getString(sk("pref_mpv_video_sync_v1"), "display-resample") ?: "display-resample")
+    /** Sincronização de vídeo do mpv: "display-resample", "display-vdrop" ou "audio". */
+    val mpvVideoSyncFlow: StateFlow<String> = _mpvVideoSync.asStateFlow()
+    var mpvVideoSync: String
+        get() = _mpvVideoSync.value
+        set(value) { prefs.edit().putString(sk("pref_mpv_video_sync_v1"), value).apply(); _mpvVideoSync.value = value }
+
+    private val _mpvHwdec = MutableStateFlow(prefs.getString(sk("pref_mpv_hwdec_v1"), "mediacodec") ?: "mediacodec")
+    /** Decodificação por hardware do mpv: "mediacodec" (zero-copy), "mediacodec-copy" ou "no" (software). NUNCA mediacodec-copy como padrão em aparelho fraco — copia cada quadro p/ a CPU. */
+    val mpvHwdecFlow: StateFlow<String> = _mpvHwdec.asStateFlow()
+    var mpvHwdec: String
+        get() = _mpvHwdec.value
+        set(value) { prefs.edit().putString(sk("pref_mpv_hwdec_v1"), value).apply(); _mpvHwdec.value = value }
+
+    private val _mpvCacheSecs = MutableStateFlow(prefs.getInt(sk("pref_mpv_cache_secs_v1"), 0))
+    /** Cache do demuxer do mpv, em segundos (0 = padrão do mpv). */
+    val mpvCacheSecsFlow: StateFlow<Int> = _mpvCacheSecs.asStateFlow()
+    var mpvCacheSecs: Int
+        get() = _mpvCacheSecs.value
+        set(value) { prefs.edit().putInt(sk("pref_mpv_cache_secs_v1"), value).apply(); _mpvCacheSecs.value = value }
+
+    private val _mpvPitchCorrection = MutableStateFlow(prefs.getBoolean(sk("pref_mpv_pitch_correction_v1"), true))
+    /** Manter o tom da voz ao mudar a velocidade (mpv audio-pitch-correction; no ExoPlayer, o pitch acompanha o toggle). */
+    val mpvPitchCorrectionFlow: StateFlow<Boolean> = _mpvPitchCorrection.asStateFlow()
+    var mpvPitchCorrection: Boolean
+        get() = _mpvPitchCorrection.value
+        set(value) { prefs.edit().putBoolean(sk("pref_mpv_pitch_correction_v1"), value).apply(); _mpvPitchCorrection.value = value }
+
+    private val _mpvSubPos = MutableStateFlow(prefs.getInt(sk("pref_mpv_sub_pos_v1"), 100))
+    /** Posição vertical das legendas no mpv (sub-pos, 0..100; 100 = embaixo). */
+    val mpvSubPosFlow: StateFlow<Int> = _mpvSubPos.asStateFlow()
+    var mpvSubPos: Int
+        get() = _mpvSubPos.value
+        set(value) { prefs.edit().putInt(sk("pref_mpv_sub_pos_v1"), value).apply(); _mpvSubPos.value = value }
+
     // ── Motor do player (Lote 4, v1.12.0) — por perfil ─────────────────────
     // Player padrão: "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 —
     // v1.36.0) ou "external" (abre o link resolvido num player instalado,
@@ -2924,6 +3008,13 @@ class PlatformPrefs @Inject constructor(
     var playerAutoSwitch: Boolean
         get() = _playerAutoSwitch.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_auto_switch"), value).apply(); _playerAutoSwitch.value = value }
+
+    private val _playerAutoSwitchAtStart = MutableStateFlow(prefs.getBoolean(sk("pref_player_auto_switch_start_v1"), true))
+    /** Procurar outra fonte no começo (Lote mpv 3, v1.38.0): com o toggle ligado, valem a troca automática ao abrir e o upgrade 1x de qualidade; desligado, o player fica na fonte que começou. Em fonte P2P/torrent as duas trocas NUNCA rodam sozinhas, mesmo com o toggle ligado. */
+    val playerAutoSwitchAtStartFlow: StateFlow<Boolean> = _playerAutoSwitchAtStart.asStateFlow()
+    var playerAutoSwitchAtStart: Boolean
+        get() = _playerAutoSwitchAtStart.value
+        set(value) { prefs.edit().putBoolean(sk("pref_player_auto_switch_start_v1"), value).apply(); _playerAutoSwitchAtStart.value = value }
 
     private val _durationGuard = MutableStateFlow(prefs.getBoolean(sk("pref_duration_guard"), true))
     /** Guarda de duração (Lote 11, v1.21.0): antes de tocar um filme, avisa quando a duração do arquivo destoa >10% da do título no TMDB. Ligada por padrão. */

@@ -363,6 +363,8 @@ data class EnhanceState(
     val gamma: Float = 0f,
     /** Renderizador do mpv: "gpu" ou "gpu-next". */
     val vo: String = "gpu",
+    /** Estilo da interpolação de quadros (Lote mpv 3, v1.38.0): "off", "light", "standard", "smooth" ou "cinema" — mapeia p/ o tscale do mpv (ver [interpTscale]). Só vale com [smoothMotion] ligado. */
+    val interpPreset: String = "standard",
 ) {
     val presetEnum get() = EnhancePreset.byId(preset)
     val qualityEnum get() = EnhanceQuality.byId(quality)
@@ -410,6 +412,30 @@ val ENHANCE_TONE_MAPPINGS: List<String> = listOf("auto", "bt.2390", "hable", "mo
 
 /** Renderizadores que o painel oferece (os dois existem no mpv 0.41 do AAR). */
 val ENHANCE_VOS: List<String> = listOf("gpu", "gpu-next")
+
+/**
+ * Estilos de interpolação de quadros (Lote mpv 3, v1.38.0): id → rótulo.
+ * O tscale do mpv vai em [interpTscale]. "off" desliga a interpolação
+ * mesmo com o Movimento suave ligado. Custo crescente: Leve usa
+ * oversample (barato, sem borrão de movimento), Padrão usa linear,
+ * Suave usa spline e Cinema usa mitchell (mais suave, mais pesado).
+ */
+val ENHANCE_INTERP_PRESETS: List<Pair<String, String>> = listOf(
+    "off" to "Desligada",
+    "light" to "Leve",
+    "standard" to "Padrão",
+    "smooth" to "Suave",
+    "cinema" to "Cinema",
+)
+
+/** tscale do mpv p/ o estilo de interpolação; null = interpolação desligada. */
+fun interpTscale(preset: String): String? = when (preset) {
+    "light" -> "oversample"
+    "standard" -> "linear"
+    "smooth" -> "spline"
+    "cinema" -> "mitchell"
+    else -> null
+}
 
 // ── Resolucao da cadeia ─────────────────────────────────────────────────────
 
@@ -474,16 +500,21 @@ fun autoPickPreset(
     screenH: Int,
     fps: Double?,
     watchdogCap: String,
+    /** Força medida do hardware (Lote mpv 3, v1.38.0): "weak" trava o Auto no preset mais leve. */
+    hwClass: String = "",
 ): Pair<String, String> {
     val ladder = listOf("light", "anime_c", "anime_b", "anime_a")
     val capIdx = ladder.indexOf(watchdogCap).takeIf { it >= 0 } ?: (ladder.size - 1)
+    // Hardware fraco medido (ou forçado nas Configurações): o Auto não sobe
+    // do preset mais leve — em aparelho fraco o upscaling trava o vídeo.
+    val hwCapIdx = if (hwClass == "weak") 0 else (ladder.size - 1)
     val baseIdx = when {
         videoH <= 0 || screenH <= 0 -> ladder.indexOf("anime_b")
         videoH <= 480 -> ladder.indexOf("anime_c")
         videoH <= 720 -> ladder.indexOf("anime_b")
         videoH < screenH -> ladder.indexOf("anime_a")
         else -> ladder.indexOf("light")
-    }.coerceAtMost(capIdx)
+    }.coerceAtMost(capIdx).coerceAtMost(hwCapIdx)
     val budget = autoBudgetMs(fps)
     var idx = baseIdx
     while (idx > 0) {

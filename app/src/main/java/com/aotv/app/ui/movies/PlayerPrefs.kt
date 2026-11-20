@@ -159,6 +159,15 @@ class PlayerPrefsViewModel @Inject constructor(
     val autoSwitch: StateFlow<Boolean> = prefs.playerAutoSwitchFlow
     fun setAutoSwitch(v: Boolean) { prefs.playerAutoSwitch = v }
 
+    /**
+     * Procurar outra fonte no começo (Lote mpv 3, v1.38.0): com o toggle
+     * ligado, valem a troca automática ao abrir e o upgrade 1x de qualidade;
+     * desligado, o player fica na fonte que começou. Em fonte P2P/torrent as
+     * duas trocas NUNCA rodam sozinhas, mesmo com o toggle ligado.
+     */
+    val autoSwitchAtStart: StateFlow<Boolean> = prefs.playerAutoSwitchAtStartFlow
+    fun setAutoSwitchAtStart(v: Boolean) { prefs.playerAutoSwitchAtStart = v }
+
     /** Guarda de duração (Lote 11, v1.21.0): avisar antes de tocar um arquivo com duração >10% diferente da do título. */
     val durationGuard: StateFlow<Boolean> = prefs.durationGuardFlow
     fun setDurationGuard(v: Boolean) { prefs.durationGuard = v }
@@ -349,6 +358,70 @@ class PlayerPrefsViewModel @Inject constructor(
     /** Teto do vigia: preset mais pesado que a placa aguentou ("" = nenhum). */
     val enhanceWatchdogCap: StateFlow<String> = prefs.enhanceWatchdogCapFlow
     fun setEnhanceWatchdogCap(v: String) { prefs.enhanceWatchdogCap = v }
+
+    // ── Lote mpv 3 (v1.38.0) — Playback avançado ─────────────────────────
+
+    /** Estilo da interpolação de quadros do mpv: "off", "light", "standard", "smooth" ou "cinema". */
+    val enhanceInterpPreset: StateFlow<String> = prefs.enhanceInterpPresetFlow
+    fun setEnhanceInterpPreset(v: String) {
+        prefs.enhanceInterpPreset = when (v) {
+            "off", "light", "smooth", "cinema" -> v
+            else -> "standard"
+        }
+    }
+
+    /** Detecção de hardware do upscaling: "auto" (mede na 1ª vez que o mpv é usado), "weak" ou "strong". */
+    val enhanceHwMode: StateFlow<String> = prefs.enhanceHwModeFlow
+    fun setEnhanceHwMode(v: String) {
+        prefs.enhanceHwMode = when (v) {
+            "weak", "strong" -> v
+            else -> "auto"
+        }
+    }
+
+    /** Força medida do hardware: "" = ainda não medida, "weak" ou "strong". */
+    val enhanceHwClass: StateFlow<String> = prefs.enhanceHwClassFlow
+    fun setEnhanceHwClass(v: String) { prefs.enhanceHwClass = v }
+
+    /** Taxa da tela p/ o video-sync do mpv, em Hz (0 = deixar o mpv detectar). */
+    val mpvDisplayFps: StateFlow<Float> = prefs.mpvDisplayFpsFlow
+    fun setMpvDisplayFps(v: Float) {
+        val allowed = listOf(0f, 24f, 25f, 30f, 50f, 60f, 120f)
+        prefs.mpvDisplayFps = allowed.minByOrNull { kotlin.math.abs(it - v) } ?: 0f
+    }
+
+    /** Sincronização de vídeo do mpv: "display-resample", "display-vdrop" ou "audio". */
+    val mpvVideoSync: StateFlow<String> = prefs.mpvVideoSyncFlow
+    fun setMpvVideoSync(v: String) {
+        prefs.mpvVideoSync = when (v) {
+            "display-vdrop", "audio" -> v
+            else -> "display-resample"
+        }
+    }
+
+    /** Decodificação por hardware do mpv: "mediacodec" (zero-copy), "mediacodec-copy" ou "no" (software). */
+    val mpvHwdec: StateFlow<String> = prefs.mpvHwdecFlow
+    fun setMpvHwdec(v: String) {
+        prefs.mpvHwdec = when (v) {
+            "mediacodec-copy", "no" -> v
+            else -> "mediacodec"
+        }
+    }
+
+    /** Cache do demuxer do mpv, em segundos (0 = padrão do mpv). */
+    val mpvCacheSecs: StateFlow<Int> = prefs.mpvCacheSecsFlow
+    fun setMpvCacheSecs(v: Int) {
+        val allowed = listOf(0, 10, 30, 60, 120)
+        prefs.mpvCacheSecs = allowed.minByOrNull { kotlin.math.abs(it - v) } ?: 0
+    }
+
+    /** Manter o tom da voz ao mudar a velocidade (mpv audio-pitch-correction; no ExoPlayer, o pitch acompanha o toggle). */
+    val mpvPitchCorrection: StateFlow<Boolean> = prefs.mpvPitchCorrectionFlow
+    fun setMpvPitchCorrection(v: Boolean) { prefs.mpvPitchCorrection = v }
+
+    /** Posição vertical das legendas no mpv (sub-pos, 0..100; 100 = embaixo). */
+    val mpvSubPos: StateFlow<Int> = prefs.mpvSubPosFlow
+    fun setMpvSubPos(v: Int) { prefs.mpvSubPos = v.coerceIn(0, 100) }
 
     /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 — v1.36.0) ou "external". */
     val engine: StateFlow<String> = prefs.playerEngineFlow

@@ -149,6 +149,15 @@ class StreamPrefsViewModel @Inject constructor(
     val sourceRememberPick: StateFlow<Boolean> = prefs.sourceRememberPickFlow
     fun setSourceRememberPick(v: Boolean) { prefs.sourceRememberPick = v }
 
+    /** Formato de fonte preferido (Lote mpv 3, v1.38.0): "auto" (sem bônus), "hls" ou "mp4" — bônus no score do ranking. */
+    val sourceFormat: StateFlow<String> = prefs.sourceFormatFlow
+    fun setSourceFormat(v: String) {
+        prefs.sourceFormat = when (v) {
+            "hls", "mp4" -> v
+            else -> "auto"
+        }
+    }
+
     /** Última fonte escolhida à mão neste título ("TIPO:tmdbId"), ou null. */
     fun lastPickFor(key: String): com.aotv.app.data.local.LastSourcePick? = prefs.lastSourcePicks[key]
 }

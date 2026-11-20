@@ -74,6 +74,10 @@ fun EnhancePanel(
     effectivePreset: String,
     effectiveQuality: String,
     watchdogCap: String,
+    /** Força medida do hardware (Lote mpv 3): "" = ainda não medida, "weak" ou "strong". */
+    hwClass: String,
+    /** Modo da detecção de hardware: "auto", "weak" ou "strong". */
+    hwMode: String,
     benchRunning: Boolean,
     benchResult: String?,
     videoW: Int,
@@ -96,6 +100,8 @@ fun EnhancePanel(
                 effectivePreset = effectivePreset,
                 effectiveQuality = effectiveQuality,
                 watchdogCap = watchdogCap,
+                hwClass = hwClass,
+                hwMode = hwMode,
                 benchRunning = benchRunning,
                 benchResult = benchResult,
                 videoW = videoW,
@@ -118,6 +124,8 @@ fun EnhancePanel(
             effectivePreset = effectivePreset,
             effectiveQuality = effectiveQuality,
             watchdogCap = watchdogCap,
+            hwClass = hwClass,
+            hwMode = hwMode,
             benchRunning = benchRunning,
             benchResult = benchResult,
             videoW = videoW,
@@ -142,6 +150,8 @@ private fun EnhancePanelBody(
     effectivePreset: String,
     effectiveQuality: String,
     watchdogCap: String,
+    hwClass: String,
+    hwMode: String,
     benchRunning: Boolean,
     benchResult: String?,
     videoW: Int,
@@ -221,6 +231,8 @@ private fun EnhancePanelBody(
                         effectivePreset = effectivePreset,
                         effectiveQuality = effectiveQuality,
                         watchdogCap = watchdogCap,
+                        hwClass = hwClass,
+                        hwMode = hwMode,
                         benchRunning = benchRunning,
                         benchResult = benchResult,
                         videoW = videoW,
@@ -489,10 +501,26 @@ private fun androidx.compose.foundation.lazy.LazyListScope.enhanceFilterItems(
     item {
         EnhanceRow(
             label = "Movimento suave",
-            sub = "Cria quadros entre os do arquivo, no ritmo da tela (a interpolação aprofundada vem no Lote 3)",
+            sub = "Cria quadros entre os do arquivo, no ritmo da tela — o estilo está na linha abaixo",
             active = state.smoothMotion,
             enabled = enabled,
             onClick = { onStateChange(state.copy(smoothMotion = !state.smoothMotion)) },
+        )
+    }
+    item {
+        // Lote mpv 3 (v1.38.0): estilo da interpolação (tscale do mpv) —
+        // só vale com o Movimento suave ligado.
+        val interpLabel = ENHANCE_INTERP_PRESETS.firstOrNull { it.first == state.interpPreset }?.second ?: "Padrão"
+        EnhanceRow(
+            label = "Estilo da interpolação: $interpLabel",
+            sub = "Leve é barato (oversample); Suave e Cinema são mais suaves e mais pesados — só vale com o Movimento suave ligado",
+            active = state.smoothMotion && state.interpPreset != "off",
+            enabled = enabled,
+            onClick = {
+                val ids = ENHANCE_INTERP_PRESETS.map { it.first }
+                val next = ids[(ids.indexOf(state.interpPreset) + 1) % ids.size]
+                onStateChange(state.copy(interpPreset = next))
+            },
         )
     }
     item {
@@ -602,6 +630,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.enhancePerfItems(
     effectivePreset: String,
     effectiveQuality: String,
     watchdogCap: String,
+    hwClass: String,
+    hwMode: String,
     benchRunning: Boolean,
     benchResult: String?,
     videoW: Int,
@@ -671,6 +701,22 @@ private fun androidx.compose.foundation.lazy.LazyListScope.enhancePerfItems(
         Text(
             "Em uso: ${EnhancePreset.byId(effectivePreset).label} (${EnhanceQuality.byId(effectiveQuality).label})" +
                 if (watchdogCap.isNotBlank()) "\nTeto do vigia: ${EnhancePreset.byId(watchdogCap).label} — a placa aguentou até aí" else "\nTeto do vigia: nenhum ainda",
+            color = Color.White, fontSize = 14.sp, lineHeight = 20.sp,
+            modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
+        )
+    }
+    item {
+        // Lote mpv 3: força do aparelho — medida na 1ª vez que o mpv é usado
+        // (ou pelo "Testar a minha placa") ou forçada nas Configurações.
+        val hwText = when {
+            hwMode == "weak" -> "Fraca (forçada nas Configurações) — o Auto fica no preset mais leve"
+            hwMode == "strong" -> "Forte (forçada nas Configurações)"
+            hwClass == "weak" -> "Fraca (medida) — o Auto fica no preset mais leve"
+            hwClass == "strong" -> "Forte (medida)"
+            else -> "Ainda não medida — mede sozinha na 1ª vez que o mpv é usado, ou toque em \"Testar a minha placa\""
+        }
+        Text(
+            "Força do aparelho: $hwText",
             color = Color.White, fontSize = 14.sp, lineHeight = 20.sp,
             modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
         )
