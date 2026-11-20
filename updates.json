@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "32e873664ccb531c762903496996a1d41921d75bad41ea4691f7181a1da9da98",
-        "size": 114426217,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.39.0/AOTV-v1.39.0.apk"
+        "sha256": "0e24d79c8d959d58c5a46c78110cf39e9de664f4eb121a10d2c1429887ede934",
+        "size": 123341512,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.40.0/AOTV-v1.40.0.apk"
       }
     },
-    "changelog": "v1.39.0 — Lote mpv 4: pré-carregar o mpv (piscina quente com 1 instância reutilizada, warmup ao abrir o detalhe, expira em 120 s sem uso; observer removido no destroy; log com surface: ok), exportar trecho (share sheet e cópia para a pasta pública via SAF) e vídeo inteiro (HLS com todos os segmentos, MP4 direto, id :full), scripts Lua com 2 exemplos, observação de propriedades no Diagnóstico e IPC por socket (desligado por padrão). Obs.: yt-dlp nativo fora (sem binário no AAR) e scripts JS não funcionam (só Lua); o crash do mpv na primeira abertura ainda não está provado como resolvido — só o teste no celular valida.",
-    "published_at": "2026-11-20T17:34:00Z",
-    "tag": "v1.39.0",
-    "version": "1.39.0",
-    "versionCode": 78
+    "changelog": "v1.40.0 — Lote da VPN: conexão WireGuard e OpenVPN de verdade, com status, kill switch e escopo por app ou no aparelho. Correções do exportar trecho: o player não troca mais de fonte ao tocar arquivo local, compartilhar .ts como vídeo, e linha do tempo do trecho arrumada (re-basing de PTS/DTS/PCR). Obs.: perfis de VPN importados antes desta versão precisam ser importados de novo para conectar; a conexão VPN e os 3 fixes só validam no celular com perfil real.",
+    "published_at": "2026-11-20T20:54:00Z",
+    "tag": "v1.40.0",
+    "version": "1.40.0",
+    "versionCode": 79
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "0e24d79c8d959d58c5a46c78110cf39e9de664f4eb121a10d2c1429887ede934",
+          "size": 123341512,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.40.0/AOTV-v1.40.0.apk"
+        }
+      },
+      "changelog": "v1.40.0 — Lote da VPN: conexão WireGuard e OpenVPN de verdade, com status, kill switch e escopo por app ou no aparelho. Correções do exportar trecho: o player não troca mais de fonte ao tocar arquivo local, compartilhar .ts como vídeo, e linha do tempo do trecho arrumada (re-basing de PTS/DTS/PCR). Obs.: perfis de VPN importados antes desta versão precisam ser importados de novo para conectar; a conexão VPN e os 3 fixes só validam no celular com perfil real.",
+      "published_at": "2026-11-20T20:54:00Z",
+      "tag": "v1.40.0",
+      "version": "1.40.0",
+      "versionCode": 79
+    },
     {
       "assets": {
         "universal": {
