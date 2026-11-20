@@ -43,6 +43,21 @@ package com.aotv.app.data.clips
  *
  * NÃO MEXIDO: clipes fMP4 (.mp4) — os tempos vivem nos boxes moof, não
  * em timestamps TS; o caminho fMP4 não passa por aqui.
+ *
+ * Lote dos 3 fixes (v1.41.0) — POR QUE A v1.40.0 NÃO FUNCIONOU: o
+ * `firstTimestamp90k` da v1.40.0 varria os pacotes em passos fixos de 188
+ * bytes a partir do byte 0 e devolvia null quando nenhum pacote trazia
+ * timestamp — e null virava offset 0, ou seja, o segmento ia cru p/ o
+ * arquivo (o no-op silencioso). Qualquer segmento fora do layout "188
+ * bytes alinhado no byte 0" cai nesse caso: pacotes M2TS de 192 bytes
+ * (4 bytes de TP_extra_header antes de cada pacote), pacotes de 204
+ * bytes (16 bytes de paridade RS depois de cada pacote), prefixo antes
+ * do primeiro pacote, ou bytes que nem TS são (ex.: fMP4 sem
+ * #EXT-X-MAP). O teste da v1.40.0 (arquivo com a mesma linha do tempo
+ * da v1.39.0: duração 2:05, gerenciador marcando 5 s) é exatamente o
+ * que esse no-op produz. Por isso esta versão DETECTA o layout
+ * ([detectPacketLayout]) antes de ler qualquer timestamp e REEMPACOTA
+ * o segmento p/ TS limpo de 188 bytes ([rebase]) — mesmo com offset 0.
  */
 object TsRebase {
 
@@ -57,16 +72,85 @@ object TsRebase {
     const val TICKS_PER_MS = 90L
 
     /**
+     * Layout físico dos pacotes TS dentro do segmento: a partir de qual
+     * byte começa o primeiro pacote ([startOffset]) e a distância entre
+     * pacotes ([stride]).
+     * - (0, 188): TS padrão — o caso comum.
+     * - (4, 192): M2TS — 4 bytes de TP_extra_header antes de cada
+     *   pacote de 188 bytes.
+     * - (0, 204): TS com paridade Reed-Solomon — 16 bytes de paridade
+     *   depois de cada pacote de 188 bytes.
+     * - (G, 188): G bytes de prefixo antes do primeiro pacote.
+     * [packetStart] é o byte 0x47 do pacote [index]; [packetCount] é
+     * quantos pacotes inteiros cabem em [size] bytes.
+     */
+    data class PacketLayout(val startOffset: Int, val stride: Int) {
+        fun packetStart(index: Int): Int = startOffset + index * stride
+        /** Pacotes TS inteiros (188 bytes) que cabem em [size] bytes — o
+         *  último pacote só precisa dos 188 bytes dele, não do slot
+         *  inteiro (ex.: M2TS (4, 192) num segmento de 1920 bytes tem
+         *  10 pacotes, não 9). */
+        fun packetCount(size: Int): Int {
+            val remaining = size - startOffset - PACKET_SIZE
+            return if (remaining < 0) 0 else remaining / stride + 1
+        }
+    }
+
+    /**
+     * Detecta o layout dos pacotes no segmento procurando o byte de sync
+     * (0x47) repetido: testa os strides 188, 192 e 204 (nesta ordem — o
+     * padrão primeiro) e, p/ cada um, o menor startOffset (até 4096)
+     * com 0x47 em 8 pacotes seguidos (ou menos, se o segmento tiver
+     * menos de 8 pacotes no total). O nº de confirmações é o do
+     * SEGMENTO inteiro, não o que resta a partir do candidato — senão
+     * um start perto do fim passaria com 1 só confirmação e o layout
+     * sairia errado. Null = nenhum layout consistente (ex.: bytes que
+     * nem TS são) — o chamador cai no layout padrão como melhor esforço.
+     */
+    fun detectPacketLayout(bytes: ByteArray): PacketLayout? {
+        for (stride in intArrayOf(PACKET_SIZE, 192, 204)) {
+            val need = minOf(8, bytes.size / stride)
+            if (need == 0) continue
+            val maxStart = minOf(4096, bytes.size)
+            var start = 0
+            while (start < maxStart) {
+                // O candidato precisa ter `need` pacotes inteiros à frente.
+                if (start + (need - 1) * stride < bytes.size) {
+                    var ok = true
+                    var k = 0
+                    while (k < need) {
+                        if (bytes[start + k * stride] != 0x47.toByte()) {
+                            ok = false
+                            break
+                        }
+                        k++
+                    }
+                    if (ok) return PacketLayout(start, stride)
+                }
+                start++
+            }
+        }
+        return null
+    }
+
+    /**
      * Primeiro PTS ou PCR do segmento (ticks de 90 kHz), ou null se
      * nenhum pacote trouxer timestamp. É a "base" do segmento p/ o
-     * cálculo do offset — ver o KDoc do arquivo.
+     * cálculo do offset — ver o KDoc do arquivo. Lote dos 3 fixes
+     * (v1.41.0): o scan respeita o layout detectado ([detectPacketLayout])
+     * — antes ele assumia 188 bytes a partir do byte 0 e devolvia null
+     * (offset 0, segmento cru) p/ qualquer segmento fora desse layout.
      */
     fun firstTimestamp90k(bytes: ByteArray): Long? {
-        var pos = 0
-        while (pos + PACKET_SIZE <= bytes.size) {
-            val packet = bytes.copyOfRange(pos, pos + PACKET_SIZE)
+        val layout = detectPacketLayout(bytes) ?: PacketLayout(0, PACKET_SIZE)
+        var index = 0
+        val count = layout.packetCount(bytes.size)
+        while (index < count) {
+            val at = layout.packetStart(index)
+            if (at + PACKET_SIZE > bytes.size) break
+            val packet = bytes.copyOfRange(at, at + PACKET_SIZE)
             firstTimestampInPacket(packet)?.let { return it }
-            pos += PACKET_SIZE
+            index++
         }
         return null
     }
@@ -94,14 +178,36 @@ object TsRebase {
      * [offset90k] (mod 2^33). Offset 0 devolve cópia idêntica — o
      * chamador pode pular a chamada, mas chamar com 0 é seguro.
      * Não altera PAT/PMT, pacotes sem timestamp nem o resto final.
+     *
+     * Lote dos 3 fixes (v1.41.0): o segmento é NORMALIZADO p/ TS limpo
+     * de 188 bytes quando o layout detectado não é o padrão — o
+     * TP_extra_header (192 bytes), a paridade RS (204 bytes), o prefixo
+     * e o resto parcial são descartados. Isso vale MESMO com offset 0:
+     * sem normalizar, um segmento M2TS com offset 0 iria cru p/ o
+     * arquivo e misturaria strides com os demais segmentos. Layout
+     * padrão + offset 0 continua devolvendo cópia idêntica (o resto
+     * final parcial é preservado, como antes).
      */
     fun rebase(bytes: ByteArray, offset90k: Long): ByteArray {
-        val out = bytes.copyOf()
-        if (offset90k == 0L) return out
-        var pos = 0
-        while (pos + PACKET_SIZE <= out.size) {
-            rebasePacket(out, pos, offset90k)
-            pos += PACKET_SIZE
+        val layout = detectPacketLayout(bytes) ?: PacketLayout(0, PACKET_SIZE)
+        if (layout.startOffset == 0 && layout.stride == PACKET_SIZE) {
+            val out = bytes.copyOf()
+            if (offset90k == 0L) return out
+            var pos = 0
+            while (pos + PACKET_SIZE <= out.size) {
+                rebasePacket(out, pos, offset90k)
+                pos += PACKET_SIZE
+            }
+            return out
+        }
+        val count = layout.packetCount(bytes.size)
+        val out = ByteArray(count * PACKET_SIZE)
+        var index = 0
+        while (index < count) {
+            val at = layout.packetStart(index)
+            bytes.copyInto(out, index * PACKET_SIZE, at, at + PACKET_SIZE)
+            if (offset90k != 0L) rebasePacket(out, index * PACKET_SIZE, offset90k)
+            index++
         }
         return out
     }

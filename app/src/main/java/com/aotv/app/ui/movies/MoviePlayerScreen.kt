@@ -1394,6 +1394,11 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         if (!showNextPrompt) return@LaunchedEffect
         if (!autoNextEnabled) return@LaunchedEffect
         if (!nextCountdownArmed) return@LaunchedEffect
+        // Lote 3 fixes (v1.41.0): arquivo local nunca avança sozinho p/
+        // o próximo episódio — a contagem só vale p/ stream de addon. O
+        // avanço À MÃO (botão "Próximo", chip, "Assistir") continua valendo
+        // (ele chama playNextEpisode/goToNextSeason direto, não este efeito).
+        if (isLocalPlayback) return@LaunchedEffect
         while (nextCountdown > 0) { delay(1000); nextCountdown -= 1 }
         // NÃO zerar nextCountdownArmed aqui: ele é chave deste efeito e
         // mudá-lo cancelaria o avanço abaixo. O reset está em
@@ -1437,6 +1442,13 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             sleepMinutes = null
             return@LaunchedEffect
         }
+        // Lote 3 fixes (v1.41.0): o fim de um ARQUIVO LOCAL não arma o
+        // "Próximo episódio" — o trecho acabou, o player fica parado no
+        // fim (o chip "Próximo" e o botão Voltar continuam valendo). Sem
+        // isso o clipe de série avançava sozinho p/ o próximo episódio
+        // numa fonte de addon: era a causa do teste da v1.40.0 (o resume
+        // buscava o trecho p/ perto do fim e o fim disparava o avanço).
+        if (isLocalPlayback) return@LaunchedEffect
         when {
             // Tem próximo episódio na temporada → card "Próximo episódio".
             // Lote 23 item 11: o fim real ARMA a contagem (antes o cartão do
@@ -1460,7 +1472,15 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
         } ?: run { if (preferredAddon.isBlank()) preferredAddon = progressVm.lastAddon(tmdbId, type) }
         fun merge(novas: List<MoviePlayerSource>) {
             if (novas.isEmpty()) return
-            val tocando = currentSources.getOrNull(currentSourceIdx)?.url
+            // Lote 3 fixes (v1.41.0): a âncora é o streamUrl (o que está
+            // tocando de fato), não a entrada da lista. Com arquivo local
+            // ele NÃO está na lista de addons — o índice fica -1 (nenhuma
+            // fonte "atual") em vez de apontar p/ a fonte 0 da lista, o que
+            // fazia o retry do arquivo aplicar um addon e o painel marcar
+            // um addon como ativo. -1 é seguro: todo uso de
+            // currentSourceIdx lê por getOrNull (ver onRetry e
+            // sourceFailedHasActions, que também cobrem o local).
+            val tocando = streamUrl
             // A ordem passa a ser a do EPISÓDIO (ordem do gerenciador de addons), a mesma que
             // a tela de detalhe mostra. Antes as novas iam no fim e o seletor do player ficava
             // numa ordem diferente da lista que o usuário tinha acabado de ver.
@@ -1470,7 +1490,8 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             currentSources = lista
             // Reancora: a fonte em reprodução continua sendo a "atual", senão o próximo
             // fallback pularia a partir do lugar errado.
-            currentSourceIdx = lista.indexOfFirst { it.url == tocando }.coerceAtLeast(0)
+            val found = lista.indexOfFirst { it.url == tocando }
+            currentSourceIdx = if (found >= 0) found else -1
             // Episódio aberto sem URL. Toca a primeira fonte que chegar, sem esperar todos os addons.
             if (streamUrl == null) applyMovieSource(pickPreferredSource(lista, preferredAddon, preferredQuality))
         }
@@ -1482,6 +1503,13 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
 
     LaunchedEffect(Unit) {
         if (startPositionMs > 0) return@LaunchedEffect
+        // Lote 3 fixes (v1.41.0): arquivo local NUNCA retoma a posição
+        // salva do título — o trecho tem a própria linha do tempo. O clipe
+        // 2:00–3:00 de O Mentalista buscava p/ ~2:00 (a posição salva do
+        // episódio), perto do fim do arquivo de 1 min, e o fim disparava o
+        // avanço p/ o próximo episódio numa fonte de addon. O trecho sempre
+        // começa do início.
+        if (isLocalPlayback) return@LaunchedEffect
         val epKey = if (type == "SERIES" && episode > 0) "T$season:E$episode" else ""
         val salvo = progressVm.savedPosition(tmdbId, type, epKey)
         if (salvo <= 10_000) return@LaunchedEffect
@@ -2267,7 +2295,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
         // overlay fica só com "Voltar" e a volta automática de 2,5 s continua.
         if (sourceFailed) SourceFailedOverlay(
             diag = kodiDiag + proxyDiagLine(), playerError = playerError, onBack = onBack,
-            onRetry = if (currentSources.getOrNull(currentSourceIdx) != null) ({ retryCurrentSource() }) else null,
+            onRetry = if (isLocalPlayback || currentSources.getOrNull(currentSourceIdx) != null) ({ retryCurrentSource() }) else null,
             onChooseSource = if (currentSources.size > 1) ({ sourceFailed = false; openDpadPanel("sources") }) else null,
         )
 
@@ -3134,6 +3162,11 @@ class PlayerSession(
 
     /** Downgrade adaptativo: a melhor fonte até 720p ainda não tentada. */
     fun switchToLowerQuality(maxRank: Int = 720): Boolean {
+        // Lote 3 fixes (v1.41.0): arquivo local não tem "720p" p/ trocar —
+        // aceitar a economia de bateria durante o trecho não pode ejetar
+        // o arquivo p/ uma fonte de addon. O teto só vale p/ as próximas
+        // trocas (o comportamento de quando não há fonte ≤ 720p).
+        if (isLocalPlayback) return false
         val f = facts()
         val next = rankedSourceOrder().firstOrNull { idx ->
             val s = f.getOrNull(idx) ?: return@firstOrNull false
@@ -5092,6 +5125,27 @@ class PlayerSession(
      *  o efeito que prepara a mídia é keyado por streamUrl, e reaplicar a
      *  mesma URL não o redispararia. Sem fonte atual, não faz nada. */
     fun retryCurrentSource() {
+        // Lote 3 fixes (v1.41.0): arquivo local retenta O ARQUIVO — nunca
+        // a fonte do índice atual (depois do merge das fontes do episódio,
+        // o índice 0 é um addon e o retry pulava do trecho p/ ele). O
+        // engineSwitchNonce força o efeito de load a re-preparar a mesma
+        // URL (só trocar streamUrl por null e voltar pode coalescer num
+        // único frame sem redisparar o efeito); pendingSeekMs retoma de
+        // onde parou.
+        if (isLocalPlayback) {
+            val local = streamUrl ?: return
+            sourceFailed = false
+            playerError = null
+            movieStarted = false
+            movieErrored = false
+            triedUrls.remove(local)
+            pendingSeekMs = position.coerceAtLeast(0L)
+            didSeek = false
+            streamUrl = null
+            streamUrl = local
+            engineSwitchNonce++
+            return
+        }
         if (currentSources.getOrNull(currentSourceIdx) == null) return
         sourceFailed = false
         playerError = null
@@ -5104,7 +5158,10 @@ class PlayerSession(
     /** v1.13.0: o overlay de falha tem algo a oferecer (tentar a mesma fonte
      *  ou escolher outra). Sem nada disso, a volta automática de 2,5 s continua. */
     val sourceFailedHasActions get() =
-        currentSources.getOrNull(currentSourceIdx) != null || currentSources.size > 1
+        // Lote 3 fixes (v1.41.0): arquivo local sempre tem ação (retentar
+        // o próprio arquivo) — sem isso a falha do trecho voltava ao
+        // detalhe em 2,5 s sem dar tempo de tentar de novo.
+        isLocalPlayback || currentSources.getOrNull(currentSourceIdx) != null || currentSources.size > 1
     /**
      * SÉRIE: completa a lista de fontes com as do EPISÓDIO atual.
      *

@@ -64,36 +64,54 @@ class ClipExporter(context: Context) {
             val fileName = exportFileName(localUri, fallbackTitle)
             val shareUri = resolveShareUri(localUri, fileName)
                 ?: return@withContext ClipExportResult.Failed("Arquivo do trecho não encontrado.")
-            // Lote VPN (v1.40.0): .ts NÃO compartilha como `video/mp2t` —
-            // nenhum app no celular do Davi aceita MPEG-TS e o
-            // createChooser lançava ActivityNotFoundException (toast "Não
-            // deu para abrir o compartilhamento."). Tenta `video/*` e, se
-            // a folha ainda lançar, `*/*`; só então devolve Failed. .mp4
-            // continua `video/mp4` (só tem 1 tentativa — já é específico).
+            // Lote 3 fixes (v1.41.0) — CAUSA REAL do erro da v1.40.0: a
+            // flag FLAG_ACTIVITY_NEW_TASK estava no intent INTERNO (send),
+            // mas quem vai p/ startActivity é o intent do CHOOSER, e
+            // createChooser NÃO copia as flags do interno. O ClipExporter
+            // guarda só o applicationContext (linha 51) e o ViewModel é
+            // criado com @ApplicationContext, então TODO startActivity sem
+            // a flag no chooser lançava AndroidRuntimeException ("Calling
+            // startActivity() from outside of an Activity context...") —
+            // nas DUAS tentativas de mime. O fallback video/* -> */* nunca
+            // chegou a ser o problema: ele rodava e lançava a MESMA
+            // exceção. O createChooser nunca lança ActivityNotFoundException
+            // (a folha do sistema sempre existe; sem apps ele só abre
+            // vazia) e não há resolveActivity aqui — a mensagem antiga
+            // ("nenhum app aceita este formato") era um diagnóstico
+            // inventado. Um resolveActivity prévio seria pior: no
+            // Android 11+ a visibilidade de pacotes devolveria null mesmo
+            // havendo apps. O .ts continua sem video/mp2t (nenhum app
+            // aceita MPEG-TS); o .mp4 continua video/mp4. Mesmo padrão
+            // correto já usado em WatchPartyScreen.kt (chooser com a flag).
             var launchFailed = false
-            var triedMimes = ""
+            var launchError: Throwable? = null
             withContext(Dispatchers.Main) {
                 for (mime in shareMimeCandidates(fileName)) {
-                    triedMimes = mime
                     val send = Intent(Intent.ACTION_SEND).apply {
                         type = mime
                         putExtra(Intent.EXTRA_STREAM, shareUri)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    val opened = runCatching {
-                        appContext.startActivity(Intent.createChooser(send, "Compartilhar trecho"))
-                    }.isSuccess
-                    if (opened) {
+                    // A flag tem que ir no CHOOSER (é ele que o
+                    // startActivity recebe); no interno ela não basta.
+                    val chooser = Intent.createChooser(send, "Compartilhar trecho").apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val result = runCatching { appContext.startActivity(chooser) }
+                    if (result.isSuccess) {
                         launchFailed = false
+                        launchError = null
                         break
                     }
                     launchFailed = true
+                    launchError = result.exceptionOrNull()
                 }
             }
             if (launchFailed) {
                 ClipExportResult.Failed(
-                    "Não deu para abrir o compartilhamento: nenhum app no aparelho aceita este formato ($triedMimes).",
+                    "Não deu para abrir o compartilhamento" +
+                        (launchError?.javaClass?.simpleName?.let { " ($it)." } ?: "."),
                 )
             } else {
                 ClipExportResult.Shared
@@ -212,11 +230,11 @@ class ClipExporter(context: Context) {
     }
 
     /**
-     * Mimes p/ COMPARTILHAR, em ordem de tentativa (Lote VPN, v1.40.0):
-     * .mp4 vai como `video/mp4` (1 tentativa); .ts vai como `video/*` e,
-     * se a folha lançar ActivityNotFoundException, como `*/*` — o
-     * `video/mp2t` não entra na lista (nenhum app no aparelho aceita
-     * MPEG-TS e era ele que quebrava o compartilhamento).
+     * Mimes p/ COMPARTILHAR, em ordem de tentativa (Lote VPN, v1.40.0;
+     * Lote 3 fixes, v1.41.0): .mp4 vai como `video/mp4` (1 tentativa);
+     * .ts tenta o mime genérico de vídeo e depois o curinga total — o
+     * mime específico de MPEG-TS não entra na lista (nenhum app no
+     * aparelho aceita MPEG-TS e era ele que quebrava o compartilhamento).
      */
     private fun shareMimeCandidates(fileName: String): List<String> = when {
         fileName.endsWith(".mp4", ignoreCase = true) -> listOf("video/mp4")

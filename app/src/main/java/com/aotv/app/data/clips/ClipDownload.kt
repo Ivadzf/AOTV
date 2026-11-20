@@ -912,6 +912,12 @@ class ClipDownloader(context: Context) {
         // os timestamps já forem contínuos desde 0, o offset é ~0 e o
         // fix vira no-op. fMP4 NÃO passa por aqui (os tempos vivem nos
         // boxes moof — continua o caminho direto de antes).
+        // Lote dos 3 fixes (v1.41.0): a v1.40.0 não funcionou no ALYA
+        // porque o `firstTimestamp90k` só achava timestamp em segmento
+        // 188 bytes alinhado no byte 0 — fora disso a base era null e o
+        // segmento ia cru (offset 0). O [TsRebase] agora detecta o
+        // layout (188/192/204 bytes, prefixo) e normaliza p/ TS limpo
+        // de 188 bytes em todo segmento, mesmo com offset 0.
         suspend fun downloadAll(hdrs: Map<String, String>): Long {
             var total = 0L
             var accumulated90k = 0L
@@ -929,10 +935,31 @@ class ClipDownloader(context: Context) {
                         fetchClipSegmentTo(segment, hdrs, out, keyCache, cookies)
                     } else {
                         val raw = fetchClipSegmentBytes(segment, hdrs, keyCache, cookies)
-                        val offset = TsRebase.offsetForSegment(
-                            TsRebase.firstTimestamp90k(raw), accumulated90k,
-                        )
-                        val rebased = if (offset == 0L) raw else TsRebase.rebase(raw, offset)
+                        val base = TsRebase.firstTimestamp90k(raw)
+                        if (base == null) {
+                            // Lote dos 3 fixes (v1.41.0): sem base não há
+                            // re-basing — o segmento vai cru e a linha do
+                            // tempo fica errada (foi o que aconteceu na
+                            // v1.40.0). Loga p/ o diagnóstico: o layout
+                            // detectado diz se o segmento é TS fora do
+                            // padrão (192/204 bytes, prefixo) ou nem TS é
+                            // (ex.: fMP4 sem #EXT-X-MAP). Só o host vai
+                            // p/ o log, nunca a URL assinada inteira.
+                            android.util.Log.w(
+                                "ClipDownload",
+                                "TsRebase: segmento sem timestamp (base null) — vai cru; " +
+                                    "layout=${TsRebase.detectPacketLayout(raw)} " +
+                                    "bytes=${raw.size} host=" +
+                                    runCatching { java.net.URI(segment.url).host }.getOrNull(),
+                            )
+                        }
+                        val offset = TsRebase.offsetForSegment(base, accumulated90k)
+                        // O rebase SEMPRE roda: além de deslocar os
+                        // timestamps, ele normaliza o layout (192/204
+                        // bytes ou prefixo -> TS limpo de 188). Pular a
+                        // chamada com offset 0 (como antes) escreveria o
+                        // segmento cru e misturaria strides no arquivo.
+                        val rebased = TsRebase.rebase(raw, offset)
                         out.write(rebased)
                         accumulated90k += segment.durationMs * TsRebase.TICKS_PER_MS
                         rebased.size.toLong()
