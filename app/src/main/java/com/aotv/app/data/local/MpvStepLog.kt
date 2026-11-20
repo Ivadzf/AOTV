@@ -33,11 +33,17 @@ object MpvStepLog {
     /**
      * Abre uma sessão nova: se o arquivo existe e a última linha não é o
      * encerramento limpo, a sessão anterior morreu sem destruir o mpv.
+     *
+     * Hotfix v1.38.1: a comparação era `lines.last() != CLEAN_MARKER`, mas
+     * o [append] grava TODA linha com o prefixo "[HH:mm:ss] " (inclusive o
+     * marcador: "[12:34:25] destroy: ok") — a comparação NUNCA casava e o
+     * aviso disparava em TODA sessão nova, mesmo com encerramento limpo.
+     * O fim da linha é o que vale (`endsWith`).
      */
     @Synchronized
     fun beginSession(context: Context) {
         val lines = readLines(context)
-        if (lines.isNotEmpty() && lines.last() != CLEAN_MARKER) {
+        if (lines.isNotEmpty() && !lines.last().endsWith(CLEAN_MARKER)) {
             append(context, "[aviso] sessão anterior terminou sem encerramento limpo (possível crash nativo)")
         }
     }

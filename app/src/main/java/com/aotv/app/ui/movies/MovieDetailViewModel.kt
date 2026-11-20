@@ -722,7 +722,13 @@ class MovieDetailViewModel @Inject constructor(
                         related = relatedList,
                         trailerKey = trailer,
                         trailerKeys = trailers,
-                        seasons = if (episodes?.isNotEmpty() == true) mapOf(1 to episodes) else emptyMap(),
+                        // Hotfix v1.38.1: FUNDIR, não substituir — o loadSeason()
+                        // pode já ter preenchido outras temporadas enquanto o
+                        // detalhe carregava; `mapOf(1 to ...)` (ou emptyMap()
+                        // com a T1 vazia) apagava os episódios que acabaram de
+                        // aparecer. Lista vazia NÃO é cacheada (ver loadSeason/
+                        // retry): preserva o que já existe.
+                        seasons = episodes.orEmpty().takeIf { it.isNotEmpty() }?.let { eps -> state.seasons + (1 to eps) } ?: state.seasons,
                         seriesImdbId = seriesImdb,
                         isLoading = false,
                         sourcesLoading = false,

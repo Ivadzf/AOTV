@@ -24,6 +24,20 @@ fun playerButtonLabel(id: String): String = when (id) {
     "skip" -> "Pular abertura"
     "color" -> "Cor"
     "info" -> "Infos técnicas"
+    // Hotfix v1.38.1: os 11 chips que já existiam no player mas não estavam
+    // no catálogo + "engine" (troca de motor dentro do player).
+    "enhance" -> "Melhorar imagem"
+    "eq" -> "Equalizador"
+    "night" -> "Modo noturno"
+    "aspect" -> "Aspecto"
+    "ambilight" -> "Ambilight"
+    "sensory" -> "Sensorial"
+    "xray" -> "X-Ray"
+    "sleep" -> "Sleep timer"
+    "private" -> "Modo privado"
+    "external" -> "Player externo"
+    "clip" -> "Baixar trecho"
+    "engine" -> "Motor"
     else -> id
 }
 
@@ -35,9 +49,26 @@ fun playerTopActionLabel(id: String): String = when (id) {
     else -> id
 }
 
-/** Botões do player em vigor: os guardados, ou o padrão quando não há nada salvo. */
-fun effectivePlayerButtons(saved: List<String>): List<String> =
-    saved.ifEmpty { DEFAULT_PLAYER_BUTTONS }
+/**
+ * Botões do player em vigor: os guardados, ou o padrão quando não há nada salvo.
+ *
+ * Hotfix v1.38.1 — migração: ids novos do catálogo que faltam numa lista
+ * guardada entram na posição do padrão, sem reordenar o que o usuário já
+ * moveu. Sem isto, quem salvou a lista antiga de 12 veria os 11 chips
+ * novos sumirem do player ([orderPlayerChips] descarta id do catálogo
+ * fora da lista guardada) — e nunca os veria nas Configurações.
+ */
+fun effectivePlayerButtons(saved: List<String>): List<String> {
+    if (saved.isEmpty()) return DEFAULT_PLAYER_BUTTONS
+    val merged = saved.toMutableList()
+    for (id in DEFAULT_PLAYER_BUTTONS) {
+        if (id !in merged) {
+            val pos = merged.count { DEFAULT_PLAYER_BUTTONS.indexOf(it) < DEFAULT_PLAYER_BUTTONS.indexOf(id) }
+            merged.add(pos.coerceIn(0, merged.size), id)
+        }
+    }
+    return merged
+}
 
 /** Botões do topo do player em vigor: os guardados, ou o padrão quando não há nada salvo. */
 fun effectivePlayerTopActions(saved: List<String>): List<String> =

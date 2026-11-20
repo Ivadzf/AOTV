@@ -620,20 +620,40 @@ class ClipDownloader(context: Context) {
         val destFile = File(moviesDir, fileName)
         var bytes = 0L
         val keyCache = HashMap<String, ByteArray>()
-        try {
+        // Baixa init + segmentos do intervalo com os headers dados (suspend:
+        // o ensureActive() cancela o download quando o usuário sai).
+        suspend fun downloadAll(hdrs: Map<String, String>): Long {
+            var total = 0L
             partFile.outputStream().buffered().use { out ->
                 if (isFmp4) {
                     // Init segment primeiro: sem ele os .m4s não tocam.
                     val initUrl = playlist.initSegmentUrl
                     if (initUrl != null) {
-                        bytes += fetchSegmentTo(initUrl, headers, out, cookies)
+                        total += fetchSegmentTo(initUrl, hdrs, out, cookies)
                     }
                 }
                 wanted.forEachIndexed { index, segment ->
                     currentCoroutineContext().ensureActive()
-                    bytes += fetchClipSegmentTo(segment, headers, out, keyCache, cookies)
+                    total += fetchClipSegmentTo(segment, hdrs, out, keyCache, cookies)
                     onProgress?.invoke(index + 1, wanted.size)
                 }
+            }
+            return total
+        }
+        try {
+            bytes = downloadAll(headers)
+        } catch (e: IOException) {
+            runCatching { partFile.delete() }
+            if (!e.message.orEmpty().contains("HTTP 403")) throw e
+            // Hotfix v1.38.1: 403 persistente — alguns CDNs exigem que o
+            // Referer dos segmentos seja a playlist de mídia que os listou
+            // (e não o Referer genérico do player), quando o segmento está
+            // noutro host. Uma única nova tentativa com esse Referer; se o
+            // host for o mesmo, não há o que tentar (cai no erro original).
+            val retryHeaders = refererRetryHeaders(headers, playlistUrl, wanted) ?: throw e
+            bytes = runCatching { downloadAll(retryHeaders) }.getOrElse { retryError ->
+                runCatching { partFile.delete() }
+                throw retryError
             }
         } catch (e: Exception) {
             runCatching { partFile.delete() }
@@ -669,6 +689,25 @@ class ClipDownloader(context: Context) {
     private fun mergeCookies(a: String?, b: String?): String? =
         listOfNotNull(a?.takeIf { it.isNotBlank() }, b?.takeIf { it.isNotBlank() })
             .joinToString("; ").takeIf { it.isNotBlank() }
+
+    /**
+     * Headers da tentativa extra no 403 (hotfix v1.38.1): Referer = a URL
+     * da playlist de mídia, mas SÓ quando algum segmento está noutro host
+     * que o da playlist — com o mesmo host não há o que mudar (null = não
+     * tentar). Não inventa host: compara os hosts reais das URLs.
+     */
+    private fun refererRetryHeaders(
+        headers: Map<String, String>,
+        playlistUrl: String,
+        segments: List<ClipSegment>,
+    ): Map<String, String>? {
+        val playlistHost = runCatching { java.net.URL(playlistUrl).host }.getOrNull() ?: return null
+        val differs = segments.any { seg ->
+            runCatching { java.net.URL(seg.url).host }.getOrNull()?.let { it != playlistHost } == true
+        }
+        if (!differs) return null
+        return headers + ("Referer" to playlistUrl)
+    }
 
     /** Baixa um arquivo (segmento ou init) p/ o `out`, com os cookies da playlist quando houver. */
     private fun fetchSegmentTo(

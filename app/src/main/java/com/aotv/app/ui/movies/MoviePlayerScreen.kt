@@ -531,7 +531,11 @@ fun MoviePlayerScreen(
     val liveRepo = remember { LiveTvRepository(context, com.aotv.app.data.local.PlatformPrefs(context)) }
     s.onDemandRepo = liveRepo
     s.panelBlurOn = panelBlurOn
-    s.playerButtonOrder = playerButtons
+    // Hotfix v1.38.1: a lista EFETIVA (com a migração dos ids novos do
+    // catálogo) — a lista crua guardada faria os chips novos sumirem do
+    // player p/ quem salvou a ordem antes deles existirem (ver
+    // effectivePlayerButtons e orderPlayerChips).
+    s.playerButtonOrder = effectivePlayerButtons(playerButtons)
     s.playerTopActions = playerTopActionsPref
     s.routePlayId = playId
     s.tapSeekEnabled = playerTapSeek
@@ -695,6 +699,9 @@ fun MoviePlayerScreen(
     s.mpvSubPos = playerMpvSubPos
     s.autoSwitchAtStart = playerAutoSwitchAtStart
     s.onEnhanceHwClassSave = { playerPrefsVm.setEnhanceHwClass(it) }
+    // Hotfix v1.38.1: a troca de motor dentro do player persiste na pref
+    // (o chip "Motor" chama s.switchEngine(), que invoca este callback).
+    s.onEngineChange = { playerPrefsVm.setEngine(it) }
     // Opções do mpv ao vivo: quando mudam em Configurações com o player na
     // pilha, reaplica sem reiniciar o vídeo (o init lê as mesmas prefs).
     LaunchedEffect(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos) {
@@ -907,7 +914,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     }
     // Legenda externa é desenhada pelo próprio player (ver externalCues), então trocar de
     // legenda não recarrega o vídeo.
-    LaunchedEffect(streamUrl, mobileGatePass, mpvFallback) {
+    LaunchedEffect(streamUrl, mobileGatePass, mpvFallback, s.engineSwitchNonce) {
         val url = streamUrl ?: return@LaunchedEffect
         // Lote 25 item 7 (Frente C) — gate de dados móveis: segura a
         // preparação do stream em dados móveis até o usuário liberar
@@ -2694,10 +2701,16 @@ class PlayerSession(
         val url = streamUrl ?: return
         showClipDialog = false
         scope.launch {
-            // Lote mpv 3: a altura em reprodução vai p/ o clipe escolher a
-            // variante que está tocando (o downloader caía sempre na de maior
-            // bandwidth e o ALYA devolvia 403 nos segmentos dela).
-            val result = clipDownloader.downloadClip(tmdbId, type, title, posterUrl, lastEpisode, url, startMs, endMs, playingHeight = videoHeight.takeIf { it > 0 })
+            // Hotfix v1.38.1: releitura do tamanho na hora do corte — o
+            // videoHeight guardado pode estar 0 (a leitura de mpv.videoSize()
+            // só roda no FILE_LOADED e pode não ter refrescado), e sem altura
+            // a variante em reprodução ficava desconhecida e o clipe caía na
+            // de maior bandwidth. A releitura é best-effort: sem altura nova,
+            // vale o guardado.
+            val freshHeight = if (mpvActive) (mpvPlayer?.videoSize()?.second ?: 0)
+                else runCatching { exoPlayer.videoSize.height }.getOrDefault(0)
+            val height = (freshHeight.takeIf { it > 0 } ?: videoHeight).takeIf { it > 0 }
+            val result = clipDownloader.downloadClip(tmdbId, type, title, posterUrl, lastEpisode, url, startMs, endMs, playingHeight = height)
             toastMsg = when (result) {
                 is com.aotv.app.data.clips.ClipResult.Done ->
                     "Trecho salvo em Downloads: ${result.displayTitle}"
@@ -3701,13 +3714,19 @@ class PlayerSession(
     }
     // Controle pela tela bloqueada, fone Bluetooth e Google Assistant. Só o player LOCAL —
     // o Cast tem a própria sessão separada via Google Cast framework.
-    val mediaSession = androidx.media3.session.MediaSession.Builder(context, exoPlayer).build()
+    // Hotfix v1.38.1: a construção da MediaSession NÃO é guardada (o
+    // ExoPlayer acima tem fallback com try/catch, esta não tinha) — se ela
+    // lançar, o construtor da sessão morre e a 1ª composição do destino
+    // Player crasha. Null = sem controle de tela bloqueada, o player segue.
+    val mediaSession = runCatching { androidx.media3.session.MediaSession.Builder(context, exoPlayer).build() }.getOrNull()
 
     // ── CAST: ao conectar uma sessão Chromecast, transfere a reprodução p/ a TV ──
     val castContext = run {
         runCatching { com.google.android.gms.cast.framework.CastContext.getSharedInstance(context) }.getOrNull()
     }
-    val castPlayer = run { castContext?.let { androidx.media3.cast.CastPlayer(it) } }
+    // Hotfix v1.38.1: o CastPlayer também não era guardado — mesma blindagem
+    // da MediaSession acima. Null = sem Cast, o player local segue.
+    val castPlayer = run { castContext?.let { runCatching { androidx.media3.cast.CastPlayer(it) }.getOrNull() } }
     // Player ATIVO: quando transmitindo, os controles (play/pause/seek) e o progresso
     // operam no Chromecast (castPlayer), não no player local — senão o áudio sai dobrado
     // (celular + TV) e o app não controla a TV.
@@ -3808,14 +3827,23 @@ class PlayerSession(
     }
 
     // ── Libmpv (Lote mpv 1, v1.36.0) ─────────────────────────────────────
-    /** Motor escolhido na pref (só vale na criação da sessão). */
-    val useMpv: Boolean get() = engineMode == PlayerEngineMode.LIBMPV
+    /** Motor em vigor (hotfix v1.38.1: mutável — a troca dentro do player
+     * muda aqui e a pref é persistida pelo [onEngineChange]; nasce com o
+     * [engineMode] da criação da sessão). */
+    var currentEngineMode by run { mutableStateOf(engineMode) }
+    /** Motor escolhido na pref (vale na criação da sessão; a troca em
+     * reprodução muda o [currentEngineMode], não este). */
+    val useMpv: Boolean get() = currentEngineMode == PlayerEngineMode.LIBMPV
     /** true quando o mpv falhou e a sessão caiu p/ o ExoPlayer. */
     var mpvFallback by run { mutableStateOf(false) }
     /** true enquanto o vídeo está de fato no mpv (não no fallback). */
     val mpvActive: Boolean get() = useMpv && !mpvFallback && mpvPlayer != null
     /** Wrapper do libmpv (null = MPV() falhou na construção, .so ausente). */
-    val mpvPlayer: MpvPlayer? = if (useMpv) runCatching {
+    var mpvPlayer: MpvPlayer? = createMpvPlayer()
+        private set
+
+    /** Cria o wrapper do libmpv (null quando o motor não é o mpv ou o MPV() falhou). */
+    private fun createMpvPlayer(): MpvPlayer? = if (useMpv) runCatching {
         MpvPlayer(
             context,
             object : MpvPlayer.MpvListener {
@@ -3825,6 +3853,60 @@ class PlayerSession(
             },
         )
     }.getOrNull() else null
+
+    /** Destrói o mpv atual e solta a referência (troca de motor). */
+    private fun destroyMpvPlayer() {
+        val mpv = mpvPlayer ?: return
+        mpvPlayer = null
+        runCatching { mpv.destroy() }
+    }
+
+    /** Persiste a troca de motor na pref (a tela liga ao PlayerPrefsViewModel). */
+    var onEngineChange: (String) -> Unit = {}
+    /** Contador de trocas de motor: o efeito de load da tela o usa como chave p/ recarregar a fonte no motor novo. */
+    var engineSwitchNonce by run { mutableIntStateOf(0) }
+
+    /**
+     * Troca o motor dentro do player (hotfix v1.38.1 — como no Nuvio):
+     * salva a posição, para o motor atual, recria no motor novo e retoma
+     * no mesmo ponto. A escolha persiste na pref `pref_player_engine`.
+     * Transmitindo (Cast) ou com player externo aberto, não troca.
+     */
+    fun switchEngine() {
+        if (casting) {
+            toastMsg = "Transmitindo: pare a transmissão para trocar o motor."
+            return
+        }
+        if (externalOpened) {
+            toastMsg = "Player externo aberto: troque o motor depois de voltar."
+            return
+        }
+        val target = if (useMpv) PlayerEngineMode.EXOPLAYER else PlayerEngineMode.LIBMPV
+        val pos = activePositionMs().coerceAtLeast(0L)
+        position = pos
+        saveNow()
+        // Para o motor atual: o mpv é destruído (solta a superfície e o
+        // contexto GL); o ExoPlayer só para (ele sobrevive à troca e volta
+        // no próximo load — criá-lo de novo custaria o decoder).
+        if (useMpv) destroyMpvPlayer() else runCatching { exoPlayer.stop() }
+        currentEngineMode = target
+        mpvFallback = false
+        if (target == PlayerEngineMode.LIBMPV) {
+            mpvPlayer = createMpvPlayer()
+            if (mpvPlayer == null) {
+                mpvFallback = true
+                toastMsg = "O Libmpv não iniciou neste aparelho — usando o ExoPlayer."
+            }
+        }
+        onEngineChange(target.id)
+        pendingSeekMs = pos
+        didSeek = false
+        switching = true
+        movieStarted = false
+        engineSwitchNonce++
+        if (mpvFallback) return // toast de falha já avisou; o efeito cai p/ o ExoPlayer.
+        toastMsg = if (target == PlayerEngineMode.LIBMPV) "Motor: Libmpv." else "Motor: ExoPlayer."
+    }
 
     /** SurfaceView do mpv pronta: anexa (e dispara load pendente). */
     fun onMpvSurfaceCreated(surface: android.view.Surface) {
@@ -4533,7 +4615,7 @@ class PlayerSession(
         // Libmpv (Lote mpv 1): solta a superfície e destrói o mpv antes do ExoPlayer.
         mpvPlayer?.destroy()
         exoPlayer.release()
-        mediaSession.release()
+        mediaSession?.release()
         ScrubThumbnailer.release()
         // v1.2.8: para o proxy local do Kodi (a porta e os tokens morrem com o player).
         com.aotv.app.data.kodi.KodiLocalProxy.stop()
@@ -5544,58 +5626,49 @@ class PlayerSession(
             })
         }
         add(PlayerChipItem(WebPlayerIcons.Screen, "Tela ${screenModes[screenModeIdx].first.lowercase()}", active = screenModeIdx > 0, id = "screen") { openDpadPanel("screen") })
+        // Troca de motor dentro do player (hotfix v1.38.1 — como no Nuvio):
+        // mostra o motor atual e troca p/ o outro sem ir nas Configurações.
+        // Salva a posição e retoma no mesmo ponto (ver switchEngine).
+        add(PlayerChipItem(Icons.Default.SwapHoriz, "Motor: ${if (useMpv) "Libmpv" else "ExoPlayer"}", id = "engine") { switchEngine() })
         val speed = speeds[speedIdx]
         add(PlayerChipItem(WebPlayerIcons.Speed, "Velocidade ${playbackSpeedText(speed)}", active = speed != 1f,
             value = if (speed != 1f) playbackSpeedText(speed) else "", id = "speed") { openDpadPanel("speed") })
-        // Correção de cor (v1.9.0): chip novo "color" — NÃO está na lista
-        // canônica DEFAULT_PLAYER_BUTTONS (não mexida); o orderPlayerChips
-        // põe ids fora do catálogo no fim, então ele aparece por último.
+        // Correção de cor (v1.9.0): chip "color" — está no catálogo
+        // DEFAULT_PLAYER_BUTTONS, então aparece nas Configurações.
         add(PlayerChipItem(Icons.Default.Tune, "Cor", active = !colorState.isDefault, id = "color") { openDpadPanel("color") })
-        // Melhorar imagem (Lote mpv 2, v1.37.0): mesmo padrão do chip "Cor"
-        // — id fora do catálogo, vai p/ o fim. Abre sempre (mesmo no
-        // ExoPlayer, onde o painel explica que só vale com o Libmpv).
+        // Melhorar imagem (Lote mpv 2, v1.37.0): no catálogo desde o hotfix
+        // v1.38.1 (antes ia p/ o fim como id fora do catálogo). Abre sempre
+        // (mesmo no ExoPlayer, onde o painel explica que só vale com o Libmpv).
         add(PlayerChipItem(Icons.Default.AutoFixHigh, "Melhorar imagem", active = !enhanceState.isDefault, id = "enhance") { openDpadPanel("enhance") })
-        // Infos técnicas do vídeo (Lote 4 item 4, v1.12.0): mesmo padrão do chip
-        // "color" — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado
-        // nas Configurações (é um painel de diagnóstico, não um botão configurável).
+        // Infos técnicas do vídeo (Lote 4 item 4, v1.12.0): no catálogo desde
+        // o hotfix v1.38.1 (antes ia p/ o fim como id fora do catálogo).
         add(PlayerChipItem(Icons.Default.Info, "Infos técnicas", id = "info") { openDpadPanel("info") })
-        // Equalizador (Lote 9 item 3, v1.19.0): mesmo padrão dos chips
-        // "color"/"info" — id fora do catálogo, vai p/ o fim e NÃO pode ser
-        // desligado nas Configurações (o liga/desliga dele é a pref).
+        // Equalizador (Lote 9 item 3, v1.19.0): no catálogo desde o hotfix
+        // v1.38.1 (o liga/desliga dele continua sendo a pref, no painel).
         add(PlayerChipItem(Icons.Default.Equalizer, "Equalizador", active = eqEnabled, id = "eq") { openDpadPanel("eq") })
-        // Modo noturno + Clear Dialogue (Lote 16 item 1): mesmo padrão dos
-        // chips "color"/"eq" — id fora do catálogo, vai p/ o fim e NÃO pode
-        // ser desligado nas Configurações (a escolha é por título, no painel).
+        // Modo noturno + Clear Dialogue (Lote 16 item 1): no catálogo desde
+        // o hotfix v1.38.1 (a escolha continua por título, no painel).
         add(PlayerChipItem(Icons.Default.DarkMode, "Modo noturno", active = nightModeState.nightOn || nightModeState.clearDialogueOn, id = "night") { openDpadPanel("night") })
-        // Lote 24 — Frente B (v1.34.0): mesmo padrão dos chips "color"/"night"
-        // — ids fora do catálogo canônico, vão p/ o fim e NÃO podem ser
-        // desligados nas Configurações (o liga/desliga é a pref, no painel).
+        // Lote 24 — Frente B (v1.34.0): no catálogo desde o hotfix v1.38.1
+        // (antes iam p/ o fim como ids fora do catálogo).
         add(PlayerChipItem(Icons.Default.AspectRatio, "Aspecto ${aspectMode.label}", active = aspectMode != AspectMode.ORIGINAL, id = "aspect") { openDpadPanel("aspect") })
         add(PlayerChipItem(Icons.Default.BrightnessHigh, "Ambilight", active = ambilightState.enabled, id = "ambilight") { openDpadPanel("ambilight") })
         add(PlayerChipItem(Icons.Default.Spa, "Sensorial", active = sensoryOn, id = "sensory") { openDpadPanel("sensory") })
-        // X-Ray (Lote 21, v1.31.0): mesmo padrão dos chips "color"/"info" — id
-        // fora do catálogo canônico, vai p/ o fim e NÃO pode ser desligado nas
-        // Configurações (é um painel de contexto, não um botão configurável).
+        // X-Ray (Lote 21, v1.31.0): no catálogo desde o hotfix v1.38.1.
         add(PlayerChipItem(Icons.Default.Science, "X-Ray", id = "xray") { openDpadPanel("xray") })
-        // Sleep timer (Lote 9 item 4, v1.19.0): mesmo padrão — id fora do
-        // catálogo, vai p/ o fim. Escolha por sessão, sem pref persistente.
+        // Sleep timer (Lote 9 item 4, v1.19.0): no catálogo desde o hotfix
+        // v1.38.1. Escolha por sessão, sem pref persistente.
         add(PlayerChipItem(Icons.Default.Bedtime, "Sleep timer", active = sleepMinutes != null || sleepAtEpisodeEnd, id = "sleep") { openDpadPanel("sleep") })
-        // Modo privado (Lote 2, item 7 — v1.10.0): mesmo padrão do chip "color"
-        // — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado nas
-        // Configurações (é um estado, não um botão configurável). Ligado, o
-        // player não salva progresso nem marca visto (ver togglePrivateMode).
+        // Modo privado (Lote 2, item 7 — v1.10.0): no catálogo desde o hotfix
+        // v1.38.1. Ligado, o player não salva progresso nem marca visto (ver togglePrivateMode).
         add(PlayerChipItem(Icons.Default.VisibilityOff, if (privateMode) "Privado" else "Modo privado", active = privateMode, id = "private") { togglePrivateMode() })
-        // Player externo (Lote 4 item 1 — v1.12.0): mesmo padrão dos chips
-        // "color"/"private" — id fora do catálogo canônico, vai p/ o fim e
-        // NÃO pode ser desligado nas Configurações. Abre a fonte atual no
-        // seletor do sistema (VLC, MX Player…). Com a pref "Player externo"
-        // ligada, nem precisa tocar aqui: abre sozinho ao resolver a fonte.
+        // Player externo (Lote 4 item 1 — v1.12.0): no catálogo desde o hotfix
+        // v1.38.1. Abre a fonte atual no seletor do sistema (VLC, MX Player…).
+        // Com a pref "Player externo" ligada, nem precisa tocar aqui: abre sozinho ao resolver a fonte.
         add(PlayerChipItem(Icons.Default.OpenInNew, "Player externo", id = "external") { openExternalPlayer() })
-        // Baixar trecho (Lote 18 item 10 — CLIPES, v1.28.0): mesmo padrão dos
-        // chips "color"/"info" — id "clip" fora do catálogo canônico, vai p/
-        // o fim e NÃO pode ser desligado nas Configurações. Só aparece com
-        // fonte ativa e duração conhecida (ao vivo não tem trecho). HLS abre
-        // o seletor de início/fim; MP4/torrent avisam o motivo no toque.
+        // Baixar trecho (Lote 18 item 10 — CLIPES, v1.28.0): no catálogo desde
+        // o hotfix v1.38.1. Só aparece com fonte ativa e duração conhecida (ao
+        // vivo não tem trecho). HLS abre o seletor de início/fim; MP4/torrent avisam o motivo no toque.
         if (streamUrl != null && duration > 0) add(PlayerChipItem(Icons.Default.ContentCut, "Baixar trecho", id = "clip") { onClipChipTap() })
         if (currentSources.size > 1) add(PlayerChipItem(WebPlayerIcons.Pin, if (pinnedSource) "Fonte fixa" else "Fixar fonte", active = pinnedSource, id = "pin") {
             pinnedSource = !pinnedSource

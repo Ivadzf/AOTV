@@ -256,6 +256,20 @@ fun DiagnosticsScreen(
                 )
             }
         } else {
+            // Hotfix v1.38.1: o COMEÇO do erro num cartão próprio — a tela
+            // mostrava só o texto corrido (take 4000) e o print do Davi
+            // pegou o FIM do stack, sem o tipo da exceção (a 1ª linha depois
+            // de "Thread:"). O head cabe sempre no topo da seção.
+            Text(
+                "Começo do erro — é isto que identifica o crash (tipo da exceção + primeiras linhas):",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            DiagCard {
+                Text(
+                    crashHeadText(lastCrash),
+                    fontSize = 13.sp, color = TextPrimary, lineHeight = 18.sp,
+                )
+            }
             DiagCard {
                 Text(
                     lastCrash.take(4000),
@@ -351,6 +365,18 @@ fun DiagnosticsScreen(
 }
 
 /** Milissegundos com 1 casa decimal, vírgula brasileira ("16,7"). */
+/**
+ * Começo do registro de crash (hotfix v1.38.1): cabeçalho (versão, aparelho,
+ * Thread) + tipo da exceção + primeiros frames — as 12 primeiras linhas.
+ * O registro do [CrashLog] começa com o cabeçalho e o
+ * `Log.getStackTraceString` põe a exceção logo depois; 12 linhas cobrem o
+ * cabeçalho + a exceção + ~7 frames. Vazio só com registro em branco.
+ */
+private fun crashHeadText(crash: String): String {
+    val head = crash.lineSequence().take(12).joinToString("\n").trimEnd()
+    return head.ifBlank { crash.take(600) }
+}
+
 private fun msText(ms: Double): String = String.format(Locale.US, "%.1f", ms).replace('.', ',')
 
 /** Cartão simples de linhas (rótulo à esquerda, valor à direita). */

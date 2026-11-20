@@ -294,6 +294,10 @@ internal val SCOPED_KEYS = listOf(
  */
 val DEFAULT_PLAYER_BUTTONS = listOf(
     "subs", "audio", "sources", "episodes", "prev", "next", "screen", "speed", "pin", "skip", "color", "info",
+    // Hotfix v1.38.1: os 11 chips que o player já montava mas não estavam
+    // no catálogo (por isso não apareciam p/ editar em Reprodução) +
+    // "engine" (troca de motor dentro do player, v1.38.1).
+    "enhance", "eq", "night", "aspect", "ambilight", "sensory", "xray", "sleep", "private", "external", "clip", "engine",
 )
 
 /** Botões do topo do player (voltar sempre aparece; estes são os opcionais). */
