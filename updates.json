@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "63a8922425b07b599803ce293ec50526ce71f8f3dd2bb8ef8da6657819742e61",
-        "size": 81893390,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.35.0/AOTV-v1.35.0.apk"
+        "sha256": "f4f190f633c3983375476f61d122d803fa11489a5906304d76e40fa57a10aa01",
+        "size": 114007625,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.36.0/AOTV-v1.36.0.apk"
       }
     },
-    "changelog": "v1.35.0 \u2014 Lote 25: assistente por comandos, command palette, voz + QR + populares na busca, tour de onboarding, Report a problem com teste de velocidade, addon health check, gate de dados m\u00f3veis, governador de bateria, sa\u00edda de \u00e1udio (TV/receiver + passthrough Dolby/DTS), aba Streaming (Onde assistir), v\u00eddeos gr\u00e1tis (CCC, Blender, PeerTube) e sincronia cont\u00ednua Nuvio/Stremio. Inclui o hotfix v1.34.1 (crash ao tocar num perfil). Obs.: passthrough sem receiver HDMI real ainda precisa de teste no aparelho; assistente, paleta, Streaming e v\u00eddeos gr\u00e1tis s\u00f3 no celular (n\u00e3o na TV); voz e QR s\u00f3 na busca e no guia ao vivo.",
-    "published_at": "2026-11-19T21:22:00Z",
-    "tag": "v1.35.0",
-    "version": "1.35.0",
-    "versionCode": 73
+    "changelog": "v1.36.0 \u2014 Lote mpv 1: player mpv (libmpv) como engine alternativa ao ExoPlayer com fallback autom\u00e1tico, engine selecion\u00e1vel nas configura\u00e7\u00f5es do player, controles b\u00e1sicos no mpv (play/pause, seek, velocidade, faixas de \u00e1udio e legenda). Corre\u00e7\u00f5es: campo de chave da OMDb na aba de Trackers, Continuar assistindo acima do Peak Cinema, classifica\u00e7\u00e3o mais perto das op\u00e7\u00f5es no detalhe de s\u00e9rie, assistente e paleta de comandos s\u00f3 na aba de pesquisa. Obs.: APK maior (~109 MB) por causa do FFmpeg do libmpv; o mpv no aparelho/TV ainda precisa de teste ao vivo.",
+    "published_at": "2026-11-20T10:13:00Z",
+    "tag": "v1.36.0",
+    "version": "1.36.0",
+    "versionCode": 74
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "f4f190f633c3983375476f61d122d803fa11489a5906304d76e40fa57a10aa01",
+          "size": 114007625,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.36.0/AOTV-v1.36.0.apk"
+        }
+      },
+      "changelog": "v1.36.0 \u2014 Lote mpv 1: player mpv (libmpv) como engine alternativa ao ExoPlayer com fallback autom\u00e1tico, engine selecion\u00e1vel nas configura\u00e7\u00f5es do player, controles b\u00e1sicos no mpv (play/pause, seek, velocidade, faixas de \u00e1udio e legenda). Corre\u00e7\u00f5es: campo de chave da OMDb na aba de Trackers, Continuar assistindo acima do Peak Cinema, classifica\u00e7\u00e3o mais perto das op\u00e7\u00f5es no detalhe de s\u00e9rie, assistente e paleta de comandos s\u00f3 na aba de pesquisa. Obs.: APK maior (~109 MB) por causa do FFmpeg do libmpv; o mpv no aparelho/TV ainda precisa de teste ao vivo.",
+      "published_at": "2026-11-20T10:13:00Z",
+      "tag": "v1.36.0",
+      "version": "1.36.0",
+      "versionCode": 74
+    },
     {
       "assets": {
         "universal": {
