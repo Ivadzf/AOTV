@@ -26,6 +26,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.DeviceFacts
+import com.aotv.app.ui.movies.MpvIpc
+import com.aotv.app.ui.movies.MpvObservedProperties
 import com.aotv.app.data.local.CrashLog
 import com.aotv.app.data.local.MpvStepLog
 import com.aotv.app.data.local.PlatformPrefs
@@ -132,6 +134,10 @@ data class DiagnosticsUiState(
     val lastCrash: String? = null,
     /** Últimos passos do libmpv (Lote mpv 3, v1.38.0), ou "" sem registro. */
     val mpvSteps: String = "",
+    /** Servidor IPC do mpv ligado (Lote mpv 4, v1.39.0 — Frente 3). */
+    val mpvIpcEnabled: Boolean = false,
+    /** Caminho do socket IPC do mpv (só quando ligado). */
+    val mpvIpcSocket: String = "",
 )
 
 @HiltViewModel
@@ -163,6 +169,8 @@ class DiagnosticsViewModel @Inject constructor(
             applied = false,
             lastCrash = CrashLog.read(appContext),
             mpvSteps = MpvStepLog.read(appContext),
+            mpvIpcEnabled = prefs.mpvIpc,
+            mpvIpcSocket = if (prefs.mpvIpc) MpvIpc.socketPath(appContext).absolutePath else "",
         )
     }
 
@@ -307,6 +315,33 @@ fun DiagnosticsScreen(
                 fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
             )
             AotvButton("Limpar passos do mpv", { viewModel.clearMpvSteps() }, tone = ButtonTone.SECONDARY, modifier = Modifier.fillMaxWidth())
+        }
+        // Lote mpv 4 (v1.39.0) — Frente 3: propriedades observadas do mpv
+        // (time-pos, duration, pause, paused-for-cache, core-idle) + status
+        // do servidor IPC. Os valores vêm do MpvObservedProperties, que o
+        // player alimenta enquanto o Libmpv toca (valores já formatados).
+        VpnPartySection("Propriedades observadas do mpv", anchor = SettingsAnchors.DIAG_MPV_PROPS)
+        val mpvProps by MpvObservedProperties.values.collectAsStateWithLifecycle()
+        DiagCard {
+            if (mpvProps.isEmpty()) {
+                Text(
+                    "Sem valores ainda — abra um vídeo com o Libmpv.",
+                    fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp,
+                )
+            } else {
+                DiagRow("Posição", mpvProps["time-pos"] ?: "—")
+                DiagRow("Duração", mpvProps["duration"] ?: "—")
+                DiagRow("Pausa", mpvProps["pause"] ?: "—")
+                DiagRow("Pausa p/ cache", mpvProps["paused-for-cache"] ?: "—")
+                DiagRow("Núcleo parado", mpvProps["core-idle"] ?: "—")
+            }
+            DiagRow("Servidor IPC", if (state.mpvIpcEnabled) "Ligado" else "Desligado")
+            if (state.mpvIpcEnabled && state.mpvIpcSocket.isNotBlank()) {
+                Text(
+                    state.mpvIpcSocket,
+                    fontSize = 13.sp, color = TextPrimary, lineHeight = 18.sp,
+                )
+            }
         }
         // Lote 25 (v1.35.0) — Frente B, item 5: "Report a problem".
         VpnPartySection("Reportar um problema", anchor = SettingsAnchors.DIAG_REPORT)

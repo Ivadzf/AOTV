@@ -203,6 +203,12 @@ fun MovieDetailScreen(
     // Autoplay: 3 s após abrir, só com a pref ligada e (por padrão) só no
     // Wi-Fi. Se o usuário já abriu o trailer na mão, não dispara.
     val detailContext = androidx.compose.ui.platform.LocalContext.current
+    // Lote mpv 4 (v1.39.0): pré-carrega o motor Libmpv em 2º plano quando o
+    // motor do perfil é o Libmpv — o player reabre um motor já quente em
+    // vez de construir a frio (o crash da 1ª abertura). Preguiçoso e
+    // descartável: se o usuário não abrir o player, a piscina descarta o
+    // motor depois de 120 s sem uso; não trava a abertura do detalhe.
+    LaunchedEffect(item.tmdbId) { MpvWarmPool.warmup(detailContext) }
     LaunchedEffect(state.trailerKey) {
         if (state.trailerKey.isBlank() || trailerAutoplayed) return@LaunchedEffect
         kotlinx.coroutines.delay(3_000)

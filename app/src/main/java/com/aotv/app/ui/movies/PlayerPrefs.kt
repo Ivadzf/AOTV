@@ -454,6 +454,18 @@ class PlayerPrefsViewModel @Inject constructor(
     val mpvSubPos: StateFlow<Int> = prefs.mpvSubPosFlow
     fun setMpvSubPos(v: Int) { prefs.mpvSubPos = v.coerceIn(0, 100) }
 
+    /** Pré-carregar o motor Libmpv ao abrir o detalhe do título (Lote mpv 4, v1.39.0). */
+    val mpvPreload: StateFlow<Boolean> = prefs.mpvPreloadFlow
+    fun setMpvPreload(v: Boolean) { prefs.mpvPreload = v }
+
+    /** Carregar scripts Lua do mpv (pasta filesDir/mpv/scripts). */
+    val mpvScripts: StateFlow<Boolean> = prefs.mpvScriptsFlow
+    fun setMpvScripts(v: Boolean) { prefs.mpvScripts = v }
+
+    /** Servidor IPC do mpv (socket no armazenamento interno; desligado por padrão). */
+    val mpvIpc: StateFlow<Boolean> = prefs.mpvIpcFlow
+    fun setMpvIpc(v: Boolean) { prefs.mpvIpc = v }
+
     /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 — v1.36.0) ou "external". */
     val engine: StateFlow<String> = prefs.playerEngineFlow
     fun setEngine(v: String) {

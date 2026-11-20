@@ -41,7 +41,10 @@ import java.io.File
  */
 class MpvPlayer(
     context: Context,
-    private val listener: MpvListener,
+    // var (não val): a piscina quente (MpvWarmPool) re-liga o listener da
+    // sessão ao adotar o motor — o observer lê o listener atual a cada
+    // evento, então trocar aqui vale p/ os eventos seguintes.
+    private var listener: MpvListener,
 ) {
     interface MpvListener {
         /** Arquivo carregado e tocando (equivale ao STATE_READY do ExoPlayer). */
@@ -86,30 +89,64 @@ class MpvPlayer(
         val subLang: String,
     )
 
+    /**
+     * Observer de eventos do mpv — guardado como campo p/ remover no
+     * destroy() (Lote mpv 4): antes ele era criado inline no construtor e
+     * nunca era removido, então um evento nativo podia chegar num
+     * observer de um player já destruído. Os `eventProperty` alimentam o
+     * [MpvObservedProperties] (o Diagnóstico mostra os últimos valores).
+     */
+    private val eventObserver = object : MPV.EventObserver {
+        override fun eventProperty(property: String) = Unit
+        override fun eventProperty(property: String, value: Long) {
+            MpvObservedProperties.update(property, value)
+        }
+        override fun eventProperty(property: String, value: Boolean) {
+            MpvObservedProperties.update(property, value)
+        }
+        override fun eventProperty(property: String, value: String) {
+            MpvObservedProperties.update(property, value)
+        }
+        override fun eventProperty(property: String, value: Double) {
+            MpvObservedProperties.update(property, value)
+        }
+        override fun eventProperty(property: String, value: MPVNode) = Unit
+        override fun event(eventId: Int, data: MPVNode) {
+            // Chega na thread de eventos do mpv — tudo p/ a Main.
+            when (eventId) {
+                MPV.mpvEvent.MPV_EVENT_FILE_LOADED -> mainHandler.post {
+                    if (!destroyed) listener.onFileLoaded()
+                }
+                MPV.mpvEvent.MPV_EVENT_END_FILE -> mainHandler.post {
+                    if (destroyed) return@post
+                    val eof = runCatching { mpv.getPropertyBoolean("eof-reached") }.getOrNull() == true
+                    listener.onEndFile(eof)
+                }
+            }
+        }
+    }
+
     init {
         MpvStepLog.beginSession(appContext)
         MpvStepLog.append(appContext, "create: MpvPlayer")
-        mpv.addObserver(object : MPV.EventObserver {
-            override fun eventProperty(property: String) = Unit
-            override fun eventProperty(property: String, value: Long) = Unit
-            override fun eventProperty(property: String, value: Boolean) = Unit
-            override fun eventProperty(property: String, value: String) = Unit
-            override fun eventProperty(property: String, value: Double) = Unit
-            override fun eventProperty(property: String, value: MPVNode) = Unit
-            override fun event(eventId: Int, data: MPVNode) {
-                // Chega na thread de eventos do mpv — tudo p/ a Main.
-                when (eventId) {
-                    MPV.mpvEvent.MPV_EVENT_FILE_LOADED -> mainHandler.post {
-                        if (!destroyed) listener.onFileLoaded()
-                    }
-                    MPV.mpvEvent.MPV_EVENT_END_FILE -> mainHandler.post {
-                        if (destroyed) return@post
-                        val eof = runCatching { mpv.getPropertyBoolean("eof-reached") }.getOrNull() == true
-                        listener.onEndFile(eof)
-                    }
-                }
-            }
-        })
+        mpv.addObserver(eventObserver)
+    }
+
+    /** Troca o listener (a piscina quente adota o motor com o listener da sessão). */
+    fun rebindListener(newListener: MpvListener) {
+        listener = newListener
+    }
+
+    /** Motor iniciado e saudável (pronto p/ adotar ou devolver à piscina). */
+    val isWarm: Boolean get() = initialized && !initFailed && !destroyed
+
+    /** Já destruído (nunca reutilizar). */
+    val isDestroyed: Boolean get() = destroyed
+
+    /** Para a reprodução e deixa o motor ocioso (p/ devolver à piscina quente). */
+    fun stopPlayback() {
+        if (!initialized || destroyed) return
+        runCatching { mpv.command("stop") }
     }
 
     // ── Ciclo de vida ────────────────────────────────────────────────────
@@ -191,6 +228,11 @@ class MpvPlayer(
                 subPos = p.mpvSubPos,
             )
         }
+        // Lote mpv 4: extras do init (scripts Lua, IPC, yt-dlp) — lidos aqui
+        // porque o init pode correr antes do primeiro LaunchedEffect da tela
+        // (e o pré-carregamento da piscina quente inicia sem tela nenhuma).
+        val scriptsEnabled = runCatching { PlatformPrefs(appContext).mpvScripts }.getOrDefault(true)
+        val ipcEnabled = runCatching { PlatformPrefs(appContext).mpvIpc }.getOrDefault(false)
         MpvStepLog.append(
             appContext,
             "init: opções vo=${preferredVo} hwdec=${playbackOptions.hwdec} video-sync=${playbackOptions.videoSync} display-fps=${playbackOptions.displayFps}",
@@ -198,6 +240,10 @@ class MpvPlayer(
         val ok = runCatching {
             val configDir = File(appContext.filesDir, "mpv").apply { mkdirs() }
             val cacheDir = File(appContext.cacheDir, "mpv").apply { mkdirs() }
+            // Scripts Lua (Lote mpv 4): os exemplos embutidos são copiados
+            // p/ filesDir/mpv/scripts na 1ª vez; o mpv carrega sozinho os
+            // .lua dessa pasta no init (config-dir = filesDir/mpv).
+            runCatching { MpvScripts.ensureExamples(appContext) }
             mpv.create(appContext)
             mpv.setOptionString("config", "yes")
             mpv.setOptionString("config-dir", configDir.absolutePath)
@@ -251,22 +297,58 @@ class MpvPlayer(
             )
             mpv.setOptionString("sub-pos", playbackOptions.subPos.coerceIn(0, 100).toString())
             mpv.setOptionString("force-window", "no")
+            // Scripts Lua (Lote mpv 4): "no" desliga o carregamento de
+            // scripts; "yes" é o padrão do mpv.
+            mpv.setOptionString("load-scripts", if (scriptsEnabled) "yes" else "no")
+            // Servidor IPC do mpv (Lote mpv 4, cliente-servidor): socket no
+            // armazenamento interno, só quando ligado nas Configurações.
+            // O socket é do UID do app — só outro app no aparelho acessa.
+            if (ipcEnabled) {
+                mpv.setOptionString("input-ipc-server", MpvIpc.socketPath(appContext).absolutePath)
+            }
             // Precisa ficar idle 1x p/ o loadfile funcionar antes da superfície.
             mpv.setOptionString("idle", "once")
             // O app escolhe as faixas sozinho (pickAutoSub/pickAutoAudio) —
             // o mpv não pré-seleciona legenda nenhuma.
             mpv.setOptionString("sub-auto", "no")
-            // Sem yt-dlp: as fontes já chegam resolvidas pelos addons.
-            mpv.setOptionString("ytdl", "no")
+            // yt-dlp (Lote mpv 4): o AAR 0.1.12 não traz o binário yt-dlp —
+            // sem ele, `ytdl=yes` não resolve nada. O ponto de integração é
+            // [MpvYtdlp.binaryPath]: se um lote futuro embutir o binário, o
+            // init liga o ytdl e aponta o caminho; até lá, fica desligado
+            // (as fontes já chegam resolvidas pelos addons).
+            val ytdlpPath = runCatching { MpvYtdlp.binaryPath(appContext) }.getOrNull()
+            if (ytdlpPath != null) {
+                mpv.setOptionString("ytdl", "yes")
+                mpv.setOptionString("script-opts", "ytdl_hook-ytdl_path=$ytdlpPath")
+            } else {
+                mpv.setOptionString("ytdl", "no")
+            }
             mpv.init()
             initialized = true
         }.isSuccess
         if (ok) {
             MpvStepLog.append(appContext, "init: ok")
+            observePlaybackProperties()
         } else {
             MpvStepLog.append(appContext, "init: falhou")
             initFailed = true
             mainHandler.post { listener.onInitFailed() }
+        }
+    }
+
+    /**
+     * Observa as propriedades úteis p/ o app (Lote mpv 4) — os valores
+     * chegam no [eventObserver] e vão p/ [MpvObservedProperties], que o
+     * Diagnóstico mostra. Só depois do init: observar antes do handle
+     * existir não registra nada.
+     */
+    private fun observePlaybackProperties() {
+        runCatching {
+            mpv.observeProperty("time-pos", MPV.mpvFormat.MPV_FORMAT_DOUBLE)
+            mpv.observeProperty("duration", MPV.mpvFormat.MPV_FORMAT_DOUBLE)
+            mpv.observeProperty("pause", MPV.mpvFormat.MPV_FORMAT_FLAG)
+            mpv.observeProperty("paused-for-cache", MPV.mpvFormat.MPV_FORMAT_FLAG)
+            mpv.observeProperty("core-idle", MPV.mpvFormat.MPV_FORMAT_FLAG)
         }
     }
 
@@ -280,12 +362,15 @@ class MpvPlayer(
             MpvStepLog.append(appContext, "attachSurface: ok")
             mpv.setOptionString("force-window", "yes")
             surfaceAttached = true
+            // Lote mpv 4: o motor reutilizado da piscina volta com vo=null
+            // (o giveBack soltou o VO no onSurfaceDestroyed) — restaura
+            // antes do load, senão o vídeo toca sem imagem. P/ motor novo
+            // é o mesmo valor do init (sem efeito).
+            mpv.setPropertyString("vo", preferredVo)
             val pending = pendingLoad
             if (pending != null) {
                 pendingLoad = null
                 doLoad(pending)
-            } else {
-                mpv.setPropertyString("vo", preferredVo)
             }
         }
     }
@@ -311,6 +396,9 @@ class MpvPlayer(
         if (destroyed) return
         destroyed = true
         pendingLoad = null
+        // Lote mpv 4: remover o observer antes de destruir — sem isto, um
+        // evento nativo podia chegar num observer de um player morto.
+        runCatching { mpv.removeObserver(eventObserver) }
         runCatching {
             if (surfaceAttached) {
                 mpv.setPropertyString("vo", "null")

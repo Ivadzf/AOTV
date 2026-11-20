@@ -98,6 +98,7 @@ import androidx.media3.ui.PlayerView
 import com.aotv.app.data.kodi.kodiProxyHostnameVerifier
 import com.aotv.app.data.local.ExternalPlayerLaunch
 import com.aotv.app.data.local.ExternalPlayerStore
+import com.aotv.app.data.local.MpvStepLog
 import com.aotv.app.data.local.SubLangs
 import com.aotv.app.data.party.PartyPlayer
 import com.aotv.app.data.torrent.TorrentMagnet
@@ -3844,21 +3845,25 @@ class PlayerSession(
 
     /** Cria o wrapper do libmpv (null quando o motor não é o mpv ou o MPV() falhou). */
     private fun createMpvPlayer(): MpvPlayer? = if (useMpv) runCatching {
-        MpvPlayer(
-            context,
-            object : MpvPlayer.MpvListener {
-                override fun onFileLoaded() = onMpvFileLoaded()
-                override fun onEndFile(eofReached: Boolean) = onMpvEndFile(eofReached)
-                override fun onInitFailed() = onMpvInitFailed()
-            },
-        )
+        val listener = object : MpvPlayer.MpvListener {
+            override fun onFileLoaded() = onMpvFileLoaded()
+            override fun onEndFile(eofReached: Boolean) = onMpvEndFile(eofReached)
+            override fun onInitFailed() = onMpvInitFailed()
+        }
+        // Lote mpv 4: reabre o motor pré-carregado no detalhe quando há um
+        // quente na piscina; senão constrói a frio, como antes.
+        MpvWarmPool.take(listener) ?: MpvPlayer(context, listener)
     }.getOrNull() else null
 
-    /** Destrói o mpv atual e solta a referência (troca de motor). */
-    private fun destroyMpvPlayer() {
+    /**
+     * Solta o mpv atual e limpa a referência (troca de motor). Lote mpv 4:
+     * o motor saudável volta p/ a piscina quente (se o usuário voltar p/ o
+     * Libmpv, reabre sem construir a frio); o que não presta é destruído.
+     */
+    private fun releaseMpvPlayer() {
         val mpv = mpvPlayer ?: return
         mpvPlayer = null
-        runCatching { mpv.destroy() }
+        runCatching { MpvWarmPool.giveBack(mpv) }
     }
 
     /** Persiste a troca de motor na pref (a tela liga ao PlayerPrefsViewModel). */
@@ -3885,10 +3890,11 @@ class PlayerSession(
         val pos = activePositionMs().coerceAtLeast(0L)
         position = pos
         saveNow()
-        // Para o motor atual: o mpv é destruído (solta a superfície e o
-        // contexto GL); o ExoPlayer só para (ele sobrevive à troca e volta
-        // no próximo load — criá-lo de novo custaria o decoder).
-        if (useMpv) destroyMpvPlayer() else runCatching { exoPlayer.stop() }
+        // Para o motor atual: o mpv volta p/ a piscina quente (solta a
+        // superfície e o contexto GL); o ExoPlayer só para (ele sobrevive
+        // à troca e volta no próximo load — criá-lo de novo custaria o
+        // decoder).
+        if (useMpv) releaseMpvPlayer() else runCatching { exoPlayer.stop() }
         currentEngineMode = target
         mpvFallback = false
         if (target == PlayerEngineMode.LIBMPV) {
@@ -3910,6 +3916,9 @@ class PlayerSession(
 
     /** SurfaceView do mpv pronta: anexa (e dispara load pendente). */
     fun onMpvSurfaceCreated(surface: android.view.Surface) {
+        // Lote mpv 4: marca onde a superfície apareceu — se a próxima morte
+        // cair antes desta linha, o crash é antes da superfície.
+        MpvStepLog.append(context, "surface: ok")
         mpvPlayer?.onSurfaceCreated(surface)
     }
 
@@ -4613,7 +4622,10 @@ class PlayerSession(
         releaseEqualizer()
         cancelSleepTimer()
         // Libmpv (Lote mpv 1): solta a superfície e destrói o mpv antes do ExoPlayer.
-        mpvPlayer?.destroy()
+        // Lote mpv 4: o motor saudável volta p/ a piscina quente (a próxima
+        // abertura reabre sem construir a frio); o que não presta é destruído.
+        mpvPlayer?.let { MpvWarmPool.giveBack(it) }
+        mpvPlayer = null
         exoPlayer.release()
         mediaSession?.release()
         ScrubThumbnailer.release()

@@ -3,6 +3,11 @@ package com.aotv.app.ui.movies
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aotv.app.data.clips.ClipDownload
+import com.aotv.app.data.clips.ClipDownloader
+import com.aotv.app.data.clips.ClipExportResult
+import com.aotv.app.data.clips.ClipExporter
+import com.aotv.app.data.clips.ClipResult
 import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.local.entity.DownloadEntity
@@ -42,17 +47,27 @@ data class ClipDownloadEntry(
     val status: String = "done",
     val percent: Int = 0,
     val localUri: String = "",
+    /**
+     * Fonte do clipe (Lote mpv 4 — Frente 2, v1.39.0): a URL master + headers
+     * Kodi guardada na entidade ([DownloadEntity.sourceUrl]). É daqui que
+     * sai o vídeo inteiro ([DownloadsViewModel.downloadFullClip]) — clipe
+     * antigo sem ela não baixa o vídeo inteiro (avisa, sem crash).
+     */
+    val sourceUrl: String = "",
+    val tmdbId: Int = 0,
+    val type: String = "MOVIE",
+    val lastEpisode: String = "",
 ) {
     /** O clipe como download comum, p/ tocar o arquivo local pelo mesmo player. */
     fun toDownloadEntity(): DownloadEntity = DownloadEntity(
         id = id,
-        tmdbId = 0,
-        type = "MOVIE",
+        tmdbId = tmdbId,
+        type = type,
         title = if (intervalLabel.isNotBlank()) "$title ($intervalLabel)" else title,
         posterUrl = posterUrl,
-        sourceUrl = "",
+        sourceUrl = sourceUrl,
         localUri = localUri,
-        lastEpisode = "",
+        lastEpisode = lastEpisode,
         downloadId = 0,
         status = status,
         createdAt = 0L,
@@ -161,6 +176,10 @@ class DownloadsViewModel @Inject constructor(
             status = status,
             percent = 0,
             localUri = localUri,
+            sourceUrl = sourceUrl,
+            tmdbId = tmdbId,
+            type = type,
+            lastEpisode = lastEpisode,
         )
     }
 
@@ -180,5 +199,100 @@ class DownloadsViewModel @Inject constructor(
 
     fun delete(entity: DownloadEntity) {
         viewModelScope.launch { repo.delete(entity) }
+    }
+
+    // LOTE mpv 4 — FRENTE 2 (v1.39.0): exportar o trecho e baixar o vídeo
+    // inteiro. O downloader/exporter resolvem o DAO e as prefs por conta
+    // própria (mesmo padrão do ClipDownloader no player); o progresso do
+    // vídeo inteiro vive aqui porque o DownloadManager não o conhece
+    // (downloadId 0, como o clipe).
+    private val clipDownloader by lazy { ClipDownloader(context) }
+    private val clipExporter by lazy { ClipExporter(context) }
+
+    /** Progresso (0..100) do vídeo inteiro por id (":full") — a tela mescla com [queryProgress]. */
+    private val _fullProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val fullProgress: StateFlow<Map<String, Int>> = _fullProgress.asStateFlow()
+
+    /** Mensagem curta p/ a tela mostrar em toast (null = nada pendente). */
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message.asStateFlow()
+
+    /** A tela chama depois de mostrar a mensagem, p/ não repetir no retorno. */
+    fun consumeMessage() {
+        _message.value = null
+    }
+
+    /** Compartilha o trecho concluído no share sheet do sistema. */
+    fun shareClip(entry: ClipDownloadEntry) {
+        viewModelScope.launch {
+            if (entry.localUri.isBlank()) {
+                _message.value = "O trecho ainda não tem arquivo para compartilhar."
+                return@launch
+            }
+            when (val result = clipExporter.shareClip(entry.localUri, entry.title)) {
+                ClipExportResult.Shared -> { /* o share sheet abriu — nada a avisar */ }
+                ClipExportResult.CopiedToFolder -> { /* não acontece no share */ }
+                ClipExportResult.NoFolderConfigured -> { /* não acontece no share */ }
+                is ClipExportResult.Failed -> _message.value = result.message
+            }
+        }
+    }
+
+    /** Copia o trecho concluído p/ a pasta de Downloads escolhida (sem mover o original). */
+    fun copyClipToFolder(entry: ClipDownloadEntry) {
+        viewModelScope.launch {
+            if (entry.localUri.isBlank()) {
+                _message.value = "O trecho ainda não tem arquivo para exportar."
+                return@launch
+            }
+            when (val result = clipExporter.copyClipToFolder(entry.localUri, entry.title)) {
+                ClipExportResult.Shared -> { /* não acontece na cópia */ }
+                ClipExportResult.CopiedToFolder -> _message.value = "Trecho copiado para a pasta de Downloads."
+                ClipExportResult.NoFolderConfigured ->
+                    _message.value = "Escolha a pasta de Downloads em Configurações → Downloads para exportar o trecho."
+                is ClipExportResult.Failed -> _message.value = result.message
+            }
+        }
+    }
+
+    /**
+     * Baixa o vídeo INTEIRO da fonte do clipe (HLS = todos os segmentos,
+     * MP4 = arquivo direto — ver [ClipDownloader.downloadFull]). A entrada
+     * ":full:" aparece na lista principal de Downloads com "(completo)" no
+     * título; o progresso vem por [fullProgress] e a tela mescla com o do
+     * DownloadManager. Sem `sourceUrl` no clipe, avisa sem crash.
+     */
+    fun downloadFullClip(entry: ClipDownloadEntry) {
+        viewModelScope.launch {
+            if (entry.sourceUrl.isBlank()) {
+                _message.value = "Este trecho foi salvo sem a fonte — não dá para baixar o vídeo inteiro."
+                return@launch
+            }
+            val fullId = ClipDownload.fullId(entry.tmdbId, entry.type, entry.lastEpisode)
+            val result = clipDownloader.downloadFull(
+                tmdbId = entry.tmdbId,
+                type = entry.type,
+                title = entry.title,
+                posterUrl = entry.posterUrl,
+                lastEpisode = entry.lastEpisode,
+                streamUrl = entry.sourceUrl,
+                onProgress = { downloaded, total ->
+                    if (total > 0) {
+                        val percent = ((downloaded * 100) / total).coerceIn(0, 100)
+                        // Só atualiza quando a % muda, p/ não recompor a lista a cada segmento.
+                        if (_fullProgress.value[fullId] != percent) {
+                            _fullProgress.value = _fullProgress.value + (fullId to percent)
+                        }
+                    }
+                },
+            )
+            _fullProgress.value = _fullProgress.value - fullId
+            _message.value = when (result) {
+                is ClipResult.Done -> "Vídeo inteiro salvo em Downloads: ${result.displayTitle}"
+                is ClipResult.Failed -> "Não deu para baixar o vídeo inteiro: ${result.message}"
+                is ClipResult.Unsupported -> result.reason
+                ClipResult.BlockedWifi -> "“Só Wi-Fi” ligado: conecte no Wi-Fi para baixar o vídeo inteiro."
+            }
+        }
     }
 }

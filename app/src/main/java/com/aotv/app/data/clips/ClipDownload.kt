@@ -82,6 +82,18 @@ import kotlinx.coroutines.currentCoroutineContext
  * [com.aotv.app.data.repository.DownloadRepository.resumeQueued] retomaria
  * a fila como download .mp4 inteiro. A pasta SAF escolhida é respeitada
  * (o arquivo é movido para lá na conclusão, como o Lote 5 faz).
+ *
+ * Lote mpv 4 — Frente 2 (v1.39.0): exportar o trecho e o vídeo inteiro.
+ * Exportar o trecho mora em [ClipExport] (share sheet via FileProvider ou
+ * cópia p/ a pasta SAF de Downloads — nunca move: o original continua em
+ * Downloads). O vídeo inteiro é [ClipDownloader.downloadFull]: HLS baixa
+ * TODOS os segmentos (a mesma maquinaria do trecho, com o intervalo
+ * (0, Long.MAX_VALUE)); MP4 direto baixa o arquivo inteiro (sem remontar
+ * o `moov`, porque não há corte). A URL master + headers vivem na
+ * entidade do clipe ([DownloadEntity.sourceUrl], gravada pelo
+ * [ClipDownloader.downloadClip] desde a v1.28.0) — sem mudança de esquema
+ * do Room e sem codificar URL no id. Clipes antigos sem `sourceUrl` não
+ * têm de onde baixar o vídeo inteiro: a opção avisa, nunca crasha.
  */
 
 /** Uma variante de um master playlist HLS (ver [ClipDownload.listMasterVariants]). */
@@ -165,6 +177,60 @@ object ClipDownload {
         "$tmdbId:$type:$lastEpisode:clip:$startMs-$endMs"
 
     fun isClipId(id: String): Boolean = ":clip:" in id
+
+    /**
+     * Id da entidade do vídeo inteiro (Lote mpv 4 — Frente 2, v1.39.0): o
+     * ":full" distingue do download normal do mesmo título (o id normal é
+     * "$tmdbId:$type:$lastEpisode", sem sufixo) e do clipe (":clip:").
+     * Vai p/ a lista principal de Downloads, não p/ o slot do clipe.
+     */
+    fun fullId(tmdbId: Int, type: String, lastEpisode: String): String =
+        "$tmdbId:$type:$lastEpisode:full"
+
+    fun isFullId(id: String): Boolean = id.endsWith(":full")
+
+    /** Nome exibido do vídeo inteiro: "Filme (completo)" — é o título guardado na entidade. */
+    fun fullDisplayTitle(title: String): String = "$title (completo)"
+
+    /** Nome do arquivo do vídeo inteiro no disco (mesma sanitização do clipe). */
+    fun fullFileName(title: String, extension: String = "ts"): String {
+        val safe = title.replace(Regex("[^A-Za-z0-9._-]"), "_").take(50).trim('_')
+            .ifBlank { "video" }
+        return "${safe}_(completo).$extension"
+    }
+
+    /** O que a fonte atual permite em matéria de vídeo inteiro (Lote mpv 4 — Frente 2). */
+    sealed class FullEligibility {
+        /** HLS com playlist .m3u8 — baixa todos os segmentos e concatena. */
+        object Hls : FullEligibility()
+        /** MP4 direto — baixa o arquivo inteiro, sem corte e sem remontar o `moov`. */
+        object Mp4 : FullEligibility()
+        /** Não permite vídeo inteiro; [reason] é o texto mostrado ao usuário, sem inventar. */
+        data class Unsupported(val reason: String) : FullEligibility()
+    }
+
+    /**
+     * Classifica a fonte p/ o vídeo inteiro (Lote mpv 4 — Frente 2): HLS e
+     * MP4 direto dão; torrent e arquivo local não (o torrent já tem o
+     * download inteiro pelo Lote 5 e o arquivo local já está no aparelho).
+     */
+    fun classifyFullSource(rawUrl: String): FullEligibility {
+        val (url, _) = splitKodiStreamHeaders(rawUrl)
+        val clean = url.trim()
+        if (clean.isBlank()) return FullEligibility.Unsupported("Sem fonte salva para baixar o vídeo inteiro.")
+        if (TorrentMagnet.isMagnet(clean) || clean.contains("127.0.0.1")) {
+            return FullEligibility.Unsupported(
+                "Torrent não permite baixar o vídeo inteiro por aqui: use o download normal do conteúdo (o torrent já baixa inteiro pelo Lote 5).",
+            )
+        }
+        if (clean.startsWith("file://") || clean.startsWith("content://")) {
+            return FullEligibility.Unsupported("O arquivo já está no aparelho — não há o que baixar.")
+        }
+        val base = clean.substringBefore('?').substringBefore('#')
+        if (base.endsWith(".m3u8", ignoreCase = true)) return FullEligibility.Hls
+        if (base.endsWith(".mp4", ignoreCase = true)) return FullEligibility.Mp4
+        return FullEligibility.Unsupported("Esta fonte não permite baixar o vídeo inteiro (só HLS e MP4 direto).")
+    }
 
     /** Classifica a fonte atual: só HLS permite trecho; o resto devolve o motivo. */
     fun classifyClipSource(rawUrl: String): ClipEligibility {
@@ -506,26 +572,17 @@ class ClipDownloader(context: Context) {
             } else {
                 ClipDownload.orderVariantsForPlayback(variants, playingHeight).map { it.url to null }
             }
-            var lastError: String? = null
-            var attempt: VariantAttempt? = null
-            for ((variantUrl, prefetchedText) in candidates) {
-                try {
-                    attempt = downloadVariantAttempt(
-                        variantUrl, headers, masterCookies, title, startMs, endMs,
-                        onProgress, playingHeight, prefetchedText,
-                    )
-                    break
-                } catch (e: IOException) {
-                    lastError = e.message
-                    // Só o 403 troca de variante: outro erro (timeout,
-                    // playlist inválida, intervalo sem segmento) falharia
-                    // igual em toda variante — desiste na hora.
-                    if (!e.message.orEmpty().contains("HTTP 403")) throw e
-                }
-            }
-            val done = attempt ?: throw IOException(
-                "Nenhuma variante baixou o trecho (tentei ${candidates.size} variante(s); último erro: ${lastError ?: "desconhecido"})." +
-                    if (playingHeight == null) " A variante em reprodução era desconhecida." else "",
+            val done = downloadBestVariant(
+                candidates = candidates,
+                headers = headers,
+                masterCookies = masterCookies,
+                title = title,
+                startMs = startMs,
+                endMs = endMs,
+                onProgress = onProgress,
+                playingHeight = playingHeight,
+                fileNameFor = null,
+                what = "o trecho",
             )
             tmpFile = null
             finalFile = done.destFile
@@ -548,6 +605,222 @@ class ClipDownloader(context: Context) {
         }
     }
 
+    /**
+     * Baixa o vídeo INTEIRO a partir da fonte guardada num clipe (Lote mpv
+     * 4 — Frente 2, v1.39.0) e registra como [DownloadEntity] com ":full"
+     * no id — vai p/ a lista principal de Downloads (não p/ o slot do
+     * clipe), com o título "Filme (completo)". A fonte é o `sourceUrl` da
+     * entidade do clipe (a URL master + headers Kodi, gravada pelo
+     * [downloadClip] desde a v1.28.0): nada de novo é persistido, e o
+     * `playingHeight` não é guardado — sem ele, vale o maior BANDWIDTH.
+     * - HLS: baixa TODOS os segmentos (intervalo (0, Long.MAX_VALUE)) com
+     *   a mesma maquinaria do trecho — ordem de variantes, fallback só no
+     *   403, cookies, AES-128 e fMP4.
+     * - MP4 direto: baixa o arquivo inteiro, sem corte e sem remontar o
+     *   `moov` (não há corte aqui).
+     * O progresso ([onProgress]) é (feito, total): segmentos no HLS e KB
+     * no MP4 — nos dois casos a % é feito * 100 / total quando total > 0.
+     * "Só Wi-Fi" e pasta SAF valem como no trecho. Clipes sem `sourceUrl`
+     * (antigos, de antes da URL ser guardada) devolvem [ClipResult.Failed]
+     * com motivo — nunca crash.
+     */
+    suspend fun downloadFull(
+        tmdbId: Int,
+        type: String,
+        title: String,
+        posterUrl: String,
+        lastEpisode: String,
+        streamUrl: String,
+        onProgress: ((downloaded: Int, total: Int) -> Unit)? = null,
+        playingHeight: Int? = null,
+    ): ClipResult = withContext(Dispatchers.IO) {
+        val eligibility = ClipDownload.classifyFullSource(streamUrl)
+        when (eligibility) {
+            ClipDownload.FullEligibility.Hls -> { /* segue */ }
+            ClipDownload.FullEligibility.Mp4 -> { /* segue */ }
+            is ClipDownload.FullEligibility.Unsupported ->
+                return@withContext ClipResult.Unsupported(eligibility.reason)
+        }
+        // "Só Wi-Fi" (Lote 5): igual ao trecho — sem Wi-Fi nem começa e
+        // não cria entidade "queued" (a fila retomaria como .mp4 inteiro).
+        if (prefs.downloadsWifiOnly && !MobileDataUsage.isWifiActive(appContext)) {
+            return@withContext ClipResult.BlockedWifi
+        }
+        val (cleanUrl, extraHeaders) = splitKodiStreamHeaders(streamUrl)
+        val headers = STREAM_HEADERS + extraHeaders
+        val id = ClipDownload.fullId(tmdbId, type, lastEpisode)
+        val displayTitle = ClipDownload.fullDisplayTitle(title)
+        if (dao.get(id)?.status == "downloading") {
+            return@withContext ClipResult.Failed("O vídeo inteiro já está baixando.")
+        }
+        dao.upsert(
+            DownloadEntity(
+                id = id, tmdbId = tmdbId, type = type, title = displayTitle,
+                posterUrl = posterUrl, sourceUrl = streamUrl, lastEpisode = lastEpisode,
+                downloadId = 0, status = "downloading", createdAt = System.currentTimeMillis(),
+            ),
+        )
+        var tmpFile: File? = null
+        var finalFile: File? = null
+        try {
+            val done: VariantAttempt = if (eligibility is ClipDownload.FullEligibility.Hls) {
+                val (masterText, masterCookies) = fetchText(cleanUrl, headers)
+                val variants = ClipDownload.listMasterVariants(masterText, cleanUrl)
+                val candidates: List<Pair<String, String?>> = if (variants.isEmpty()) {
+                    listOf(cleanUrl to masterText)
+                } else {
+                    ClipDownload.orderVariantsForPlayback(variants, playingHeight).map { it.url to null }
+                }
+                downloadBestVariant(
+                    candidates = candidates,
+                    headers = headers,
+                    masterCookies = masterCookies,
+                    title = title,
+                    startMs = 0L,
+                    endMs = Long.MAX_VALUE,
+                    onProgress = onProgress,
+                    playingHeight = playingHeight,
+                    fileNameFor = { extension -> ClipDownload.fullFileName(title, extension) },
+                    what = "o vídeo inteiro",
+                )
+            } else if (eligibility is ClipDownload.FullEligibility.Mp4) {
+                downloadMp4Direct(
+                    url = cleanUrl,
+                    headers = headers,
+                    fileName = ClipDownload.fullFileName(title, "mp4"),
+                    onProgress = onProgress,
+                )
+            } else {
+                // Inalcançável: o Unsupported já retornou lá em cima.
+                throw IOException("Fonte sem suporte para o vídeo inteiro.")
+            }
+            tmpFile = null
+            finalFile = done.destFile
+            val localUri = moveToDownloadFolder(
+                done.fileName, done.destFile, if (done.isFmp4) "video/mp4" else "video/mp2t",
+            ) ?: "file://${done.destFile.absolutePath}"
+            dao.updateStatus(id, "done", localUri)
+            ClipResult.Done(displayTitle, done.fileName, done.segments, done.bytes)
+        } catch (e: CancellationException) {
+            runCatching { tmpFile?.delete() }
+            runCatching { dao.updateStatus(id, "failed", "") }
+            throw e
+        } catch (e: Exception) {
+            runCatching { tmpFile?.delete() }
+            runCatching { finalFile?.delete() }
+            runCatching { dao.updateStatus(id, "failed", "") }
+            ClipResult.Failed(e.message?.take(200) ?: "Falha no download do vídeo inteiro.")
+        }
+    }
+
+    /**
+     * Tenta as variantes do master EM ORDEM e devolve a primeira que baixa
+     * (Lote mpv 4 — Frente 2: extraído do [downloadClip] sem mudar o
+     * comportamento, p/ o [downloadFull] reaproveitar). Só o 403 troca de
+     * variante; outro erro desiste na hora. [fileNameFor] dá o nome do
+     * arquivo por extensão (null = nome de clipe); [what] é o que está
+     * sendo baixado, p/ a mensagem de erro ("o trecho" / "o vídeo inteiro").
+     */
+    private suspend fun downloadBestVariant(
+        candidates: List<Pair<String, String?>>,
+        headers: Map<String, String>,
+        masterCookies: String?,
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        onProgress: ((downloaded: Int, total: Int) -> Unit)?,
+        playingHeight: Int?,
+        fileNameFor: ((String) -> String)?,
+        what: String,
+    ): VariantAttempt {
+        var lastError: String? = null
+        var attempt: VariantAttempt? = null
+        for ((variantUrl, prefetchedText) in candidates) {
+            try {
+                attempt = downloadVariantAttempt(
+                    variantUrl = variantUrl,
+                    headers = headers,
+                    masterCookies = masterCookies,
+                    title = title,
+                    startMs = startMs,
+                    endMs = endMs,
+                    onProgress = onProgress,
+                    playingHeight = playingHeight,
+                    prefetchedText = prefetchedText,
+                    fileNameFor = fileNameFor,
+                )
+                break
+            } catch (e: IOException) {
+                lastError = e.message
+                if (!e.message.orEmpty().contains("HTTP 403")) throw e
+            }
+        }
+        return attempt ?: throw IOException(
+            "Nenhuma variante baixou $what (tentei ${candidates.size} variante(s); último erro: ${lastError ?: "desconhecido"})." +
+                if (playingHeight == null) " A variante em reprodução era desconhecida." else "",
+        )
+    }
+
+    /**
+     * Baixa um MP4 direto inteiro (Lote mpv 4 — Frente 2): GET com os
+     * headers do stream e cópia por streaming p/ o arquivo, sem remontar
+     * nada — o arquivo que chega é o arquivo final. O progresso é em KB
+     * (baixado, total; total 0 = tamanho desconhecido) e só é reportado a
+     * cada 512 KB, p/ não afogar a UI. Lança IOException em qualquer falha
+     * — o parcial é apagado pelo chamador.
+     */
+    private suspend fun downloadMp4Direct(
+        url: String,
+        headers: Map<String, String>,
+        fileName: String,
+        onProgress: ((downloaded: Int, total: Int) -> Unit)?,
+    ): VariantAttempt {
+        val moviesDir = appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+            ?: appContext.filesDir
+        moviesDir.mkdirs()
+        val partFile = File(moviesDir, "$fileName.part")
+        val destFile = File(moviesDir, fileName)
+        try {
+            val req = Request.Builder().url(url).apply {
+                headers.forEach { (k, v) -> header(k, v) }
+            }.build()
+            var bytes = 0L
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IOException("HTTP ${resp.code} no vídeo")
+                val body = resp.body ?: throw IOException("Resposta sem corpo no vídeo")
+                val totalBytes = body.contentLength().takeIf { it > 0 } ?: 0L
+                val totalKb = (totalBytes / 1024).toInt()
+                var lastReportedKb = 0
+                body.byteStream().use { input ->
+                    partFile.outputStream().buffered().use { out ->
+                        val buf = ByteArray(8192)
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            val read = input.read(buf)
+                            if (read < 0) break
+                            out.write(buf, 0, read)
+                            bytes += read
+                            val downloadedKb = (bytes / 1024).toInt()
+                            if (totalKb > 0 && downloadedKb - lastReportedKb >= 512) {
+                                lastReportedKb = downloadedKb
+                                onProgress?.invoke(downloadedKb, totalKb)
+                            }
+                        }
+                    }
+                }
+                if (totalKb > 0) onProgress?.invoke((bytes / 1024).toInt(), totalKb)
+            }
+            if (!partFile.renameTo(destFile)) {
+                partFile.copyTo(destFile, overwrite = true)
+                partFile.delete()
+            }
+            return VariantAttempt(fileName, true, 1, bytes, destFile)
+        } catch (e: Exception) {
+            runCatching { partFile.delete() }
+            throw e
+        }
+    }
+
     /** Resultado de uma tentativa de variante (o arquivo já está no disco). */
     private data class VariantAttempt(
         val fileName: String,
@@ -564,6 +837,8 @@ class ClipDownloader(context: Context) {
      * variante (só o 403) ou desiste. O parcial é apagado na falha.
      * [prefetchedText] evita buscar de novo uma playlist já lida (o master
      * que já é mídia). [playingHeight] só vale p/ descer um master aninhado.
+     * [fileNameFor] dá o nome do arquivo por extensão (null = nome de
+     * clipe com o intervalo — ver [ClipDownload.clipFileName]).
      */
     private suspend fun downloadVariantAttempt(
         variantUrl: String,
@@ -575,6 +850,7 @@ class ClipDownloader(context: Context) {
         onProgress: ((downloaded: Int, total: Int) -> Unit)?,
         playingHeight: Int?,
         prefetchedText: String?,
+        fileNameFor: ((String) -> String)? = null,
     ): VariantAttempt {
         val moviesDir = appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
             ?: appContext.filesDir
@@ -615,7 +891,8 @@ class ClipDownloader(context: Context) {
                 "HLS fragmentado (fMP4) sem init segment utilizável (#EXT-X-MAP sem URI ou com BYTERANGE).",
             )
         }
-        val fileName = ClipDownload.clipFileName(title, startMs, endMs, if (isFmp4) "mp4" else "ts")
+        val fileName = fileNameFor?.invoke(if (isFmp4) "mp4" else "ts")
+            ?: ClipDownload.clipFileName(title, startMs, endMs, if (isFmp4) "mp4" else "ts")
         val partFile = File(moviesDir, "$fileName.part")
         val destFile = File(moviesDir, fileName)
         var bytes = 0L

@@ -120,6 +120,8 @@ object SettingsAnchors {
     const val DIAG_CRASH = "diagnostico-ultimo-crash"
     // Últimos passos do mpv (Lote mpv 3, v1.38.0).
     const val DIAG_MPV_STEPS = "diagnostico-passos-mpv"
+    // Propriedades observadas do mpv (Lote mpv 4, v1.39.0 — Frente 3).
+    const val DIAG_MPV_PROPS = "diagnostico-propriedades-mpv"
     // Lote 25 (v1.35.0) — Frente B: "Report a problem".
     const val DIAG_REPORT = "diagnostico-reportar-problema"
     // Controle remoto e TV (Lote 22, v1.32.0).
@@ -1464,6 +1466,29 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_ENGINE,
     ),
+    // Lote mpv 4 (v1.39.0) — Frente 3: pré-carregar o motor, scripts Lua e
+    // servidor IPC do mpv.
+    SettingOptionEntry(
+        title = "Pré-carregar o motor Libmpv",
+        sub = "O motor já está quente ao abrir o player — desliga p/ não gastar memória antes",
+        keywords = listOf("pré-carregar", "preload", "motor", "quente", "memória", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Scripts Lua do mpv",
+        sub = "Carrega os .lua da pasta de scripts — lista os scripts presentes",
+        keywords = listOf("scripts", "lua", "mpv", "libmpv", "pasta", "exemplo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    SettingOptionEntry(
+        title = "Servidor IPC do mpv",
+        sub = "Controla o player por socket — desligado por padrão",
+        keywords = listOf("ipc", "socket", "servidor", "controle", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
     SettingOptionEntry(
         title = "Client ID do Anime-Skip",
         sub = "Pular trechos em séries (IntroDB/SkipDB sem chave)",
@@ -1926,6 +1951,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("mpv", "libmpv", "passos", "crash", "nativo", "fechou", "abertura", "init"),
         pageId = SettingsPageIds.Diagnostico,
         anchor = SettingsAnchors.DIAG_MPV_STEPS,
+        kidsHidden = true,
+    ),
+    // Lote mpv 4 (v1.39.0) — Frente 3: propriedades observadas do mpv
+    // (time-pos, duration, pause, paused-for-cache, core-idle).
+    SettingOptionEntry(
+        title = "Propriedades observadas do mpv",
+        sub = "Posição, duração, pausa e estado do núcleo — medidos enquanto o Libmpv toca",
+        keywords = listOf("mpv", "libmpv", "propriedades", "time-pos", "duração", "pausa", "observadas"),
+        pageId = SettingsPageIds.Diagnostico,
+        anchor = SettingsAnchors.DIAG_MPV_PROPS,
         kidsHidden = true,
     ),
     // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.

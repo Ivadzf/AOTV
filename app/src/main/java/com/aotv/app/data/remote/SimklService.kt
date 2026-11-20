@@ -742,7 +742,7 @@ class SimklService @Inject constructor(
         const val DEVELOPER_LIST_URL = "https://simkl.com/settings/developer/"
 
         const val APP_NAME = "aotv"
-        const val APP_VERSION = "1.38.1"
+        const val APP_VERSION = "1.39.0"
 
         val JSON = "application/json".toMediaType()
     }

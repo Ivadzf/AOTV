@@ -21,9 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.aotv.app.data.local.MobileDataUsage
@@ -62,6 +64,17 @@ fun DownloadsScreen(
     // Restos de arquivos + clipes (Lote 18 item 4 e item 10 — aba Restos / mesma lista).
     val orphans by vm.orphans.collectAsStateWithLifecycle()
     val clips by vm.clipEntries.collectAsStateWithLifecycle()
+    // Progresso do vídeo inteiro (Lote mpv 4 — Frente 2) + mensagens
+    // (exportação e vídeo inteiro chegam por toast).
+    val fullProgress by vm.fullProgress.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    LaunchedEffect(message) {
+        message?.let { text ->
+            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            vm.consumeMessage()
+        }
+    }
 
     // Abas Completos/Restos (Lote 18 item 4): a aba sobrevive à recomposição.
     var tab by remember { mutableStateOf(DownloadsTab.COMPLETED) }
@@ -224,7 +237,9 @@ fun DownloadsScreen(
                 items(completed, key = { it.id }) { d ->
                     DownloadRow(
                         d = d,
-                        percent = progress[d.id] ?: 0,
+                        // O vídeo inteiro (":full:") não passa pelo
+                        // DownloadManager: o progresso dele vem do ViewModel.
+                        percent = progress[d.id] ?: fullProgress[d.id] ?: 0,
                         onClick = { if (d.status == "done") onPlayLocal(d) },
                         onDelete = { pendingDelete = d },
                         onResume = null,
@@ -236,13 +251,16 @@ fun DownloadsScreen(
                         onClick = { if (clip.localUri.isNotBlank()) onPlayLocal(clip.toDownloadEntity()) },
                         // Sem lixeira por aqui: a remoção do clipe é do dono do clipe (item 10).
                         onDelete = null,
+                        onShare = { vm.shareClip(clip) },
+                        onSaveToFolder = { vm.copyClipToFolder(clip) },
+                        onDownloadFull = { vm.downloadFullClip(clip) },
                     )
                 }
             } else {
                 items(leftovers, key = { it.id }) { d ->
                     DownloadRow(
                         d = d,
-                        percent = progress[d.id] ?: 0,
+                        percent = progress[d.id] ?: fullProgress[d.id] ?: 0,
                         onClick = { if (d.status == "done") onPlayLocal(d) },
                         onDelete = { pendingDelete = d },
                         // Retomar (Lote 18 item 4): "failed" e "queued" começam
@@ -331,13 +349,20 @@ private fun DownloadRow(
  * (12:34–15:20)"). O clipe concluído toca o arquivo local pelo mesmo
  * player; sem arquivo local, não há o que tocar nem apagar por aqui (a
  * remoção é do dono do clipe — por isso [onDelete] pode ser null e o
- * botão some).
+ * botão some). Lote mpv 4 — Frente 2 (v1.39.0): o clipe concluído ganha
+ * "Compartilhar" (share sheet), "Salvar na pasta" (cópia p/ a pasta de
+ * Downloads, sem mover o original) e "Vídeo inteiro" (baixa o vídeo
+ * completo da fonte do clipe); sem fonte guardada, o "Vídeo inteiro"
+ * avisa em vez de falhar (ver [DownloadsViewModel.downloadFullClip]).
  */
 @Composable
 private fun ClipDownloadRow(
     clip: ClipDownloadEntry,
     onClick: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    onShare: (() -> Unit)? = null,
+    onSaveToFolder: (() -> Unit)? = null,
+    onDownloadFull: (() -> Unit)? = null,
 ) {
     val interval = clip.intervalLabel.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
     val sub = when (clip.status) {
@@ -364,6 +389,11 @@ private fun ClipDownloadRow(
         onClick = onClick,
         onResume = null,
         onDelete = onDelete,
+        // Exportar só com arquivo local; o vídeo inteiro só com o clipe
+        // concluído (a fonte dele é o que alimenta o download completo).
+        onShare = if (clip.status == "done" && clip.localUri.isNotBlank()) onShare else null,
+        onSaveToFolder = if (clip.status == "done" && clip.localUri.isNotBlank()) onSaveToFolder else null,
+        onDownloadFull = if (clip.status == "done") onDownloadFull else null,
     )
 }
 
@@ -392,7 +422,10 @@ private fun OrphanRow(
  * Casca visual compartilhada das linhas da tela de Downloads (download,
  * clipe e resto de arquivo): pôster, título, subtítulo, barra de
  * progresso, play/anel, "Retomar" e lixeira. Cada tipo só preenche o que
- * tem — sem pôster, o quadrado vira o ícone de download.
+ * tem — sem pôster, o quadrado vira o ícone de download. Lote mpv 4 —
+ * Frente 2 (v1.39.0): a linha do clipe pode trazer mais três ações em
+ * texto abaixo do subtítulo ([onShare], [onSaveToFolder] e
+ * [onDownloadFull]); download e resto passam null e nada muda p/ eles.
  */
 @Composable
 private fun DownloadRowShell(
@@ -407,6 +440,9 @@ private fun DownloadRowShell(
     onClick: (() -> Unit)?,
     onResume: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    onShare: (() -> Unit)? = null,
+    onSaveToFolder: (() -> Unit)? = null,
+    onDownloadFull: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -456,6 +492,24 @@ private fun DownloadRowShell(
                     color = Accent,
                     trackColor = FillTint.copy(alpha = 0.12f),
                 )
+            }
+            // Ações do trecho (Lote mpv 4 — Frente 2): só a linha do clipe
+            // preenche — download e resto passam null e não mostram nada.
+            if (onShare != null || onSaveToFolder != null || onDownloadFull != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (onShare != null) {
+                        TextButton(onClick = onShare) { Text("Compartilhar", color = Accent, fontSize = 13.sp) }
+                    }
+                    if (onSaveToFolder != null) {
+                        TextButton(onClick = onSaveToFolder) { Text("Salvar na pasta", color = Accent, fontSize = 13.sp) }
+                    }
+                    if (onDownloadFull != null) {
+                        TextButton(onClick = onDownloadFull) { Text("Vídeo inteiro", color = Accent, fontSize = 13.sp) }
+                    }
+                }
             }
         }
         if (showPlay) {

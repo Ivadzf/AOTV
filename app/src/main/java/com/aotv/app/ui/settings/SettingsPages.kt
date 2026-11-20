@@ -156,6 +156,7 @@ import com.aotv.app.data.recordings.ScheduledRecording
 import com.aotv.app.data.remote.AppUpdateService
 import com.aotv.app.data.local.PlatformMode
 import com.aotv.app.data.local.SubLangs
+import com.aotv.app.ui.movies.MpvScripts
 import com.aotv.app.ui.movies.PlayerPrefsViewModel
 import com.aotv.app.ui.movies.SUB_BG_OPACITIES
 import com.aotv.app.ui.movies.SUB_COLORS
@@ -2725,6 +2726,11 @@ private fun ReproducaoPage(
     val mpvHwdec by playerPrefs.mpvHwdec.collectAsStateWithLifecycle()
     val mpvCacheSecs by playerPrefs.mpvCacheSecs.collectAsStateWithLifecycle()
     val mpvPitchCorrection by playerPrefs.mpvPitchCorrection.collectAsStateWithLifecycle()
+    // Lote mpv 4 (v1.39.0) — Frente 3: pré-carregar o motor, scripts Lua e
+    // servidor IPC do mpv.
+    val mpvPreload by playerPrefs.mpvPreload.collectAsStateWithLifecycle()
+    val mpvScriptsEnabled by playerPrefs.mpvScripts.collectAsStateWithLifecycle()
+    val mpvIpcEnabled by playerPrefs.mpvIpc.collectAsStateWithLifecycle()
     val mpvSubPos by playerPrefs.mpvSubPos.collectAsStateWithLifecycle()
     val enhanceHwMode by playerPrefs.enhanceHwMode.collectAsStateWithLifecycle()
     val enhanceHwClass by playerPrefs.enhanceHwClass.collectAsStateWithLifecycle()
@@ -3378,6 +3384,70 @@ private fun ReproducaoPage(
                 grouped = true,
             )
         }
+        // Lote mpv 4 (v1.39.0) — Frente 3: extras do mpv (pré-carregar o
+        // motor, scripts Lua e servidor IPC). Valem a partir da próxima
+        // reprodução (o pré-carregar, ao abrir o próximo detalhe).
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Bolt,
+                title = "Pré-carregar o motor Libmpv",
+                sub = if (mpvPreload) "Ligado: o motor já está quente ao abrir o player"
+                    else "Desligado: o motor só inicia ao abrir o player (sem o gasto de memória antes)",
+                trailing = { Switch(checked = mpvPreload, onCheckedChange = { playerPrefs.setMpvPreload(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvPreload(!mpvPreload) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Code,
+                title = "Scripts Lua do mpv",
+                sub = if (mpvScriptsEnabled) "Ligado: carrega os .lua da pasta de scripts no próximo init do Libmpv"
+                    else "Desligado: os .lua da pasta de scripts não carregam",
+                trailing = { Switch(checked = mpvScriptsEnabled, onCheckedChange = { playerPrefs.setMpvScripts(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvScripts(!mpvScriptsEnabled) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Dns,
+                title = "Servidor IPC do mpv",
+                sub = if (mpvIpcEnabled) "Ligado: controla o player por socket — só outro app no aparelho acessa"
+                    else "Desligado por padrão: controla o player por socket — só outro app no aparelho acessa",
+                trailing = { Switch(checked = mpvIpcEnabled, onCheckedChange = { playerPrefs.setMpvIpc(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvIpc(!mpvIpcEnabled) },
+                grouped = true,
+            )
+        }
+        // Scripts presentes na pasta (lida na hora de abrir a tela; muda ao
+        // reabrir). Os 2 exemplos são copiados na 1ª reprodução com o
+        // Libmpv, quando a pasta está vazia.
+        val scriptsContext = LocalContext.current
+        val mpvScriptNames = remember(scriptsContext) {
+            MpvScripts.scriptsDir(scriptsContext).listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".lua") }
+                ?.map { it.name }
+                ?.sorted() ?: emptyList()
+        }
+        SettingsCard {
+            Text(
+                "Scripts Lua na pasta",
+                fontSize = 16.sp, color = TextPrimary, fontWeight = FontWeight.Bold,
+            )
+            if (mpvScriptNames.isEmpty()) {
+                Text(
+                    "Nenhum script — os 2 exemplos são copiados na 1ª reprodução com o Libmpv.",
+                    fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+                )
+            } else {
+                mpvScriptNames.forEach { name ->
+                    Text(name, fontSize = 14.sp, color = TextPrimary, lineHeight = 20.sp)
+                }
+            }
+        }
+        Text(
+            "yt-dlp não disponível nesta versão do motor (o AAR não traz o binário) — as fontes já chegam resolvidas pelos addons, então nada muda.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
         SettingsCard {
             PrefRow(
                 "Detecção de hardware do upscaling",

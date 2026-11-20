@@ -282,9 +282,11 @@ internal val SCOPED_KEYS = listOf(
     // detecção de hardware do upscaling (modo + força medida) e as opções
     // do mpv (display-fps, video-sync, hwdec, cache, correção de tom e
     // posição vertical das legendas). Tudo por perfil.
+    // Lote mpv 4 (v1.39.0) — pré-carregar o motor, scripts Lua e IPC do mpv.
     "pref_enhance_interp_preset_v1", "pref_enhance_hw_mode_v1", "pref_enhance_hw_class_v1",
     "pref_mpv_display_fps_v1", "pref_mpv_video_sync_v1", "pref_mpv_hwdec_v1",
     "pref_mpv_cache_secs_v1", "pref_mpv_pitch_correction_v1", "pref_mpv_sub_pos_v1",
+    "pref_mpv_preload_v1", "pref_mpv_scripts_v1", "pref_mpv_ipc_v1",
 )
 
 /**
@@ -2845,6 +2847,32 @@ class PlatformPrefs @Inject constructor(
     var mpvSubPos: Int
         get() = _mpvSubPos.value
         set(value) { prefs.edit().putInt(sk("pref_mpv_sub_pos_v1"), value).apply(); _mpvSubPos.value = value }
+
+    // ── Pré-carregamento e extras do mpv (Lote mpv 4, v1.39.0) — por perfil ─
+    // Pré-carregar o motor ao abrir o detalhe (o player reabre um motor já
+    // quente em vez de construir a frio — o crash da 1ª abertura); scripts
+    // Lua do mpv (pasta filesDir/mpv/scripts); servidor IPC do mpv (socket
+    // filesDir/mpv/ipc.sock, desligado por padrão).
+    private val _mpvPreload = MutableStateFlow(prefs.getBoolean(sk("pref_mpv_preload_v1"), true))
+    /** Pré-carregar o motor Libmpv ao abrir o detalhe do título. */
+    val mpvPreloadFlow: StateFlow<Boolean> = _mpvPreload.asStateFlow()
+    var mpvPreload: Boolean
+        get() = _mpvPreload.value
+        set(value) { prefs.edit().putBoolean(sk("pref_mpv_preload_v1"), value).apply(); _mpvPreload.value = value }
+
+    private val _mpvScripts = MutableStateFlow(prefs.getBoolean(sk("pref_mpv_scripts_v1"), true))
+    /** Carregar scripts Lua do mpv (pasta filesDir/mpv/scripts). */
+    val mpvScriptsFlow: StateFlow<Boolean> = _mpvScripts.asStateFlow()
+    var mpvScripts: Boolean
+        get() = _mpvScripts.value
+        set(value) { prefs.edit().putBoolean(sk("pref_mpv_scripts_v1"), value).apply(); _mpvScripts.value = value }
+
+    private val _mpvIpc = MutableStateFlow(prefs.getBoolean(sk("pref_mpv_ipc_v1"), false))
+    /** Servidor IPC do mpv (socket no armazenamento interno; desligado por padrão). */
+    val mpvIpcFlow: StateFlow<Boolean> = _mpvIpc.asStateFlow()
+    var mpvIpc: Boolean
+        get() = _mpvIpc.value
+        set(value) { prefs.edit().putBoolean(sk("pref_mpv_ipc_v1"), value).apply(); _mpvIpc.value = value }
 
     // ── Motor do player (Lote 4, v1.12.0) — por perfil ─────────────────────
     // Player padrão: "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 —
