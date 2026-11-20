@@ -993,11 +993,15 @@ class TraktService @Inject constructor(
         api.getEpisodeComments(clientId, id, season, episode)
     }
 
-    // ── Nota do episódio (Lote 24 item 12, v1.34.0) ─────────────────────
-    // Endpoint público (só client_id, como os comentários), mas a fonte só
-    // entra quando o Trakt está CONECTADO neste perfil (decisão do lote):
-    // sem login, sem nota do Trakt na média. O id do Trakt é cacheado por
-    // série na sessão (1 busca por série, não 1 por episódio).
+    // ── Nota do episódio (Lote 24 item 12, v1.34.0; porta de login
+    // removida no Lote mpv 2, v1.37.0) ─────────────────────────────
+    // Endpoint público (só client_id, como os comentários): a fonte só
+    // exigia estar CONECTADO neste perfil (decisão do Lote 24), mas o
+    // endpoint não usa a sessão — sem login, ou com o token expirado, a
+    // nota do Trakt sumia em silêncio de todos os episódios. Era a causa
+    // raiz da nota do Trakt nunca voltar. Agora basta o Client ID
+    // configurado ([configured]); sem ele, devolve null. O id do Trakt é
+    // cacheado por série na sessão (1 busca por série, não 1 por episódio).
 
     /** Id do Trakt da série p/ a nota do episódio (null = sem par no Trakt). */
     private val episodeRatingTraktIds = Collections.synchronizedMap(mutableMapOf<Int, Int?>())
@@ -1010,12 +1014,13 @@ class TraktService @Inject constructor(
     }
 
     /**
-     * Nota média do episódio no Trakt (0–10). null = sem conexão, sem par
-     * no Trakt, sem nota ou erro de rede/HTTP. Nunca lança (só o
+     * Nota média do episódio no Trakt (0–10). null = sem Client ID, sem
+     * par no Trakt, sem nota ou erro de rede/HTTP. Não precisa de login:
+     * o endpoint é público, só o Client ID. Nunca lança (só o
      * CancellationException da coroutine passa).
      */
     suspend fun getEpisodeRating(tmdbId: Int, season: Int, episode: Int): Double? {
-        if (!isConnected || tmdbId <= 0 || season <= 0 || episode <= 0) return null
+        if (!configured || tmdbId <= 0 || season <= 0 || episode <= 0) return null
         val traktId = episodeRatingTraktId(tmdbId) ?: return null
         val rating = try {
             api.getEpisodeRatings(clientId, traktId, season, episode).rating

@@ -1365,8 +1365,8 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Player padrão",
-        sub = "ExoPlayer interno ou player externo",
-        keywords = listOf("player", "externo", "vlc", "mx player", "exoplayer"),
+        sub = "ExoPlayer, Libmpv ou player externo",
+        keywords = listOf("player", "externo", "vlc", "mx player", "exoplayer", "libmpv"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_ENGINE,
     ),
@@ -1374,6 +1374,16 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Decoder de vídeo",
         sub = "Hardware (HW) ou Hardware com fallback",
         keywords = listOf("decoder", "hardware", "hw", "vídeo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_ENGINE,
+    ),
+    // Lote mpv 2 (v1.37.0): o painel "Melhorar imagem" (upscaler Anime4K,
+    // filtros, desempenho) só existe com o motor Libmpv — a busca leva p/
+    // a seção do motor, onde o usuário troca p/ o Libmpv.
+    SettingOptionEntry(
+        title = "Melhorar imagem (Libmpv)",
+        sub = "Upscaler Anime4K, filtros e desempenho — só com o motor Libmpv",
+        keywords = listOf("melhorar imagem", "upscaler", "anime4k", "libmpv", "shader", "nitidez", "debanding"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_ENGINE,
     ),

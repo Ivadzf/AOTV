@@ -412,7 +412,6 @@ fun MoviesNavigation(
                             ),
                         )
                     },
-                    onSearchClick   = { navController.navigate(MoviesRoute.Search.route) },
                     onSettingsClick = { navController.navigate(MoviesRoute.Settings.route) },
                     onLibraryClick  = { navController.navigate(MoviesRoute.MinhaLista.route) },
                     onDiscoverClick = { navController.navigate(MoviesRoute.Descobrir.route) },

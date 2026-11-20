@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.Cast
@@ -611,6 +612,63 @@ fun MoviePlayerScreen(
         playerPrefsVm.setColorPreset(ns.preset)
         playerPrefsVm.setColorDaltonism(ns.daltonism.id)
     }
+    // Melhorar imagem (Lote mpv 2, v1.37.0): a tela lê os fluxos e entrega
+    // à sessão, como a correção de cor. O painel salva de volta por
+    // [PlayerSession.onEnhanceSave]; o teto do vigia, por
+    // [PlayerSession.onEnhanceWatchdogCapSave].
+    val playerEnhancePreset by playerPrefsVm.enhancePreset.collectAsState()
+    val playerEnhanceQuality by playerPrefsVm.enhanceQuality.collectAsState()
+    val playerEnhanceOutput by playerPrefsVm.enhanceOutput.collectAsState()
+    val playerEnhanceChain by playerPrefsVm.enhanceChain.collectAsState()
+    val playerEnhanceDeband by playerPrefsVm.enhanceDeband.collectAsState()
+    val playerEnhanceDebandCfg by playerPrefsVm.enhanceDebandCfg.collectAsState()
+    val playerEnhanceSmoothMotion by playerPrefsVm.enhanceSmoothMotion.collectAsState()
+    val playerEnhanceToneMapping by playerPrefsVm.enhanceToneMapping.collectAsState()
+    val playerEnhanceHdrPeak by playerPrefsVm.enhanceHdrPeak.collectAsState()
+    val playerEnhanceDeinterlace by playerPrefsVm.enhanceDeinterlace.collectAsState()
+    val playerEnhanceScale by playerPrefsVm.enhanceScale.collectAsState()
+    val playerEnhanceCscale by playerPrefsVm.enhanceCscale.collectAsState()
+    val playerEnhanceDscale by playerPrefsVm.enhanceDscale.collectAsState()
+    val playerEnhanceAntiring by playerPrefsVm.enhanceAntiring.collectAsState()
+    val playerEnhanceGamma by playerPrefsVm.enhanceGamma.collectAsState()
+    val playerEnhanceVo by playerPrefsVm.enhanceVo.collectAsState()
+    val playerEnhanceWatchdogCap by playerPrefsVm.enhanceWatchdogCap.collectAsState()
+    s.enhancePreset = playerEnhancePreset
+    s.enhanceQuality = playerEnhanceQuality
+    s.enhanceOutput = playerEnhanceOutput
+    s.enhanceChainJson = playerEnhanceChain
+    s.enhanceDeband = playerEnhanceDeband
+    s.enhanceDebandCfg = playerEnhanceDebandCfg
+    s.enhanceSmoothMotion = playerEnhanceSmoothMotion
+    s.enhanceToneMapping = playerEnhanceToneMapping
+    s.enhanceHdrPeak = playerEnhanceHdrPeak
+    s.enhanceDeinterlace = playerEnhanceDeinterlace
+    s.enhanceScale = playerEnhanceScale
+    s.enhanceCscale = playerEnhanceCscale
+    s.enhanceDscale = playerEnhanceDscale
+    s.enhanceAntiring = playerEnhanceAntiring
+    s.enhanceGamma = playerEnhanceGamma
+    s.enhanceVo = playerEnhanceVo
+    s.enhanceWatchdogCap = playerEnhanceWatchdogCap
+    s.onEnhanceSave = { ns ->
+        playerPrefsVm.setEnhancePreset(ns.preset)
+        playerPrefsVm.setEnhanceQuality(ns.quality)
+        playerPrefsVm.setEnhanceOutput(ns.output)
+        playerPrefsVm.setEnhanceChain(ns.chainJson)
+        playerPrefsVm.setEnhanceDeband(ns.deband)
+        playerPrefsVm.setEnhanceDebandCfg(ns.debandCfg)
+        playerPrefsVm.setEnhanceSmoothMotion(ns.smoothMotion)
+        playerPrefsVm.setEnhanceToneMapping(ns.toneMapping)
+        playerPrefsVm.setEnhanceHdrPeak(ns.hdrPeak)
+        playerPrefsVm.setEnhanceDeinterlace(ns.deinterlace)
+        playerPrefsVm.setEnhanceScale(ns.scale)
+        playerPrefsVm.setEnhanceCscale(ns.cscale)
+        playerPrefsVm.setEnhanceDscale(ns.dscale)
+        playerPrefsVm.setEnhanceAntiring(ns.antiring)
+        playerPrefsVm.setEnhanceGamma(ns.gamma)
+        playerPrefsVm.setEnhanceVo(ns.vo)
+    }
+    s.onEnhanceWatchdogCapSave = { playerPrefsVm.setEnhanceWatchdogCap(it) }
     // Modo noturno + Clear Dialogue (Lote 16 item 1): estado por título,
     // carregado ao abrir e ao trocar de episódio; a sessão aplica no
     // ExoPlayer quando a sessão de áudio fica pronta ou o estado muda.
@@ -978,6 +1036,25 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     // fonte reaplicam ao vivo; no ExoPlayer o PlayerView já faz isso no update.
     LaunchedEffect(subSize, subColor, subBg, subBgOpacity, subOutline, subFont) {
         if (mpvActive) mpvPlayer?.applySubStyle(subSize, subColor, subBg, subBgOpacity, subOutline, subFont)
+    }
+
+    // Melhorar imagem (Lote mpv 2): o debounce segura os ticks dos sliders
+    // (o mpv recompila os shaders a cada aplicação); preset e toggle caem
+    // na mesma janela de 200 ms. O Comparar aplica na hora, fora daqui.
+    LaunchedEffect(enhancePreset, enhanceQuality, enhanceOutput, enhanceChainJson, enhanceDeband, enhanceDebandCfg, enhanceSmoothMotion, enhanceToneMapping, enhanceHdrPeak, enhanceDeinterlace, enhanceScale, enhanceCscale, enhanceDscale, enhanceAntiring, enhanceGamma, enhanceVo) {
+        onEnhanceStateChanged()
+    }
+
+    // Vigia (Lote mpv 2): com o mpv ativo, lê os contadores a cada 5 s e
+    // desce um passo quando o aparelho perde quadros demais (o check em si
+    // só vale tocando — ver PlayerSession.watchdogCheck).
+    LaunchedEffect(mpvActive) {
+        if (!mpvActive) return@LaunchedEffect
+        while (true) {
+            delay(ENHANCE_WATCHDOG_INTERVAL_MS)
+            if (!mpvActive) return@LaunchedEffect
+            watchdogCheck()
+        }
     }
 
     DisposableEffect(castPlayer, streamUrl) {
@@ -1647,6 +1724,15 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                             else -> false
                         }
                     }
+                    // Painel MELHORAR IMAGEM (Lote mpv 2): mesmo padrão do
+                    // equalizador/modo noturno — o painel tem foco próprio
+                    // (abas, linhas clicáveis e sliders); Voltar fecha.
+                    if (panelKind == "enhance") {
+                        return@onKeyEvent when (kc) {
+                            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> { sourcePanelOpen = false; true }
+                            else -> false
+                        }
+                    }
                     // Fileira de chips de filtro do painel de fontes (Lote 23
                     // item 13): os chips entram no anel de navegação junto
                     // com a lista — ↑ na 1ª linha entra nos chips, ↑ de novo
@@ -2163,6 +2249,30 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 onSliderFinished = { applyColorNow() },
                 onDismiss = { sourcePanelOpen = false },
                 television = isTv,
+            )
+        } else if (sourcePanelOpen && !locked && panelKind == "enhance") {
+            // Melhorar imagem (Lote mpv 2): só aplica de verdade com o mpv
+            // ativo — no ExoPlayer o painel abre desabilitado, com explicação.
+            val (effPreset, effQuality) = enhanceEffective()
+            EnhancePanel(
+                state = enhanceState,
+                enabled = mpvActive,
+                perf = enhancePerf,
+                effectivePreset = effPreset,
+                effectiveQuality = effQuality,
+                watchdogCap = enhanceWatchdogCap,
+                benchRunning = enhanceBenchRunning,
+                benchResult = enhanceBenchResult,
+                videoW = videoWidth,
+                videoH = videoHeight,
+                videoFps = mpvPlayer?.videoFps()?.toDouble(),
+                television = isTv,
+                onStateChange = ::applyEnhanceState,
+                onTestBench = { startEnhanceBench() },
+                onComparePress = { enhanceCompareHeld = true; applyEnhanceEffects() },
+                onCompareRelease = { enhanceCompareHeld = false; applyEnhanceEffects() },
+                onOpenColor = { openDpadPanel("color") },
+                onDismiss = { sourcePanelOpen = false },
             )
         } else if (sourcePanelOpen && !locked && panelKind == "night") {
             NightModePanel(
@@ -3093,6 +3203,9 @@ class PlayerSession(
         // p/ o Lote mpv 2.
         if (mpvActive) {
             mpvPlayer?.applyColor(colorState)
+            // Lote mpv 2: a daltonizacao vive no glsl-shaders, junto com a
+            // cadeia do upscaler — reaplicar o enhance quando a cor muda.
+            applyEnhanceEffects()
             return
         }
         runCatching { exoPlayer.setVideoEffects(buildColorEffects(colorState)) }
@@ -3105,6 +3218,183 @@ class PlayerSession(
     fun onColorStateChanged(newState: ColorFilterState, oldState: ColorFilterState) =
         colorDebouncer.onStateChanged(newState, oldState)
     fun applyColorNow() = colorDebouncer.applyNow()
+
+    // ── Melhorar imagem (Lote mpv 2, v1.37.0) ─────────────────────────────
+    // Estado do painel (por perfil, prefs `pref_enhance_*` — ver
+    // EnhanceCatalog.kt). So vale com o mpv: no ExoPlayer o painel abre
+    // desabilitado e nada aqui e chamado (ver [applyEnhanceEffects]).
+    var enhancePreset by run { mutableStateOf(EnhancePreset.AUTO.id) }
+    var enhanceQuality by run { mutableStateOf(EnhanceQuality.FAST.id) }
+    var enhanceOutput by run { mutableStateOf(EnhanceOutput.FIT.id) }
+    var enhanceChainJson by run { mutableStateOf("") }
+    var enhanceDeband by run { mutableStateOf(false) }
+    var enhanceDebandCfg by run { mutableStateOf("4,64,16,48") }
+    var enhanceSmoothMotion by run { mutableStateOf(false) }
+    var enhanceToneMapping by run { mutableStateOf("auto") }
+    var enhanceHdrPeak by run { mutableStateOf(false) }
+    var enhanceDeinterlace by run { mutableStateOf("auto") }
+    var enhanceScale by run { mutableStateOf("ewa_lanczos") }
+    var enhanceCscale by run { mutableStateOf("spline36") }
+    var enhanceDscale by run { mutableStateOf("mitchell") }
+    var enhanceAntiring by run { mutableFloatStateOf(0f) }
+    var enhanceGamma by run { mutableFloatStateOf(0f) }
+    var enhanceVo by run { mutableStateOf("gpu") }
+    var enhanceWatchdogCap by run { mutableStateOf("") }
+    /** Estado atual do painel, p/ aplicar e p/ o painel. */
+    val enhanceState
+        get() = EnhanceState(
+            enhancePreset, enhanceQuality, enhanceOutput, enhanceChainJson,
+            enhanceDeband, enhanceDebandCfg, enhanceSmoothMotion, enhanceToneMapping,
+            enhanceHdrPeak, enhanceDeinterlace, enhanceScale, enhanceCscale,
+            enhanceDscale, enhanceAntiring, enhanceGamma, enhanceVo,
+        )
+    /** A tela liga ao PlayerPrefsViewModel (salva as prefs do perfil). */
+    var onEnhanceSave: (EnhanceState) -> Unit = {}
+    /** A tela liga ao PlayerPrefsViewModel (salva o teto do vigia). */
+    var onEnhanceWatchdogCapSave: (String) -> Unit = {}
+    /** Preset/qualidade efetivos apos o vigia descer (null = vale a escolha). */
+    var enhanceWatchdogPreset: String? by run { mutableStateOf<String?>(null) }
+    var enhanceWatchdogQuality: String? by run { mutableStateOf<String?>(null) }
+    /** VO aplicado por ultimo (o init ja deixa "gpu"; trocar sem mudar nao reinicia o VO). */
+    private var lastAppliedVo: String = "gpu"
+    /** Ultimo desempenho lido do mpv (aba Desempenho). */
+    var enhancePerf: MpvPerf? by run { mutableStateOf<MpvPerf?>(null) }
+    /** Comparar pressionado: tudo desligado enquanto segurar. */
+    var enhanceCompareHeld by run { mutableStateOf(false) }
+    /** "Testar a minha placa" em andamento. */
+    var enhanceBenchRunning by run { mutableStateOf(false) }
+    /** Resultado do ultimo teste de placa (null = nenhum). */
+    var enhanceBenchResult: String? by run { mutableStateOf<String?>(null) }
+
+    /** Aplica um estado novo na sessao e salva (painel usa este). */
+    fun applyEnhanceState(ns: EnhanceState) {
+        // Trocar o preset/qualidade devolve a escolha p/ o usuario: o vigia
+        // reaprende do zero (o override some; o teto guardado nao muda —
+        // ele so registra ate onde a placa ja aguentou).
+        val presetChanged = ns.preset != enhancePreset || ns.quality != enhanceQuality
+        enhancePreset = ns.preset; enhanceQuality = ns.quality; enhanceOutput = ns.output
+        enhanceChainJson = ns.chainJson; enhanceDeband = ns.deband; enhanceDebandCfg = ns.debandCfg
+        enhanceSmoothMotion = ns.smoothMotion; enhanceToneMapping = ns.toneMapping
+        enhanceHdrPeak = ns.hdrPeak; enhanceDeinterlace = ns.deinterlace
+        enhanceScale = ns.scale; enhanceCscale = ns.cscale; enhanceDscale = ns.dscale
+        enhanceAntiring = ns.antiring; enhanceGamma = ns.gamma; enhanceVo = ns.vo
+        if (presetChanged) {
+            enhanceWatchdogPreset = null
+            enhanceWatchdogQuality = null
+        }
+        onEnhanceSave(ns)
+    }
+
+    /** (preset, qualidade) em uso: escolha do usuario, Auto resolvido, ou o passo do vigia. */
+    fun enhanceEffective(): Pair<String, String> {
+        val wdPreset = enhanceWatchdogPreset
+        val wdQuality = enhanceWatchdogQuality
+        if (wdPreset != null && wdQuality != null) return wdPreset to wdQuality
+        if (enhanceState.presetEnum != EnhancePreset.AUTO) return enhancePreset to enhanceQuality
+        val dm = context.resources.displayMetrics
+        val fps = mpvPlayer?.videoFps()?.toDouble()
+        return autoPickPreset(videoWidth, videoHeight, dm.widthPixels, dm.heightPixels, fps, enhanceWatchdogCap)
+    }
+
+    /** (Re)aplica o estado do painel no mpv (cadeia + filtros + VO). */
+    fun applyEnhanceEffects() {
+        if (!mpvActive) return
+        val mpv = mpvPlayer ?: return
+        val (preset, quality) = enhanceEffective()
+        val base = if (enhanceCompareHeld) ENHANCE_OFF_STATE
+            else enhanceState.copy(preset = preset, quality = quality)
+        // O Comparar nao mexe no VO (trocar o VO reinicia a saida de video).
+        val state = base.copy(vo = enhanceVo)
+        mpv.applyEnhance(state, colorDaltonism)
+        if (state.vo != lastAppliedVo) {
+            mpv.applyVo(state.vo)
+            lastAppliedVo = state.vo
+        }
+    }
+
+    // O debounce segura os ticks dos sliders (o mpv recompila os shaders a
+    // cada aplicacao); preset e toggle caem na mesma janela de 200 ms. O
+    // Comparar aplica na hora, fora do debounce (ver o painel).
+    private val enhanceDebouncer = ColorFilterDebouncer(scope) { applyEnhanceEffects() }
+    fun onEnhanceStateChanged() = enhanceDebouncer.onSliderChanged()
+    fun applyEnhanceNow() = enhanceDebouncer.applyNow()
+
+    /** Le custo/contadores do mpv p/ a aba Desempenho (best-effort). */
+    fun refreshEnhancePerf() {
+        if (!mpvActive) {
+            enhancePerf = null
+            return
+        }
+        enhancePerf = mpvPlayer?.readPerf()
+    }
+
+    // Vigia (Lote mpv 2): compara os contadores do mpv com a leitura
+    // anterior e desce UM passo (qualidade, depois preset) quando o aparelho
+    // perde quadros demais na janela. Nao mexe na escolha do usuario (o
+    // preset guardado continua o dele) e guarda ate onde a placa aguentou
+    // no teto (pref por perfil, p/ o Auto dos proximos videos).
+    private var lastWatchdogCounters: Triple<Long, Long, Long>? = null
+    fun watchdogCheck() {
+        if (!mpvActive || !isPlaying) return
+        val perf = mpvPlayer?.readPerf() ?: return
+        enhancePerf = perf
+        val prev = lastWatchdogCounters
+        lastWatchdogCounters = Triple(perf.dropped, perf.delayed, perf.mistimed)
+        val prevVal = prev ?: return
+        val bad = (perf.dropped - prevVal.first) + (perf.delayed - prevVal.second) +
+            (perf.mistimed - prevVal.third)
+        if (bad <= 0) return
+        val fps = perf.fps ?: mpvPlayer?.videoFps()?.toDouble() ?: return
+        val frames = fps * (ENHANCE_WATCHDOG_INTERVAL_MS / 1000.0)
+        if (frames <= 0 || bad / frames < ENHANCE_WATCHDOG_BAD_FRACTION) return
+        val (preset, quality) = enhanceEffective()
+        val down = watchdogStepDown(preset, quality) ?: return
+        enhanceWatchdogPreset = down.first
+        enhanceWatchdogQuality = down.second
+        if (down.first != enhanceWatchdogCap) {
+            enhanceWatchdogCap = down.first
+            onEnhanceWatchdogCapSave(down.first)
+        }
+        applyEnhanceEffects()
+    }
+
+    /** "Testar a minha placa": mede ~4 s com a cadeia atual e diz qual preset o aparelho sustenta. */
+    fun startEnhanceBench() {
+        if (!mpvActive || enhanceBenchRunning) return
+        enhanceBenchRunning = true
+        enhanceBenchResult = null
+        scope.launch {
+            val before = mpvPlayer?.readPerf()
+            delay(4000)
+            val after = mpvPlayer?.readPerf()
+            val b = before
+            val a = after
+            enhanceBenchRunning = false
+            if (b == null || a == null || !mpvActive) {
+                enhanceBenchResult = "Não deu para medir — reabra o vídeo no Libmpv e tente de novo."
+                return@launch
+            }
+            val bad = (a.dropped - b.dropped) + (a.delayed - b.delayed) + (a.mistimed - b.mistimed)
+            val fps = a.fps ?: 24.0
+            val frames = fps * 4.0
+            val rate = if (frames > 0) bad / frames else 0.0
+            val (preset, quality) = enhanceEffective()
+            val presetLabel = EnhancePreset.byId(preset).label
+            val qualityLabel = EnhanceQuality.byId(quality).label
+            enhanceBenchResult = if (bad <= 0) {
+                "Sem quadros perdidos em 4 s — o aparelho sustenta $presetLabel ($qualityLabel)."
+            } else if (rate < ENHANCE_WATCHDOG_BAD_FRACTION) {
+                "Poucos quadros perdidos em 4 s ($bad em ${frames.toInt()} quadros) — o aparelho sustenta $presetLabel ($qualityLabel), no limite."
+            } else {
+                val down = watchdogStepDown(preset, quality)
+                if (down == null) {
+                    "O aparelho perdeu $bad quadros em 4 s mesmo no preset mais leve — o gargalo não é o upscaler (veja a fonte ou o motor)."
+                } else {
+                    "O aparelho perdeu $bad quadros em 4 s com $presetLabel — tente ${EnhancePreset.byId(down.first).label} (${EnhanceQuality.byId(down.second).label})."
+                }
+            }
+        }
+    }
 
     // ── Modo noturno + Clear Dialogue (Lote 16 item 1) ─────────────────────
     // Controller criado com as prefs do app; o estado é carregado por título
@@ -3434,6 +3724,8 @@ class PlayerSession(
         mpv.setSpeed(speeds.getOrElse(speedIdx) { 1f })
         mpv.applyColor(colorState)
         mpv.applySubStyle(subSize, subColor, subBg, subBgOpacity, subOutline, subFont)
+        // Lote mpv 2: cadeia de shaders + filtros do painel Melhorar imagem.
+        applyEnhanceEffects()
         if (!didSeek && pendingSeekMs > 0) {
             mpv.seekAfterLoad(pendingSeekMs)
             didSeek = true
@@ -5037,6 +5329,7 @@ class PlayerSession(
         "screen" -> "Tela"
         "episodes" -> "Episódios"
         "color" -> "Cor do vídeo"
+        "enhance" -> "Melhorar imagem"
         "info" -> "Informações de reprodução"
         "eq" -> "Equalizador"
         "night" -> "Modo noturno"
@@ -5054,6 +5347,9 @@ class PlayerSession(
         sourcePanelOpen = true
         if (kind == "sources") sourceLimit = 30
         if (kind == "color") colorFocusIdx = 0
+        // Melhorar imagem (Lote mpv 2): lê o custo e os contadores do mpv na
+        // hora de abrir, p/ a aba Desempenho já chegar com dados.
+        if (kind == "enhance") refreshEnhancePerf()
         // Lote 12 — Frente 2: abrir a folha de fontes busca o título no On
         // Demand Xtream (1x por título; sem conta, a seção fica vazia).
         if (kind == "sources") loadOnDemand()
@@ -5106,6 +5402,10 @@ class PlayerSession(
         // canônica DEFAULT_PLAYER_BUTTONS (não mexida); o orderPlayerChips
         // põe ids fora do catálogo no fim, então ele aparece por último.
         add(PlayerChipItem(Icons.Default.Tune, "Cor", active = !colorState.isDefault, id = "color") { openDpadPanel("color") })
+        // Melhorar imagem (Lote mpv 2, v1.37.0): mesmo padrão do chip "Cor"
+        // — id fora do catálogo, vai p/ o fim. Abre sempre (mesmo no
+        // ExoPlayer, onde o painel explica que só vale com o Libmpv).
+        add(PlayerChipItem(Icons.Default.AutoFixHigh, "Melhorar imagem", active = !enhanceState.isDefault, id = "enhance") { openDpadPanel("enhance") })
         // Infos técnicas do vídeo (Lote 4 item 4, v1.12.0): mesmo padrão do chip
         // "color" — id fora do catálogo, vai p/ o fim e NÃO pode ser desligado
         // nas Configurações (é um painel de diagnóstico, não um botão configurável).

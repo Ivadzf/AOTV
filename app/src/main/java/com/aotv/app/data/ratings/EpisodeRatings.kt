@@ -173,6 +173,9 @@ class EpisodeRatingsResolver @Inject constructor(
     private val omdb: OmdbService,
     private val tvMaze: TvMazeService,
 ) {
+    /** Trakt configurado p/ a nota dos episódios (tem Client ID — login não é preciso). */
+    val traktConfigured: Boolean get() = trakt.configured
+
     val modeFlow: StateFlow<String> get() = settings.modeFlow
 
     suspend fun resolve(
@@ -217,9 +220,14 @@ class EpisodeRatingsResolver @Inject constructor(
         }
     }
 
-    /** Trakt só entra conectado (decisão do lote) — sem login, sem nota do Trakt. */
+    /**
+     * Trakt (Lote mpv 2, v1.37.0): o endpoint de notas é público — só o
+     * Client ID, sem login (igual aos comentários). A decisão do Lote 24
+     * ("só entra conectado") calava a fonte sempre que o Davi não estava
+     * logado ou o token expirava, sem avisar nada — era a causa raiz da
+     * nota do Trakt nunca voltar. Sem Client ID, o serviço devolve null.
+     */
     private suspend fun traktRating(tmdbId: Int, season: Int, episode: Int): Double? {
-        if (!trakt.isConnected) return null
         return trakt.getEpisodeRating(tmdbId, season, episode)
     }
 

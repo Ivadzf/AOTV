@@ -88,7 +88,7 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Tela "Trackers e Sincronização" (Simkl v1.13.1, device flow V2; Trakt v1.17.0;
- * MDBList, AniList e TheTVDB v1.17.0; OMDb v1.36.0).
+ * MDBList, AniList e TheTVDB v1.17.0; OMDb v1.36.0; TVmaze v1.37.0).
  *
  * Ponto de entrada p/ a navegação (o coordenador faz a fiação da rota e do
  * hub; esta tela NÃO se conecta à navegação sozinha):
@@ -151,7 +151,7 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
             if (!com.aotv.app.ui.common.LocalIsTv.current) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Voltar", tint = TextPrimary)
             }
-            PageHeader("Trackers e Sincronização", Modifier.weight(1f), sub = "Simkl, Trakt, MDBList, OMDb, AniList e TheTVDB no perfil ${st.profileName}")
+            PageHeader("Trackers e Sincronização", Modifier.weight(1f), sub = "Simkl, Trakt, MDBList, OMDb, TVmaze, AniList e TheTVDB no perfil ${st.profileName}")
         }
 
         val summary: @Composable () -> Unit = {
@@ -221,6 +221,28 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "O OMDb é uma das fontes da nota dos episódios (junto com TMDB, Trakt e TVmaze). Ele só lê — nenhuma nota sai daqui para o OMDb.",
+                    color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(16.dp))
+                Text("TVmaze", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(10.dp))
+                SummaryRow(
+                    "Status",
+                    "Grátis, sem chave",
+                    TextPrimary,
+                )
+                SummaryRow(
+                    "Teste",
+                    when {
+                        st.tvmazeMessage != null -> "OK — respondeu"
+                        st.tvmazeError != null -> "Falhou"
+                        else -> "Não testado"
+                    },
+                    if (st.tvmazeMessage != null) Ok else TextPrimary,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "O TVmaze é uma das fontes da nota dos episódios. A API é grátis e não precisa de chave nem de conta.",
                     color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -366,6 +388,10 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     "Para conectar, crie um app grátis no site do Trakt e cole o Client ID aqui. " +
                         "No formulário, o Trakt pede um endereço de retorno — use urn:ietf:wg:oauth:2.0:oob. " +
                         "O Client Secret é opcional.",
+                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                Text(
+                    "A nota dos episódios no Trakt só precisa do Client ID — não precisa conectar a conta nem manter a sessão ativa.",
                     color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
                 )
                 AotvButton(
@@ -591,6 +617,27 @@ fun TrackersScreen(onBack: () -> Unit, viewModel: TrackersViewModel = hiltViewMo
                     Text(
                         "Sem a chave o OMDb não entra nas fontes da nota dos episódios — o AOTV precisa da sua própria chave, não usa a de nenhum outro app.",
                         color = TextTertiary, fontSize = 12.sp, lineHeight = 16.sp,
+                    )
+                }
+
+                st.tvmazeMessage?.let { SimklBanner(it, ok = true, onClose = viewModel::clearTvMazeMessage) }
+                st.tvmazeError?.let { SimklBanner(it, ok = false, onClose = viewModel::clearTvMazeMessage) }
+
+                // TVmaze (Lote mpv 2, v1.37.0): a API é grátis e SEM chave —
+                // não há campo de chave p/ inventar. Seção de status + teste
+                // de conexão, no mesmo padrão visual das outras seções.
+                SettingsSection("TVmaze")
+                Text(
+                    "O TVmaze é uma das fontes da nota dos episódios (junto com TMDB, Trakt e OMDb). " +
+                        "A API dele é grátis e não precisa de chave nem de conta — nada p/ configurar aqui.",
+                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AotvButton(
+                        "Testar conexão", viewModel::testTvMazeConnection,
+                        icon = Icons.Default.Search, tone = ButtonTone.SECONDARY,
+                        enabled = !st.tvmazeTesting,
+                        busy = st.tvmazeTesting, busyLabel = "Testando…", compact = true,
                     )
                 }
 

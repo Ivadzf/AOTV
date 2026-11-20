@@ -84,6 +84,9 @@ class MovieDetailViewModel @Inject constructor(
     /** Modo da nota dos episódios ("average" por padrão) — a tela lê p/ o rótulo de origem do mapa. */
     val episodeRatingMode: StateFlow<String> = episodeRatings.modeFlow
 
+    /** Trakt configurado p/ a nota dos episódios (só o Client ID — sem login). A tela avisa quando falta. */
+    val traktConfigured: Boolean get() = episodeRatings.traktConfigured
+
     /** Aplica [apply] no UiState depois de 300 ms sem outra chamada (cancela a anterior). */
     private fun updateStreamsDebounced(apply: (UiState) -> UiState) {
         streamDebounceJob?.cancel()
@@ -729,6 +732,13 @@ class MovieDetailViewModel @Inject constructor(
                     )
                 }
                 loadDetailExtras(tmdbId, seriesDetail?.title.orEmpty(), seriesDetail?.firstAirYear?.toIntOrNull(), false, detailDto?.originalName.orEmpty())
+                // Temporada 1 (Lote mpv 2, v1.37.0): os episódios dela já vêm
+                // no carregamento inicial — sem esta chamada, o enriquecimento
+                // das notas (Trakt/OMDb/TVmaze) só rodava ao trocar de
+                // temporada (loadSeason) e a 1ª tela da série mostrava só a
+                // nota do TMDB. O resolver lê título, IMDb id e título
+                // original do estado, já preenchidos no update acima.
+                if (episodes?.isNotEmpty() == true) enrichSeasonRatings(tmdbId, 1, episodes)
                 // Logo do título: TMDB (PT-BR) principal, metahub fallback.
                 launch {
                     val tmdbLogo = if (apiKey.isNotBlank() && tmdbId > 0)

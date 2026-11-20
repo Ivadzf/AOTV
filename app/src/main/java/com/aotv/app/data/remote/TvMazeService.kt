@@ -4,9 +4,19 @@
 //
 // Resolução da série: prefere o lookup por IMDb id (o mais confiável — não
 // erra a série); sem IMDb id, busca por título e usa o 1º resultado. Quando
-// o IMDb id EXISTE mas o TVmaze não o conhece (404), NÃO cai p/ a busca por
-// título: casar por título quando o id disse "não conheço" arriscaria
-// trazer a nota da série errada (remakes, homônimos).
+// o IMDb id EXISTE mas o TVmaze não o conhece (404), CAI p/ a busca por
+// título (Lote mpv 2, v1.37.0 — reversão da decisão do Lote 24): o link de
+// IMDb falta em muitas entradas do TVmaze, então o 404 calava a fonte p/
+// séries que ele conhece pelo título — era a causa raiz do "TVmaze não
+// aparece nas notas" (o OMDb, que sempre tenta o título original quando o
+// exibido falha, aparecia). A busca usa o 1º resultado (o mais relevante);
+// o risco de homônimo/remake continua existindo, mas é menor que a fonte
+// nunca aparecer. Título em PT-BR quase nunca casa — verificado ao vivo:
+// "O Mentalista" não retorna nada, "The Mentalist" retorna a série —
+// por isso o título original é tentado quando o exibido falha. Erro de
+// rede NÃO cai p/ a busca nem entra no cache: a próxima abertura tenta
+// de novo (um null cacheado por falha passageira sumiria com a fonte na
+// sessão inteira).
 //
 // Cobertura menor — muito episódio sem nota (rating.average null): sem
 // nota = fora da média, nunca zero. Cache em memória igual ao do OMDb
@@ -131,6 +141,46 @@ class TvMazeService @Inject constructor(
         return rating
     }
 
+    /**
+     * Testa a conexão com o TVmaze (Lote mpv 2, v1.37.0): busca conhecida
+     * ("Breaking Bad") — a API é grátis e SEM chave, sem login. Sucesso =
+     * a API respondeu com pelo menos um show. Nunca lança (só o
+     * CancellationException da coroutine passa).
+     */
+    suspend fun testConnection(): Result<String> {
+        return try {
+            val found = api.searchShows("Breaking Bad")
+            if (found.any { it.show != null }) {
+                Result.success("TVmaze conectado — a API respondeu à busca de teste.")
+            } else {
+                Result.failure(IllegalStateException("O TVmaze respondeu, mas sem nenhum show na busca de teste."))
+            }
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(IllegalStateException("Não foi possível falar com o TVmaze. Confira a conexão e tente de novo."))
+        }
+    }
+
+    /** Resultado do lookup por IMDb: achado, "não conhece" (404) ou erro transitório. */
+    private sealed class ImdbLookup {
+        data class Found(val showId: Int) : ImdbLookup()
+        object NotFound : ImdbLookup()
+        object TransientError : ImdbLookup()
+    }
+
+    /** Lookup por IMDb id, distinguindo 404 (definitivo) de erro transitório. */
+    private suspend fun lookupByImdb(cleanImdb: String): ImdbLookup {
+        return try {
+            ImdbLookup.Found(api.lookupByImdb(cleanImdb).id)
+        } catch (e: HttpException) {
+            currentCoroutineContext().ensureActive()
+            if (e.code() == 404) ImdbLookup.NotFound else ImdbLookup.TransientError
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            ImdbLookup.TransientError
+        }
+    }
+
     /** Id da série no TVmaze (null = não encontrada). Resultado cacheado. */
     private suspend fun resolveShowId(title: String, imdbId: String?, originalTitle: String = ""): Int? {
         val cleanImdb = imdbId?.trim().orEmpty()
@@ -139,16 +189,20 @@ class TvMazeService @Inject constructor(
             synchronized(showIdCache) {
                 if (showIdCache.containsKey(key)) return showIdCache[key]
             }
-            val id = try {
-                api.lookupByImdb(cleanImdb).id
-            } catch (e: Exception) {
-                currentCoroutineContext().ensureActive()
-                null
+            when (val lookup = lookupByImdb(cleanImdb)) {
+                is ImdbLookup.Found -> {
+                    synchronized(showIdCache) { showIdCache[key] = lookup.showId }
+                    return lookup.showId
+                }
+                ImdbLookup.NotFound -> {
+                    // 404: o TVmaze não conhece esse IMDb id — mas pode
+                    // conhecer a série pelo título (o link de IMDb falta em
+                    // muitas entradas). Cai p/ a busca por título abaixo,
+                    // como se não houvesse IMDb id (ver o comentário do
+                    // arquivo). O 404 em si não entra no cache.
+                }
+                ImdbLookup.TransientError -> return null
             }
-            synchronized(showIdCache) { showIdCache[key] = id }
-            // IMDb conhecido mas sem par no TVmaze: volta null sem tentar por
-            // título (ver o comentário do arquivo).
-            return id
         }
         searchShowId(title)?.let { return it }
         val original = originalTitle.trim()
@@ -170,7 +224,10 @@ class TvMazeService @Inject constructor(
             api.searchShows(cleanTitle).firstOrNull()?.show?.id
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
-            null
+            // Erro de transporte (rede/HTTP): NÃO cacheia — um null cacheado
+            // aqui faria a fonte sumir na sessão inteira por uma falha
+            // passageira (o OMDb já faz assim: erro de rede não entra).
+            return null
         }
         synchronized(showIdCache) { showIdCache[key] = id }
         return id

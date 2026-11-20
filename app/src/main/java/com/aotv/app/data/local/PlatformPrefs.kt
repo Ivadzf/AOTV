@@ -266,6 +266,18 @@ internal val SCOPED_KEYS = listOf(
     "mk_channel_source_v1", "peak_cinema_enabled_v1", "peak_cinema_mood_v1",
     "pref_player_ambilight_v1", "pref_player_ambilight_intensity_v1",
     "pref_player_sensory_friendly_v1", "episode_rating_mode_v1",
+    // Lote mpv 2 (v1.37.0) — Painel "Melhorar imagem" (só Libmpv): preset
+    // do upscaler, qualidade, saída, cadeia própria (JSON), debanding
+    // (liga + "iter,limiar,alcance,grão"), movimento suave, tone-mapping,
+    // pico do HDR, entrelaçado, escaladores (ampliação/croma/redução),
+    // antiring, gama, renderizador (vo) e o teto guardado pelo vigia
+    // (preset mais pesado que a placa aguentou). Tudo por perfil.
+    "pref_enhance_preset_v1", "pref_enhance_quality_v1", "pref_enhance_output_v1",
+    "pref_enhance_chain_v1", "pref_enhance_deband_v1", "pref_enhance_deband_cfg_v1",
+    "pref_enhance_smooth_motion_v1", "pref_enhance_tone_mapping_v1", "pref_enhance_hdr_peak_v1",
+    "pref_enhance_deinterlace_v1", "pref_enhance_scale_v1", "pref_enhance_cscale_v1",
+    "pref_enhance_dscale_v1", "pref_enhance_antiring_v1", "pref_enhance_gamma_v1",
+    "pref_enhance_vo_v1", "pref_enhance_watchdog_cap_v1",
 )
 
 /**
@@ -2623,6 +2635,129 @@ class PlatformPrefs @Inject constructor(
         get() = _playerColorDaltonism.value
         set(value) { prefs.edit().putString(sk("pref_player_color_daltonism"), value).apply(); _playerColorDaltonism.value = value }
 
+    // ── Painel "Melhorar imagem" (Lote mpv 2, v1.37.0) — por perfil ────────
+    // So vale com o Libmpv; no ExoPlayer o painel abre desabilitado. Ver
+    // EnhanceCatalog.kt (presets, cadeias, custos) e MpvPlayer.applyEnhance.
+
+    private val _enhancePreset = MutableStateFlow(prefs.getString(sk("pref_enhance_preset_v1"), "auto") ?: "auto")
+    /** Preset do upscaler ("auto", "anime_a"... "light", "off"). */
+    val enhancePresetFlow: StateFlow<String> = _enhancePreset.asStateFlow()
+    var enhancePreset: String
+        get() = _enhancePreset.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_preset_v1"), value).apply(); _enhancePreset.value = value }
+
+    private val _enhanceQuality = MutableStateFlow(prefs.getString(sk("pref_enhance_quality_v1"), "fast") ?: "fast")
+    /** Qualidade da cadeia ("fast" = redes S, "high" = redes M/L). */
+    val enhanceQualityFlow: StateFlow<String> = _enhanceQuality.asStateFlow()
+    var enhanceQuality: String
+        get() = _enhanceQuality.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_quality_v1"), value).apply(); _enhanceQuality.value = value }
+
+    private val _enhanceOutput = MutableStateFlow(prefs.getString(sk("pref_enhance_output_v1"), "fit") ?: "fit")
+    /** Saida do upscaler ("fit", "2x" ou "4x"). */
+    val enhanceOutputFlow: StateFlow<String> = _enhanceOutput.asStateFlow()
+    var enhanceOutput: String
+        get() = _enhanceOutput.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_output_v1"), value).apply(); _enhanceOutput.value = value }
+
+    private val _enhanceChain = MutableStateFlow(prefs.getString(sk("pref_enhance_chain_v1"), "") ?: "")
+    /** Cadeia propria do modo Avancado (JSON); "" = vale a cadeia do preset. */
+    val enhanceChainFlow: StateFlow<String> = _enhanceChain.asStateFlow()
+    var enhanceChain: String
+        get() = _enhanceChain.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_chain_v1"), value).apply(); _enhanceChain.value = value }
+
+    private val _enhanceDeband = MutableStateFlow(prefs.getBoolean(sk("pref_enhance_deband_v1"), false))
+    /** Debanding ligado. */
+    val enhanceDebandFlow: StateFlow<Boolean> = _enhanceDeband.asStateFlow()
+    var enhanceDeband: Boolean
+        get() = _enhanceDeband.value
+        set(value) { prefs.edit().putBoolean(sk("pref_enhance_deband_v1"), value).apply(); _enhanceDeband.value = value }
+
+    private val _enhanceDebandCfg = MutableStateFlow(prefs.getString(sk("pref_enhance_deband_cfg_v1"), "4,64,16,48") ?: "4,64,16,48")
+    /** Debanding como CSV "iter,limiar,alcance,grao" (ver parseDebandCfg). */
+    val enhanceDebandCfgFlow: StateFlow<String> = _enhanceDebandCfg.asStateFlow()
+    var enhanceDebandCfg: String
+        get() = _enhanceDebandCfg.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_deband_cfg_v1"), value).apply(); _enhanceDebandCfg.value = value }
+
+    private val _enhanceSmoothMotion = MutableStateFlow(prefs.getBoolean(sk("pref_enhance_smooth_motion_v1"), false))
+    /** Movimento suave (interpolacao do mpv; o video-sync ja e display-resample). */
+    val enhanceSmoothMotionFlow: StateFlow<Boolean> = _enhanceSmoothMotion.asStateFlow()
+    var enhanceSmoothMotion: Boolean
+        get() = _enhanceSmoothMotion.value
+        set(value) { prefs.edit().putBoolean(sk("pref_enhance_smooth_motion_v1"), value).apply(); _enhanceSmoothMotion.value = value }
+
+    private val _enhanceToneMapping = MutableStateFlow(prefs.getString(sk("pref_enhance_tone_mapping_v1"), "auto") ?: "auto")
+    /** Tone-mapping p/ HDR em tela comum ("auto" = o padrao do mpv). */
+    val enhanceToneMappingFlow: StateFlow<String> = _enhanceToneMapping.asStateFlow()
+    var enhanceToneMapping: String
+        get() = _enhanceToneMapping.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_tone_mapping_v1"), value).apply(); _enhanceToneMapping.value = value }
+
+    private val _enhanceHdrPeak = MutableStateFlow(prefs.getBoolean(sk("pref_enhance_hdr_peak_v1"), false))
+    /** Calcular o pico do HDR (hdr-compute-peak). */
+    val enhanceHdrPeakFlow: StateFlow<Boolean> = _enhanceHdrPeak.asStateFlow()
+    var enhanceHdrPeak: Boolean
+        get() = _enhanceHdrPeak.value
+        set(value) { prefs.edit().putBoolean(sk("pref_enhance_hdr_peak_v1"), value).apply(); _enhanceHdrPeak.value = value }
+
+    private val _enhanceDeinterlace = MutableStateFlow(prefs.getString(sk("pref_enhance_deinterlace_v1"), "auto") ?: "auto")
+    /** Entrelacado ("auto", "yes" ou "no"). */
+    val enhanceDeinterlaceFlow: StateFlow<String> = _enhanceDeinterlace.asStateFlow()
+    var enhanceDeinterlace: String
+        get() = _enhanceDeinterlace.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_deinterlace_v1"), value).apply(); _enhanceDeinterlace.value = value }
+
+    private val _enhanceScale = MutableStateFlow(prefs.getString(sk("pref_enhance_scale_v1"), "ewa_lanczos") ?: "ewa_lanczos")
+    /** Escalador de ampliacao (scale). */
+    val enhanceScaleFlow: StateFlow<String> = _enhanceScale.asStateFlow()
+    var enhanceScale: String
+        get() = _enhanceScale.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_scale_v1"), value).apply(); _enhanceScale.value = value }
+
+    private val _enhanceCscale = MutableStateFlow(prefs.getString(sk("pref_enhance_cscale_v1"), "spline36") ?: "spline36")
+    /** Escalador de croma (cscale). */
+    val enhanceCscaleFlow: StateFlow<String> = _enhanceCscale.asStateFlow()
+    var enhanceCscale: String
+        get() = _enhanceCscale.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_cscale_v1"), value).apply(); _enhanceCscale.value = value }
+
+    private val _enhanceDscale = MutableStateFlow(prefs.getString(sk("pref_enhance_dscale_v1"), "mitchell") ?: "mitchell")
+    /** Escalador de reducao (dscale). */
+    val enhanceDscaleFlow: StateFlow<String> = _enhanceDscale.asStateFlow()
+    var enhanceDscale: String
+        get() = _enhanceDscale.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_dscale_v1"), value).apply(); _enhanceDscale.value = value }
+
+    private val _enhanceAntiring = MutableStateFlow(prefs.getFloat(sk("pref_enhance_antiring_v1"), 0f))
+    /** Antiring 0..1 (aplica o mesmo valor em scale/cscale/dscale). */
+    val enhanceAntiringFlow: StateFlow<Float> = _enhanceAntiring.asStateFlow()
+    var enhanceAntiring: Float
+        get() = _enhanceAntiring.value
+        set(value) { prefs.edit().putFloat(sk("pref_enhance_antiring_v1"), value).apply(); _enhanceAntiring.value = value }
+
+    private val _enhanceGamma = MutableStateFlow(prefs.getFloat(sk("pref_enhance_gamma_v1"), 0f))
+    /** Gama do mpv, -100..100 (0 = sem mudanca). */
+    val enhanceGammaFlow: StateFlow<Float> = _enhanceGamma.asStateFlow()
+    var enhanceGamma: Float
+        get() = _enhanceGamma.value
+        set(value) { prefs.edit().putFloat(sk("pref_enhance_gamma_v1"), value).apply(); _enhanceGamma.value = value }
+
+    private val _enhanceVo = MutableStateFlow(prefs.getString(sk("pref_enhance_vo_v1"), "gpu") ?: "gpu")
+    /** Renderizador do mpv ("gpu" ou "gpu-next"). */
+    val enhanceVoFlow: StateFlow<String> = _enhanceVo.asStateFlow()
+    var enhanceVo: String
+        get() = _enhanceVo.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_vo_v1"), value).apply(); _enhanceVo.value = value }
+
+    private val _enhanceWatchdogCap = MutableStateFlow(prefs.getString(sk("pref_enhance_watchdog_cap_v1"), "") ?: "")
+    /** Teto do vigia: preset mais pesado que a placa aguentou ("" = nenhum). */
+    val enhanceWatchdogCapFlow: StateFlow<String> = _enhanceWatchdogCap.asStateFlow()
+    var enhanceWatchdogCap: String
+        get() = _enhanceWatchdogCap.value
+        set(value) { prefs.edit().putString(sk("pref_enhance_watchdog_cap_v1"), value).apply(); _enhanceWatchdogCap.value = value }
+
     // ── Motor do player (Lote 4, v1.12.0) — por perfil ─────────────────────
     // Player padrão: "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 —
     // v1.36.0) ou "external" (abre o link resolvido num player instalado,
@@ -3734,6 +3869,24 @@ class PlatformPrefs @Inject constructor(
         _playerColorHue.value = prefs.getFloat(sk("pref_player_color_hue"), 0f)
         _playerColorPreset.value = prefs.getString(sk("pref_player_color_preset"), "padrao") ?: "padrao"
         _playerColorDaltonism.value = prefs.getString(sk("pref_player_color_daltonism"), "off") ?: "off"
+        // Lote mpv 2 (v1.37.0) — Melhorar imagem, por perfil.
+        _enhancePreset.value = prefs.getString(sk("pref_enhance_preset_v1"), "auto") ?: "auto"
+        _enhanceQuality.value = prefs.getString(sk("pref_enhance_quality_v1"), "fast") ?: "fast"
+        _enhanceOutput.value = prefs.getString(sk("pref_enhance_output_v1"), "fit") ?: "fit"
+        _enhanceChain.value = prefs.getString(sk("pref_enhance_chain_v1"), "") ?: ""
+        _enhanceDeband.value = prefs.getBoolean(sk("pref_enhance_deband_v1"), false)
+        _enhanceDebandCfg.value = prefs.getString(sk("pref_enhance_deband_cfg_v1"), "4,64,16,48") ?: "4,64,16,48"
+        _enhanceSmoothMotion.value = prefs.getBoolean(sk("pref_enhance_smooth_motion_v1"), false)
+        _enhanceToneMapping.value = prefs.getString(sk("pref_enhance_tone_mapping_v1"), "auto") ?: "auto"
+        _enhanceHdrPeak.value = prefs.getBoolean(sk("pref_enhance_hdr_peak_v1"), false)
+        _enhanceDeinterlace.value = prefs.getString(sk("pref_enhance_deinterlace_v1"), "auto") ?: "auto"
+        _enhanceScale.value = prefs.getString(sk("pref_enhance_scale_v1"), "ewa_lanczos") ?: "ewa_lanczos"
+        _enhanceCscale.value = prefs.getString(sk("pref_enhance_cscale_v1"), "spline36") ?: "spline36"
+        _enhanceDscale.value = prefs.getString(sk("pref_enhance_dscale_v1"), "mitchell") ?: "mitchell"
+        _enhanceAntiring.value = prefs.getFloat(sk("pref_enhance_antiring_v1"), 0f)
+        _enhanceGamma.value = prefs.getFloat(sk("pref_enhance_gamma_v1"), 0f)
+        _enhanceVo.value = prefs.getString(sk("pref_enhance_vo_v1"), "gpu") ?: "gpu"
+        _enhanceWatchdogCap.value = prefs.getString(sk("pref_enhance_watchdog_cap_v1"), "") ?: ""
         _playerEngine.value = prefs.getString(sk("pref_player_engine"), "exoplayer") ?: "exoplayer"
         _playerDecoder.value = prefs.getString(sk("pref_player_decoder"), "hw") ?: "hw"
         _playerBuffer.value = prefs.getString(sk("pref_player_buffer"), "normal") ?: "normal"

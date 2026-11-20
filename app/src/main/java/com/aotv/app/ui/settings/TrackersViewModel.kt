@@ -8,6 +8,7 @@ import com.aotv.app.data.remote.AniListService
 import com.aotv.app.data.remote.MDBListService
 import com.aotv.app.data.remote.SimklService
 import com.aotv.app.data.remote.TraktService
+import com.aotv.app.data.remote.TvMazeService
 import com.aotv.app.data.remote.TvdbService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -64,6 +65,11 @@ data class TrackersUiState(
     val tvdbOrdering: String = "official",
     val tvdbMessage: String? = null,
     val tvdbError: String? = null,
+    // TVmaze (Lote mpv 2, v1.37.0): grátis e SEM chave — só status e teste
+    // de conexão, sem campo de chave nem toggle.
+    val tvmazeMessage: String? = null,
+    val tvmazeError: String? = null,
+    val tvmazeTesting: Boolean = false,
     // Avaliação pós-filme (v1.17.0): pedir nota ao fim do título e enviar aos trackers.
     val postPlayRatingEnabled: Boolean = true,
     // Lote 23 (v1.33.0): sync de 2 vias do Simkl (puxar assistidos + Minha Lista).
@@ -91,6 +97,7 @@ class TrackersViewModel @Inject constructor(
     private val mdbList: MDBListService,
     private val aniList: AniListService,
     private val tvdb: TvdbService,
+    private val tvMaze: TvMazeService,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(
@@ -149,6 +156,27 @@ class TrackersViewModel @Inject constructor(
     fun clearAniMessage() = _ui.update { it.copy(aniMessage = null, aniError = null) }
 
     fun clearTvdbMessage() = _ui.update { it.copy(tvdbMessage = null, tvdbError = null) }
+
+    fun clearTvMazeMessage() = _ui.update { it.copy(tvmazeMessage = null, tvmazeError = null) }
+
+    /**
+     * Testa a conexão com o TVmaze (Lote mpv 2, v1.37.0): a API é grátis
+     * e sem chave, então o teste é só uma busca conhecida — o resultado
+     * vai p/ tvmazeMessage/tvmazeError, que a tela já exibe em banner.
+     */
+    fun testTvMazeConnection() {
+        viewModelScope.launch {
+            _ui.update { it.copy(tvmazeTesting = true, tvmazeMessage = null, tvmazeError = null) }
+            val result = tvMaze.testConnection()
+            _ui.update {
+                it.copy(
+                    tvmazeTesting = false,
+                    tvmazeMessage = result.getOrNull(),
+                    tvmazeError = result.exceptionOrNull()?.message,
+                )
+            }
+        }
+    }
 
     /** Grava o client ID digitado (só o usuário cola; nunca há valor embutido). */
     fun saveClientId(id: String) {

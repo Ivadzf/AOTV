@@ -59,6 +59,18 @@ class MpvPlayer(
     private var surfaceAttached = false
     private var destroyed = false
 
+    /**
+     * Renderizador escolhido no painel Melhorar imagem (Lote mpv 2):
+     * "gpu" (padrao) ou "gpu-next" (os dois existem no mpv 0.41 do AAR).
+     * Vale no init e na (re)anexacao da superficie; trocar em reproducao
+     * reinicia o VO (ver [applyVo]).
+     */
+    var preferredVo: String = "gpu"
+        private set
+
+    /** Shaders ja copiados p/ filesDir (ver [shaderDir]). */
+    private var shadersInstalled = false
+
     /** Load pedido antes do init/superfície — dispara quando ambos existirem. */
     private var pendingLoad: PendingLoad? = null
 
@@ -110,10 +122,34 @@ class MpvPlayer(
             mpv.setOptionString("gpu-shader-cache-dir", cacheDir.absolutePath)
             mpv.setOptionString("icc-cache-dir", cacheDir.absolutePath)
             // Renderizador em contexto próprio (vo=gpu, contexto EGL do mpv).
-            mpv.setOptionString("vo", "gpu")
+            mpv.setOptionString("vo", preferredVo)
             // Decodificação por hardware no Android (MediaCodec); se o
             // decoder de hardware falhar, o mpv cai p/ software sozinho.
             mpv.setOptionString("hwdec", "mediacodec")
+            // Correcao A (Lote mpv 2, v1.37.0) — video engasgando: o video
+            // ficava lento em partes apos alguns segundos, como perda de FPS
+            // em jogo, sem travar tudo. Causa mais provavel: o padrao do mpv
+            // (video-sync=audio) apresenta os quadros no relogio do audio;
+            // num painel de 60 Hz, conteudo de 24 fps cai na cadencia 3:2
+            // (quadros repetidos de forma desigual) e a correcao de deriva
+            // audio-video aparece como "lentidao em partes". Com
+            // video-sync=display-resample o mpv trava a apresentacao no
+            // vsync da tela e reajusta a velocidade do audio (o display-fps
+            // fica na deteccao automatica do mpv, padrao 0 = detectar).
+            // Candidatos REJEITADOS, com motivo:
+            // - hwdec=mediacodec-copy: COPIA cada quadro decodificado p/ a
+            //   CPU antes de subir p/ a textura — num SoC fraco de TV satura
+            //   a thread do codec (medido em 0,78x tempo real num Amlogic
+            //   de 4x Cortex-A55) e reproduz o proprio sintoma relatado.
+            //   O mediacodec zero-copy atual ja e o caminho certo.
+            // - vo=gpu-next: existe no mpv 0.41, mas troca o pipeline de
+            //   shaders inteiro (libplacebo) e ja quebrou com mediacodec em
+            //   alguns aparelhos — fica como ESCOLHA no painel, nao padrao.
+            // - demuxer-max-bytes / demuxer-readahead-secs: sao p/ engasgo
+            //   de REDE (pausa p/ cache); o sintoma e de ritmo de quadro,
+            //   nao de buffer — e o isBuffering ja cobre a pausa p/ cache.
+            // A prova final e o teste do Davi na TV/celular (ver o reporte).
+            mpv.setOptionString("video-sync", "display-resample")
             mpv.setOptionString("force-window", "no")
             // Precisa ficar idle 1x p/ o loadfile funcionar antes da superfície.
             mpv.setOptionString("idle", "once")
@@ -145,7 +181,7 @@ class MpvPlayer(
                 pendingLoad = null
                 doLoad(pending)
             } else {
-                mpv.setPropertyString("vo", "gpu")
+                mpv.setPropertyString("vo", preferredVo)
             }
         }
     }
@@ -378,6 +414,137 @@ class MpvPlayer(
         }
     }
 
+    // ── Melhorar imagem (Lote mpv 2, v1.37.0) ─────────────────────────────
+
+    /**
+     * Troca o renderizador ("gpu" ou "gpu-next"). Guarda a escolha p/ o
+     * init e p/ a proxima superficie; com o VO ja ativo, troca na hora
+     * (o mpv reinicia o VO sozinho). Valor desconhecido volta p/ "gpu".
+     * Best-effort: se a troca falhar, o video continua no VO atual.
+     */
+    fun applyVo(vo: String) {
+        val clean = if (vo == "gpu-next") "gpu-next" else "gpu"
+        preferredVo = clean
+        if (!initialized || destroyed) return
+        runCatching { mpv.setPropertyString("vo", clean) }
+    }
+
+    /**
+     * Copia os shaders empacotados (assets/shaders/) p/ filesDir/mpv-shaders
+     * na primeira utilizacao e devolve o diretorio. SO os arquivos da
+     * allowlist ([ENHANCE_SHADER_ALLOWLIST]) sao copiados — nunca caminho
+     * arbitrario (o painel so manda ids do catalogo). null = a copia falhou
+     * (o upscaler degrada p/ os escaladores built-in; os filtros continuam).
+     */
+    fun shaderDir(): File? {
+        val dir = File(appContext.filesDir, "mpv-shaders").apply { mkdirs() }
+        if (shadersInstalled) return dir.takeIf { it.isDirectory }
+        var ok = true
+        for (name in ENHANCE_SHADER_ALLOWLIST) {
+            runCatching {
+                val target = File(dir, name)
+                val bytes = appContext.assets.open("shaders/$name").use { it.readBytes() }
+                if (!target.exists() || target.length() != bytes.size.toLong()) target.writeBytes(bytes)
+            }.onFailure { ok = false }
+        }
+        shadersInstalled = ok
+        return dir.takeIf { ok }
+    }
+
+    /**
+     * Aplica o estado do painel Melhorar imagem no mpv, sem reiniciar o
+     * video. A cadeia de shaders vai por caminho absoluto em `glsl-shaders`
+     * (separador ":" — o formato do libmpv no Android); etapa cujo arquivo
+     * nao foi instalado e PULADA (o preset degrada p/ os escaladores
+     * built-in em vez de fingir que o shader existe). A daltonizacao vai
+     * por ultimo na cadeia (correcao depois da gradacao, como no ReShade);
+     * sem upscaler, ela vai sozinha. O `video-sync` NAO e mexido aqui:
+     * fica display-resample do init (correcao A) — o movimento suave so
+     * liga/desliga a `interpolation`.
+     */
+    fun applyEnhance(state: EnhanceState, daltonism: DaltonismMode) {
+        if (!initialized || destroyed) return
+        runCatching {
+            val dir = shaderDir()
+            val shaderFiles = ArrayList<String>()
+            if (dir != null) {
+                for (id in resolveEnhanceChain(state)) {
+                    val file = enhanceStepById(id)?.file ?: continue
+                    val f = File(dir, file)
+                    if (f.exists()) shaderFiles.add(f.absolutePath)
+                }
+                daltonizeShaderFile(daltonism)?.let { name ->
+                    val f = File(dir, name)
+                    if (f.exists()) shaderFiles.add(f.absolutePath)
+                }
+            }
+            mpv.setPropertyString("glsl-shaders", shaderFiles.joinToString(":"))
+            val deband = state.debandParts
+            mpv.setPropertyBoolean("deband", state.deband)
+            mpv.setPropertyInt("deband-iterations", deband.iter)
+            mpv.setPropertyDouble("deband-threshold", deband.threshold.toDouble())
+            mpv.setPropertyDouble("deband-range", deband.range.toDouble())
+            mpv.setPropertyDouble("deband-grain", deband.grain.toDouble())
+            mpv.setPropertyBoolean("interpolation", state.smoothMotion)
+            if (state.toneMapping != "auto" && state.toneMapping in ENHANCE_TONE_MAPPINGS) {
+                mpv.setPropertyString("tone-mapping", state.toneMapping)
+            }
+            mpv.setPropertyString("hdr-compute-peak", if (state.hdrPeak) "yes" else "auto")
+            if (state.deinterlace in listOf("auto", "yes", "no")) {
+                mpv.setPropertyString("deinterlace", state.deinterlace)
+            }
+            if (state.scale in ENHANCE_SCALERS) mpv.setPropertyString("scale", state.scale)
+            if (state.cscale in ENHANCE_SCALERS) mpv.setPropertyString("cscale", state.cscale)
+            if (state.dscale in ENHANCE_SCALERS) mpv.setPropertyString("dscale", state.dscale)
+            // O mpv 0.41 nao tem opcao unica "antiring": sao tres (escala,
+            // croma e reducao) e o slider unico aplica o mesmo valor nas tres.
+            val antiring = state.antiring.coerceIn(0f, 1f).toDouble()
+            mpv.setPropertyDouble("scale-antiring", antiring)
+            mpv.setPropertyDouble("cscale-antiring", antiring)
+            mpv.setPropertyDouble("dscale-antiring", antiring)
+            mpv.setPropertyInt("gamma", state.gamma.toInt().coerceIn(-100, 100))
+        }
+    }
+
+    /**
+     * Custo por passada e contadores de quadros, lidos do proprio mpv (aba
+     * Desempenho). `vo-passes` devolve um mapa categoria -> lista de
+     * passadas, cada uma com `desc`, `avg`/`peak` em NANOSSEGUNDOS e
+     * `samples`/`count` (ver o stats.lua embutido no mpv 0.41). O total e o
+     * MAIOR total por categoria — as categorias se sobrepoem e soma-las
+     * dobraria a conta. Qualquer falha de leitura devolve contadores zerados
+     * e lista vazia (a aba mostra "sem dados"), nunca crasha.
+     */
+    fun readPerf(): MpvPerf {
+        val dropped = runCatching { mpv.getPropertyInt("frame-drop-count") }.getOrNull() ?: 0
+        val delayed = runCatching { mpv.getPropertyInt("vo-delayed-frame-count") }.getOrNull() ?: 0
+        val mistimed = runCatching { mpv.getPropertyInt("mistimed-frame-count") }.getOrNull() ?: 0
+        val fps = runCatching { mpv.getPropertyDouble("video-params/average-frame-rate") }.getOrNull()
+            ?.takeIf { it > 0 }
+        val passes = ArrayList<MpvPass>()
+        var totalMs = 0.0
+        runCatching {
+            val json = mpv.getPropertyNode("vo-passes")?.toJson() ?: return@runCatching
+            val root = org.json.JSONObject(json)
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val category = keys.next()
+                val arr = root.optJSONArray(category) ?: continue
+                var categoryMs = 0.0
+                for (i in 0 until arr.length()) {
+                    val pass = arr.optJSONObject(i) ?: continue
+                    val avgMs = pass.optDouble("avg", 0.0) / 1_000_000.0
+                    val peakMs = pass.optDouble("peak", 0.0) / 1_000_000.0
+                    val desc = pass.optString("desc", "").takeIf { it.isNotBlank() } ?: continue
+                    passes.add(MpvPass("$category — $desc", avgMs, peakMs))
+                    categoryMs += avgMs
+                }
+                if (categoryMs > totalMs) totalMs = categoryMs
+            }
+        }
+        return MpvPerf(passes, dropped.toLong(), delayed.toLong(), mistimed.toLong(), fps, totalMs)
+    }
+
     // ── Infos técnicas ───────────────────────────────────────────────────
 
     /** Dados do stream p/ o painel técnico (mesmo TechInfo do ExoPlayer). */
@@ -433,3 +600,20 @@ class MpvPlayer(
         }
     }
 }
+
+/** Uma passada do VO do mpv (ver [MpvPlayer.readPerf]): tempos em ms por quadro. */
+data class MpvPass(val desc: String, val avgMs: Double, val peakMs: Double)
+
+/**
+ * Custo e contadores do mpv (aba Desempenho). [totalAvgMs] e o maior total
+ * por categoria de `vo-passes` (as categorias se sobrepoem). [fps] e o fps
+ * do video, ou null sem video.
+ */
+data class MpvPerf(
+    val passes: List<MpvPass>,
+    val dropped: Long,
+    val delayed: Long,
+    val mistimed: Long,
+    val fps: Double?,
+    val totalAvgMs: Double,
+)

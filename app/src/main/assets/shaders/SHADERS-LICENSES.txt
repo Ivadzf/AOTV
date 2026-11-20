@@ -1,0 +1,54 @@
+Shaders GLSL do painel "Melhorar imagem" (Lote mpv 2, v1.37.0)
+===============================================================
+
+Estes arquivos vao empacotados no APK (app/src/main/assets/shaders/) e sao
+copiados p/ filesDir/mpv-shaders na primeira utilizacao; o mpv os recebe por
+caminho absoluto via a opcao glsl-shaders. So arquivos desta lista entram
+na allowlist do app (EnhanceCatalog.SHADER_ALLOWLIST) — nenhum caminho
+arbitrario e aceito.
+
+Anime4K v4.0.1 — bloc97/Anime4K (https://github.com/bloc97/Anime4K)
+---------------------------------------------------------------------
+29 arquivos, baixados de raw.githubusercontent.com/bloc97/Anime4K/v4.0.1/glsl/
+em 2026-11-20. Tamanhos conferidos contra a API do GitHub no download.
+
+- MIT License, Copyright (c) 2019-2021 bloc97:
+  Anime4K_Clamp_Highlights.glsl
+  Anime4K_Restore_CNN_S.glsl, Anime4K_Restore_CNN_M.glsl, Anime4K_Restore_CNN_L.glsl
+  Anime4K_Restore_CNN_Soft_S.glsl, Anime4K_Restore_CNN_Soft_M.glsl, Anime4K_Restore_CNN_Soft_L.glsl
+  Anime4K_Upscale_CNN_x2_S.glsl, Anime4K_Upscale_CNN_x2_M.glsl, Anime4K_Upscale_CNN_x2_L.glsl
+  Anime4K_Upscale_Denoise_CNN_x2_S.glsl, Anime4K_Upscale_Denoise_CNN_x2_M.glsl, Anime4K_Upscale_Denoise_CNN_x2_L.glsl
+  Anime4K_Upscale_DoG_x2.glsl, Anime4K_Upscale_Original_x2.glsl
+  Anime4K_Upscale_Deblur_DoG_x2.glsl, Anime4K_Upscale_Deblur_Original_x2.glsl
+  Anime4K_Deblur_DoG.glsl, Anime4K_Deblur_Original.glsl
+  Anime4K_Denoise_Bilateral_Mean.glsl, Anime4K_Denoise_Bilateral_Median.glsl, Anime4K_Denoise_Bilateral_Mode.glsl
+  Anime4K_Darken_Fast.glsl, Anime4K_Darken_HQ.glsl, Anime4K_Darken_VeryFast.glsl
+  Anime4K_Thin_Fast.glsl, Anime4K_Thin_HQ.glsl
+  (27 arquivos — o texto da licenca MIT esta no cabecalho de cada arquivo.)
+
+- Dominio publico (Unlicense — "free and unencumbered software released into
+  the public domain", ver o cabecalho de cada arquivo):
+  Anime4K_AutoDownscalePre_x2.glsl, Anime4K_AutoDownscalePre_x4.glsl
+  (2 arquivos.)
+
+Nenhum arquivo foi modificado. As cadeias dos presets A/B/C/A+A/B+B/C+A
+seguem o documento oficial do Anime4K (md/GLSL_Instructions_Advanced.md,
+v4.x): A = Restore -> Upscale -> Upscale; B = Restore_Soft -> Upscale ->
+Upscale; C = Upscale_Denoise -> Upscale; A+A = Restore -> Upscale ->
+Restore -> Upscale; B+B = Restore_Soft -> Upscale -> Restore_Soft ->
+Upscale; C+A = Upscale_Denoise -> Restore -> Upscale; sempre com
+Clamp_Highlights no comeco e AutoDownscalePre_x2 entre as duas ampliacoes.
+O mesmo arquivo nunca aparece 2x numa cadeia: os shaders Anime4K usam
+//!SAVE com nomes fixos (ex.: conv2d_tf), e repetir o arquivo colide —
+ver o aviso do proprio documento ("You can only use each shader file
+once").
+
+AOTV — daltonizacao (codigo proprio, MIT)
+------------------------------------------
+aotv_daltonize_deuteranomalia.glsl
+aotv_daltonize_protanomalia.glsl
+aotv_daltonize_tritanomalia.glsl
+
+Escritos p/ o AOTV (Lote mpv 2) a partir das matrizes 3x3 de
+ColorFilter.kt (DALTONIZATION_RGB, algoritmo LMS de daltonizacao do
+daltonize.org). Correcao, nao simulacao. MIT, codigo proprio do AOTV.

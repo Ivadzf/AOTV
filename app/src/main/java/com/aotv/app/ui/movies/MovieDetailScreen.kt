@@ -95,6 +95,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.ratings.MODE_AVERAGE
+import com.aotv.app.data.ratings.MODE_TRAKT
 import com.aotv.app.data.ratings.episodeRatingOriginCaption
 import com.aotv.app.data.remote.durationGuardMismatch
 import com.aotv.app.data.remote.hasAtmos
@@ -1225,6 +1227,20 @@ fun MovieDetailScreen(
                                 episodes = episodes,
                                 onEpisodeClick = { ep -> viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
                                 ratingOrigin = episodeRatingOriginCaption(episodeRatingMode),
+                            )
+                        }
+                        // Lote mpv 2 (v1.37.0), correção C: a nota do Trakt
+                        // sumia em silêncio quando não havia Client ID (a
+                        // fonte exigia login, mas o endpoint é público).
+                        // Sem Client ID, avisa aqui em vez de calar — só
+                        // nos modos que usam o Trakt (média ou só Trakt).
+                        if (showEpisodeRatings && (episodeRatingMode == MODE_AVERAGE || episodeRatingMode == MODE_TRAKT) && !viewModel.traktConfigured) {
+                            Text(
+                                "Nota do Trakt indisponível: configure o Client ID do Trakt em Configurações → Trackers (só o Client ID — não precisa conectar a conta).",
+                                color = TextTertiary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFamily = ManropeFontFamily,
                             )
                         }
                         if (episodeQuery.isNotBlank()) {

@@ -39,7 +39,6 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -96,7 +95,6 @@ import com.aotv.app.ui.lote24.pickMkChannelTargets
 @Composable
 fun MoviesHomeScreen(
     onItemClick: (MovieItem) -> Unit,
-    onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLibraryClick: () -> Unit = {},
     onDiscoverClick: () -> Unit = {},
@@ -229,7 +227,7 @@ fun MoviesHomeScreen(
             }
             else -> HomeSectionsTab(
                 state = state, viewModel = viewModel, onItemClick = onItemClick,
-                onSearchClick = onSearchClick, onSettingsClick = onSettingsClick,
+                onSettingsClick = onSettingsClick,
                 onDiscoverClick = onDiscoverClick,
                 onSeeMore = seeMore,
                 onPlayTrailer = playTrailerFn,
@@ -557,7 +555,6 @@ private fun HomeSectionsTab(
     state: MoviesHomeViewModel.UiState,
     viewModel: MoviesHomeViewModel,
     onItemClick: (MovieItem) -> Unit,
-    onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDiscoverClick: () -> Unit = {},
     onSeeMore: (MoviesHomeViewModel.CatalogQuery) -> Unit,
@@ -794,37 +791,11 @@ private fun HomeSectionsTab(
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(com.aotv.app.ui.common.homeSectionSpacing(display.density)),
     ) {
-        // ── Lote 25 (v1.35.0), itens 1–2 ────────────────────────────────
-        // Entrada discreta no topo: pill de busca (abre a busca) + assistente + paleta.
-        item(key = "lote25_entry") {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Row(
-                    Modifier.weight(1f)
-                        .height(52.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Surface2)
-                        .clickable(onClick = onSearchClick)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(20.dp))
-                    Text(
-                        "Buscar filmes ou séries...",
-                        color = TextTertiary,
-                        fontSize = 15.sp,
-                        fontFamily = ManropeFontFamily,
-                    )
-                }
-                // Lote mpv 1 (v1.36.0), correção 4: o assistente e a paleta
-                // de comandos SAÍRAM daqui — o acesso fica SÓ na aba de
-                // pesquisa (MediaSearchScreen), onde já existem.
-            }
-        }
+        // ── Lote mpv 2 (v1.37.0), correção 5 ───────────────────────────
+        // A pill de busca do topo SAIU daqui: a busca já existe na aba
+        // Busca do menu inferior e a barra era redundante (decisão do
+        // Davi). Voz e QR não dependiam dela — vivem na aba de busca
+        // (MediaSearchScreen, SearchPill com Mic + QrCode2) e continuam lá.
         // Sem chave TMDB as fileiras do sistema voltam vazias em silêncio — avisa no topo.
         if (!state.hasTmdbKey) {
             item(key = "no_tmdb_key") {

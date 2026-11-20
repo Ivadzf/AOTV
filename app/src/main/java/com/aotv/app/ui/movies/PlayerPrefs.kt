@@ -280,6 +280,76 @@ class PlayerPrefsViewModel @Inject constructor(
     val colorDaltonism: StateFlow<String> = prefs.playerColorDaltonismFlow
     fun setColorDaltonism(v: String) { prefs.playerColorDaltonism = v }
 
+    // ── Melhorar imagem (Lote mpv 2, v1.37.0) — só vale com o Libmpv ────────
+
+    /** Preset do upscaler ("auto", "anime_a"... "light", "off"). */
+    val enhancePreset: StateFlow<String> = prefs.enhancePresetFlow
+    fun setEnhancePreset(v: String) { prefs.enhancePreset = v }
+
+    /** Qualidade da cadeia ("fast" = redes S, "high" = redes M/L). */
+    val enhanceQuality: StateFlow<String> = prefs.enhanceQualityFlow
+    fun setEnhanceQuality(v: String) { prefs.enhanceQuality = v }
+
+    /** Saída do upscaler ("fit", "2x" ou "4x"). */
+    val enhanceOutput: StateFlow<String> = prefs.enhanceOutputFlow
+    fun setEnhanceOutput(v: String) { prefs.enhanceOutput = v }
+
+    /** Cadeia própria do modo Avançado (JSON); "" = vale a cadeia do preset. */
+    val enhanceChain: StateFlow<String> = prefs.enhanceChainFlow
+    fun setEnhanceChain(v: String) { prefs.enhanceChain = v }
+
+    /** Debanding ligado. */
+    val enhanceDeband: StateFlow<Boolean> = prefs.enhanceDebandFlow
+    fun setEnhanceDeband(v: Boolean) { prefs.enhanceDeband = v }
+
+    /** Debanding como CSV "iter,limiar,alcance,grão". */
+    val enhanceDebandCfg: StateFlow<String> = prefs.enhanceDebandCfgFlow
+    fun setEnhanceDebandCfg(v: String) { prefs.enhanceDebandCfg = v }
+
+    /** Movimento suave (interpolação do mpv). */
+    val enhanceSmoothMotion: StateFlow<Boolean> = prefs.enhanceSmoothMotionFlow
+    fun setEnhanceSmoothMotion(v: Boolean) { prefs.enhanceSmoothMotion = v }
+
+    /** Tone-mapping p/ HDR em tela comum ("auto" = o padrão do mpv). */
+    val enhanceToneMapping: StateFlow<String> = prefs.enhanceToneMappingFlow
+    fun setEnhanceToneMapping(v: String) { prefs.enhanceToneMapping = v }
+
+    /** Calcular o pico do HDR (hdr-compute-peak). */
+    val enhanceHdrPeak: StateFlow<Boolean> = prefs.enhanceHdrPeakFlow
+    fun setEnhanceHdrPeak(v: Boolean) { prefs.enhanceHdrPeak = v }
+
+    /** Entrelaçado ("auto", "yes" ou "no"). */
+    val enhanceDeinterlace: StateFlow<String> = prefs.enhanceDeinterlaceFlow
+    fun setEnhanceDeinterlace(v: String) { prefs.enhanceDeinterlace = v }
+
+    /** Escalador de ampliação (scale). */
+    val enhanceScale: StateFlow<String> = prefs.enhanceScaleFlow
+    fun setEnhanceScale(v: String) { prefs.enhanceScale = v }
+
+    /** Escalador de croma (cscale). */
+    val enhanceCscale: StateFlow<String> = prefs.enhanceCscaleFlow
+    fun setEnhanceCscale(v: String) { prefs.enhanceCscale = v }
+
+    /** Escalador de redução (dscale). */
+    val enhanceDscale: StateFlow<String> = prefs.enhanceDscaleFlow
+    fun setEnhanceDscale(v: String) { prefs.enhanceDscale = v }
+
+    /** Antiring 0..1 (vale p/ os três escaladores juntos). */
+    val enhanceAntiring: StateFlow<Float> = prefs.enhanceAntiringFlow
+    fun setEnhanceAntiring(v: Float) { prefs.enhanceAntiring = v.coerceIn(0f, 1f) }
+
+    /** Gama do mpv, -100..100 (0 = sem mudança). */
+    val enhanceGamma: StateFlow<Float> = prefs.enhanceGammaFlow
+    fun setEnhanceGamma(v: Float) { prefs.enhanceGamma = v.coerceIn(-100f, 100f) }
+
+    /** Renderizador do mpv ("gpu" ou "gpu-next"). */
+    val enhanceVo: StateFlow<String> = prefs.enhanceVoFlow
+    fun setEnhanceVo(v: String) { prefs.enhanceVo = if (v == "gpu-next") "gpu-next" else "gpu" }
+
+    /** Teto do vigia: preset mais pesado que a placa aguentou ("" = nenhum). */
+    val enhanceWatchdogCap: StateFlow<String> = prefs.enhanceWatchdogCapFlow
+    fun setEnhanceWatchdogCap(v: String) { prefs.enhanceWatchdogCap = v }
+
     /** Player padrão do perfil (Lote 4, v1.12.0): "exoplayer" (interno), "libmpv" (interno, Lote mpv 1 — v1.36.0) ou "external". */
     val engine: StateFlow<String> = prefs.playerEngineFlow
     fun setEngine(v: String) {
