@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "838cf17893d22af3361079e69db5915a1f6e627028df909dedeb0e0b2502e5fd",
-        "size": 123342992,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.41.0/AOTV-v1.41.0.apk"
+        "sha256": "cf27b5d4a17ec12b354d14a341314e9854236468281de5286cef4dce129f70d5",
+        "size": 123359716,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.42.0/AOTV-v1.42.0.apk"
       }
     },
-    "changelog": "v1.41.0 — Lote dos 3 fixes: o trecho baixado não troca mais de fonte (resume e fim não saem do arquivo), compartilhar o trecho abre a folha de verdade, e linha do tempo do .ts com detecção do formato dos pacotes (188/192/204 bytes). Obs.: compartilhar e trava de fonte validados no celular; a linha do tempo continua com problema no reprodutor de vídeo normal — o ffmpeg ficou para depois.",
-    "published_at": "2026-11-20T22:02:00Z",
-    "tag": "v1.41.0",
-    "version": "1.41.0",
-    "versionCode": 80
+    "changelog": "v1.42.0 — Lote de correções: o botão Vídeo inteiro baixa o vídeo completo de verdade (com progresso visível), instalar scripts Lua de dentro do app, troca de motor em etapas sem travar, e os avisos falsos do mpv só quando realmente não estiver tocando.",
+    "published_at": "2026-11-21T00:20:38Z",
+    "tag": "v1.42.0",
+    "version": "1.42.0",
+    "versionCode": 81
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "cf27b5d4a17ec12b354d14a341314e9854236468281de5286cef4dce129f70d5",
+          "size": 123359716,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.42.0/AOTV-v1.42.0.apk"
+        }
+      },
+      "changelog": "v1.42.0 — Lote de correções: o botão Vídeo inteiro baixa o vídeo completo de verdade (com progresso visível), instalar scripts Lua de dentro do app, troca de motor em etapas sem travar, e os avisos falsos do mpv só quando realmente não estiver tocando.",
+      "published_at": "2026-11-21T00:20:38Z",
+      "tag": "v1.42.0",
+      "version": "1.42.0",
+      "versionCode": 81
+    },
     {
       "assets": {
         "universal": {
