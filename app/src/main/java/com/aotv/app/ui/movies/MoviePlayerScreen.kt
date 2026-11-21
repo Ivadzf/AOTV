@@ -4021,7 +4021,7 @@ class PlayerSession(
      * load) e o contador no último FILE_LOADED (ver onMpvFileLoaded).
      * Um END_FILE sem EOF com load mais novo que o pronto é do arquivo
      * anterior — não da fonte atual (Problema 4 (a)). */
-    private var mpvLoadSeq = 0
+    internal var mpvLoadSeq = 0
     private var mpvReadySeq = 0
     /** true depois que releaseAll() rodou: uma troca em curso não entrega
      * motor novo a uma sessão morta (ver switchEngine, etapa 3). */
