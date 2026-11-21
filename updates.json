@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "296826dbcaf77ae013bdefe4c1b5a3573b766c4f81a8a23acb7b2e3328a098d3",
-        "size": 123360888,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.43.0/AOTV-v1.43.0.apk"
+        "sha256": "c8ca26fb5aca7316ff5af3a58e7ba2bae99797ac16f5a75b28714b82eb751596",
+        "size": 123382140,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.44.0/AOTV-v1.44.0.apk"
       }
     },
-    "changelog": "v1.43.0 — Lote de correções: Compartilhar e Salvar na pasta agora aparecem no card do vídeo inteiro baixado (antes só existiam no card do trecho), e o preset Série do upscaling desativa de verdade — ao escolher Desligado, os escaladores voltam para os padrões do mpv e o debanding desliga, sem precisar reabrir o vídeo.",
-    "published_at": "2026-11-21T11:47:22Z",
-    "tag": "v1.43.0",
-    "version": "1.43.0",
-    "versionCode": 82
+    "changelog": "v1.44.0 — Remodel do app: Compartilhar e Salvar em todos os downloads concluídos, lixeira para excluir o trecho, importar legenda de arquivo no player (.srt/.ass/.vtt/.zip), aba própria pro MPV nas Configurações, Hero maior sem trailer automático, pílula com os 6 itens mais estreita e com ícones maiores, detalhe da série sem desfoque na capa, folha de fontes menor e mais organizada, data de lançamento embaixo do pôster e trocar de conta dentro das Configurações.",
+    "published_at": "2026-11-21T18:13:00Z",
+    "tag": "v1.44.0",
+    "version": "1.44.0",
+    "versionCode": 83
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "c8ca26fb5aca7316ff5af3a58e7ba2bae99797ac16f5a75b28714b82eb751596",
+          "size": 123382140,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.44.0/AOTV-v1.44.0.apk"
+        }
+      },
+      "changelog": "v1.44.0 — Remodel do app: Compartilhar e Salvar em todos os downloads concluídos, lixeira para excluir o trecho, importar legenda de arquivo no player (.srt/.ass/.vtt/.zip), aba própria pro MPV nas Configurações, Hero maior sem trailer automático, pílula com os 6 itens mais estreita e com ícones maiores, detalhe da série sem desfoque na capa, folha de fontes menor e mais organizada, data de lançamento embaixo do pôster e trocar de conta dentro das Configurações.",
+      "published_at": "2026-11-21T18:13:00Z",
+      "tag": "v1.44.0",
+      "version": "1.44.0",
+      "versionCode": 83
+    },
     {
       "assets": {
         "universal": {
