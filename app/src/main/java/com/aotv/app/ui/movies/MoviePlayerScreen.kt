@@ -401,7 +401,10 @@ fun MoviePlayerScreen(
             val bytes = withContext(Dispatchers.IO) {
                 runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
             }
-            if (bytes.isNullOrEmpty()) {
+            // `isNullOrEmpty()` não existe p/ ByteArray? no stdlib — checar
+            // null e vazio separados (o smart cast do `val` local cobre o
+            // uso em importedSubtitleCues/importedSubBytes abaixo).
+            if (bytes == null || bytes.isEmpty()) {
                 s.toastMsg = "Não deu para ler esse arquivo de legenda"
                 return@launch
             }
