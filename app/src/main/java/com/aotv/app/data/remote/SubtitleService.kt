@@ -63,40 +63,56 @@ class SubtitleService @Inject constructor(
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
                 val bytes = resp.body?.bytes() ?: return@use null
-                // GZIP: magic bytes 1f 8b no início do corpo.
-                var rawBytes = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
-                    java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(bytes)).use { it.readBytes() }
-                } else bytes
-                // ZIP: magic bytes PK\x03\x04 — extrai o primeiro .srt/.vtt/.ass
-                // de dentro (o .srt é o preferido). Sem entrada de legenda, null.
-                if (rawBytes.size >= 4 && rawBytes[0] == 0x50.toByte() && rawBytes[1] == 0x4B.toByte() &&
-                    rawBytes[2] == 0x03.toByte() && rawBytes[3] == 0x04.toByte()
-                ) {
-                    rawBytes = unzipFirstSubtitle(rawBytes) ?: return@use null
-                }
-                // BOM UTF-16 (FF FE = LE, FE FF = BE): decodifica direto com o
-                // charset certo — o UTF-8 estrito abaixo aceitaria os bytes NUL
-                // e devolveria lixo, então o BOM é testado ANTES do fallback.
-                if (rawBytes.size >= 2 && rawBytes[0] == 0xFF.toByte() && rawBytes[1] == 0xFE.toByte()) {
-                    return@use String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16LE)
-                }
-                if (rawBytes.size >= 2 && rawBytes[0] == 0xFE.toByte() && rawBytes[1] == 0xFF.toByte()) {
-                    return@use String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16BE)
-                }
-                // BOM UTF-8 (EF BB BF): tira e segue o fallback normal.
-                if (rawBytes.size >= 3 && rawBytes[0] == 0xEF.toByte() && rawBytes[1] == 0xBB.toByte() && rawBytes[2] == 0xBF.toByte()) {
-                    rawBytes = rawBytes.copyOfRange(3, rawBytes.size)
-                }
-                // UTF-8 estrito (falha em vez de trocar por �) e, se vier com replacement
-                // chars, cai para windows-1252 e depois ISO-8859-1 (nunca falha).
-                fun decodeStrict(data: ByteArray, charset: java.nio.charset.Charset): String? = runCatching {
-                    charset.newDecoder().decode(java.nio.ByteBuffer.wrap(data)).toString()
-                }.getOrNull()?.takeIf { '\uFFFD' !in it }
-                decodeStrict(rawBytes, java.nio.charset.StandardCharsets.UTF_8)
-                    ?: decodeStrict(rawBytes, java.nio.charset.Charset.forName("windows-1252"))
-                    ?: String(rawBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
+                decodeSubtitleBytes(bytes)
             }
         }.getOrNull()
+    }
+
+    /**
+     * Decodifica os bytes de um arquivo de legenda p/ texto (Lote do
+     * remodel v1.44.0 — Frente 1, extraído do [download] sem mudar o
+     * comportamento): o MESMO tratamento p/ o arquivo importado no
+     * player ([com.aotv.app.ui.movies.EpisodePlayerViewModel.importedSubtitleCues])
+     * e p/ o baixado — GZIP, ZIP (1º .srt/.vtt/.ass de dentro), BOM
+     * UTF-16 LE/BE, BOM UTF-8, UTF-8 estrito → windows-1252 →
+     * ISO-8859-1. Null quando os bytes não são um arquivo de legenda
+     * utilizável (ZIP sem entrada de legenda). Não faz rede.
+     */
+    fun decodeSubtitleBytes(bytes: ByteArray): String? {
+        // GZIP: magic bytes 1f 8b no início do corpo.
+        var rawBytes = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
+            runCatching {
+                java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(bytes)).use { it.readBytes() }
+            }.getOrNull() ?: return null
+        } else bytes
+        // ZIP: magic bytes PK\x03\x04 — extrai o primeiro .srt/.vtt/.ass
+        // de dentro (o .srt é o preferido). Sem entrada de legenda, null.
+        if (rawBytes.size >= 4 && rawBytes[0] == 0x50.toByte() && rawBytes[1] == 0x4B.toByte() &&
+            rawBytes[2] == 0x03.toByte() && rawBytes[3] == 0x04.toByte()
+        ) {
+            rawBytes = unzipFirstSubtitle(rawBytes) ?: return null
+        }
+        // BOM UTF-16 (FF FE = LE, FE FF = BE): decodifica direto com o
+        // charset certo — o UTF-8 estrito abaixo aceitaria os bytes NUL
+        // e devolveria lixo, então o BOM é testado ANTES do fallback.
+        if (rawBytes.size >= 2 && rawBytes[0] == 0xFF.toByte() && rawBytes[1] == 0xFE.toByte()) {
+            return String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16LE)
+        }
+        if (rawBytes.size >= 2 && rawBytes[0] == 0xFE.toByte() && rawBytes[1] == 0xFF.toByte()) {
+            return String(rawBytes, 2, rawBytes.size - 2, java.nio.charset.StandardCharsets.UTF_16BE)
+        }
+        // BOM UTF-8 (EF BB BF): tira e segue o fallback normal.
+        if (rawBytes.size >= 3 && rawBytes[0] == 0xEF.toByte() && rawBytes[1] == 0xBB.toByte() && rawBytes[2] == 0xBF.toByte()) {
+            rawBytes = rawBytes.copyOfRange(3, rawBytes.size)
+        }
+        // UTF-8 estrito (falha em vez de trocar por �) e, se vier com replacement
+        // chars, cai para windows-1252 e depois ISO-8859-1 (nunca falha).
+        fun decodeStrict(data: ByteArray, charset: java.nio.charset.Charset): String? = runCatching {
+            charset.newDecoder().decode(java.nio.ByteBuffer.wrap(data)).toString()
+        }.getOrNull()?.takeIf { '\uFFFD' !in it }
+        return decodeStrict(rawBytes, java.nio.charset.StandardCharsets.UTF_8)
+            ?: decodeStrict(rawBytes, java.nio.charset.Charset.forName("windows-1252"))
+            ?: String(rawBytes, java.nio.charset.StandardCharsets.ISO_8859_1)
     }
 
     /**

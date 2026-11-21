@@ -1,5 +1,6 @@
 package com.aotv.app.ui.movies
 
+import android.provider.OpenableColumns
 import android.view.KeyEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -368,6 +369,59 @@ fun MoviePlayerScreen(
             externalLaunch = launch
             externalPlayerLauncher.launch(intent)
         }
+    }
+    // Importar legenda de arquivo (Lote do remodel v1.44.0 — Frente 1):
+    // o lançador fica na tela (não na sessão), como o do player externo
+    // acima — a sessão só guarda o `onImportSubtitleClick` p/ o painel
+    // de legendas chamar. O arquivo (.srt/.ass/.vtt, ou ZIP com um
+    // dentro) vale p/ a reprodução atual; os bytes ficam guardados na
+    // sessão p/ o efeito de selectedSubUrl recarregar as falas sem rede
+    // (inclusive na volta do sleep timer, que recoloca o selectedSubUrl).
+    // Mime "*/*": os gerenciadores de arquivo não concordam no mime de
+    // .srt/.ass (text/plain, application/octet-stream…) — filtrar por
+    // mime esconderia o arquivo em alguns aparelhos; a extensão é
+    // validada no retorno, abaixo.
+    val pickSubtitleFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val name = runCatching {
+                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }.getOrNull()?.takeIf { it.isNotBlank() }
+                ?: uri.lastPathSegment?.takeIf { it.isNotBlank() }
+                ?: "legenda"
+            val lower = name.lowercase()
+            if (!lower.endsWith(".srt") && !lower.endsWith(".ass") && !lower.endsWith(".vtt") && !lower.endsWith(".zip")) {
+                s.toastMsg = "Esse arquivo não é uma legenda (.srt ou .ass)"
+                return@launch
+            }
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            }
+            if (bytes.isNullOrEmpty()) {
+                s.toastMsg = "Não deu para ler esse arquivo de legenda"
+                return@launch
+            }
+            val cues = withContext(Dispatchers.IO) { episodeVm.importedSubtitleCues(bytes, name) }
+            if (cues.isEmpty()) {
+                s.toastMsg = "Não deu para ler essa legenda (.srt ou .ass)"
+                return@launch
+            }
+            if (s.subtitleOn) s.disableText()
+            s.subtitleOn = false
+            s.subPicked = true
+            s.subWanted = true
+            s.progressVm.subtitleOn = true
+            s.importedSubBytes = bytes
+            s.importedSubName = name
+            s.selectedSubUrl = IMPORTED_SUB_URL_PREFIX + name
+        }
+    }
+    SideEffect {
+        s.onImportSubtitleClick = { pickSubtitleFile.launch(arrayOf("*/*")) }
     }
     // Controle remoto (Lote 22, item 1): com o player aberto, o celular
     // manda play/pause e pulo de 10 s e fecha o player. O servidor chama
@@ -891,6 +945,11 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     LaunchedEffect(tmdbId, type, curSeason, curEpisode) {
         selectedSubUrl = null
         subPicked = false
+        // Lote do remodel v1.44.0 — Frente 1: a legenda importada de
+        // arquivo também vale só p/ o vídeo atual — trocar de
+        // episódio/título solta os bytes e o nome junto.
+        importedSubBytes = null
+        importedSubName = null
         // Lote 16 item 3: a 2ª legenda vale p/ o vídeo atual — trocar de
         // episódio/título desliga.
         secondarySubUrl = null
@@ -906,9 +965,33 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
         externalSubs = runCatching { episodeVm.subtitlesFor(tmdbId, type, curSeason, curEpisode) }.getOrDefault(emptyList())
         pickAutoSub()
     }
-    LaunchedEffect(selectedSubUrl) {
+    // A 2ª chave é p/ reimportar o mesmo nome de arquivo: sem ela o
+    // efeito não re-disparava (a sentinela `imported://nome` não muda) e
+    // as falas do arquivo anterior ficavam na tela.
+    LaunchedEffect(selectedSubUrl, importedSubBytes) {
+        val u = selectedSubUrl
+        if (u == null) {
+            externalCues = emptyList()
+            return@LaunchedEffect
+        }
+        if (isImportedSubUrl(u)) {
+            // Legenda importada de arquivo (Lote do remodel v1.44.0 —
+            // Frente 1): as falas vêm dos bytes guardados na importação
+            // (sem rede e sem recarregar o vídeo) — o que também faz a
+            // volta do sleep timer funcionar, porque ela recoloca o
+            // selectedSubUrl e o efeito roda de novo. Sem bytes, não há
+            // o que mostrar (o arquivo não foi persistido).
+            val bytes = importedSubBytes
+            val name = importedSubName.orEmpty()
+            externalCues = if (bytes != null) {
+                withContext(Dispatchers.IO) { episodeVm.importedSubtitleCues(bytes, name) }
+            } else {
+                emptyList()
+            }
+            if (externalCues.isEmpty() && selectedSubUrl == u) toastMsg = "Não deu para carregar essa legenda"
+            return@LaunchedEffect
+        }
         externalCues = emptyList()
-        val u = selectedSubUrl ?: return@LaunchedEffect
         externalCues = episodeVm.subtitleCues(u)
         if (externalCues.isEmpty() && selectedSubUrl == u) toastMsg = "Não deu para carregar essa legenda"
     }
@@ -2956,6 +3039,18 @@ class PlayerSession(
     var subOutline by run { mutableStateOf(progressVm.subOutline) }
     var subFont by run { mutableStateOf(progressVm.subFont) }
 
+    // Legenda importada de arquivo (Lote do remodel v1.44.0 — Frente 1):
+    // os bytes do arquivo ficam guardados aqui (só p/ a reprodução
+    // atual) p/ o efeito de selectedSubUrl recarregar as falas sem rede
+    // — inclusive na volta do sleep timer, que recoloca o selectedSubUrl
+    // com a sentinela `imported://`. [onImportSubtitleClick] é o
+    // lançador SAF da tela (ver MoviePlayerScreen): a sessão não é
+    // composable e não pode criar o lançador — o painel de legendas só
+    // chama o slot.
+    var importedSubBytes by run { mutableStateOf<ByteArray?>(null) }
+    var importedSubName by run { mutableStateOf<String?>(null) }
+    var onImportSubtitleClick: (() -> Unit)? = null
+
     // Som de outra fonte. [extSync] segue o player principal, [audioDelay] em segundos.
     var extSync by run { mutableStateOf<ExtAudioSync?>(null) }
     var extUrl by run { mutableStateOf<String?>(null) }
@@ -4529,6 +4624,12 @@ class PlayerSession(
     // o próximo episódio e a próxima sessão abrirem do mesmo jeito.
     fun pickSub(g: androidx.media3.common.Tracks.Group?, ext: com.aotv.app.data.remote.ExternalSub?) {
         subPicked = true
+        // Lote do remodel v1.44.0 — Frente 1: qualquer escolha à mão
+        // (embutida, externa ou "Desativada") solta a legenda importada
+        // de arquivo — os bytes não valem mais e o painel não pode seguir
+        // mostrando o nome dela como "Em uso".
+        importedSubBytes = null
+        importedSubName = null
         // Lote 16 item 3: lembrar a faixa exata deste título (vale no próximo episódio/sessão).
         val memory = SubTrackMemory.fromContext(context)
         when {
@@ -5703,6 +5804,15 @@ class PlayerSession(
                 }
             }
         }
+        // Importar legenda de arquivo (Lote do remodel v1.44.0 — Frente 1):
+        // fora do `if` acima de propósito — o botão aparece mesmo quando
+        // o título não tem nenhuma legenda (embutida ou externa). Abre o
+        // seletor de arquivo (SAF, .srt/.ass); a importada vale p/ a
+        // reprodução atual e aparece ativa aqui enquanto estiver em uso.
+        add(TvPlayerAction("Importar legenda", false, isImportedSubUrl(selectedSubUrl),
+            header = "Arquivo do aparelho",
+            sub = importedSubName?.let { "Em uso: $it" } ?: "Arquivo .srt ou .ass do aparelho",
+            keepOpen = true) { onImportSubtitleClick?.invoke() })
     }
     // Faixas da fonte atual e, abaixo, o som de outra fonte. Serve para ver a imagem boa de uma
     // versão legendada ouvindo a dublagem de outra.

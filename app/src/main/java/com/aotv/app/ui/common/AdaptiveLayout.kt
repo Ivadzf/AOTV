@@ -31,10 +31,13 @@ fun continueCardWidth(compact: Boolean): Dp {
 internal fun posterColumns(widthDp: Int, fontScale: Float, minimumWidth: Int = 136): Int =
     ((widthDp - 32 + 12) / (minimumWidth * fontScale.coerceIn(1f, 1.65f) + 12)).toInt().coerceIn(1, 8)
 
+// Remodel v1.44.0 (Frente 3): herói MAIOR, estilo Nuvio — em pé ocupa
+// ~78% da altura (antes ~70%), com piso e teto maiores; deitado também
+// cresce. Vale p/ o herói e p/ o esqueleto dele (mesma função).
 internal fun homeHeroHeight(widthDp: Int, heightDp: Int, fontScale: Float): Float {
     val landscape = widthDp > heightDp
-    val base = if (landscape) ((heightDp - 88) * .98f).coerceIn(224f, 440f) else (heightDp * .7f).coerceIn(420f, 620f)
+    val base = if (landscape) ((heightDp - 88) * .98f).coerceIn(260f, 480f) else (heightDp * .78f).coerceIn(480f, 700f)
     val extra = fontScale.coerceAtLeast(1f) - 1f
-    val minimum = if (landscape) 220f else 280f
+    val minimum = if (landscape) 240f else 320f
     return maxOf(base + extra * if (landscape) 130f else 170f, minimum + extra * 240f)
 }

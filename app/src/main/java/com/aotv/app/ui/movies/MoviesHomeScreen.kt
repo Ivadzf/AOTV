@@ -6,7 +6,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -48,7 +47,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -142,6 +140,28 @@ fun MoviesHomeScreen(
     val seeMore = remember(viewModel) { { q: MoviesHomeViewModel.CatalogQuery -> viewModel.openCatalog(q) } }
     val playTrailerFn = remember { { card: MoviesHomeViewModel.TrailerCard -> playTrailer(card) } }
 
+    // Trailer do HERÓI (remodel v1.44.0, Frente 3): o trailer do destaque
+    // NUNCA toca sozinho — só abre aqui, quando o usuário toca no botão
+    // "Trailer" do herói. Mesmo overlay ExoPlayer do trailer das fileiras,
+    // mas com o stream do herói (viewModel.heroTrailerStream) e o item
+    // (p/ "Ver detalhes" abrir o detalhe do título).
+    var heroTrailerExo by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
+    var heroTrailerItem by remember { mutableStateOf<MovieItem?>(null) }
+
+    fun playHeroTrailer(item: MovieItem) {
+        heroTrailerItem = item
+        trailerLoading = true
+        scope.launch {
+            heroTrailerExo = viewModel.heroTrailerStream(item)
+            trailerLoading = false
+            // Sem stream (extração falhou ou sem trailer no TMDB) → não
+            // deixa o overlay preso "tocando".
+            if (heroTrailerExo == null) heroTrailerItem = null
+        }
+    }
+
+    val playHeroTrailerFn = remember { { item: MovieItem -> playHeroTrailer(item) } }
+
     // Coleções do perfil (p/ a grade "Ver Tudo" de pastas, Lote 19).
     val collections by viewModel.collectionsFlow.collectAsStateWithLifecycle()
     // Data de hoje p/ "Ocultar conteúdo não lançado" nas grades (o mesmo
@@ -231,6 +251,7 @@ fun MoviesHomeScreen(
                 onDiscoverClick = onDiscoverClick,
                 onSeeMore = seeMore,
                 onPlayTrailer = playTrailerFn,
+                onPlayHeroTrailer = playHeroTrailerFn,
                 onCustomize = onCustomize,
                 onFolderClick = onFolderClick,
                 onPlayEpisode = onPlayEpisode,
@@ -279,6 +300,23 @@ fun MoviesHomeScreen(
                     }
                 },
                 onNext = proximo?.let { n -> { trailerExo = null; playTrailer(n) } },
+            )
+        }
+        // Trailer do herói (manual, v1.44.0): mesmo overlay, sem "Próximo"
+        // (o herói não é uma fileira de trailers).
+        heroTrailerExo?.let { st ->
+            val heroItem = heroTrailerItem
+            com.aotv.app.ui.common.TrailerExoOverlay(
+                videoUrl = st.videoUrl,
+                audioUrl = st.audioUrl,
+                onClose = { heroTrailerExo = null; heroTrailerItem = null },
+                title = heroItem?.title.orEmpty(),
+                onOpenDetail = heroItem?.let { item ->
+                    {
+                        heroTrailerExo = null; heroTrailerItem = null
+                        onItemClick(item)
+                    }
+                },
             )
         }
         if (trailerLoading) {
@@ -559,6 +597,9 @@ private fun HomeSectionsTab(
     onDiscoverClick: () -> Unit = {},
     onSeeMore: (MoviesHomeViewModel.CatalogQuery) -> Unit,
     onPlayTrailer: (MoviesHomeViewModel.TrailerCard) -> Unit,
+    /** Trailer do herói (remodel v1.44.0, Frente 3): o botão "Trailer" do
+     *  destaque abre o trailer manualmente — nunca sozinho. */
+    onPlayHeroTrailer: (MovieItem) -> Unit = {},
     onCustomize: () -> Unit,
     onFolderClick: (String, String) -> Unit,
     onPlayEpisode: (MovieItem, Int, Int, Int) -> Unit = { _, _, _, _ -> },
@@ -731,16 +772,18 @@ private fun HomeSectionsTab(
     // ── Lote 24 (v1.34.0), Frente A ──────────────────────────────────────
     // Herói auto-rotativo (item 2): pref hero_autorotate_v1 ("auto" | "on" |
     // "off") — "auto" usa o default do aparelho (ligado no celular,
-    // desligado em TV fraca; ver heroAutoRotateEffective). Prévia ao focar
-    // pela pref hero_preview_on_focus_v1.
+    // desligado em TV fraca; ver heroAutoRotateEffective).
+    // Remodel v1.44.0 (Frente 3): a prévia de trailer ao focar / toque
+    // longo NÃO existe mais — o trailer do herói nunca toca sozinho
+    // (só pelo botão "Trailer"). A pref hero_preview_on_focus_v1 ficou
+    // sem uso no herói (ver relatório da frente).
     val homeContext = LocalContext.current
     val homeIsTv = com.aotv.app.ui.common.LocalIsTv.current
     val heroMode by viewModel.lote24Settings.autoRotateFlow.collectAsStateWithLifecycle()
-    val heroPreviewOnFocus by viewModel.lote24Settings.previewOnFocusFlow.collectAsStateWithLifecycle()
     val heroAutoRotateOn = heroAutoRotateEffective(heroMode, homeContext, homeIsTv)
     // Lote 24 item 9 (Frente B): com o modo sensorial ligado o herói não
     // rotaciona sozinho — o AND abaixo desliga a rotação sem mexer no
-    // default do item 2 (o trailer continua valendo).
+    // default do item 2.
     val heroSensoryOn = remember(homeContext) {
         loadSensoryFriendlyState(com.aotv.app.data.local.PlatformPrefs(homeContext)).enabled
     }
@@ -827,15 +870,17 @@ private fun HomeSectionsTab(
                 val atTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset < 300 } }
                 HeroCarousel(
                     heroItems, state.heroLogos, onItemClick,
-                    // Lote 25 item 8 (Frente C): com o modo economia
-                    // ativo na sessão, a prévia do herói/trailer fica
-                    // desligada (ver BatteryGovernorSession).
-                    trailerOn = state.heroTrailer && atTop && !BatteryGovernorSession.economyActive,
-                    trailerFor = viewModel::heroTrailerStream,
+                    // Remodel v1.44.0 (Frente 3): o trailer do herói NUNCA
+                    // toca sozinho — sem autoplay por tempo parado nem
+                    // prévia ao focar. Só abre pelo botão "Trailer"
+                    // (onPlayTrailer). A rotação continua, pausada fora do
+                    // topo ou com o modo economia ativo na sessão (Lote 25
+                    // item 8, Frente C — ver BatteryGovernorSession).
+                    heroActive = atTop && !BatteryGovernorSession.economyActive,
+                    onPlayTrailer = onPlayHeroTrailer,
                     heroStyle = display.heroStyle,
                     autoRotate = heroAutoRotateOn && heroAutoRotateAllowed(heroSensoryOn),
                     autoRotateIntervalMs = HeroAutoRotate.INTERVAL_MS,
-                    previewOnFocus = heroPreviewOnFocus,
                 )
             }
         }
@@ -1301,59 +1346,46 @@ private fun HeroCarousel(
     items: List<MovieItem>,
     logos: Map<Int, String>,
     onItemClick: (MovieItem) -> Unit,
-    trailerOn: Boolean = false,
-    trailerFor: suspend (MovieItem) -> com.aotv.app.data.remote.YoutubeTrailer.TrailerStream? = { null },
+    /**
+     * Remodel v1.44.0 (Frente 3): herói no topo e app em 1º plano. A
+     * rotação pausa fora do topo ou em 2º plano; o trailer NÃO depende
+     * mais daqui — nunca toca sozinho.
+     */
+    heroActive: Boolean = true,
+    /**
+     * Remodel v1.44.0 (Frente 3): botão "Trailer" do herói — abre o
+     * trailer do item manualmente (overlay ExoPlayer da Início). É o
+     * ÚNICO caminho p/ o trailer do herói: sem autoplay por tempo
+     * parado, sem prévia ao focar (TV/D-pad) nem ao toque longo.
+     */
+    onPlayTrailer: (MovieItem) -> Unit = {},
     /** Estilo do herói (Fase B): tela cheia (o atual) ou cartão com cantos arredondados. */
     heroStyle: HeroStyle = HeroStyle.FULL_BLEED,
     /** Lote 24 (v1.34.0), item 2: rotação automática ligada. Desligado, o herói não avança sozinho. */
     autoRotate: Boolean = true,
     /** Lote 24, item 2: intervalo da rotação automática (padrão 8 s). */
     autoRotateIntervalMs: Long = HeroAutoRotate.INTERVAL_MS,
-    /** Lote 24, item 2: prévia de cena ao focar (TV/D-pad) ou toque longo (celular). */
-    previewOnFocus: Boolean = true,
 ) {
     val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { items.size })
-    // Trailer mudo depois de 5 s parado no mesmo destaque. Trocar de página, rolar a Início ou
-    // sair dela (o composable some) para o trailer.
-    var trailer by remember { mutableStateOf<Pair<Int, com.aotv.app.data.remote.YoutubeTrailer.TrailerStream>?>(null) }
-    // Lote 24, item 2: prévia de cena — o item em foco (ou de toque longo) mostra o trailer
-    // mudo dele; a rotação pausa enquanto a prévia está aberta.
-    var previewItem by remember { mutableStateOf<MovieItem?>(null) }
     // Lote 24, item 2: arrastar o pager pausa a rotação (o usuário está interagindo).
     val dragged by pagerState.interactionSource.collectIsDraggedAsState()
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val resumed by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
-    val active = trailerOn && resumed.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+    val rotateActive = heroActive && resumed.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
     val scope = rememberCoroutineScope()
     fun advance(from: Int) {
         if (items.size > 1) scope.launch { runCatching { pagerState.animateScrollToPage((from + 1) % items.size) } }
     }
-    // Um efeito só cuida do avanço e do trailer, assim um não corta o outro. Com trailer ligado,
-    // espera 5 s, toca e só avança quando o trailer acaba. Sem trailer, avança a cada 6 s.
-    // Herói fora do topo (rolou) ou app em 2º plano: PARA — antes avançava a cada
-    // 6 s mesmo fora da tela, animando o pager e buscando trailer sem ninguém ver.
-    // Lote 24, item 2: o intervalo virou 8 s (autoRotateIntervalMs); sem
-    // autoRotate, o trailer ainda toca mas o herói não avança sozinho; com o
-    // usuário arrastando ou a prévia aberta, o ciclo pausa.
-    LaunchedEffect(pagerState.settledPage, active, items.size, autoRotate, dragged, previewItem) {
-        // Prévia de outra página ficou para trás (o pager andou): fecha.
-        if (previewItem != null && previewItem != items.getOrNull(pagerState.settledPage)) previewItem = null
-        if (previewItem != null || dragged) return@LaunchedEffect
-        trailer = null
-        if (items.isEmpty() || !active) return@LaunchedEffect
-        val page = pagerState.settledPage
-        kotlinx.coroutines.delay(if (autoRotate) autoRotateIntervalMs else HeroAutoRotate.TRAILER_DELAY_MS)
-        trailerFor(items[page])?.let { trailer = page to it; return@LaunchedEffect }
-        if (autoRotate) advance(page)
-    }
-    // Lote 24, item 2: prévia de cena do item em foco — busca o trailer mudo
-    // dele (o mesmo caminho do trailer do herói) e toca por cima do backdrop.
-    LaunchedEffect(previewItem) {
-        val preview = previewItem ?: return@LaunchedEffect
-        val page = pagerState.settledPage
-        if (preview != items.getOrNull(page)) return@LaunchedEffect
-        kotlinx.coroutines.delay(600)
-        trailerFor(preview)?.let { trailer = page to it }
+    // Remodel v1.44.0 (Frente 3): este efeito SÓ rotaciona o pager. O
+    // trailer mudo que tocava depois de 5 s parado (e a prévia ao focar /
+    // toque longo) foi removido — decisão do Davi: o trailer do herói
+    // nunca toca sozinho, só pelo botão "Trailer". Herói fora do topo
+    // (rolou) ou app em 2º plano: PARA — antes avançava mesmo fora da
+    // tela, animando o pager sem ninguém ver.
+    LaunchedEffect(pagerState.settledPage, rotateActive, items.size, autoRotate, dragged) {
+        if (dragged || !autoRotate || !rotateActive || items.size <= 1) return@LaunchedEffect
+        kotlinx.coroutines.delay(autoRotateIntervalMs)
+        advance(pagerState.settledPage)
     }
     val config = androidx.compose.ui.platform.LocalConfiguration.current
     val wide = config.screenWidthDp >= 600 && config.screenWidthDp > config.screenHeightDp
@@ -1373,23 +1405,14 @@ private fun HeroCarousel(
     Box(heroBox) {
         androidx.compose.foundation.pager.HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             val item = items[page]
-            // Lote 24, item 2: focar o item (TV/D-pad) abre a prévia de cena;
-            // perder o foco fecha. O toque longo (celular) abre pela arte, abaixo.
-            Box(
-                Modifier.fillMaxSize()
-                    .onFocusChanged { focusState ->
-                        if (!previewOnFocus) return@onFocusChanged
-                        if (focusState.isFocused) previewItem = item
-                        else if (previewItem == item) previewItem = null
-                    },
-            ) {
-                // Arte. Box com o tamanho exato da área, a imagem e o trailer recortam no centro.
+            // Remodel v1.44.0 (Frente 3): sem prévia de trailer ao focar
+            // (TV/D-pad) nem ao toque longo — o trailer só abre pelo botão
+            // "Trailer". A arte é só imagem (backdrop/pôster).
+            Box(Modifier.fillMaxSize()) {
+                // Arte. Box com o tamanho exato da área; a imagem recorta no centro.
                 Box(
-                    (if (wide) Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.8f)
-                    else Modifier.fillMaxSize())
-                        .pointerInput(item.tmdbId, previewOnFocus) {
-                            detectTapGestures(onLongPress = { if (previewOnFocus) previewItem = item })
-                        },
+                    if (wide) Modifier.align(Alignment.TopEnd).fillMaxHeight().fillMaxWidth(0.8f)
+                    else Modifier.fillMaxSize(),
                 ) {
                     // Tamanho explícito em px de exibição (chave de cache estável).
                     val density = androidx.compose.ui.platform.LocalDensity.current
@@ -1407,19 +1430,9 @@ private fun HeroCarousel(
                         contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                         alignment = androidx.compose.ui.BiasAlignment(0f, -0.6f),
                     )
-                    trailer?.takeIf { it.first == page }?.let { (_, st) ->
-                        com.aotv.app.ui.common.MutedTrailer(
-                            st.videoUrl, st.audioUrl,
-                            // Lote 24, item 2: fim da prévia só fecha a prévia;
-                            // fim do trailer do ciclo avança (só com autoRotate).
-                            onEnd = {
-                                trailer = null
-                                if (previewItem != null) previewItem = null
-                                else if (autoRotate) advance(page)
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
+                    // Remodel v1.44.0 (Frente 3): sem MutedTrailer aqui —
+                    // o trailer do herói nunca toca sozinho (só pelo botão
+                    // "Trailer", que abre o overlay ExoPlayer da Início).
                 }
                 // Degradês do webOS. Lateral só deitado (.scrim-x), de baixo sempre (.scrim-y).
                 if (wide) Box(Modifier.fillMaxSize().background(
@@ -1459,17 +1472,23 @@ private fun HeroCarousel(
                     } else {
                         HeroTitle(item.title, compactHero)
                     }
-                    // Metadados (.meta-row). Nota em dourado.
+                    // Metadados (.meta-row). Nota em dourado. Remodel
+                    // v1.44.0 (Frente 3): + classificação indicativa
+                    // quando o TMDB traz (filmes). Duração NÃO cabe aqui:
+                    // MovieItem não tem runtime (só no detalhe do TMDB).
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (item.rating > 0) Text(
                             "★ ${"%.1f".format(item.rating)}", color = Gold, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold,
                         )
                         if (item.year.isNotBlank()) Text(item.year, color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(if (item.type == MediaType.SERIES) "Série" else "Filme", color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        if (item.certification.isNotBlank()) Text(
+                            item.certification, color = TextSecondary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        )
                     }
                     if (item.overview.isNotBlank()) Text(
                         item.overview, color = TextSecondary, fontSize = 14.sp, lineHeight = 21.sp,
-                        maxLines = if (compactHero) 1 else 2, overflow = TextOverflow.Ellipsis,
+                        maxLines = if (compactHero) 1 else 3, overflow = TextOverflow.Ellipsis,
                     )
                     FlowRow(
                         Modifier.padding(top = 4.dp),
@@ -1478,6 +1497,10 @@ private fun HeroCarousel(
                     ) {
                         // "Ver Detalhes" abre o detalhe (é o que o onItemClick faz); sem ícone de play.
                         com.aotv.app.ui.common.AotvPrimaryButton(text = "Ver Detalhes", onClick = { onItemClick(item) }, icon = null)
+                        // Remodel v1.44.0 (Frente 3): "Trailer" abre o
+                        // trailer manualmente — é o ÚNICO jeito de tocar
+                        // o trailer do herói (sem autoplay).
+                        com.aotv.app.ui.common.AotvButton(text = "Trailer", onClick = { onPlayTrailer(item) }, icon = Icons.Default.PlayArrow)
                         // Indicador da página atual.
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             repeat(items.size) { i ->

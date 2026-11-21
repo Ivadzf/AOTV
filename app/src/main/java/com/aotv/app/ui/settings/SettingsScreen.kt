@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,7 +75,7 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Hub das Configurações (redesign Lote 6, v1.15.0, formato Nuvio): busca no
- * topo, cartão do perfil e as 14 páginas em 8 cartões por grupo — Conta,
+ * topo, cartão do perfil e as 17 páginas em 8 cartões por grupo — Conta,
  * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações,
  * Acompanhamento e Conexão (VPN + Watch Party, Lote 10, + Social Hub,
  * Lote 19). Cada página é uma
@@ -288,7 +289,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 15 páginas. Os ids são as rotas `movies_settings/{id}`. */
+/** As 17 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -358,6 +359,15 @@ private val hubEntries = listOf(
         icon = Icons.Default.ClosedCaption,
         keywords = listOf("Reprodução", "Áudio", "Qualidade", "Trailer", "destaque", "Legenda", "idioma", "buffer", "Buffer"),
     ),
+    // Remodel v1.44.0 (Frente 2): aba própria do MPV — motor, opções do
+    // Libmpv, scripts Lua e Melhorar imagem saíram de Reprodução.
+    HubEntry(
+        id = SettingsPageIds.Mpv,
+        title = "MPV",
+        sub = "Motor do player, Libmpv e Melhorar imagem",
+        icon = Icons.Default.Tune,
+        keywords = listOf("MPV", "Libmpv", "motor", "player", "Melhorar imagem", "upscaler", "Anime4K", "scripts", "Lua", "display-fps"),
+    ),
     HubEntry(
         id = SettingsPageIds.Downloads,
         title = "Downloads",
@@ -423,7 +433,8 @@ private val hubEntriesById = hubEntries.associateBy { it.id }
  * Lote 11), Layout (Início, detalhes e streams, como o "Layout" do Nuvio),
  * Conteúdo & Descoberta, Reprodução (com Downloads), Integrações,
  * Acompanhamento (com Trackers) e Conexão (VPN + Watch Party, Lote 10, +
- * Social Hub, Lote 19).
+ * Social Hub, Lote 19). Reprodução (com MPV e Downloads) — a aba MPV
+ * é do remodel v1.44.0 (Frente 2).
  * Sem "Notificações" (não existe no AOTV) e sem "Avançadas" (sem conteúdo
  * real) — grupos omitidos de propósito.
  */
@@ -432,7 +443,7 @@ private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Aparencia, SettingsPageIds.Diagnostico),
     listOf(SettingsPageIds.Layout, SettingsPageIds.Detalhe, SettingsPageIds.Streams),
     listOf(SettingsPageIds.Conteudo),
-    listOf(SettingsPageIds.Reproducao, SettingsPageIds.Downloads),
+    listOf(SettingsPageIds.Reproducao, SettingsPageIds.Mpv, SettingsPageIds.Downloads),
     listOf(SettingsPageIds.Integracoes),
     listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
     listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub, SettingsPageIds.RemoteTv),

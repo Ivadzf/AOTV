@@ -256,20 +256,21 @@ class DownloadsViewModel @Inject constructor(
     }
 
     /**
-     * Compartilha o VÍDEO INTEIRO concluído (entrada ":full:", Lote de
-     * correções v1.43.0 — Frente 1): o card do vídeo inteiro só tinha
-     * play + lixeira porque o [DownloadRow] não passava onShare p/ o
-     * shell. Reutiliza o MESMO caminho do trecho
-     * ([ClipExporter.shareClip] — FileProvider via cópia p/ o cache):
-     * o exporter é genérico (localUri + título) e o arquivo do vídeo
-     * inteiro é .mp4 ou .ts como o do trecho — o mime vai como
-     * `video/mp4` (.mp4) ou `video/*` → `*/*` (.ts). Sem arquivo local
-     * (download em andamento), avisa em vez de quebrar.
+     * Compartilha um download concluído no share sheet do sistema (Lote
+     * de correções v1.43.0 — Frente 1, generalizado na v1.44.0 — Frente 1:
+     * antes só a entrada ":full:" chegava aqui; agora TODO download
+     * concluído com arquivo local passa por aqui — ver DownloadsScreen).
+     * Reutiliza o MESMO caminho do trecho ([ClipExporter.shareClip] —
+     * FileProvider via cópia p/ o cache): o exporter é genérico
+     * (localUri + título) e o arquivo do download é .mp4 ou .ts como o
+     * do trecho — o mime vai como `video/mp4` (.mp4) ou `video/*` →
+     * `*/*` (.ts). Sem arquivo local (download em andamento), avisa em
+     * vez de quebrar.
      */
-    fun shareFullVideo(entity: DownloadEntity) {
+    fun shareDownload(entity: DownloadEntity) {
         viewModelScope.launch {
             if (entity.localUri.isBlank()) {
-                _message.value = "O vídeo inteiro ainda não tem arquivo para compartilhar."
+                _message.value = "Este download ainda não tem arquivo para compartilhar."
                 return@launch
             }
             when (val result = clipExporter.shareClip(entity.localUri, entity.title)) {
@@ -282,28 +283,42 @@ class DownloadsViewModel @Inject constructor(
     }
 
     /**
-     * Copia o VÍDEO INTEIRO concluído (entrada ":full:", Lote de
-     * correções v1.43.0 — Frente 1) p/ a pasta de Downloads escolhida
-     * (sem mover o original). Mesmo caminho do trecho
-     * ([ClipExporter.copyClipToFolder] — cópia SAF): o exporter é
-     * genérico (localUri + título) e o arquivo do vídeo inteiro é .mp4
-     * ou .ts como o do trecho. Sem arquivo local, avisa em vez de
-     * quebrar; sem pasta escolhida, diz onde escolher.
+     * Copia um download concluído (Lote de correções v1.43.0 — Frente 1,
+     * generalizado na v1.44.0 — Frente 1: antes só a entrada ":full:")
+     * p/ a pasta de Downloads escolhida (sem mover o original). Mesmo
+     * caminho do trecho ([ClipExporter.copyClipToFolder] — cópia SAF): o
+     * exporter é genérico (localUri + título). Sem arquivo local, avisa
+     * em vez de quebrar; sem pasta escolhida, diz onde escolher.
      */
-    fun copyFullVideoToFolder(entity: DownloadEntity) {
+    fun copyDownloadToFolder(entity: DownloadEntity) {
         viewModelScope.launch {
             if (entity.localUri.isBlank()) {
-                _message.value = "O vídeo inteiro ainda não tem arquivo para exportar."
+                _message.value = "Este download ainda não tem arquivo para exportar."
                 return@launch
             }
             when (val result = clipExporter.copyClipToFolder(entity.localUri, entity.title)) {
                 ClipExportResult.Shared -> { /* não acontece na cópia */ }
-                ClipExportResult.CopiedToFolder -> _message.value = "Vídeo inteiro copiado para a pasta de Downloads."
+                ClipExportResult.CopiedToFolder -> _message.value = "Copiado para a pasta de Downloads."
                 ClipExportResult.NoFolderConfigured ->
-                    _message.value = "Escolha a pasta de Downloads em Configurações → Downloads para exportar o vídeo inteiro."
+                    _message.value = "Escolha a pasta de Downloads em Configurações → Downloads para exportar."
                 is ClipExportResult.Failed -> _message.value = result.message
             }
         }
+    }
+
+    /**
+     * Apaga um trecho (clipe) — Lote do remodel v1.44.0 — Frente 1: o
+     * clipe vive como [DownloadEntity] comum com ":clip:" no id (ver
+     * [ClipDownload]), então a remoção é o MESMO caminho do download
+     * normal ([repo.delete]): cancela no DownloadManager (downloadId 0,
+     * sem efeito), apaga o arquivo local (file:// por File, content://
+     * pelo ContentResolver) e remove a linha do DAO — e o Flow de
+     * [repo.all] tira a entrada da lista de clipes sozinho. A tela pede
+     * confirmação antes (diálogo `pendingDeleteClip`, mesmo padrão do
+     * `pendingDelete` dos downloads normais).
+     */
+    fun deleteClip(entry: ClipDownloadEntry) {
+        viewModelScope.launch { repo.delete(entry.toDownloadEntity()) }
     }
 
     /**

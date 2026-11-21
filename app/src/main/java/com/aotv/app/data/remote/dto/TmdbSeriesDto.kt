@@ -32,6 +32,9 @@ data class TmdbSeriesDetailDto(
     @SerializedName("last_episode_to_air") val lastEpisodeToAir: TmdbNextEpisodeDto? = null,
     @SerializedName("status")              val status: String? = null,
     @SerializedName("in_production")       val inProduction: Boolean = false,
+    // Última exibição (p/ o intervalo de anos "1998–2008" no detalhe). O /tv/{id} já devolve;
+    // as listas (/tv/popular etc.) NÃO — por isso o catálogo só tem o ano inicial.
+    @SerializedName("last_air_date")       val lastAirDate: String? = null,
     // Estúdios de produção (folha Sobre, v1.21.0). Só vem em /tv/{id}.
     @SerializedName("production_companies") val productionCompanies: List<TmdbCompanyDto> = emptyList(),
 )
@@ -67,6 +70,7 @@ fun TmdbSeriesDetailDto.toDomain(embedId: String = id.toString()) = SeriesItem(
     genres          = genres.map { it.name },
     certification   = contentRatings.certBR(),
     firstAirDate    = firstAirDate ?: "",
+    lastAirDate     = lastAirDate ?: "",
     nextEpisodeDate = nextEpisodeToAir?.airDate ?: "",
     nextEpisodeSE   = nextEpisodeToAir?.let { if (it.season > 0) "T${it.season} E${it.episode}" else "" } ?: "",
     status          = status ?: "",
@@ -114,4 +118,7 @@ fun TmdbSeriesDetailDto.toMovieItem(embedId: String = id.toString()) = MovieItem
     rating      = voteAverage,
     type        = MediaType.SERIES,
     releaseDate = firstAirDate ?: "",
+    // Intervalo de anos no pôster/detalhe (só o detalhe traz last_air_date + status).
+    lastAirDate = lastAirDate ?: "",
+    seriesStatus = status ?: "",
 )

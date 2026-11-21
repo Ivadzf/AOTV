@@ -171,10 +171,30 @@ internal fun hearItNeedsJump(driftMs: Long): Boolean = abs(driftMs) > 300
 /** Uma fala da legenda, em ms. */
 data class SubCue(val start: Long, val end: Long, val text: String)
 
+/**
+ * Prefixo da "URL" da legenda importada de arquivo (Lote do remodel
+ * v1.44.0 — Frente 1): o arquivo não tem URL — o [selectedSubUrl] do
+ * player guarda `imported://<nome do arquivo>` como sentinela e as falas
+ * vêm dos bytes guardados na importação (ver o `LaunchedEffect` de
+ * `selectedSubUrl` no MoviePlayerScreen). Não é uma URL de rede: nada
+ * tenta baixar daqui.
+ */
+const val IMPORTED_SUB_URL_PREFIX = "imported://"
+
+/** Esta é a sentinela da legenda importada de arquivo (não uma URL de rede)? */
+fun isImportedSubUrl(url: String?): Boolean =
+    url != null && url.startsWith(IMPORTED_SUB_URL_PREFIX)
+
 private val CUE_TIME = Regex("""(?:(\d+):)?(\d{1,2}):(\d{2})[,.](\d{3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})[,.](\d{3})""")
 
-/** Lê SRT ou VTT. Marcação (<i>, {\an8}) sai. */
+/** Lê SRT, VTT ou ASS. Marcação (<i>, {\an8}) sai. */
 internal fun parseSubs(body: String): List<SubCue> {
+    // ASS (Lote do remodel v1.44.0 — Frente 1): o formato tem seção
+    // [Events] e linhas "Dialogue:" — o parser SRT/VTT lia 0 falas em
+    // silêncio (ver o GAP no fim de SubtitleLevel2.kt). O despacho é
+    // pelo conteúdo, não pela extensão: um .ass baixado também passa a
+    // valer pelo mesmo caminho.
+    if ("[Events]" in body && "Dialogue:" in body) return parseAssSubs(body)
     val out = mutableListOf<SubCue>()
     for (block in body.replace("\r", "").split(Regex("\n{2,}"))) {
         val lines = block.trim().lines()
@@ -186,6 +206,45 @@ internal fun parseSubs(body: String): List<SubCue> {
         val text = lines.drop(i + 1).joinToString("\n")
             .replace(Regex("<[^>]+>|\\{[^}]*\\}"), "").trim()
         if (text.isNotEmpty()) out += SubCue(ms(g[1], g[2], g[3], g[4]), ms(g[5], g[6], g[7], g[8]), text)
+    }
+    return out.sortedBy { it.start }
+}
+
+private val ASS_TIME = Regex("""(\d+):(\d{2}):(\d{2})\.(\d{2})""")
+
+/**
+ * Lê ASS/SSA (Lote do remodel v1.44.0 — Frente 1): só as linhas
+ * `Dialogue:` da seção [Events] viram falas — o resto do arquivo
+ * (estilos, fontes embutidas) é ignorado, como o player já faz com a
+ * marcação do SRT. `Dialogue:` tem 9 vírgulas separando os 9 primeiros
+ * campos (Layer, Start, End, Style, Name, MarginL, MarginR, MarginV,
+ * Effect) e o texto é o 10º campo — o texto pode ter vírgula, por isso
+ * o split é limitado a 10 partes. Tempo em centésimos (`0:01:02.34`).
+ * `\N` vira quebra de linha e `{...}` (posicionamento/estilo) sai.
+ */
+internal fun parseAssSubs(body: String): List<SubCue> {
+    fun ms(m: MatchResult): Long {
+        val g = m.groupValues
+        val h = g[1].toLongOrNull() ?: 0L
+        val min = g[2].toLongOrNull() ?: 0L
+        val s = g[3].toLongOrNull() ?: 0L
+        val cs = g[4].toLongOrNull() ?: 0L
+        return ((h * 60 + min) * 60 + s) * 1000 + cs * 10
+    }
+    val out = mutableListOf<SubCue>()
+    for (raw in body.replace("\r", "").lines()) {
+        val line = raw.trim()
+        if (!line.startsWith("Dialogue:")) continue
+        val fields = line.removePrefix("Dialogue:").split(",", limit = 10)
+        if (fields.size < 10) continue
+        val start = ASS_TIME.find(fields[1].trim())?.let { ms(it) } ?: continue
+        val end = ASS_TIME.find(fields[2].trim())?.let { ms(it) } ?: continue
+        if (end <= start) continue
+        val text = fields[9]
+            .replace("\\N", "\n").replace("\\n", "\n")
+            .replace(Regex("\\{[^}]*\\}"), "")
+            .replace(Regex("<[^>]+>"), "").trim()
+        if (text.isNotEmpty()) out += SubCue(start, end, text)
     }
     return out.sortedBy { it.start }
 }

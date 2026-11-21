@@ -125,7 +125,24 @@ fun TmdbVideosDto?.trailerKeys(): List<String> {
 }
 
 // ── Elenco (credits) ──
-data class TmdbCreditsDto(val cast: List<TmdbCastDto> = emptyList())
+data class TmdbCreditsDto(
+    val cast: List<TmdbCastDto> = emptyList(),
+    // Equipe (o mesmo append credits já traz): "Director", "Writer", "Screenplay", "Story".
+    // Gson monta o DTO sem passar pelo construtor: lista ausente chega nula — usar .orEmpty().
+    val crew: List<TmdbCrewDto> = emptyList(),
+)
+data class TmdbCrewDto(
+    val id: Int = 0,
+    val name: String = "",
+    val job: String = "",
+)
+
+/** Nomes distintos da equipe por cargo. Vazio sem dado (a linha some, nunca inventa). */
+fun TmdbCreditsDto?.crewNames(vararg jobs: String): List<String> {
+    val wanted = jobs.toSet()
+    return this?.crew.orEmpty().filter { it.job in wanted }.map { it.name }
+        .filter { it.isNotBlank() }.distinct().take(3)
+}
 data class TmdbCastDto(
     val id: Int = 0,
     val name: String = "",

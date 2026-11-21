@@ -72,7 +72,12 @@ object SettingsAnchors {
     const val PLAY_BUTTONS = "reproducao-botoes"
     const val PLAY_TOP = "reproducao-botoes-topo"
     const val PLAY_PLAYER = "reproducao-player"
-    const val PLAY_ENGINE = "reproducao-motor"
+    // MPV (remodel v1.44.0, Frente 2): as opções do motor/mpv saíram de
+    // Reprodução p/ a aba própria — as âncoras acompanham a mudança.
+    const val MPV_ENGINE = "mpv-motor"
+    const val MPV_OPTIONS = "mpv-opcoes"
+    const val MPV_EXTRAS = "mpv-extras"
+    const val MPV_ENHANCE = "mpv-melhorar-imagem"
     const val PLAY_SKIP = "reproducao-pular"
     const val PLAY_EQ = "reproducao-equalizador"
     // Downloads
@@ -924,9 +929,9 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
-        title = "Trocar de perfil",
-        sub = "Perfil ativo: trocar ou editar perfis",
-        keywords = listOf("perfil", "trocar", "editar", "quem está assistindo"),
+        title = "Trocar de perfil/conta",
+        sub = "Perfil ativo: trocar de conta ou perfil",
+        keywords = listOf("perfil", "trocar", "editar", "conta", "quem está assistindo"),
         pageId = SettingsPageIds.Acompanhamento,
         anchor = SettingsAnchors.TRACK_PROFILE,
     ),
@@ -1387,32 +1392,32 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Player padrão",
         sub = "ExoPlayer, Libmpv ou player externo",
         keywords = listOf("player", "externo", "vlc", "mx player", "exoplayer", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_ENGINE,
     ),
     SettingOptionEntry(
         title = "Decoder de vídeo",
         sub = "Hardware (HW) ou Hardware com fallback",
         keywords = listOf("decoder", "hardware", "hw", "vídeo"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_ENGINE,
     ),
     // Lote mpv 2 (v1.37.0): o painel "Melhorar imagem" (upscaler Anime4K,
     // filtros, desempenho) só existe com o motor Libmpv — a busca leva p/
-    // a seção do motor, onde o usuário troca p/ o Libmpv.
+    // a aba MPV, seção Melhorar imagem (remodel v1.44.0).
     SettingOptionEntry(
         title = "Melhorar imagem (Libmpv)",
         sub = "Upscaler Anime4K, filtros e desempenho — só com o motor Libmpv",
         keywords = listOf("melhorar imagem", "upscaler", "anime4k", "libmpv", "shader", "nitidez", "debanding"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_ENHANCE,
     ),
     SettingOptionEntry(
         title = "Buffer do player",
         sub = "Baixo, Normal ou Alto",
         keywords = listOf("buffer", "carregamento", "travando", "exoplayer"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_ENGINE,
     ),
     // Lote mpv 3 (v1.38.0) — Opções do Libmpv: display-fps, video-sync,
     // hwdec, cache, correção de tom, posição das legendas e detecção de
@@ -1421,50 +1426,50 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Taxa da tela do mpv",
         sub = "Automática ou fixa (24 a 120 Hz) — fixe a taxa do painel se o vídeo engasgar",
         keywords = listOf("display-fps", "taxa", "tela", "Hz", "engasgando", "mpv", "libmpv", "fps"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Sincronização de vídeo do mpv",
         sub = "Display (resample/vdrop) ou Áudio",
         keywords = listOf("video-sync", "sincronização", "resample", "vdrop", "áudio", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Decodificação por hardware do mpv",
         sub = "Hardware (zero-copy), Hardware (com cópia) ou Software",
         keywords = listOf("hwdec", "hardware", "mediacodec", "software", "decoder", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Cache do mpv",
         sub = "Padrão do mpv ou 10 a 120 segundos",
         keywords = listOf("cache", "demuxer", "buffer", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Posição das legendas (mpv)",
         sub = "Embaixo, acima ou no meio da tela",
         keywords = listOf("legenda", "posição", "sub-pos", "vertical", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Manter o tom da voz ao mudar a velocidade",
         sub = "A voz não distorce quando a velocidade muda (mpv e ExoPlayer)",
         keywords = listOf("tom", "voz", "pitch", "velocidade", "distorcer", "mpv", "scaletempo"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
     ),
     SettingOptionEntry(
         title = "Detecção de hardware do upscaling",
         sub = "Automática, Fraca ou Forte — em aparelho fraco o Auto fica no preset mais leve",
         keywords = listOf("hardware", "upscaling", "fraca", "forte", "automática", "placa", "melhorar imagem", "mpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_ENHANCE,
     ),
     // Lote mpv 4 (v1.39.0) — Frente 3: pré-carregar o motor, scripts Lua e
     // servidor IPC do mpv.
@@ -1472,22 +1477,22 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Pré-carregar o motor Libmpv",
         sub = "O motor já está quente ao abrir o player — desliga p/ não gastar memória antes",
         keywords = listOf("pré-carregar", "preload", "motor", "quente", "memória", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_EXTRAS,
     ),
     SettingOptionEntry(
         title = "Scripts Lua do mpv",
         sub = "Instala um .lua do celular, liga/desliga e exclui — lista os scripts presentes",
         keywords = listOf("scripts", "lua", "mpv", "libmpv", "pasta", "exemplo", "instalar", "excluir"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_EXTRAS,
     ),
     SettingOptionEntry(
         title = "Servidor IPC do mpv",
         sub = "Controla o player por socket — desligado por padrão",
         keywords = listOf("ipc", "socket", "servidor", "controle", "mpv", "libmpv"),
-        pageId = SettingsPageIds.Reproducao,
-        anchor = SettingsAnchors.PLAY_ENGINE,
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_EXTRAS,
     ),
     SettingOptionEntry(
         title = "Client ID do Anime-Skip",

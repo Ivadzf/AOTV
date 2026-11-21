@@ -389,8 +389,8 @@ internal fun BoxScope.SecondarySubtitle(
 // 2026-11-16: magic bytes PK\x03\x04 → extrai o 1º .srt/.vtt/.ass do ZIP;
 // BOM UTF-16 LE (FF FE) / BE (FE FF) → decodifica com o charset certo;
 // BOM UTF-8 (EF BB BF) → removido; fallback UTF-8 estrito → windows-1252
-// → ISO-8859-1. O que FALTA (gap real, fora do meu escopo — o parser mora
-// em PlayerExtras.kt, que eu não posso tocar): arquivos .ASS — o
-// unzipFirstSubtitle até extrai o .ass quando não há .srt/.vtt, mas o
-// parseSubs só lê SRT/VTT, então um .ass vira 0 falas em silêncio. Até o
-// coordenador resolver, o .ass deveria ser despriorizado na escolha.
+// → ISO-8859-1. O .ASS também foi resolvido (Lote do remodel v1.44.0 —
+// Frente 1): o [parseSubs] agora despacha p/ [parseAssSubs] quando o
+// conteúdo tem [Events] + "Dialogue:", então um .ass (baixado ou
+// importado de arquivo) vira falas em vez de 0 em silêncio — sem
+// despriorizar nada na escolha.

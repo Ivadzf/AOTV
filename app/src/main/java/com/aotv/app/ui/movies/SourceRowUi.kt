@@ -216,8 +216,11 @@ fun SourceCard(
             .onFocusChanged { focused = it.isFocused }
             .then(if (manualFocus) Modifier.focusProperties { canFocus = false } else Modifier)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            // REMODEL v1.44.0: card compacto (16.dp → 12.dp, respiro 12.dp → 8.dp)
+            // p/ a folha de fontes caber mais versões na tela. Só visual — a
+            // lógica de resolução/ranking não muda.
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Selo do selecionado com check, como o Nuvio marca a faixa/qualidade ativa.
         if (selected || suggested) Row(verticalAlignment = Alignment.CenterVertically,

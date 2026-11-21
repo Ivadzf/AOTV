@@ -197,6 +197,10 @@ object SettingsPageIds {
     const val Acompanhamento = "acompanhamento"
     const val Aparencia = "aparencia"
     const val Reproducao = "reproducao"
+    /** Motor do player + tudo de mpv (remodel v1.44.0, Frente 2):
+     * saiu de Reprodução p/ aba própria. NÃO está em [kidsHidden],
+     * igual a Reprodução, de onde veio. */
+    const val Mpv = "mpv"
     const val Downloads = "downloads"
     const val Backup = "backup"
     const val Trackers = "trackers"
@@ -219,6 +223,7 @@ object SettingsPageIds {
         Acompanhamento -> "Acompanhamento"
         Aparencia -> "Aparência"
         Reproducao -> "Reprodução"
+        Mpv -> "MPV"
         Downloads -> "Downloads"
         Backup -> "Backup e restauração"
         Trackers -> "Trackers e Sincronização"
@@ -274,6 +279,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor, onOpenReportProblem = onOpenReportProblem)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
+        SettingsPageIds.Mpv -> MpvPage(onBack, highlightAnchor = highlightAnchor)
         SettingsPageIds.Downloads -> DownloadsPage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Backup -> BackupScreen(onBack, highlightAnchor = highlightAnchor)
         SettingsPageIds.Trackers -> TrackersScreen(onBack)
@@ -2312,6 +2318,20 @@ private fun AcompanhamentoPage(
                 onClick = onOpenProfiles,
                 grouped = true,
             )
+            // Remodel v1.44.0 (Frente 2): trocar de conta/perfil dentro
+            // das Configurações, como no Nuvio — abre a mesma seleção
+            // de perfil de sempre ("Quem está assistindo?"); a troca
+            // reinicia o app no perfil escolhido (MainActivity observa
+            // profileId e chama restartApp(picked = true)). A tela de
+            // seleção continua como está, sem nada removido.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.SwapHoriz,
+                title = "Trocar de perfil/conta",
+                sub = "Abre \"Quem está assistindo?\" para trocar de conta ou perfil",
+                onClick = onOpenProfiles,
+                grouped = true,
+                divider = true,
+            )
             if (!isKids) {
                 com.aotv.app.ui.common.SettingsRow(
                     icon = Icons.Default.Lock,
@@ -2916,25 +2936,6 @@ private fun ReproducaoPage(
     // Lote 12 — Frente 2: modo de tela padrão e vista da folha de fontes.
     val screenMode by playerPrefs.screenMode.collectAsStateWithLifecycle()
     val sourcesRanked by playerPrefs.sourcesRanked.collectAsStateWithLifecycle()
-    // Motor do player (Lote 4, v1.12.0): player padrão e decoder.
-    val playerEngine by playerPrefs.engine.collectAsStateWithLifecycle()
-    val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
-    // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
-    val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
-    // Lote mpv 3 (v1.38.0) — Playback avançado: opções do mpv e detecção de hardware do upscaling.
-    val mpvDisplayFps by playerPrefs.mpvDisplayFps.collectAsStateWithLifecycle()
-    val mpvVideoSync by playerPrefs.mpvVideoSync.collectAsStateWithLifecycle()
-    val mpvHwdec by playerPrefs.mpvHwdec.collectAsStateWithLifecycle()
-    val mpvCacheSecs by playerPrefs.mpvCacheSecs.collectAsStateWithLifecycle()
-    val mpvPitchCorrection by playerPrefs.mpvPitchCorrection.collectAsStateWithLifecycle()
-    // Lote mpv 4 (v1.39.0) — Frente 3: pré-carregar o motor, scripts Lua e
-    // servidor IPC do mpv.
-    val mpvPreload by playerPrefs.mpvPreload.collectAsStateWithLifecycle()
-    val mpvScriptsEnabled by playerPrefs.mpvScripts.collectAsStateWithLifecycle()
-    val mpvIpcEnabled by playerPrefs.mpvIpc.collectAsStateWithLifecycle()
-    val mpvSubPos by playerPrefs.mpvSubPos.collectAsStateWithLifecycle()
-    val enhanceHwMode by playerPrefs.enhanceHwMode.collectAsStateWithLifecycle()
-    val enhanceHwClass by playerPrefs.enhanceHwClass.collectAsStateWithLifecycle()
     // Lote 9 — Player parte 3 (v1.19.0): AutoSync, pular abertura automático,
     // cartão "A seguir" e equalizador.
     val autoSync by playerPrefs.autoSync.collectAsStateWithLifecycle()
@@ -3497,156 +3498,6 @@ private fun ReproducaoPage(
                 }
             }
         }
-        // Motor do player (Lote 4, v1.12.0): player padrão e decoder de vídeo.
-        // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
-        SettingsSection("Motor do player", anchor = SettingsAnchors.PLAY_ENGINE)
-        SettingsCard {
-            PrefRow(
-                "Player padrão",
-                listOf("exoplayer" to "ExoPlayer (interno)", "libmpv" to "Libmpv (interno)", "external" to "Player externo (VLC, MX…)"),
-                playerEngine, playerPrefs::setEngine,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Decoder de vídeo",
-                listOf("hw" to "Hardware (HW)", "hw_fallback" to "Hardware com fallback"),
-                playerDecoder, playerPrefs::setDecoder,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Buffer do player",
-                listOf("low" to "Baixo", "normal" to "Normal", "high" to "Alto"),
-                playerBuffer, playerPrefs::setBuffer,
-            )
-        }
-        Text(
-            "Buffer: Baixo guarda menos vídeo na frente (começa mais rápido, trava mais fácil se a internet oscilar), Normal é o padrão do ExoPlayer e Alto guarda até 3 minutos (aguenta internet instável, mas espera mais no início). Vale a partir da próxima reprodução. Não vale para TV ao vivo, player externo nem Cast.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        Text(
-            "Em fonte P2P, o painel \"Infos técnicas\" do player mostra seeds, conexões, velocidade de download e buffer no player, atualizados enquanto o painel está aberto.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        Text(
-            "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Libmpv é experimental: se ele falhar ao iniciar, o player volta sozinho p/ o ExoPlayer e avisa; som de outra fonte, Volume Boost, equalizador e modo noturno ainda não valem com o Libmpv. Vale a partir da próxima reprodução.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        Text(
-            "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        // Opções do Libmpv (Lote mpv 3, v1.38.0): só valem com o Libmpv
-        // ativo; valem a partir da próxima reprodução (ou na hora, com o
-        // player na pilha). A taxa da tela fixa o display-fps quando a
-        // detecção automática do mpv erra no painel do aparelho.
-        Text(
-            "Opções do Libmpv:",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        SettingsCard {
-            PrefRow(
-                "Taxa da tela do mpv",
-                listOf(0f to "Automática", 24f to "24 Hz", 25f to "25 Hz", 30f to "30 Hz", 50f to "50 Hz", 60f to "60 Hz", 120f to "120 Hz"),
-                mpvDisplayFps, playerPrefs::setMpvDisplayFps,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Sincronização de vídeo",
-                listOf("display-resample" to "Display (resample)", "display-vdrop" to "Display (vdrop)", "audio" to "Áudio"),
-                mpvVideoSync, playerPrefs::setMpvVideoSync,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Decodificação por hardware",
-                listOf("mediacodec" to "Hardware (zero-copy)", "mediacodec-copy" to "Hardware (com cópia)", "no" to "Software"),
-                mpvHwdec, playerPrefs::setMpvHwdec,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Cache do mpv",
-                listOf(0 to "Padrão do mpv", 10 to "10 s", 30 to "30 s", 60 to "60 s", 120 to "120 s"),
-                mpvCacheSecs, playerPrefs::setMpvCacheSecs,
-            )
-            Spacer(Modifier.height(14.dp))
-            PrefRow(
-                "Posição das legendas",
-                listOf(100 to "Embaixo", 90 to "Um pouco acima", 80 to "Acima", 70 to "Mais acima", 50 to "Meio da tela"),
-                mpvSubPos, playerPrefs::setMpvSubPos,
-            )
-        }
-        com.aotv.app.ui.common.SettingsGroup {
-            com.aotv.app.ui.common.SettingsRow(
-                icon = Icons.Default.Speed,
-                title = "Manter o tom da voz ao mudar a velocidade",
-                sub = if (mpvPitchCorrection) "A voz não distorce quando a velocidade muda (mpv e ExoPlayer)"
-                    else "A voz acompanha a velocidade (efeito \"voz de esquilo\")",
-                trailing = { Switch(checked = mpvPitchCorrection, onCheckedChange = { playerPrefs.setMpvPitchCorrection(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                onClick = { playerPrefs.setMpvPitchCorrection(!mpvPitchCorrection) },
-                grouped = true,
-            )
-        }
-        // Lote mpv 4 (v1.39.0) — Frente 3: extras do mpv (pré-carregar o
-        // motor, scripts Lua e servidor IPC). Valem a partir da próxima
-        // reprodução (o pré-carregar, ao abrir o próximo detalhe).
-        com.aotv.app.ui.common.SettingsGroup {
-            com.aotv.app.ui.common.SettingsRow(
-                icon = Icons.Default.Bolt,
-                title = "Pré-carregar o motor Libmpv",
-                sub = if (mpvPreload) "Ligado: o motor já está quente ao abrir o player"
-                    else "Desligado: o motor só inicia ao abrir o player (sem o gasto de memória antes)",
-                trailing = { Switch(checked = mpvPreload, onCheckedChange = { playerPrefs.setMpvPreload(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                onClick = { playerPrefs.setMpvPreload(!mpvPreload) },
-                grouped = true,
-                divider = true,
-            )
-            com.aotv.app.ui.common.SettingsRow(
-                icon = Icons.Default.Code,
-                title = "Scripts Lua do mpv",
-                sub = if (mpvScriptsEnabled) "Ligado: carrega os .lua da pasta de scripts no próximo init do Libmpv"
-                    else "Desligado: os .lua da pasta de scripts não carregam",
-                trailing = { Switch(checked = mpvScriptsEnabled, onCheckedChange = { playerPrefs.setMpvScripts(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                onClick = { playerPrefs.setMpvScripts(!mpvScriptsEnabled) },
-                grouped = true,
-                divider = true,
-            )
-            com.aotv.app.ui.common.SettingsRow(
-                icon = Icons.Default.Dns,
-                title = "Servidor IPC do mpv",
-                sub = if (mpvIpcEnabled) "Ligado: controla o player por socket — só outro app no aparelho acessa"
-                    else "Desligado por padrão: controla o player por socket — só outro app no aparelho acessa",
-                trailing = { Switch(checked = mpvIpcEnabled, onCheckedChange = { playerPrefs.setMpvIpc(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
-                onClick = { playerPrefs.setMpvIpc(!mpvIpcEnabled) },
-                grouped = true,
-            )
-        }
-        // Scripts Lua do mpv (Lote de correções, v1.42.0 — Frente 2):
-        // instalar/ligar/desligar/excluir de dentro do app.
-        MpvScriptsManager()
-        Text(
-            "yt-dlp não disponível nesta versão do motor (o AAR não traz o binário) — as fontes já chegam resolvidas pelos addons, então nada muda.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        SettingsCard {
-            PrefRow(
-                "Detecção de hardware do upscaling",
-                listOf("auto" to "Automática", "weak" to "Fraca", "strong" to "Forte"),
-                enhanceHwMode, playerPrefs::setEnhanceHwMode,
-            )
-        }
-        Text(
-            "Força do aparelho: " + when {
-                enhanceHwMode == "weak" -> "Fraca (forçada aqui) — o Auto do upscaling fica no preset mais leve."
-                enhanceHwMode == "strong" -> "Forte (forçada aqui)."
-                enhanceHwClass == "weak" -> "Fraca (medida) — o Auto do upscaling fica no preset mais leve."
-                enhanceHwClass == "strong" -> "Forte (medida)."
-                else -> "Ainda não medida — mede sozinha na 1ª vez que o mpv é usado."
-            },
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
-        Text(
-            "Taxa da tela: Automática deixa o mpv detectar; se o vídeo engasgar depois de alguns segundos, fixe a taxa do seu painel. Hardware com cópia copia cada quadro p/ a CPU e pode travar aparelho fraco — só use se o zero-copy falhar.",
-            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
-        )
         // Equalizador (Lote 9 item 3, v1.19.0): presets do aparelho e 5
         // bandas em dB. Os presets e as bandas ficam no painel do player
         // (chip "Equalizador") — aqui só o liga/desliga, porque os presets
@@ -3720,6 +3571,198 @@ private fun ReproducaoPage(
                 compact = true,
             )
         }
+    }
+}
+
+/**
+ * Aba MPV (remodel v1.44.0, Frente 2): tudo de mpv que vivia em
+ * Reprodução — motor (ExoPlayer/Libmpv), decoder, buffer, opções do
+ * Libmpv (display-fps, video-sync, hwdec, cache, posição das legendas,
+ * correção de tom), extras (pré-carregar, scripts Lua, IPC) e Melhorar
+ * imagem (detecção de hardware do upscaling). Conteúdo MOVIDO de
+ * ReproducaoPage, sem duplicar e sem renomear nenhuma pref: as mesmas
+ * chaves (`pref_mpv_*` / `pref_enhance_*` via PlayerPrefsViewModel) e o
+ * mesmo gerenciador de scripts Lua ([MpvScriptsManager]). Reprodução
+ * fica com o resto (áudio, legendas, botões, velocidade etc.).
+ */
+@Composable
+private fun MpvPage(
+    onBack: () -> Unit,
+    highlightAnchor: String? = null,
+    playerPrefs: PlayerPrefsViewModel = hiltViewModel(),
+) {
+    // Motor do player (Lote 4, v1.12.0): player padrão e decoder.
+    val playerEngine by playerPrefs.engine.collectAsStateWithLifecycle()
+    val playerDecoder by playerPrefs.decoder.collectAsStateWithLifecycle()
+    // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
+    val playerBuffer by playerPrefs.buffer.collectAsStateWithLifecycle()
+    // Lote mpv 3 (v1.38.0) — Playback avançado: opções do mpv e detecção de hardware do upscaling.
+    val mpvDisplayFps by playerPrefs.mpvDisplayFps.collectAsStateWithLifecycle()
+    val mpvVideoSync by playerPrefs.mpvVideoSync.collectAsStateWithLifecycle()
+    val mpvHwdec by playerPrefs.mpvHwdec.collectAsStateWithLifecycle()
+    val mpvCacheSecs by playerPrefs.mpvCacheSecs.collectAsStateWithLifecycle()
+    val mpvPitchCorrection by playerPrefs.mpvPitchCorrection.collectAsStateWithLifecycle()
+    // Lote mpv 4 (v1.39.0) — Frente 3: pré-carregar o motor, scripts Lua e
+    // servidor IPC do mpv.
+    val mpvPreload by playerPrefs.mpvPreload.collectAsStateWithLifecycle()
+    val mpvScriptsEnabled by playerPrefs.mpvScripts.collectAsStateWithLifecycle()
+    val mpvIpcEnabled by playerPrefs.mpvIpc.collectAsStateWithLifecycle()
+    val mpvSubPos by playerPrefs.mpvSubPos.collectAsStateWithLifecycle()
+    val enhanceHwMode by playerPrefs.enhanceHwMode.collectAsStateWithLifecycle()
+    val enhanceHwClass by playerPrefs.enhanceHwClass.collectAsStateWithLifecycle()
+    SettingsPageScaffold("MPV", "Motor do player, opções do Libmpv, scripts Lua e Melhorar imagem", onBack, highlightAnchor = highlightAnchor) {
+        // Motor do player (Lote 4, v1.12.0): player padrão e decoder de vídeo.
+        // Buffer do player (Lote 5 item 1, v1.14.0): perfil de buffer do ExoPlayer.
+        SettingsSection("Motor do player", anchor = SettingsAnchors.MPV_ENGINE)
+        SettingsCard {
+            PrefRow(
+                "Player padrão",
+                listOf("exoplayer" to "ExoPlayer (interno)", "libmpv" to "Libmpv (interno)", "external" to "Player externo (VLC, MX…)"),
+                playerEngine, playerPrefs::setEngine,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Decoder de vídeo",
+                listOf("hw" to "Hardware (HW)", "hw_fallback" to "Hardware com fallback"),
+                playerDecoder, playerPrefs::setDecoder,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Buffer do player",
+                listOf("low" to "Baixo", "normal" to "Normal", "high" to "Alto"),
+                playerBuffer, playerPrefs::setBuffer,
+            )
+        }
+        Text(
+            "Buffer: Baixo guarda menos vídeo na frente (começa mais rápido, trava mais fácil se a internet oscilar), Normal é o padrão do ExoPlayer e Alto guarda até 3 minutos (aguenta internet instável, mas espera mais no início). Vale a partir da próxima reprodução. Não vale para TV ao vivo, player externo nem Cast.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Em fonte P2P, o painel \"Infos técnicas\" do player mostra seeds, conexões, velocidade de download e buffer no player, atualizados enquanto o painel está aberto.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Player externo abre o link da fonte no seletor do sistema quando ela resolve — ou na hora, pelo chip \"Player externo\" do player. Precisa de um player instalado; torrent sem link do debrid e fonte que só toca com header não abrem fora. Libmpv é experimental: se ele falhar ao iniciar, o player volta sozinho p/ o ExoPlayer e avisa; som de outra fonte, Volume Boost, equalizador e modo noturno ainda não valem com o Libmpv. Vale a partir da próxima reprodução.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Decoder: HW usa só o hardware do aparelho. Com fallback, se o decoder de hardware falhar ao iniciar, o player tenta outro decoder do aparelho antes de trocar de fonte. Não há decoder por software: ele exigiria a extensão FFmpeg do Media3, não incluída. O decoder vale a partir da próxima reprodução.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        // Opções do Libmpv (Lote mpv 3, v1.38.0): só valem com o Libmpv
+        // ativo; valem a partir da próxima reprodução (ou na hora, com o
+        // player na pilha). A taxa da tela fixa o display-fps quando a
+        // detecção automática do mpv erra no painel do aparelho.
+        SettingsSection("Opções do Libmpv", anchor = SettingsAnchors.MPV_OPTIONS)
+        SettingsCard {
+            PrefRow(
+                "Taxa da tela do mpv",
+                listOf(0f to "Automática", 24f to "24 Hz", 25f to "25 Hz", 30f to "30 Hz", 50f to "50 Hz", 60f to "60 Hz", 120f to "120 Hz"),
+                mpvDisplayFps, playerPrefs::setMpvDisplayFps,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Sincronização de vídeo",
+                listOf("display-resample" to "Display (resample)", "display-vdrop" to "Display (vdrop)", "audio" to "Áudio"),
+                mpvVideoSync, playerPrefs::setMpvVideoSync,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Decodificação por hardware",
+                listOf("mediacodec" to "Hardware (zero-copy)", "mediacodec-copy" to "Hardware (com cópia)", "no" to "Software"),
+                mpvHwdec, playerPrefs::setMpvHwdec,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Cache do mpv",
+                listOf(0 to "Padrão do mpv", 10 to "10 s", 30 to "30 s", 60 to "60 s", 120 to "120 s"),
+                mpvCacheSecs, playerPrefs::setMpvCacheSecs,
+            )
+            Spacer(Modifier.height(14.dp))
+            PrefRow(
+                "Posição das legendas",
+                listOf(100 to "Embaixo", 90 to "Um pouco acima", 80 to "Acima", 70 to "Mais acima", 50 to "Meio da tela"),
+                mpvSubPos, playerPrefs::setMpvSubPos,
+            )
+        }
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Speed,
+                title = "Manter o tom da voz ao mudar a velocidade",
+                sub = if (mpvPitchCorrection) "A voz não distorce quando a velocidade muda (mpv e ExoPlayer)"
+                    else "A voz acompanha a velocidade (efeito \"voz de esquilo\")",
+                trailing = { Switch(checked = mpvPitchCorrection, onCheckedChange = { playerPrefs.setMpvPitchCorrection(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvPitchCorrection(!mpvPitchCorrection) },
+                grouped = true,
+            )
+        }
+        // Lote mpv 4 (v1.39.0) — Frente 3: extras do mpv (pré-carregar o
+        // motor, scripts Lua e servidor IPC). Valem a partir da próxima
+        // reprodução (o pré-carregar, ao abrir o próximo detalhe).
+        SettingsSection("Extras do mpv", anchor = SettingsAnchors.MPV_EXTRAS)
+        com.aotv.app.ui.common.SettingsGroup {
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Bolt,
+                title = "Pré-carregar o motor Libmpv",
+                sub = if (mpvPreload) "Ligado: o motor já está quente ao abrir o player"
+                    else "Desligado: o motor só inicia ao abrir o player (sem o gasto de memória antes)",
+                trailing = { Switch(checked = mpvPreload, onCheckedChange = { playerPrefs.setMpvPreload(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvPreload(!mpvPreload) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Code,
+                title = "Scripts Lua do mpv",
+                sub = if (mpvScriptsEnabled) "Ligado: carrega os .lua da pasta de scripts no próximo init do Libmpv"
+                    else "Desligado: os .lua da pasta de scripts não carregam",
+                trailing = { Switch(checked = mpvScriptsEnabled, onCheckedChange = { playerPrefs.setMpvScripts(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvScripts(!mpvScriptsEnabled) },
+                grouped = true,
+                divider = true,
+            )
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Dns,
+                title = "Servidor IPC do mpv",
+                sub = if (mpvIpcEnabled) "Ligado: controla o player por socket — só outro app no aparelho acessa"
+                    else "Desligado por padrão: controla o player por socket — só outro app no aparelho acessa",
+                trailing = { Switch(checked = mpvIpcEnabled, onCheckedChange = { playerPrefs.setMpvIpc(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setMpvIpc(!mpvIpcEnabled) },
+                grouped = true,
+            )
+        }
+        // Scripts Lua do mpv (Lote de correções, v1.42.0 — Frente 2):
+        // instalar/ligar/desligar/excluir de dentro do app.
+        MpvScriptsManager()
+        Text(
+            "yt-dlp não disponível nesta versão do motor (o AAR não traz o binário) — as fontes já chegam resolvidas pelos addons, então nada muda.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        // Melhorar imagem (Lote mpv 2, v1.37.0): a detecção de hardware
+        // do upscaling vive aqui; o painel em si fica no player, com o
+        // motor Libmpv (a busca apontava p/ Reprodução — agora p/ cá).
+        SettingsSection("Melhorar imagem", anchor = SettingsAnchors.MPV_ENHANCE)
+        SettingsCard {
+            PrefRow(
+                "Detecção de hardware do upscaling",
+                listOf("auto" to "Automática", "weak" to "Fraca", "strong" to "Forte"),
+                enhanceHwMode, playerPrefs::setEnhanceHwMode,
+            )
+        }
+        Text(
+            "Força do aparelho: " + when {
+                enhanceHwMode == "weak" -> "Fraca (forçada aqui) — o Auto do upscaling fica no preset mais leve."
+                enhanceHwMode == "strong" -> "Forte (forçada aqui)."
+                enhanceHwClass == "weak" -> "Fraca (medida) — o Auto do upscaling fica no preset mais leve."
+                enhanceHwClass == "strong" -> "Forte (medida)."
+                else -> "Ainda não medida — mede sozinha na 1ª vez que o mpv é usado."
+            },
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
+        Text(
+            "Taxa da tela: Automática deixa o mpv detectar; se o vídeo engasgar depois de alguns segundos, fixe a taxa do seu painel. Hardware com cópia copia cada quadro p/ a CPU e pode travar aparelho fraco — só use se o zero-copy falhar.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
     }
 }
 

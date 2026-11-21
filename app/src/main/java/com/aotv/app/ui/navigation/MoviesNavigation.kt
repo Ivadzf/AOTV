@@ -1588,7 +1588,13 @@ private fun TouchRailItem(
  *  translúcido + borda sutil, com o toggle `pref_panel_blur`); blur real
  *  de fundo não existe aqui (o RenderEffect desfoca o próprio conteúdo,
  *  não o que está atrás da barra). A lista de itens continua sendo
- *  parâmetro ([items]), p/ a aba Esportes entrar depois sem reescrever. */
+ *  parâmetro ([items]), p/ a aba Esportes entrar depois sem reescrever.
+ *
+ *  Remodel v1.44.0 (Frente 3): pílula mais estreita e centralizada — 94%
+ *  da largura (máx. 560dp), sem esticar na tela toda — com itens maiores
+ *  e mais confortáveis (56dp, ícones de 24dp, rótulos de 11sp). Só existe
+ *  no celular (hideBar cobre TV/tablet); TV usa TvSideMenu e o tablet
+ *  usa MoviesTabletRail (não mexidos aqui). */
 @Composable
 private fun MoviesBottomBar(
     currentRoute: String?,
@@ -1609,22 +1615,34 @@ private fun MoviesBottomBar(
     /** Bolinha "What's new" no avatar do Perfil (Lote 18, v1.28.0). */
     showWhatsNewDot: Boolean = false,
 ) {
-    // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones menores com rótulo.
+    // Pílula flutuante estilo Nuvio: vidro translúcido + sombra, ícones com rótulo.
     // O blur de fundo vem da translucência do GlassBg: o blur do Compose desfoca o
     // próprio conteúdo (ícones inclusos), não o que está atrás da barra.
-    Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 6.dp)
-        .shadow(10.dp, MaterialTheme.shapes.extraLarge)
-        .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.62f) else com.aotv.app.ui.theme.GlassBg)
-        .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
-        .padding(4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-        items.forEach { item ->
-            MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
+    // Remodel v1.44.0 (Frente 3): pílula mais ESTREITA e centralizada — não
+    // esticada na largura toda (94% da largura, máx. 560dp) — com itens
+    // maiores (ver MoviesBottomBarItem). Só existe no celular: hideBar
+    // cobre TV/tablet, e esses usam TvSideMenu / MoviesTabletRail.
+    Box(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.fillMaxWidth(0.94f).widthIn(max = 560.dp)
+                .shadow(10.dp, MaterialTheme.shapes.extraLarge)
+                .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.62f) else com.aotv.app.ui.theme.GlassBg)
+                .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items.forEach { item ->
+                MoviesBottomBarItem(item.icon, item.label, currentRoute == item.route, item.onClick, Modifier.weight(1f))
+            }
+            if (showProfile) MoviesBottomBarItem(
+                icon = null, label = "Perfil", selected = currentRoute == profilesRoute,
+                onClick = onProfile, modifier = Modifier.weight(1f), profile = profile,
+                showWhatsNewDot = showWhatsNewDot,
+            )
         }
-        if (showProfile) MoviesBottomBarItem(
-            icon = null, label = "Perfil", selected = currentRoute == profilesRoute,
-            onClick = onProfile, modifier = Modifier.weight(1f), profile = profile,
-            showWhatsNewDot = showWhatsNewDot,
-        )
     }
 }
 
@@ -1638,17 +1656,20 @@ private fun MoviesBottomBarItem(
     profile: com.aotv.app.data.local.Profile? = null,
     showWhatsNewDot: Boolean = false,
 ) {
-    Column(modifier.heightIn(min = 46.dp).clip(MaterialTheme.shapes.large)
+    // Remodel v1.44.0 (Frente 3): itens maiores e mais confortáveis —
+    // 56dp de altura (antes 46dp), ícones/avatar de 24dp (antes 20dp),
+    // rótulos de 11sp (antes 9sp).
+    Column(modifier.heightIn(min = 56.dp).clip(MaterialTheme.shapes.large)
         .background(if (selected) com.aotv.app.ui.theme.Accent else androidx.compose.ui.graphics.Color.Transparent)
         .semantics { this.selected = selected }
         .clickable(role = androidx.compose.ui.semantics.Role.Tab, onClick = onClick)
-        .padding(horizontal = 2.dp, vertical = 5.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        .padding(horizontal = 2.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         val fg = if (selected) com.aotv.app.ui.theme.TextOnLight else com.aotv.app.ui.theme.TextSecondary
-        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 20.dp, showDot = showWhatsNewDot)
-        else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(20.dp))
+        if (profile != null) com.aotv.app.ui.settings.ProfileAvatar(profile, 24.dp, showDot = showWhatsNewDot)
+        else if (icon != null) Icon(icon, label, tint = fg, modifier = Modifier.size(24.dp))
         Text(label, color = fg,
-            fontSize = 9.sp, lineHeight = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            fontSize = 11.sp, lineHeight = 13.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
             fontFamily = com.aotv.app.ui.theme.Inter, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }

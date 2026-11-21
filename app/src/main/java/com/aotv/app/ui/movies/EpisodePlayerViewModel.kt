@@ -106,9 +106,22 @@ class EpisodePlayerViewModel @Inject constructor(
         return base + extra.filter { it.url !in seen }
     }
 
-    /** Falas de uma legenda externa (SRT ou VTT). Vazio se não baixou. */
+    /** Falas de uma legenda externa (SRT, VTT ou ASS). Vazio se não baixou. */
     suspend fun subtitleCues(url: String): List<SubCue> =
         subtitleService.download(url)?.let { parseSubs(it) }.orEmpty()
+
+    /**
+     * Falas de um arquivo de legenda importado no player (Lote do remodel
+     * v1.44.0 — Frente 1): os bytes já estão em memória (lidos do SAF
+     * pela tela), então não há rede aqui — só a decodificação
+     * ([SubtitleService.decodeSubtitleBytes]: ZIP, BOM UTF-16/UTF-8,
+     * UTF-8 → windows-1252 → ISO-8859-1, o mesmo tratamento do
+     * download) e o parser ([parseSubs]: SRT/VTT/ASS). [fileName] só
+     * serve p/ a mensagem — o formato é detectado pelo conteúdo, não
+     * pela extensão. Vazio quando o arquivo não é uma legenda legível.
+     */
+    fun importedSubtitleCues(bytes: ByteArray, fileName: String): List<SubCue> =
+        subtitleService.decodeSubtitleBytes(bytes)?.let { parseSubs(it) }.orEmpty()
 
     // Cache do IMDB ID por tmdbId p/ não re-resolver a cada troca de episódio.
     private val imdbCache = mutableMapOf<Int, String?>()

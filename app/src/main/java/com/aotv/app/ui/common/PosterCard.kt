@@ -57,6 +57,7 @@ import com.aotv.app.data.local.fresh
 import com.aotv.app.data.local.posterKey
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
+import com.aotv.app.domain.model.yearRange
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.Gold
 import com.aotv.app.ui.theme.Inter
@@ -122,10 +123,10 @@ internal fun posterTag(item: MovieItem, rank: Int, today: String, monthAgo: Stri
     return null
 }
 
-/** Ano e gênero curto da faixa de baixo. Sem nenhum dos dois fica Filme ou Série. */
+/** Ano e gênero curto da faixa de baixo. Série com dado de fim mostra o intervalo ("1998–2008", "1998–"); sem dado, só o início — igual ao catálogo. Sem nenhum dos dois fica Filme ou Série. */
 internal fun stripParts(item: MovieItem): List<String> {
     val genre = item.genreIds.firstNotNullOfOrNull { GENRE_SHORT[it] }
-    return listOfNotNull(item.year.ifBlank { null }, genre)
+    return listOfNotNull(item.yearRange().ifBlank { null }, genre)
         .ifEmpty { listOf(if (item.type == MediaType.SERIES) "Série" else "Filme") }
 }
 

@@ -107,6 +107,7 @@ import com.aotv.app.data.remote.langOf
 import com.aotv.app.domain.model.EpisodeItem
 import com.aotv.app.domain.model.MediaType
 import com.aotv.app.domain.model.MovieItem
+import com.aotv.app.domain.model.yearRange
 import com.aotv.app.ui.common.GlassCircleButton
 import com.aotv.app.ui.common.AotvPrimaryButton
 import com.aotv.app.ui.common.FrostedScrim
@@ -286,6 +287,10 @@ fun MovieDetailScreen(
     val genres      = state.item?.genres ?: state.series?.genres ?: item.genres
     val certification = state.item?.certification ?: state.series?.certification ?: ""
     val isSeries    = item.type == MediaType.SERIES
+    // Intervalo de exibição (remodel v1.44.0, estilo Nuvio): série encerrada
+    // "1998–2008", em produção "1998–", filme = o ano. Sem dado de fim, só o
+    // início — nunca inventa.
+    val yearRange = if (isSeries) state.series?.yearRange().orEmpty().ifBlank { year } else year
     val matchPct    = (rating * 10).toInt()
 
     // Seasons info
@@ -336,10 +341,14 @@ fun MovieDetailScreen(
     // Lote 24 item 12 (v1.34.0) — modo da nota dos episódios (rótulo de origem do mapa).
     val episodeRatingMode by viewModel.episodeRatingMode.collectAsStateWithLifecycle()
 
-    // Blur nos painéis (Lote 3 item 4, v1.11.0): com uma folha aberta (fontes
-    // ou filmografia), o conteúdo da página atrás dela é desfocado. O efeito
-    // é criado 1x; abaixo do Android 12 ele é null e o fallback é o scrim
-    // fosco ([FrostedScrim], Lote 4) — o toggle continua valendo lá.
+    // Blur nos painéis (Lote 3 item 4, v1.11.0): o efeito é criado 1x; abaixo
+    // do Android 12 ele é null e o fallback é o scrim fosco ([FrostedScrim],
+    // Lote 4) — o toggle continua valendo lá.
+    // REMODEL v1.44.0: o desfoque ATRÁS das folhas saiu do detalhe — a capa/
+    // backdrop fica limpa (estilo Nuvio) e a folha escurece a página com o
+    // próprio scrim. O blur anti-spoiler dos episódios (no card do episódio)
+    // e o FrostedScrim (< Android 12) continuam; o toggle "Blur nos painéis"
+    // segue existindo p/ as outras superfícies que o usam.
     val panelBlurOn by detailPrefs.panelBlur.collectAsStateWithLifecycle()
     val panelBlurEffect = rememberPanelBlurEffect()
     // Blur anti-spoiler (Lote 11, v1.21.0): com a pref ligada, os episódios
@@ -348,8 +357,6 @@ fun MovieDetailScreen(
     // esconde o título até a data, mesmo com o blur desligado.
     val spoilerBlurOn by detailPrefs.spoilerBlur.collectAsStateWithLifecycle()
     val calendarHideSpoilersOn by detailPrefs.calendarHideSpoilers.collectAsStateWithLifecycle()
-    val blurBehindSheets = panelBlurOn && panelBlurEffect != null &&
-        (sheetOpen || state.personName != null || aboutOpen)
     // Título em idioma original (Lote 3 item 6, por perfil; padrão: desligado).
     val showOriginalTitle by detailPrefs.originalTitle.collectAsStateWithLifecycle()
 
@@ -427,13 +434,12 @@ fun MovieDetailScreen(
             .fillMaxSize()
             .background(if (cinematicBg) Color.Black else Background),
     ) {
-        // O blur é aplicado a ESTE Box (fundo + lista): a folha, irmã dele no
-        // Box externo, fica nítida por cima. Com o blur desligado (ou sem
-        // folha aberta, ou abaixo do Android 12) o Modifier não muda nada.
+        // REMODEL v1.44.0: sem blur neste Box — a capa/backdrop fica nítida
+        // mesmo com folha aberta (estilo Nuvio); a folha escurece a página
+        // com o próprio scrim. O FrostedScrim (< Android 12) continua abaixo.
         Box(
             Modifier
-                .fillMaxSize()
-                .blurBehind(blurBehindSheets, panelBlurEffect),
+                .fillMaxSize(),
         ) {
         // Fundo cinematográfico (Fase B, opt-in): arte desfocada em tela cheia
         // atrás da página. O LazyColumn não tem fundo próprio, então a arte aparece.
@@ -687,9 +693,9 @@ fun MovieDetailScreen(
                                 )
                                 MetaDot(Modifier.align(Alignment.CenterVertically))
                             }
-                            if (year.isNotBlank()) {
+                            if (yearRange.isNotBlank()) {
                                 Text(
-                                    year,
+                                    yearRange,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 15.sp,
                                     color = TextSecondary,
@@ -900,6 +906,9 @@ fun MovieDetailScreen(
                         )
                     }
 
+                    // Direção e roteiro (remodel v1.44.0): abaixo da sinopse da série.
+                    if (isSeries) CrewCredits(state.directors, state.writers)
+
                     // Linha "Ready" (Lote 11, v1.21.0): a melhor fonte antes de
                     // tocar — resolução, HDR/DV/áudio. Só com fontes prontas e
                     // pelo menos um dado real; sem dado nenhum, some (nunca inventa).
@@ -1059,6 +1068,8 @@ fun MovieDetailScreen(
                                     )
                                 }
                             }
+                            // Direção e roteiro (remodel v1.44.0): abaixo da sinopse do filme.
+                            CrewCredits(state.directors, state.writers, Modifier.padding(top = 14.dp))
                         }
                     }
                 }
@@ -1467,9 +1478,10 @@ fun MovieDetailScreen(
         }
         // Fallback < Android 12 (Lote 4): sem RenderEffect, o scrim fosco
         // escurece o conteúdo atrás da folha quando o toggle está ligado.
-        // Com efeito real ele não aparece (nunca os dois juntos).
+        // REMODEL v1.44.0: no Android 12+ não há mais blur atrás das folhas
+        // no detalhe (capa limpa) — o scrim escuro da própria folha basta.
         FrostedScrim(panelBlurOn && (sheetOpen || state.personName != null), panelBlurEffect)
-        } // fecha o Box do blur atrás das folhas
+        } // fecha o Box do conteúdo do detalhe
 
         // Lote 21 (v1.31.0) — mini-player do trailer: no topo do detalhe
         // (autoplay) ou PiP flutuante no canto (minimizado). Um só composable
@@ -1504,9 +1516,8 @@ fun MovieDetailScreen(
             EpisodeServersSheet(
                 season = season,
                 episode = episode,
-                // Lote 3 item 4: com o blur ligado, o card fica translúcido p/
-                // o conteúdo desfocado aparecer através dele (vidro fosco).
-                blurred = blurBehindSheets,
+                // REMODEL v1.44.0: folha opaca — sem blur atrás dela no detalhe,
+                // o card translúcido mostraria o conteúdo nítido por baixo.
                 stremioStreams = state.episodeStremioStreams,
                 facts = state.episodeFacts(),
                 debridTag = state.debridTag,
@@ -1591,6 +1602,8 @@ fun MovieDetailScreen(
                 originalTitle = state.originalTitle,
                 isSeries = isSeries,
                 releaseDate = if (isSeries) state.series?.firstAirDate.orEmpty() else state.item?.releaseDate.orEmpty(),
+                // Intervalo de exibição ("1998–2008" / "1998–") p/ a ficha.
+                yearRange = yearRange,
                 nextEpisodeDate = state.series?.nextEpisodeDate.orEmpty(),
                 nextEpisodeSE = state.series?.nextEpisodeSE.orEmpty(),
                 certification = certification,
@@ -1602,7 +1615,6 @@ fun MovieDetailScreen(
                 studios = state.studios,
                 collectionName = state.collectionName,
                 collectionItems = state.collectionItems,
-                blurred = blurBehindSheets,
                 onDismiss = { aboutOpen = false },
             )
         }
@@ -1615,8 +1627,7 @@ fun MovieDetailScreen(
                 loading = state.personLoading,
                 bio = state.personBio,
                 details = state.personDetails,
-                // Lote 3 item 4: vidro fosco, como na folha de fontes.
-                blurred = blurBehindSheets,
+                // REMODEL v1.44.0: folha opaca, como a de fontes (sem blur atrás no detalhe).
                 onDismiss = { viewModel.closePerson() },
                 onItemClick = { rel -> viewModel.closePerson(); onRelatedClick(rel) },
             )
@@ -1645,6 +1656,8 @@ private fun AboutTitleSheet(
     originalTitle: String,
     isSeries: Boolean,
     releaseDate: String,
+    /** Intervalo de exibição da série ("1998–2008" / "1998–"). "" = sem dado. */
+    yearRange: String = "",
     nextEpisodeDate: String,
     nextEpisodeSE: String,
     certification: String,
@@ -1671,7 +1684,8 @@ private fun AboutTitleSheet(
                 .background(if (blurred) Background.copy(alpha = 0.86f) else Background)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
-                .padding(16.dp)
+                // REMODEL v1.44.0: mesmo gutter da página (28.dp em tela larga).
+                .padding(com.aotv.app.ui.common.pagePadding())
                 .navigationBarsPadding(),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1707,6 +1721,10 @@ private fun AboutTitleSheet(
                     if (releaseDate.isNotBlank()) {
                         item { AboutRow(if (isSeries) "Estreia" else "Lançamento", fmtIsoDateMobile(releaseDate)) }
                     }
+                    // Intervalo de exibição (remodel v1.44.0): o fim só existe no detalhe.
+                    if (isSeries && yearRange.isNotBlank()) {
+                        item { AboutRow("Exibição", yearRange) }
+                    }
                     if (nextEpisodeDate.isNotBlank()) {
                         val nextValue = if (nextEpisodeSE.isNotBlank()) "$nextEpisodeSE · ${fmtIsoDateMobile(nextEpisodeDate)}" else fmtIsoDateMobile(nextEpisodeDate)
                         item { AboutRow("Próximo episódio", nextValue) }
@@ -1734,6 +1752,32 @@ private fun AboutTitleSheet(
                 }
             }
         }
+    }
+}
+
+/** Direção e roteiro abaixo da sinopse (remodel v1.44.0, referência Nuvio). Some sem dado. */
+@Composable
+private fun CrewCredits(
+    directors: List<String>,
+    writers: List<String>,
+    modifier: Modifier = Modifier,
+) {
+    if (directors.isEmpty() && writers.isEmpty()) return
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (directors.isNotEmpty()) CrewLine("Direção", directors.joinToString(" · "))
+        if (writers.isNotEmpty()) CrewLine("Roteiro", writers.joinToString(" · "))
+    }
+}
+
+@Composable
+private fun CrewLine(label: String, names: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, color = TextTertiary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily)
+        Text(
+            names, color = TextSecondary, fontSize = 13.sp, fontFamily = ManropeFontFamily,
+            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -1772,7 +1816,8 @@ private fun PersonFilmographySheet(
                 .background(if (blurred) Background.copy(alpha = 0.86f) else Background)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
-                .padding(16.dp)
+                // REMODEL v1.44.0: mesmo gutter da página (28.dp em tela larga).
+                .padding(com.aotv.app.ui.common.pagePadding())
                 .navigationBarsPadding(),
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1857,20 +1902,22 @@ private fun EpisodeServersSheet(
             .clickable(interactionSource = scrimSrc, indication = null, onClick = onDismiss),
         contentAlignment = Alignment.BottomCenter,
     ) {
-        // Card inferior — não fecha ao tocar dentro. Altura limitada a 90% da tela e
+        // Card inferior — não fecha ao tocar dentro. Altura limitada a 80% da tela
+        // (remodel v1.44.0, estilo Nuvio: folha compacta, não quase-tela-cheia) e
         // lista rolável: com muitas fontes o card crescia além da tela e o resto ficava
         // inalcançável (sem rolagem, nem o "Mostrar mais" aparecia).
         val cardSrc = remember { MutableInteractionSource() }
         Column(
             Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.9f)
+                .fillMaxHeight(0.8f)
                 .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .background(if (blurred) BackgroundCard.copy(alpha = 0.86f) else BackgroundCard)
                 .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .clickable(interactionSource = cardSrc, indication = null, onClick = {})
-                .padding(horizontal = 16.dp)
-                .padding(top = 12.dp, bottom = 18.dp)
+                // REMODEL v1.44.0: mesmo gutter da página (28.dp em tela larga).
+                .padding(horizontal = com.aotv.app.ui.common.pagePadding())
+                .padding(top = 12.dp, bottom = 14.dp)
                 .navigationBarsPadding(),
         ) {
             // Grabber
@@ -1882,7 +1929,7 @@ private fun EpisodeServersSheet(
                     .clip(RoundedCornerShape(2.dp))
                     .background(BorderSubtle),
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             // Header: eyebrow + título + fechar
             Row(
                 Modifier.fillMaxWidth(),
@@ -1916,14 +1963,15 @@ private fun EpisodeServersSheet(
                     contentDescription = "Fechar",
                 )
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
             // Estado da lista (filtros/limite) lembrado aqui, na folha — a função
             // auxiliar LazyListScope.sourceListItems não compilava (o compilador
             // recusou chamar @Composable com receiver LazyListScope de dentro do
             // conteúdo do LazyColumn), então os items ficam inline aqui.
-            // Fase C: busca, emblemas, logo e fixadas vêm das prefs de streams.
-            val searchOn by streamPrefs.search.collectAsStateWithLifecycle()
+            // Fase C: emblemas, logo e fixadas vêm das prefs de streams. A busca
+            // é SEMPRE visível na folha (remodel v1.44.0, referência Nuvio) —
+            // a pref só vale p/ a lista inline do filme.
             val pinned by streamPrefs.pinned.collectAsStateWithLifecycle()
             val cardPrefs = rememberStreamCardPrefs(streamPrefs)
             val sourceData = rememberSourceListData(
@@ -1939,13 +1987,15 @@ private fun EpisodeServersSheet(
             // "Mostrar mais" voltava pro topo e as outras fontes não apareciam).
             androidx.compose.foundation.lazy.LazyColumn(
                 Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 // Fontes dos addons, tocam no ExoPlayer.
                 if (sourceData.groups.isNotEmpty()) item(key = "count") {
                     Text("${sourceData.groups.size} versões em ${sourceData.streamCount} fontes", color = TextTertiary, fontSize = 13.sp)
                 }
-                item(key = "filters") { SourceListFilters(sourceData, showSearch = searchOn) }
+                // REMODEL v1.44.0: busca sempre visível + chips combinados numa
+                // só fileira (provedores com contagem, idioma, qualidade).
+                item(key = "filters") { SourceListFilters(sourceData, showSearch = true, combinedChips = true) }
                 sourceData.sections.forEach { (addon, gs) ->
                     item(key = "section-$addon") {
                         SourceSectionHeader(addon, gs.size, pinned = addon in pinned,
@@ -2337,7 +2387,27 @@ private fun SourceCardRow(
 
 /** Fileiras de filtros: busca por texto (Fase C), por fonte (novo) e por idioma (existente). */
 @Composable
-private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false) {
+private fun SourceListFilters(
+    data: SourceListData,
+    showSearch: Boolean = false,
+    /**
+     * Folha compacta (remodel v1.44.0): uma só fileira rolável com todos os
+     * filtros — provedores com contagem, idioma e qualidade — na ordem da
+     * referência (Nuvio). Mesmos estados, só o layout muda; a lista inline
+     * do filme mantém as três fileiras de antes.
+     */
+    combinedChips: Boolean = false,
+) {
+    // Contagem por idioma (p/ a fileira de idioma e p/ a fileira combinada).
+    // Hoisted p/ o topo: remember dentro de `if` condicional é inválido no Compose.
+    val langCounts = remember(data.visible, data.fact) {
+        mapOf(
+            "" to data.visible.size,
+            "dub" to data.visible.count { g -> g.members.any { data.fact(it).lang == "dub" } },
+            "leg" to data.visible.count { g -> g.members.any { data.fact(it).lang == "leg" } },
+            "original" to data.visible.count { g -> g.members.any { data.fact(it).lang.isEmpty() } },
+        )
+    }
     // Busca por texto livre (Fase C) + botão Recarregar (v1.8.1), lado a lado e
     // visíveis sem rolar, acima dos chips. O Recarregar é um GlassCircleButton
     // (foco D-pad na TV; gira e trava enquanto carrega) e não mexe em busca,
@@ -2388,6 +2458,38 @@ private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false)
             }
         }
     }
+    // Fileira combinada (remodel v1.44.0, folha de fontes): provedores com
+    // contagem, idioma e qualidade numa só rolagem horizontal, na ordem da
+    // referência — "Todas / provedor N / Dublado / Legendado / Original /
+    // 1080p". Tocar num chip ativo DESLIGA o filtro (não há "Todas" p/
+    // qualidade aqui — o chip ativo é o próprio reset). Ranking, failover e
+    // ordem das fontes não mudam: só o layout dos chips.
+    if (combinedChips) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (data.sources.size > 1) {
+                SeasonChip("Todas ${data.sources.sumOf { it.second }}", data.sourceFilter.isEmpty()) { data.onSourceFilterChange("") }
+                data.sources.forEach { (name, n) ->
+                    SeasonChip("$name $n", data.sourceFilter == name) { data.onSourceFilterChange(if (data.sourceFilter == name) "" else name) }
+                }
+            }
+            if (data.groups.isNotEmpty()) {
+                listOf("" to "Todos", "dub" to "Dublado", "leg" to "Legendado", "original" to "Original").forEach { (key, name) ->
+                    val n = langCounts[key] ?: 0
+                    if (key.isEmpty() || n > 0) SeasonChip("$name $n", data.langFilter == key) { data.onLangFilterChange(if (data.langFilter == key) "" else key) }
+                }
+            }
+            // Qualidade com contagem (4K / 1080p / HDR / Instantâneo). "Todas",
+            // "Dublado" e "Legendado" do SRC_FILTERS já estão nas fileiras acima.
+            SRC_FILTERS.forEach { (key, name, _) ->
+                if (key in setOf("4k", "1080", "hdr", "instant")) {
+                    val n = data.counts[key] ?: 0
+                    if (n > 0) SeasonChip("$name $n", data.filter == key) { data.onFilterChange(if (data.filter == key) "all" else key) }
+                }
+            }
+            if (data.wrongCount > 0) SeasonChip(if (data.showWrong) "Ocultar outro filme (${data.wrongCount})" else "Mostrar todas (${data.wrongCount} de outro filme)", data.showWrong) { data.onShowWrongChange(!data.showWrong) }
+        }
+        return
+    }
     // Por fonte: um chip por addon/provider presente, com contagem. Só aparece
     // quando há mais de 1 fonte — com uma só, a seção já diz tudo.
     if (data.sources.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2399,14 +2501,6 @@ private fun SourceListFilters(data: SourceListData, showSearch: Boolean = false)
     // Por idioma (Lote 17 item 5): sempre visível quando há fontes — é o
     // filtro que o Davi mais usa (dublado/legendado), não só quando há 5 grupos.
     if (data.groups.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val langCounts = remember(data.visible, data.fact) {
-            mapOf(
-                "" to data.visible.size,
-                "dub" to data.visible.count { g -> g.members.any { data.fact(it).lang == "dub" } },
-                "leg" to data.visible.count { g -> g.members.any { data.fact(it).lang == "leg" } },
-                "original" to data.visible.count { g -> g.members.any { data.fact(it).lang.isEmpty() } },
-            )
-        }
         listOf("" to "Todos", "dub" to "Dublado", "leg" to "Legendado", "original" to "Original").forEach { (key, name) ->
             val n = langCounts[key] ?: 0
             if (key.isEmpty() || n > 0) SeasonChip("$name $n", data.langFilter == key) { data.onLangFilterChange(key) }

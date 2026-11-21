@@ -121,6 +121,24 @@ fun DownloadsScreen(
         )
     }
 
+    // Remover o trecho (Lote do remodel v1.44.0 — Frente 1): mesmo padrão
+    // do `pendingDelete` acima — confirmação antes de apagar o arquivo e
+    // a entrada do clipe (ver [DownloadsViewModel.deleteClip]).
+    var pendingDeleteClip by remember { mutableStateOf<ClipDownloadEntry?>(null) }
+    pendingDeleteClip?.let { clip ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteClip = null },
+            title = { Text("Remover trecho?") },
+            text = { Text(clip.title) },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteClip(clip); pendingDeleteClip = null }) {
+                    Text("Remover", color = LiveRed)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingDeleteClip = null }) { Text("Cancelar") } },
+        )
+    }
+
     Column(Modifier.fillMaxSize().background(Background)) {
         com.aotv.app.ui.common.PageHeader(
             "Downloads",
@@ -244,26 +262,26 @@ fun DownloadsScreen(
                         onClick = { if (d.status == "done") onPlayLocal(d) },
                         onDelete = { pendingDelete = d },
                         onResume = null,
-                        // Lote de correções v1.43.0 — Frente 1: o card do
-                        // vídeo inteiro ("The Mentalist T6:E4 (completo)")
-                        // só tinha play + lixeira — Compartilhar e Salvar
-                        // na pasta só existiam no card do trecho. A
-                        // entrada ":full:" é um DownloadEntity comum (a
-                        // lista só exclui ":clip:") e renderiza por aqui:
-                        // passa as ações só p/ ela, só concluída e com
-                        // arquivo local — sem arquivo (em andamento) os
-                        // botões somem em vez de quebrar; download normal
-                        // não ganha nada (fora do escopo).
-                        onShare = if (ClipDownload.isFullId(d.id) && d.status == "done" && d.localUri.isNotBlank()) ({ vm.shareFullVideo(d) }) else null,
-                        onSaveToFolder = if (ClipDownload.isFullId(d.id) && d.status == "done" && d.localUri.isNotBlank()) ({ vm.copyFullVideoToFolder(d) }) else null,
+                        // Lote do remodel v1.44.0 — Frente 1: Compartilhar
+                        // e Salvar na pasta valem p/ TODO download
+                        // concluído com arquivo local — não só p/ a entrada
+                        // ":full:" (o card do Davi, "The Mentalist T6:E4",
+                        // é um download NORMAL e ficava sem os botões
+                        // porque a v1.43.0 só passava as ações quando
+                        // `isFullId(d.id)`). Sem arquivo (em andamento) os
+                        // botões somem em vez de quebrar.
+                        onShare = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.shareDownload(d) }) else null,
+                        onSaveToFolder = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.copyDownloadToFolder(d) }) else null,
                     )
                 }
                 items(completedClips, key = { "clip:${it.id}" }) { clip ->
                     ClipDownloadRow(
                         clip = clip,
                         onClick = { if (clip.localUri.isNotBlank()) onPlayLocal(clip.toDownloadEntity()) },
-                        // Sem lixeira por aqui: a remoção do clipe é do dono do clipe (item 10).
-                        onDelete = null,
+                        // Lixeira no card do trecho (Lote do remodel
+                        // v1.44.0 — Frente 1): confirmação antes de apagar
+                        // o arquivo e a entrada (ver `pendingDeleteClip`).
+                        onDelete = { pendingDeleteClip = clip },
                         onShare = { vm.shareClip(clip) },
                         onSaveToFolder = { vm.copyClipToFolder(clip) },
                         onDownloadFull = { vm.downloadFullClip(clip) },
@@ -289,8 +307,10 @@ fun DownloadsScreen(
                     ClipDownloadRow(
                         clip = clip,
                         onClick = null,
-                        // Sem lixeira por aqui: a remoção do clipe é do dono do clipe (item 10).
-                        onDelete = null,
+                        // Lixeira também na aba Restos (Lote do remodel
+                        // v1.44.0 — Frente 1): o trecho incompleto também
+                        // pode ser apagado (arquivo parcial + entrada).
+                        onDelete = { pendingDeleteClip = clip },
                     )
                 }
                 // Restos de arquivos .mp4 sem dono na pasta (Lote 18 item 4).
@@ -332,7 +352,7 @@ private fun DownloadRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onResume: (() -> Unit)?,
-    /** Lote de correções v1.43.0 — Frente 1: só a entrada ":full:" preenche (ver a chamada na aba Completos). */
+    /** Lote do remodel v1.44.0 — Frente 1: TODO download concluído com arquivo local preenche [onShare] e [onSaveToFolder] (ver a chamada na aba Completos); antes (v1.43.0) só a entrada ":full:" preenchia. */
     onShare: (() -> Unit)? = null,
     onSaveToFolder: (() -> Unit)? = null,
 ) {
@@ -369,9 +389,9 @@ private fun DownloadRow(
  * Linha de um trecho (clipe) baixado (Lote 18 item 10): a MESMA casca da
  * linha de download — título + intervalo no subtítulo (ex.: "Filme
  * (12:34–15:20)"). O clipe concluído toca o arquivo local pelo mesmo
- * player; sem arquivo local, não há o que tocar nem apagar por aqui (a
- * remoção é do dono do clipe — por isso [onDelete] pode ser null e o
- * botão some). Lote mpv 4 — Frente 2 (v1.39.0): o clipe concluído ganha
+ * player; sem arquivo local, não há o que tocar. A lixeira ([onDelete])
+ * apaga o arquivo e a entrada, com confirmação na tela (Lote do remodel
+ * v1.44.0 — Frente 1, ver [DownloadsViewModel.deleteClip]). Lote mpv 4 — Frente 2 (v1.39.0): o clipe concluído ganha
  * "Compartilhar" (share sheet), "Salvar na pasta" (cópia p/ a pasta de
  * Downloads, sem mover o original) e "Vídeo inteiro" (baixa o vídeo
  * completo da fonte do clipe); sem fonte guardada, o "Vídeo inteiro"
@@ -462,10 +482,9 @@ private fun OrphanRow(
  * tem — sem pôster, o quadrado vira o ícone de download. Lote mpv 4 —
  * Frente 2 (v1.39.0): a linha do clipe pode trazer mais três ações em
  * texto abaixo do subtítulo ([onShare], [onSaveToFolder] e
- * [onDownloadFull]); download e resto passam null e nada muda p/ eles.
- * Lote de correções v1.43.0 — Frente 1: a linha do VÍDEO INTEIRO
- * (":full:", um DownloadEntity comum) também preenche [onShare] e
- * [onSaveToFolder] — o download normal continua passando null.
+ * [onDownloadFull]); o resto passa null e nada muda p/ ele. Lote do
+ * remodel v1.44.0 — Frente 1: o download concluído com arquivo local
+ * também preenche [onShare] e [onSaveToFolder] (antes só o ":full:").
  */
 @Composable
 private fun DownloadRowShell(
@@ -533,8 +552,10 @@ private fun DownloadRowShell(
                     trackColor = FillTint.copy(alpha = 0.12f),
                 )
             }
-            // Ações do trecho (Lote mpv 4 — Frente 2): só a linha do clipe
-            // preenche — download e resto passam null e não mostram nada.
+            // Ações de exportar (Lote mpv 4 — Frente 2): a linha do clipe
+            // preenche Compartilhar/Salvar/Vídeo inteiro; o download
+            // concluído com arquivo local preenche Compartilhar/Salvar
+            // (Lote do remodel v1.44.0 — Frente 1) e o resto passa null.
             // Lote v1.42.0 — Frente 1: área de toque larga (16.dp x 8.dp):
             // os botões moram dentro do card clicável (o toque toca o
             // trecho) — um toque que errasse o texto por poucos dp caía

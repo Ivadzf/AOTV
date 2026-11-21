@@ -29,8 +29,9 @@ import androidx.compose.ui.graphics.graphicsLayer
  * (teste ~19:28 -03, v1.11.0; verificado no código, sem bug no caminho
  * aplicado — a cadeia toggle + efeito + folha aberta estava correta):
  * 1. ANDROID < 12 (API < 31): [rememberPanelBlurEffect] devolve null e
- *    `blurBehindSheets` (MovieDetailScreen:193) fica false — o toggle
- *    existia mas não fazia nada. Versão do Android do Davi desconhecida;
+ *    `blurBehindSheets` (MovieDetailScreen:193, removido no remodel
+ *    v1.44.0 — o blur atrás das folhas saiu do detalhe) ficava false —
+ *    o toggle existia mas não fazia nada. Versão do Android do Davi desconhecida;
  *    se o aparelho for < 12, era ESTE o motivo. Coberto agora pelo
  *    fallback [FrostedScrim] (scrim fosco, mesma pref).
  * 2. SUPERFÍCIES SEM BLUR: o Davi testou onde o blur nunca foi aplicado —
@@ -42,11 +43,12 @@ import androidx.compose.ui.graphics.graphicsLayer
  *    Não há o que desfocar ali sem reescrever a tela; fora do escopo.
  *
  * ONDE É APLICADO (toggle "Blur nos painéis", padrão ligado):
- * - Folha de fontes do episódio e folha de filmografia do ator, na página de
- *   detalhes ([com.aotv.app.ui.movies.MovieDetailScreen]): o conteúdo da
- *   página atrás da folha é desfocado com raio 18f e o card da folha fica com
- *   86% de opacidade, p/ o desfoque aparecer através dele. Abaixo do
- *   Android 12, o [FrostedScrim] escurece o conteúdo no lugar do desfoque.
+ * - REMODEL v1.44.0: o blur atrás das folhas SAIU da página de detalhes
+ *   ([com.aotv.app.ui.movies.MovieDetailScreen]) — a capa/backdrop fica
+ *   limpa (estilo Nuvio) e as folhas (fontes, filmografia, Sobre) são
+ *   opacas, escurecendo a página com o próprio scrim. Abaixo do
+ *   Android 12, o [FrostedScrim] continua escurecendo o conteúdo atrás
+ *   da folha. O blur anti-spoiler dos episódios não usa este toggle.
  * - Folha "Mais opções" do player (ModalBottomSheet em TouchPlayerControls):
  *   blur da JANELA via `WindowManager.LayoutParams.blurBehindRadius` (API
  *   31+, melhor esforço — a OEM pode ignorar) + scrim mais escuro como
@@ -66,7 +68,8 @@ import androidx.compose.ui.graphics.graphicsLayer
  *   Aparência, onde estava.
  * - Fundo Cinematográfico do detalhe: JÁ é blur real (28f) e não foi mexido;
  *   com a folha aberta ele desliga sozinho (como antes) p/ não pagar dois
- *   blurs ao mesmo tempo — o blur da folha assume o lugar dele.
+ *   blurs ao mesmo tempo — no detalhe, sem blur de folha desde o remodel
+ *   v1.44.0, ele só desliga mesmo.
  *
  * ABAIXO DO ANDROID 12 (API < 31): não há RenderEffect — o efeito é null e
  * o fallback é o scrim fosco ([FrostedScrim] no detalhe, scrim mais escuro

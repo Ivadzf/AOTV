@@ -10,6 +10,7 @@ import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.bestLogoUrl
 import com.aotv.app.data.remote.dto.bestTrailerKey
 import com.aotv.app.data.remote.dto.trailerKeys
+import com.aotv.app.data.remote.dto.crewNames
 import com.aotv.app.data.remote.dto.toCastMember
 import com.aotv.app.data.remote.dto.toDomain
 import com.aotv.app.data.remote.dto.toMovieItem
@@ -319,6 +320,9 @@ class MovieDetailViewModel @Inject constructor(
         val watchingSeason: Int = 0,
         // Elenco + filmes/séries relacionados (TMDB credits + recommendations)
         val cast: List<com.aotv.app.domain.model.CastMember> = emptyList(),
+        /** Direção e roteiro (TMDB credits.crew, já vem no detalhe). Vazio = sem dado (a linha some). */
+        val directors: List<String> = emptyList(),
+        val writers: List<String> = emptyList(),
         /** Estúdios de produção (TMDB, folha Sobre v1.21.0). Vazio = sem dado (a linha some). */
         val studios: List<String> = emptyList(),
         val related: List<MovieItem> = emptyList(),
@@ -639,7 +643,7 @@ class MovieDetailViewModel @Inject constructor(
                 // Mostra o filme JÁ (hero). As fontes dos addons entram conforme chegam.
                 val trailer = detailDto?.videos.bestTrailerKey()
                 val trailers = detailDto?.videos.trailerKeys()
-                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() }, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
+                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, directors = detailDto?.credits.crewNames("Director").orEmpty(), writers = detailDto?.credits.crewNames("Writer", "Screenplay", "Story").orEmpty(), studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() }, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
                 loadDetailExtras(tmdbId, detail?.title.orEmpty(), detail?.year?.toIntOrNull(), true, detailDto?.originalTitle.orEmpty())
 
@@ -718,6 +722,8 @@ class MovieDetailViewModel @Inject constructor(
                         series = seriesDetail,
                         originalTitle = detailDto?.originalName.orEmpty(),
                         cast = castList,
+                        directors = detailDto?.credits.crewNames("Director").orEmpty(),
+                        writers = detailDto?.credits.crewNames("Writer", "Screenplay", "Story").orEmpty(),
                         studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() },
                         related = relatedList,
                         trailerKey = trailer,

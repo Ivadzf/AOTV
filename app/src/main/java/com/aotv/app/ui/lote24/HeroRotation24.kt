@@ -10,24 +10,23 @@ import android.content.res.Configuration
  *
  * Regras:
  * - O herói rotaciona sozinho a cada [AUTO_ROTATE_INTERVAL_MS] (8 s).
- * - Pausa quando o usuário interage (arrastar o pager ou prévia aberta).
- * - A prévia de cena ao focar usa o que já existe: o backdrop do item e o
- *   trailer mudo ([com.aotv.app.ui.common.MutedTrailer], via
- *   `MoviesHomeViewModel.heroTrailerStream`) — nenhum player novo.
+ * - Pausa quando o usuário interage (arrastar o pager).
  * - Default: ligado no celular; na TV, desligado quando a TV é fraca
  *   (pouca RAM ou Android TV de baixo desempenho). Quando não dá p/ detectar
  *   de forma confiável, o default na TV é DESLIGADO e no celular LIGADO.
  *
- * A rotação em si vive no [HeroCarousel] (MoviesHomeScreen.kt), que já
- * avançava a cada 6 s; este arquivo guarda as constantes, a detecção de TV
- * fraca e a regra do default efetivo (pref "auto" | "on" | "off").
+ * Remodel v1.44.0 (Frente 3): o trailer do herói NUNCA toca sozinho —
+ * sem autoplay por tempo parado nem prévia ao focar/toque longo (a
+ * prévia de cena do item 2 foi removida; o trailer só abre pelo botão
+ * "Trailer" do herói). A rotação do pager continua valendo: este arquivo
+ * guarda as constantes, a detecção de TV fraca e a regra do default
+ * efetivo (pref "auto" | "on" | "off").
+ *
+ * A rotação em si vive no [HeroCarousel] (MoviesHomeScreen.kt).
  */
 object HeroAutoRotate {
     /** Intervalo da rotação automática do herói. */
     const val INTERVAL_MS = 8000L
-
-    /** Atraso p/ buscar o trailer quando o herói fica parado (o de sempre). */
-    const val TRAILER_DELAY_MS = 5000L
 }
 
 /**
