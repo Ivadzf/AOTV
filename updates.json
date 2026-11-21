@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "cf27b5d4a17ec12b354d14a341314e9854236468281de5286cef4dce129f70d5",
-        "size": 123359716,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.42.0/AOTV-v1.42.0.apk"
+        "sha256": "296826dbcaf77ae013bdefe4c1b5a3573b766c4f81a8a23acb7b2e3328a098d3",
+        "size": 123360888,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.43.0/AOTV-v1.43.0.apk"
       }
     },
-    "changelog": "v1.42.0 — Lote de correções: o botão Vídeo inteiro baixa o vídeo completo de verdade (com progresso visível), instalar scripts Lua de dentro do app, troca de motor em etapas sem travar, e os avisos falsos do mpv só quando realmente não estiver tocando.",
-    "published_at": "2026-11-21T00:20:38Z",
-    "tag": "v1.42.0",
-    "version": "1.42.0",
-    "versionCode": 81
+    "changelog": "v1.43.0 — Lote de correções: Compartilhar e Salvar na pasta agora aparecem no card do vídeo inteiro baixado (antes só existiam no card do trecho), e o preset Série do upscaling desativa de verdade — ao escolher Desligado, os escaladores voltam para os padrões do mpv e o debanding desliga, sem precisar reabrir o vídeo.",
+    "published_at": "2026-11-21T11:47:22Z",
+    "tag": "v1.43.0",
+    "version": "1.43.0",
+    "versionCode": 82
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "296826dbcaf77ae013bdefe4c1b5a3573b766c4f81a8a23acb7b2e3328a098d3",
+          "size": 123360888,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.43.0/AOTV-v1.43.0.apk"
+        }
+      },
+      "changelog": "v1.43.0 — Lote de correções: Compartilhar e Salvar na pasta agora aparecem no card do vídeo inteiro baixado (antes só existiam no card do trecho), e o preset Série do upscaling desativa de verdade — ao escolher Desligado, os escaladores voltam para os padrões do mpv e o debanding desliga, sem precisar reabrir o vídeo.",
+      "published_at": "2026-11-21T11:47:22Z",
+      "tag": "v1.43.0",
+      "version": "1.43.0",
+      "versionCode": 82
+    },
     {
       "assets": {
         "universal": {
