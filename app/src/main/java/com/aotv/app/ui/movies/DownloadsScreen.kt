@@ -244,6 +244,18 @@ fun DownloadsScreen(
                         onClick = { if (d.status == "done") onPlayLocal(d) },
                         onDelete = { pendingDelete = d },
                         onResume = null,
+                        // Lote de correções v1.43.0 — Frente 1: o card do
+                        // vídeo inteiro ("The Mentalist T6:E4 (completo)")
+                        // só tinha play + lixeira — Compartilhar e Salvar
+                        // na pasta só existiam no card do trecho. A
+                        // entrada ":full:" é um DownloadEntity comum (a
+                        // lista só exclui ":clip:") e renderiza por aqui:
+                        // passa as ações só p/ ela, só concluída e com
+                        // arquivo local — sem arquivo (em andamento) os
+                        // botões somem em vez de quebrar; download normal
+                        // não ganha nada (fora do escopo).
+                        onShare = if (ClipDownload.isFullId(d.id) && d.status == "done" && d.localUri.isNotBlank()) ({ vm.shareFullVideo(d) }) else null,
+                        onSaveToFolder = if (ClipDownload.isFullId(d.id) && d.status == "done" && d.localUri.isNotBlank()) ({ vm.copyFullVideoToFolder(d) }) else null,
                     )
                 }
                 items(completedClips, key = { "clip:${it.id}" }) { clip ->
@@ -320,6 +332,9 @@ private fun DownloadRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onResume: (() -> Unit)?,
+    /** Lote de correções v1.43.0 — Frente 1: só a entrada ":full:" preenche (ver a chamada na aba Completos). */
+    onShare: (() -> Unit)? = null,
+    onSaveToFolder: (() -> Unit)? = null,
 ) {
     val sub = when (d.status) {
         "done"        -> if (d.lastEpisode.isNotBlank()) d.lastEpisode else "Pronto p/ assistir"
@@ -345,6 +360,8 @@ private fun DownloadRow(
         onClick = onClick,
         onResume = onResume,
         onDelete = onDelete,
+        onShare = onShare,
+        onSaveToFolder = onSaveToFolder,
     )
 }
 
@@ -446,6 +463,9 @@ private fun OrphanRow(
  * Frente 2 (v1.39.0): a linha do clipe pode trazer mais três ações em
  * texto abaixo do subtítulo ([onShare], [onSaveToFolder] e
  * [onDownloadFull]); download e resto passam null e nada muda p/ eles.
+ * Lote de correções v1.43.0 — Frente 1: a linha do VÍDEO INTEIRO
+ * (":full:", um DownloadEntity comum) também preenche [onShare] e
+ * [onSaveToFolder] — o download normal continua passando null.
  */
 @Composable
 private fun DownloadRowShell(

@@ -210,13 +210,19 @@ enum class EnhanceOutput(val id: String, val label: String) {
  * o usuario pode mudar os filtros depois, eles sao campos independentes).
  * Filme: escalador de qualidade + debanding; Serie: escalador leve +
  * debanding; Retro: nearest nos tres (sem suavizar o pixel); Leve: so um
- * bom escalador. Presets Anime4K e Auto nao mexem nos filtros.
+ * bom escalador. Desligado: volta os filtros p/ os padroes do mpv — sem o
+ * reset, os filtros do preset anterior (ex.: spline36 + deband do Serie)
+ * ficavam no estado e nas prefs e o video continuava processado mesmo com
+ * o Desligado marcado (ver MpvPlayer.applyEnhance, que aplica
+ * scale/cscale/dscale/deband sempre). Presets Anime4K e Auto nao mexem
+ * nos filtros.
  */
 fun applyEnhancePresetDefaults(state: EnhanceState): EnhanceState = when (state.presetEnum) {
     EnhancePreset.MOVIE -> state.copy(scale = "ewa_lanczos", cscale = "spline36", dscale = "mitchell", deband = true)
     EnhancePreset.SERIES -> state.copy(scale = "spline36", cscale = "spline36", dscale = "mitchell", deband = true)
     EnhancePreset.RETRO -> state.copy(scale = "nearest", cscale = "nearest", dscale = "nearest", deband = false)
     EnhancePreset.LIGHT -> state.copy(scale = "spline36", cscale = "spline36", dscale = "mitchell", deband = false)
+    EnhancePreset.OFF -> state.copy(scale = "bilinear", cscale = "bilinear", dscale = "mitchell", deband = false)
     else -> state
 }
 

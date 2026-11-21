@@ -256,6 +256,57 @@ class DownloadsViewModel @Inject constructor(
     }
 
     /**
+     * Compartilha o VÍDEO INTEIRO concluído (entrada ":full:", Lote de
+     * correções v1.43.0 — Frente 1): o card do vídeo inteiro só tinha
+     * play + lixeira porque o [DownloadRow] não passava onShare p/ o
+     * shell. Reutiliza o MESMO caminho do trecho
+     * ([ClipExporter.shareClip] — FileProvider via cópia p/ o cache):
+     * o exporter é genérico (localUri + título) e o arquivo do vídeo
+     * inteiro é .mp4 ou .ts como o do trecho — o mime vai como
+     * `video/mp4` (.mp4) ou `video/*` → `*/*` (.ts). Sem arquivo local
+     * (download em andamento), avisa em vez de quebrar.
+     */
+    fun shareFullVideo(entity: DownloadEntity) {
+        viewModelScope.launch {
+            if (entity.localUri.isBlank()) {
+                _message.value = "O vídeo inteiro ainda não tem arquivo para compartilhar."
+                return@launch
+            }
+            when (val result = clipExporter.shareClip(entity.localUri, entity.title)) {
+                ClipExportResult.Shared -> { /* o share sheet abriu — nada a avisar */ }
+                ClipExportResult.CopiedToFolder -> { /* não acontece no share */ }
+                ClipExportResult.NoFolderConfigured -> { /* não acontece no share */ }
+                is ClipExportResult.Failed -> _message.value = result.message
+            }
+        }
+    }
+
+    /**
+     * Copia o VÍDEO INTEIRO concluído (entrada ":full:", Lote de
+     * correções v1.43.0 — Frente 1) p/ a pasta de Downloads escolhida
+     * (sem mover o original). Mesmo caminho do trecho
+     * ([ClipExporter.copyClipToFolder] — cópia SAF): o exporter é
+     * genérico (localUri + título) e o arquivo do vídeo inteiro é .mp4
+     * ou .ts como o do trecho. Sem arquivo local, avisa em vez de
+     * quebrar; sem pasta escolhida, diz onde escolher.
+     */
+    fun copyFullVideoToFolder(entity: DownloadEntity) {
+        viewModelScope.launch {
+            if (entity.localUri.isBlank()) {
+                _message.value = "O vídeo inteiro ainda não tem arquivo para exportar."
+                return@launch
+            }
+            when (val result = clipExporter.copyClipToFolder(entity.localUri, entity.title)) {
+                ClipExportResult.Shared -> { /* não acontece na cópia */ }
+                ClipExportResult.CopiedToFolder -> _message.value = "Vídeo inteiro copiado para a pasta de Downloads."
+                ClipExportResult.NoFolderConfigured ->
+                    _message.value = "Escolha a pasta de Downloads em Configurações → Downloads para exportar o vídeo inteiro."
+                is ClipExportResult.Failed -> _message.value = result.message
+            }
+        }
+    }
+
+    /**
      * Baixa o vídeo INTEIRO da fonte do clipe (HLS = todos os segmentos,
      * MP4 = arquivo direto — ver [ClipDownloader.downloadFull]). A entrada
      * ":full:" aparece na lista principal de Downloads com "(completo)" no
