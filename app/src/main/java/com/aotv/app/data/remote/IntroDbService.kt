@@ -93,6 +93,13 @@ class IntroDbService @Inject constructor() {
 
     private val cache = ConcurrentHashMap<String, Cached>()
 
+    init {
+        // Troca de perfil sem restart (v1.45.0, item 1): o cache é por
+        // título, não por perfil — mas a resposta pode carregar o limite
+        // de confiança do perfil anterior; limpar é barato (15 min).
+        com.aotv.app.data.local.ProfileEpoch.registerInvalidator("introdb") { cache.clear() }
+    }
+
     /**
      * Segmentos filtrados da IntroDB p/ o título. Cache em memória por
      * [CACHE_TTL_MS] (curto: a comunidade edita os trechos; 15 min evita
@@ -122,6 +129,15 @@ class IntroDbService @Inject constructor() {
     }
 
     companion object {
+        /**
+         * URL base da IntroDB (v1.45.0, item 4): era fixa no código; agora
+         * vem da pref `pref_introdb_base_url_v1` (a tela de chaves pelo
+         * celular também grava aqui). O app define no arranque
+         * (`MainActivity`) e quando a pref muda. Padrão = API pública.
+         */
+        @Volatile
+        var baseUrl: String = "https://api.introdb.app"
+
         /** Confiança mínima p/ o trecho valer: abaixo de 0,5 a comunidade
          *  discorda mais do que concorda — o botão pularia p/ o lugar errado. */
         const val MIN_CONFIDENCE = 0.5
@@ -136,10 +152,10 @@ class IntroDbService @Inject constructor() {
         const val CACHE_TTL_MS = 15 * 60 * 1000L
 
         fun seriesUrl(imdb: String, season: Int, episode: Int): String =
-            "https://api.introdb.app/segments?imdb_id=$imdb&season=$season&episode=$episode"
+            "$baseUrl/segments?imdb_id=$imdb&season=$season&episode=$episode"
 
         fun movieUrl(imdb: String): String =
-            "https://api.introdb.app/segments?imdb_id=$imdb&is_movie=true"
+            "$baseUrl/segments?imdb_id=$imdb&is_movie=true"
 
         /**
          * Um trecho da resposta, já filtrado. Aceita start_ms/end_ms (o que

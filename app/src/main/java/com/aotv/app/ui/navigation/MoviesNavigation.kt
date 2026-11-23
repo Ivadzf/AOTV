@@ -692,6 +692,8 @@ fun MoviesNavigation(
                         // Lote 12 (v1.22.0 — Frente 1): gerenciar canais, a
                         // partir de Integrações → Multiview e canais.
                         onOpenLiveChannels = { navController.navigate(MoviesRoute.LiveChannelsManage.route) },
+                        // v1.45.0 (item 9): "Chaves pelo celular", a partir de Integrações.
+                        onOpenKeysQr = { navController.navigate(MoviesRoute.SettingsPage.create(com.aotv.app.ui.settings.SettingsPageIds.KeysQr)) },
                         onOpenCollections = { navController.navigate(MoviesRoute.Collections.route) },
                         // Lote 19 (v1.29.0, item 2 — Social Hub): "Assistir
                         // junto" abre a tela da Watch Party (a sessão é do

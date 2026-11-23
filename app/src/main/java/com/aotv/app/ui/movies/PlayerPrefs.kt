@@ -454,6 +454,51 @@ class PlayerPrefsViewModel @Inject constructor(
     val mpvSubPos: StateFlow<Int> = prefs.mpvSubPosFlow
     fun setMpvSubPos(v: Int) { prefs.mpvSubPos = v.coerceIn(0, 100) }
 
+    // ── Lote v1.45.0 ───────────────────────────────────────────────────────
+    // Volume do mpv (item 2), corrida de fontes (item 6), prioridade do
+    // autoplay (item 7), pré-busca do próximo episódio (item 8), URL da
+    // IntroDB (item 4), trava do limite kids (item 10) e prévias de busca
+    // (item 5). Espelham as prefs por perfil de PlatformPrefs.
+
+    /** Volume do mpv, 0–200% (item 2). 100 = sem ganho. */
+    val mpvVolume: StateFlow<Int> = prefs.mpvVolumeFlow
+    fun setMpvVolume(v: Int) { prefs.mpvVolume = v.coerceIn(0, 200) }
+
+    /** Corrida de fontes ligada (item 6). */
+    val sourceRace: StateFlow<Boolean> = prefs.sourceRaceFlow
+    fun setSourceRace(v: Boolean) { prefs.sourceRace = v }
+
+    /** Corrida de fontes só no Wi-Fi (item 6). */
+    val sourceRaceWifiOnly: StateFlow<Boolean> = prefs.sourceRaceWifiOnlyFlow
+    fun setSourceRaceWifiOnly(v: Boolean) { prefs.sourceRaceWifiOnly = v }
+
+    /** Ordem de prioridade dos addons no autoplay, JSON (item 7). */
+    val autoplayAddonPriority: StateFlow<String> = prefs.autoplayAddonPriorityFlow
+    fun setAutoplayAddonPriority(v: String) { prefs.autoplayAddonPriority = v }
+
+    /** Ordem de prioridade das qualidades no autoplay (item 7). */
+    val autoplayQualityPriority: StateFlow<String> = prefs.autoplayQualityPriorityFlow
+    fun setAutoplayQualityPriority(v: String) { prefs.autoplayQualityPriority = v }
+
+    /** Pré-busca das fontes do próximo episódio (item 8). */
+    val nextEpPrefetch: StateFlow<Boolean> = prefs.nextEpPrefetchFlow
+    fun setNextEpPrefetch(v: Boolean) { prefs.nextEpPrefetch = v }
+
+    /** URL base da IntroDB (item 4). */
+    val introDbBaseUrl: StateFlow<String> = prefs.introDbBaseUrlFlow
+    fun setIntroDbBaseUrl(v: String) {
+        prefs.introDbBaseUrl = v
+        com.aotv.app.data.remote.IntroDbService.baseUrl = prefs.introDbBaseUrl
+    }
+
+    /** Trava do limite de idade kids por PIN (item 10). */
+    val kidsAgeLimitLocked: StateFlow<Boolean> = prefs.kidsAgeLimitLockedFlow
+    fun setKidsAgeLimitLocked(v: Boolean) { prefs.kidsAgeLimitLocked = v }
+
+    /** Prévias na busca (item 5). */
+    val seekPreview: StateFlow<Boolean> = prefs.seekPreviewFlow
+    fun setSeekPreview(v: Boolean) { prefs.seekPreview = v }
+
     /** Pré-carregar o motor Libmpv ao abrir o detalhe do título (Lote mpv 4, v1.39.0). */
     val mpvPreload: StateFlow<Boolean> = prefs.mpvPreloadFlow
     fun setMpvPreload(v: Boolean) { prefs.mpvPreload = v }

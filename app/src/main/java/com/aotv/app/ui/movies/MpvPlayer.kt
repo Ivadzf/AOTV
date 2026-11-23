@@ -171,6 +171,8 @@ class MpvPlayer(
             if (opts.cacheSecs > 0) mpv.setPropertyInt("cache-secs", opts.cacheSecs)
             mpv.setPropertyString("audio-pitch-correction", if (opts.pitchCorrection) "yes" else "no")
             mpv.setPropertyInt("sub-pos", opts.subPos.coerceIn(0, 100))
+            // v1.45.0 (item 2): volume do mpv, 0–200% (o `volume-max` já foi fixado no init).
+            mpv.setPropertyDouble("volume", opts.volumePercent.coerceIn(0, 200).toDouble())
         }
     }
 
@@ -178,6 +180,23 @@ class MpvPlayer(
     fun applyAudioDelay(seconds: Double) {
         if (!initialized || destroyed) return
         runCatching { mpv.setPropertyDouble("audio-delay", seconds) }
+    }
+
+    /** Volume do mpv, 0–200% (v1.45.0, item 2): o boost (LoudnessEnhancer) só vale no ExoPlayer; no mpv o ganho é a propriedade `volume` com `volume-max=200`. Acima de 100 pode distorcer — a UI avisa. */
+    fun setVolumePercent(percent: Int) {
+        val clean = percent.coerceIn(0, 200)
+        playbackOptions = playbackOptions.copy(volumePercent = clean)
+        if (!initialized || destroyed) return
+        runCatching { mpv.setPropertyDouble("volume", clean.toDouble()) }
+    }
+
+    /** Volume atual do mpv, 0–200 (o que foi aplicado por último, não o que o mpv devolve). */
+    val volumePercent: Int get() = playbackOptions.volumePercent
+
+    /** Escreve um screenshot do quadro atual em [path] (v1.45.0, item 5: prévias de busca no mpv). False sem motor ou sem quadro. */
+    fun screenshotToFile(path: String): Boolean {
+        if (!initialized || destroyed) return false
+        return runCatching { mpv.command("screenshot-to-file", path) }.isSuccess
     }
 
     /** Posição vertical das legendas (sub-pos, 0..100; 100 = embaixo). */
@@ -226,6 +245,7 @@ class MpvPlayer(
                 cacheSecs = p.mpvCacheSecs,
                 pitchCorrection = p.mpvPitchCorrection,
                 subPos = p.mpvSubPos,
+                volumePercent = p.mpvVolume,
             )
         }
         // Lote mpv 4: extras do init (scripts Lua, IPC, yt-dlp) — lidos aqui
@@ -296,6 +316,12 @@ class MpvPlayer(
                 if (playbackOptions.pitchCorrection) "yes" else "no",
             )
             mpv.setOptionString("sub-pos", playbackOptions.subPos.coerceIn(0, 100).toString())
+            // v1.45.0 (item 2): volume do mpv, 0–200%. O `volume-max` é
+            // fixado no init (só vale como opção); o `volume` vale ao vivo
+            // por [applyPlaybackOptions] e [setVolumePercent]. Acima de 100
+            // é ganho digital e pode distorcer — a UI avisa.
+            mpv.setOptionString("volume-max", "200")
+            mpv.setOptionString("volume", playbackOptions.volumePercent.coerceIn(0, 200).toString())
             mpv.setOptionString("force-window", "no")
             // Scripts Lua (Lote mpv 4): "no" desliga o carregamento de
             // scripts; "yes" é o padrão do mpv.
@@ -826,6 +852,8 @@ data class MpvPlaybackOptions(
     val cacheSecs: Int = 0,
     val pitchCorrection: Boolean = true,
     val subPos: Int = 100,
+    /** Volume do mpv, 0–200% (v1.45.0, item 2). 100 = sem ganho. */
+    val volumePercent: Int = 100,
 )
 
 /** Uma passada do VO do mpv (ver [MpvPlayer.readPerf]): tempos em ms por quadro. */

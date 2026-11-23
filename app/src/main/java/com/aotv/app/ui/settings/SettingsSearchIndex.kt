@@ -136,6 +136,8 @@ object SettingsAnchors {
     const val REMOTE_WATCHNEXT = "remotetv-watchnext"
     const val REMOTE_GAMEPAD = "remotetv-gamepad"
     const val REMOTE_EXTERNAL = "remotetv-player-externo"
+    // Chaves pelo celular via QR (v1.45.0, item 9).
+    const val KEYS_QR = "integracoes-chaves-celular"
 }
 
 /** Uma opção dentro de uma página das Configurações. */
@@ -688,6 +690,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("stremio", "nuvio", "conta", "login"),
         pageId = SettingsPageIds.Integracoes,
         anchor = SettingsAnchors.INTEGR_ACCOUNTS,
+        kidsHidden = true,
+    ),
+    // v1.45.0 (item 9): chaves pelo celular via QR.
+    SettingOptionEntry(
+        title = "Chaves pelo celular",
+        sub = "QR abre uma página no celular p/ digitar a chave TMDB, o Trakt Client ID e a URL da IntroDB",
+        keywords = listOf("chaves", "qr", "celular", "tmdb", "trakt", "introdb", "digitar", "teclado", "servidor local"),
+        pageId = SettingsPageIds.KeysQr,
+        anchor = SettingsAnchors.KEYS_QR,
         kidsHidden = true,
     ),
     SettingOptionEntry(
@@ -1293,6 +1304,50 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),
+    // v1.45.0 (itens 6, 7 e 8): corrida de fontes, prioridade do autoplay
+    // e pré-busca do próximo episódio — e prévias de busca (item 5).
+    SettingOptionEntry(
+        title = "Corrida de fontes",
+        sub = "Testa até 8 links em paralelo e toca o 1º que entrega vídeo de verdade",
+        keywords = listOf("corrida", "fontes", "paralelo", "links", "rápido", "race"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Corrida só no Wi-Fi",
+        sub = "Em dados móveis, toca a 1ª fonte sem sondar as outras",
+        keywords = listOf("corrida", "wi-fi", "wifi", "dados móveis", "fontes"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Prioridade de qualidades",
+        sub = "Ordem das qualidades no autoplay (1080p, 4K, 720p ou leve primeiro)",
+        keywords = listOf("autoplay", "prioridade", "qualidade", "1080p", "4k", "720p"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Addons prioritários",
+        sub = "Addons em ordem de prioridade no autoplay, separados por vírgula",
+        keywords = listOf("autoplay", "prioridade", "addons", "ordem"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Pré-busca do próximo episódio",
+        sub = "Na metade do episódio, busca as fontes do próximo em 2º plano",
+        keywords = listOf("pré-busca", "prefetch", "próximo episódio", "segundo plano"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Prévias ao buscar",
+        sub = "Miniatura do momento ao buscar ±10 s, sem pausar",
+        keywords = listOf("prévias", "miniatura", "buscar", "seek", "thumbnail"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
     SettingOptionEntry(
         title = "Mini player",
         sub = "Minimizar o player e continuar navegando",
@@ -1454,6 +1509,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Posição das legendas (mpv)",
         sub = "Embaixo, acima ou no meio da tela",
         keywords = listOf("legenda", "posição", "sub-pos", "vertical", "mpv", "libmpv"),
+        pageId = SettingsPageIds.Mpv,
+        anchor = SettingsAnchors.MPV_OPTIONS,
+    ),
+    // v1.45.0 (item 2): volume do mpv, 0–200%.
+    SettingOptionEntry(
+        title = "Volume do mpv",
+        sub = "0% a 200% — acima de 100% é ganho digital e pode distorcer",
+        keywords = listOf("volume", "mpv", "libmpv", "200%", "alto", "som", "ganho"),
         pageId = SettingsPageIds.Mpv,
         anchor = SettingsAnchors.MPV_OPTIONS,
     ),

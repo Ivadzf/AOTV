@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Sync
@@ -75,7 +76,7 @@ import com.aotv.app.ui.theme.TextTertiary
 
 /**
  * Hub das Configurações (redesign Lote 6, v1.15.0, formato Nuvio): busca no
- * topo, cartão do perfil e as 17 páginas em 8 cartões por grupo — Conta,
+ * topo, cartão do perfil e as 18 páginas em 8 cartões por grupo — Conta,
  * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações,
  * Acompanhamento e Conexão (VPN + Watch Party, Lote 10, + Social Hub,
  * Lote 19). Cada página é uma
@@ -289,7 +290,7 @@ private data class HubEntry(
     val kidsHidden: Boolean = false,
 )
 
-/** As 17 páginas. Os ids são as rotas `movies_settings/{id}`. */
+/** As 18 páginas. Os ids são as rotas `movies_settings/{id}`. */
 private val hubEntries = listOf(
     HubEntry(
         id = SettingsPageIds.Layout,
@@ -423,6 +424,14 @@ private val hubEntries = listOf(
         keywords = listOf("Controle remoto", "QR", "TV", "Send to TV", "Chromecast", "DLNA", "AirPlay", "Watch Next", "gamepad", "controle", "player externo", "handoff", "pareamento"),
         kidsHidden = true,
     ),
+    HubEntry(
+        id = SettingsPageIds.KeysQr,
+        title = "Chaves pelo celular",
+        sub = "TMDB, Trakt e IntroDB no teclado do celular",
+        icon = Icons.Default.QrCode2,
+        keywords = listOf("Chaves", "QR", "celular", "TMDB", "Trakt", "IntroDB", "digitar", "teclado", "servidor local"),
+        kidsHidden = true,
+    ),
 )
 
 private val hubEntriesById = hubEntries.associateBy { it.id }
@@ -446,7 +455,7 @@ private val hubCards: List<List<String>> = listOf(
     listOf(SettingsPageIds.Reproducao, SettingsPageIds.Mpv, SettingsPageIds.Downloads),
     listOf(SettingsPageIds.Integracoes),
     listOf(SettingsPageIds.Acompanhamento, SettingsPageIds.Trackers),
-    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub, SettingsPageIds.RemoteTv),
+    listOf(SettingsPageIds.Vpn, SettingsPageIds.WatchParty, SettingsPageIds.SocialHub, SettingsPageIds.RemoteTv, SettingsPageIds.KeysQr),
 )
 
 /** Resumo das configurações (.set-summary). Logo, versão e o estado do que importa. */

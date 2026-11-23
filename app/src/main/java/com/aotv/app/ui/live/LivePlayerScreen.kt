@@ -105,6 +105,8 @@ fun LivePlayerScreen(
     val siblings = remember(st.channels, channel?.group) { st.channels.filter { it.group == channel?.group }.ifEmpty { st.channels } }
     var overlay by remember { mutableStateOf(true) }
     var panel by remember { mutableStateOf(false) }
+    // v1.45.0 (item 3): guia EPG do canal sob o preview.
+    var showEpg by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var buffering by remember { mutableStateOf(true) }
     var retries by remember { mutableIntStateOf(0) }
@@ -555,12 +557,33 @@ fun LivePlayerScreen(
                     TextButton(onClick = { showColorPanel = true }) {
                         Text("Cor", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
+                    // v1.45.0 (item 3): guia EPG do canal sob o preview —
+                    // atual com progresso, próximos abaixo, passados acima.
+                    TextButton(onClick = { showEpg = !showEpg; overlay = true }) {
+                        Text("Guia", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                     // Lote 12 — Frente 2: gravar o programa atual (em
                     // catch-up, grava o programa em catch-up). Só com o app
                     // aberto — o diálogo avisa (ver RecordProgramDialog).
                     TextButton(onClick = { onRecordClick() }) {
                         Text("Gravar", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+                // v1.45.0 (item 3): guia EPG do canal sob o preview — o
+                // painel fica acima da barra de baixo (só com o overlay).
+                // Os programas vêm do estado (o repo já carrega o EPG); o
+                // guia só pede atualização quando o programa atual termina.
+                AnimatedVisibility(
+                    showEpg, enter = fadeIn(), exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 110.dp),
+                ) {
+                    ChannelEpgGuide(
+                        programs = st.epg[currentId] ?: emptyList(),
+                        now = now,
+                        onProgramClick = { showEpg = false },
+                        onCurrentProgramEnded = { viewModel.refreshEpgIfStale() },
+                        modifier = Modifier.fillMaxWidth(0.92f).heightIn(max = 320.dp),
+                    )
                 }
             }
         }

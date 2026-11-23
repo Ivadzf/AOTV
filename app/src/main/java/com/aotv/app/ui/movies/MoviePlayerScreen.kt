@@ -71,6 +71,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
@@ -748,6 +749,15 @@ fun MoviePlayerScreen(
     val playerMpvCacheSecs by playerPrefsVm.mpvCacheSecs.collectAsState()
     val playerMpvPitchCorrection by playerPrefsVm.mpvPitchCorrection.collectAsState()
     val playerMpvSubPos by playerPrefsVm.mpvSubPos.collectAsState()
+    // v1.45.0: volume do mpv (item 2), corrida de fontes (item 6),
+    // pré-busca do próximo episódio (item 8) e prévias de busca (item 5).
+    val playerMpvVolume by playerPrefsVm.mpvVolume.collectAsState()
+    val sourceRaceEnabled by playerPrefsVm.sourceRace.collectAsState()
+    val sourceRaceWifiOnly by playerPrefsVm.sourceRaceWifiOnly.collectAsState()
+    val nextEpPrefetch by playerPrefsVm.nextEpPrefetch.collectAsState()
+    val seekPreviewEnabled by playerPrefsVm.seekPreview.collectAsState()
+    // v1.45.0 (item 6): corrida de fontes — 1 instância por tela.
+    val sourceRaceService = remember { com.aotv.app.data.remote.SourceRaceService() }
     val playerAutoSwitchAtStart by playerPrefsVm.autoSwitchAtStart.collectAsState()
     s.enhanceInterpPreset = playerEnhanceInterpPreset
     s.enhanceHwMode = playerEnhanceHwMode
@@ -758,6 +768,9 @@ fun MoviePlayerScreen(
     s.mpvCacheSecs = playerMpvCacheSecs
     s.mpvPitchCorrection = playerMpvPitchCorrection
     s.mpvSubPos = playerMpvSubPos
+    // v1.45.0 (itens 2 e 5): volume do mpv e prévias de busca.
+    s.mpvVolumePercent = playerMpvVolume
+    s.seekPreviewEnabled = seekPreviewEnabled
     s.autoSwitchAtStart = playerAutoSwitchAtStart
     s.onEnhanceHwClassSave = { playerPrefsVm.setEnhanceHwClass(it) }
     // Hotfix v1.38.1: a troca de motor dentro do player persiste na pref
@@ -765,9 +778,9 @@ fun MoviePlayerScreen(
     s.onEngineChange = { playerPrefsVm.setEngine(it) }
     // Opções do mpv ao vivo: quando mudam em Configurações com o player na
     // pilha, reaplica sem reiniciar o vídeo (o init lê as mesmas prefs).
-    LaunchedEffect(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos) {
+    LaunchedEffect(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos, playerMpvVolume) {
         s.mpvPlayer?.applyPlaybackOptions(
-            MpvPlaybackOptions(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos),
+            MpvPlaybackOptions(playerMpvDisplayFps, playerMpvVideoSync, playerMpvHwdec, playerMpvCacheSecs, playerMpvPitchCorrection, playerMpvSubPos, playerMpvVolume),
         )
     }
     // Modo noturno + Clear Dialogue (Lote 16 item 1): estado por título,
@@ -931,10 +944,25 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
                     preferredQuality = sourceQualityRank(eps[matchIdx].label)
                 } else {
                     val i = pickPreferredSource(eps, preferredAddon, preferredQuality)
-                    val best = eps[i]
-                    currentSourceIdx = i
-                    currentSourceLabel = best.label
-                    activeUrl = best.url; streamUrl = best.url
+                    // Corrida de fontes (v1.45.0, item 6): testa até 8 links
+                    // em paralelo e toca o 1º que entrega vídeo de verdade;
+                    // sem vencedor, toca a melhor da lista, como antes. Só
+                    // no autoplay — a escolha à mão não corre. Em dados
+                    // móveis com "só Wi-Fi", não sonda (ver SourceRace).
+                    val racedUrl = if (sourceRaceEnabled && eps.size > 1) {
+                        runCatching {
+                            sourceRaceService.race(
+                                urls = eps.map { it.url },
+                                wifiOnly = sourceRaceWifiOnly,
+                                isWifi = com.aotv.app.data.local.MobileDataUsage.isWifiActive(context),
+                            )
+                        }.getOrNull()
+                    } else null
+                    val winnerIdx = racedUrl?.let { u -> eps.indexOfFirst { it.url == u } }?.takeIf { it >= 0 } ?: i
+                    val winner = eps[winnerIdx]
+                    currentSourceIdx = winnerIdx
+                    currentSourceLabel = winner.label
+                    activeUrl = winner.url; streamUrl = winner.url
                 }
             } else if (streamUrl == null) {
                 // Episódio aberto sem URL e nenhum addon devolveu fonte.
@@ -1320,7 +1348,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
     // Some o HUD de gesto após 800ms parado
     LaunchedEffect(gestureHud) { if (gestureHud != null) { delay(800); gestureHud = null } }
     // Some o indicador de busca do gesto ("−10s" / "+10s") após 800ms parado
-    LaunchedEffect(seekHud) { if (seekHud != null) { delay(800); seekHud = null } }
+    LaunchedEffect(seekHud) { if (seekHud != null) { delay(800); seekHud = null; s.seekPreviewBitmap = null } }
 
 }
 
@@ -1374,7 +1402,8 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
             // o usuário aperta "Próximo", as fontes já estão na memória e a troca é instantânea.
             // Modo privado (Lote 4 item 5): nada de trabalho especulativo ligado ao que se
             // assiste — o preload em si não grava progresso, mas no privado ele nem dispara.
-            if (!privateMode && duration > 0 && position >= duration / 2 && prefetchedEp != curEpisode) {
+            // v1.45.0 (item 8): o toggle `pref_next_ep_prefetch_v1` desliga a pré-busca.
+            if (nextEpPrefetch && !privateMode && duration > 0 && position >= duration / 2 && prefetchedEp != curEpisode) {
                 prefetchedEp = curEpisode
                 when {
                     hasNextEpisode -> episodeVm.prefetchEpisode(tmdbId, curSeason, curEpisode + 1)
@@ -2242,7 +2271,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 gestureHud?.let { (label, frac) -> GestureHud(label, frac) }
 
                 // HUD do gesto de busca ("−10s" / "+10s")
-                seekHud?.let { SeekHud(it) }
+                seekHud?.let { SeekHud(it, s.seekPreviewBitmap) }
 
                 // TELA TRAVADA: destravar e voltar ficam SEMPRE visíveis (o bloqueio
                 // nunca pode esconder a saída do player nem o desbloqueio).
@@ -2631,13 +2660,21 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
     }
 }
 
-/** Indicador do gesto de busca ("−10s" / "+10s"), no centro da tela. Some sozinho em 800 ms. */
+/** Indicador do gesto de busca ("−10s" / "+10s"), no centro da tela. Some sozinho em 800 ms. Com [bitmap] (v1.45.0, item 5), mostra a miniatura do momento acima do rótulo. */
 @Composable
-private fun BoxScope.SeekHud(label: String) {
+private fun BoxScope.SeekHud(label: String, bitmap: android.graphics.Bitmap? = null) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(label, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-            modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(alpha = 0.72f))
-                .padding(horizontal = 24.dp, vertical = 12.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (bitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap.asImageBitmap(), null,
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = 0.72f)),
+                )
+            }
+            Text(label, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 24.dp, vertical = 12.dp))
+        }
     }
 }
 
@@ -3560,6 +3597,12 @@ class PlayerSession(
     var mpvCacheSecs by run { mutableIntStateOf(0) }
     var mpvPitchCorrection by run { mutableStateOf(true) }
     var mpvSubPos by run { mutableIntStateOf(100) }
+    // v1.45.0 (item 2): volume do mpv, 0–200% (100 = sem ganho).
+    var mpvVolumePercent by run { mutableIntStateOf(100) }
+    // v1.45.0 (item 5): prévias de busca — ligada e miniatura do momento.
+    var seekPreviewEnabled by run { mutableStateOf(true) }
+    var seekPreviewBitmap by run { mutableStateOf<android.graphics.Bitmap?>(null) }
+    private val seekPreviewService = com.aotv.app.data.remote.SeekPreviewService()
     /** Capítulos do arquivo em reprodução (mpv; vazio no ExoPlayer — ver [MpvPlayer.readChapters]). */
     var mpvChapters by run { mutableStateOf<List<MpvChapter>>(emptyList()) }
     /** Estado atual do painel, p/ aplicar e p/ o painel. */
@@ -4297,6 +4340,8 @@ class PlayerSession(
         // hardware (1ª vez que o mpv é usado).
         mpvChapters = mpv.readChapters()
         mpv.applySubPos(mpvSubPos)
+        // v1.45.0 (item 2): volume do mpv, 0–200% (o init já fixou o teto).
+        mpv.setVolumePercent(mpvVolumePercent)
         mpv.applyPitchCorrection(mpvPitchCorrection)
         mpv.applyAudioDelay(audioDelay)
         maybeAutoEnhanceBench()
@@ -4797,6 +4842,27 @@ class PlayerSession(
         val d = if (duration > 0) duration else activeDurationMs()
         val target = (activePositionMs() + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
         activeSeekTo(target)
+        // v1.45.0 (item 5): prévia do momento — miniatura sem pausar. No
+        // mpv, o quadro só existe depois que a busca aterrissa (a foto sai
+        // ~350 ms depois do gesto); no ExoPlayer, o retriever lê o quadro
+        // do stream progressivo (HLS/DASH = sem miniatura).
+        if (seekPreviewEnabled) {
+            seekPreviewBitmap = null
+            scope.launch {
+                val bmp = runCatching {
+                    if (mpvActive) {
+                        delay(350)
+                        val file = java.io.File(context.cacheDir, "seek-preview.jpg")
+                        if (mpvPlayer?.screenshotToFile(file.absolutePath) == true) {
+                            seekPreviewService.thumbnailForScreenshotFile(file, target)
+                        } else null
+                    } else {
+                        seekPreviewService.thumbnailForUrl(streamUrl ?: embedUrl, target)
+                    }
+                }.getOrNull()
+                if (bmp != null) seekPreviewBitmap = bmp
+            }
+        }
         if (showControls) controlsVisible = true
     }
     /** Um passo do gesto de deslizar p/ buscar (item 5): ±10 s, o mesmo passo dos

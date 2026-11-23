@@ -383,6 +383,9 @@ class LivePlayerViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), repo.state.value.copy(channels = repo.displayChannels()))
     fun channel(id: String) = repo.channel(id)
     fun watched(id: String) = repo.markWatched(id)
+
+    /** Guia EPG do canal (v1.45.0, item 3): atualiza o EPG quando o programa atual terminou — o guia pede 1x por canal. */
+    fun refreshEpgIfStale() { viewModelScope.launch { repo.refreshEpgIfStale() } }
     fun toggleFavorite(id: String) = repo.toggleFavorite(id)
     fun nowNext(id: String, now: Long) = repo.nowNext(id, now)
 

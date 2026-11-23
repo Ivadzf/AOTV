@@ -3,6 +3,7 @@ package com.aotv.app.ui.movies
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.SmartAutoplay
 import com.aotv.app.data.remote.StremioAddonService
 import com.aotv.app.data.remote.SubDlService
 import com.aotv.app.data.remote.TmdbApiService
@@ -197,9 +198,41 @@ class EpisodePlayerViewModel @Inject constructor(
             .groupBy { it.addon }.values.flatMap { g -> g.sortedByDescending { it.qualityRank } }
             .let { prefs.sortStreams(it) }
             .map { MoviePlayerSource(it.label, it.url, addon = it.addon, stream = it) }
+            // v1.45.0 (item 7): prioridade configurável do autoplay (addons +
+            // qualidades) + boost da última fonte do título (7 dias).
+            .let { applyAutoplayPriority(it, tmdbId) }
     }
 
-    // ── Abertura rápida do próximo episódio ───────────────────────────────────
+    /**
+     * Ordena as fontes p/ o autoplay com a prioridade configurada (v1.45.0,
+     * item 7): lista de addons + lista de qualidades das prefs, com o
+     * boost da última fonte escolhida à mão neste título (7 dias). A ordem
+     * de idioma/qualidade do `sortStreams` já foi aplicada antes — aqui só
+     * desempata o resto, sem reordenar por idioma.
+     */
+    private fun applyAutoplayPriority(
+        sources: List<MoviePlayerSource>,
+        tmdbId: Int,
+    ): List<MoviePlayerSource> {
+        if (sources.size <= 1) return sources
+        val lastPick = prefs.lastSourcePicks[SmartAutoplay.keyFor(tmdbId, "SERIES")]
+        val ranked = SmartAutoplay.rank(
+            candidates = sources.map {
+                SmartAutoplay.Candidate(
+                    addon = it.addon,
+                    label = it.label,
+                    qualityRank = it.stream?.qualityRank ?: 0,
+                    url = it.url,
+                )
+            },
+            addonPriority = SmartAutoplay.parseAddonPriority(prefs.autoplayAddonPriority),
+            qualityPriority = SmartAutoplay.parseQualityPriority(prefs.autoplayQualityPriority),
+            lastPick = lastPick,
+        )
+        val byUrl = ranked.map { it.url }.toSet()
+        val ordered = ranked.mapNotNull { c -> sources.firstOrNull { it.url == c.url } }
+        return ordered + sources.filter { it.url !in byUrl }
+    }
     // Dois ganhos. (1) Cache pré-carregado enquanto o episódio atual toca, aí o "Próximo"
     // não faz rede nenhuma. (2) Entrega progressiva, que começa a tocar no primeiro addon
     // que responde em vez de esperar o mais lento da lista.

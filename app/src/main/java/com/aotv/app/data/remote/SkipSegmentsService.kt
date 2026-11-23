@@ -57,6 +57,16 @@ class SkipSegmentsService @Inject constructor() {
 
     private val cache = ConcurrentHashMap<String, SkipSegments>()
 
+    init {
+        // Troca de perfil sem restart (v1.45.0, item 1): ver IntroDbService.
+        com.aotv.app.data.local.ProfileEpoch.registerInvalidator("skipsegments") { cache.clear() }
+    }
+
+    /** Limpa o cache em memória (troca de perfil sem restart, item 1). */
+    fun clearCache() {
+        cache.clear()
+    }
+
     private fun seg(a: Double, b: Double): SkipSegment? {
         if (!a.isFinite() || !b.isFinite() || b - a < 3000) return null
         return SkipSegment(maxOf(0L, a.toLong()), b.toLong())
@@ -91,7 +101,8 @@ class SkipSegmentsService @Inject constructor() {
 
     private suspend fun fromIntroDb(imdb: String, isSeries: Boolean, season: Int, episode: Int): SkipSegments? {
         if (imdb.isBlank()) return null
-        val url = "https://api.introdb.app/segments?imdb_id=$imdb" +
+        // v1.45.0 (item 4): a URL base vem da pref (ver IntroDbService.baseUrl) — igual no serviço filtrado.
+        val url = "${IntroDbService.baseUrl}/segments?imdb_id=$imdb" +
             (if (isSeries) "&season=$season&episode=$episode" else "&is_movie=true")
         val j = getJson(url) ?: return null
         return SkipSegments(

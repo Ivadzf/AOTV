@@ -287,6 +287,17 @@ internal val SCOPED_KEYS = listOf(
     "pref_mpv_display_fps_v1", "pref_mpv_video_sync_v1", "pref_mpv_hwdec_v1",
     "pref_mpv_cache_secs_v1", "pref_mpv_pitch_correction_v1", "pref_mpv_sub_pos_v1",
     "pref_mpv_preload_v1", "pref_mpv_scripts_v1", "pref_mpv_ipc_v1",
+    // Lote v1.45.0 — volume do mpv (0–200%), URL base da IntroDB, corrida
+    // de fontes (+ só Wi-Fi), prioridade do autoplay (addons/qualidades),
+    // pré-busca do próximo episódio, trava do limite de idade kids por PIN
+    // e prévias de busca. Tudo por perfil. (O "último link bom" do item 7
+    // NÃO ganha chave própria: reusa [LastSourcePick], addon + qualidade,
+    // com TTL de 7 dias — URL resolvida nunca é persistida.)
+    "pref_mpv_volume_v1", "pref_introdb_base_url_v1",
+    "pref_source_race_v1", "pref_source_race_wifi_only_v1",
+    "pref_autoplay_addon_priority_v1", "pref_autoplay_quality_priority_v1",
+    "pref_next_ep_prefetch_v1",
+    "pref_kids_age_limit_locked_v1", "pref_seek_preview_v1",
 )
 
 /**
@@ -3358,14 +3369,17 @@ class PlatformPrefs @Inject constructor(
      * No máximo 60 títulos (os mais recentes); o resto cai no cortar por [LastSourcePick.at].
      * Por perfil (SCOPED_KEYS "last_source_v1"). Quem grava é o
      * PlayerProgressViewModel, que já bloqueia no modo privado.
+     * v1.45.0 (item 7): o getter descarta o que passou de 7 dias — o "último
+     * link bom" só vale por 7 dias, depois o autoplay volta à prioridade.
      */
     var lastSourcePicks: Map<String, LastSourcePick>
         get() = runCatching {
             val o = org.json.JSONObject(prefs.getString(sk("last_source_v1"), null) ?: "{}")
+            val now = System.currentTimeMillis()
             o.keys().asSequence().associateWith { k ->
                 val v = o.getJSONObject(k)
                 LastSourcePick(v.optString("a"), v.optInt("q", 0), v.optLong("t", 0L))
-            }.filterValues { it.addon.isNotBlank() }
+            }.filterValues { it.addon.isNotBlank() && now - it.at in 0..com.aotv.app.data.local.SmartAutoplay.LAST_GOOD_LINK_TTL_MS }
         }.getOrDefault(emptyMap())
         set(value) {
             val kept = value.entries.sortedByDescending { it.value.at }.take(60)
@@ -4043,6 +4057,16 @@ class PlatformPrefs @Inject constructor(
         _playerAudioLang.value =
             prefs.getString(sk("pref_player_audio_lang"), null)?.takeIf { SubLangs.of(it) != null } ?: SubLangs.DEFAULT
         _playerReuseLastSource.value = prefs.getBoolean(sk("pref_player_reuse_last_source"), true)
+        // Lote v1.45.0.
+        _mpvVolume.value = prefs.getInt(sk("pref_mpv_volume_v1"), 100).coerceIn(0, 200)
+        _introDbBaseUrl.value = readIntroDbBaseUrl()
+        _sourceRace.value = prefs.getBoolean(sk("pref_source_race_v1"), true)
+        _sourceRaceWifiOnly.value = prefs.getBoolean(sk("pref_source_race_wifi_only_v1"), true)
+        _autoplayAddonPriority.value = prefs.getString(sk("pref_autoplay_addon_priority_v1"), "") ?: ""
+        _autoplayQualityPriority.value = prefs.getString(sk("pref_autoplay_quality_priority_v1"), "1080p,720p,2160p,480p") ?: "1080p,720p,2160p,480p"
+        _nextEpPrefetch.value = prefs.getBoolean(sk("pref_next_ep_prefetch_v1"), true)
+        _kidsAgeLimitLocked.value = prefs.getBoolean(sk("pref_kids_age_limit_locked_v1"), true)
+        _seekPreview.value = prefs.getBoolean(sk("pref_seek_preview_v1"), true)
         _privateMode.value = prefs.getBoolean(sk("pref_private_mode"), false)
         _hiddenContinue.value = readStringList("hidden_continue_v1").toSet()
         _randomIncludeContinue.value = prefs.getBoolean(sk("pref_random_include_continue"), true)
@@ -4157,6 +4181,114 @@ class PlatformPrefs @Inject constructor(
             prefs.edit().putInt(sk("kids_age_limit_v1"), clean).apply()
             _kidsAgeLimitFlow.value = clean
         }
+
+    // ── Lote v1.45.0 ───────────────────────────────────────────────────────
+    // Volume do mpv, URL da IntroDB, corrida de fontes, prioridade do
+    // autoplay, último link bom, pré-busca do próximo episódio, trava do
+    // limite kids e prévias de busca. Tudo por perfil (SCOPED_KEYS).
+
+    private val _mpvVolume = MutableStateFlow(prefs.getInt(sk("pref_mpv_volume_v1"), 100).coerceIn(0, 200))
+    /** Volume do mpv, 0–200% (item 2). 100 = sem ganho; acima de 100 é ganho digital e pode distorcer. */
+    val mpvVolumeFlow: StateFlow<Int> = _mpvVolume.asStateFlow()
+    var mpvVolume: Int
+        get() = _mpvVolume.value
+        set(value) {
+            val clean = value.coerceIn(0, 200)
+            prefs.edit().putInt(sk("pref_mpv_volume_v1"), clean).apply()
+            _mpvVolume.value = clean
+        }
+
+    private val _introDbBaseUrl = MutableStateFlow(readIntroDbBaseUrl())
+    /** URL base da IntroDB (item 4): a API já existia desde a v1.8.1, mas o endereço era fixo no código. */
+    val introDbBaseUrlFlow: StateFlow<String> = _introDbBaseUrl.asStateFlow()
+    var introDbBaseUrl: String
+        get() = _introDbBaseUrl.value
+        set(value) {
+            val clean = sanitizeIntroDbBaseUrl(value)
+            prefs.edit().putString(sk("pref_introdb_base_url_v1"), clean).apply()
+            _introDbBaseUrl.value = clean
+        }
+
+    private fun readIntroDbBaseUrl(): String =
+        sanitizeIntroDbBaseUrl(prefs.getString(sk("pref_introdb_base_url_v1"), null) ?: "")
+
+    /** Limpa a URL base da IntroDB (item 4): sem esquema vira o padrão; sem barra no fim. */
+    private fun sanitizeIntroDbBaseUrl(raw: String): String {
+        val clean = raw.trim().trimEnd('/')
+        if (clean.isBlank()) return "https://api.introdb.app"
+        if (!clean.startsWith("http://") && !clean.startsWith("https://")) return "https://api.introdb.app"
+        return clean
+    }
+
+    private val _sourceRace = MutableStateFlow(prefs.getBoolean(sk("pref_source_race_v1"), true))
+    /** Corrida de fontes ligada (item 6): testa até 8 links em paralelo e toca o 1º com vídeo de verdade. */
+    val sourceRaceFlow: StateFlow<Boolean> = _sourceRace.asStateFlow()
+    var sourceRace: Boolean
+        get() = _sourceRace.value
+        set(value) { prefs.edit().putBoolean(sk("pref_source_race_v1"), value).apply(); _sourceRace.value = value }
+
+    private val _sourceRaceWifiOnly = MutableStateFlow(prefs.getBoolean(sk("pref_source_race_wifi_only_v1"), true))
+    /** Corrida de fontes só no Wi-Fi (item 6): em dados móveis, toca a 1ª fonte sem sondar as outras. */
+    val sourceRaceWifiOnlyFlow: StateFlow<Boolean> = _sourceRaceWifiOnly.asStateFlow()
+    var sourceRaceWifiOnly: Boolean
+        get() = _sourceRaceWifiOnly.value
+        set(value) { prefs.edit().putBoolean(sk("pref_source_race_wifi_only_v1"), value).apply(); _sourceRaceWifiOnly.value = value }
+
+    private val _autoplayAddonPriority = MutableStateFlow(prefs.getString(sk("pref_autoplay_addon_priority_v1"), "") ?: "")
+    /** Ordem de prioridade dos addons no autoplay (item 7): JSON com os nomes, na ordem. Vazio = ordem do gerenciador. */
+    val autoplayAddonPriorityFlow: StateFlow<String> = _autoplayAddonPriority.asStateFlow()
+    var autoplayAddonPriority: String
+        get() = _autoplayAddonPriority.value
+        set(value) {
+            val clean = value.trim().take(2000)
+            prefs.edit().putString(sk("pref_autoplay_addon_priority_v1"), clean).apply()
+            _autoplayAddonPriority.value = clean
+        }
+
+    private val _autoplayQualityPriority = MutableStateFlow(prefs.getString(sk("pref_autoplay_quality_priority_v1"), "1080p,720p,2160p,480p") ?: "1080p,720p,2160p,480p")
+    /** Ordem de prioridade das qualidades no autoplay (item 7): rótulos separados por vírgula, na ordem. */
+    val autoplayQualityPriorityFlow: StateFlow<String> = _autoplayQualityPriority.asStateFlow()
+    var autoplayQualityPriority: String
+        get() = _autoplayQualityPriority.value
+        set(value) {
+            val clean = value.trim().take(200).ifBlank { "1080p,720p,2160p,480p" }
+            prefs.edit().putString(sk("pref_autoplay_quality_priority_v1"), clean).apply()
+            _autoplayQualityPriority.value = clean
+        }
+
+    private val _nextEpPrefetch = MutableStateFlow(prefs.getBoolean(sk("pref_next_ep_prefetch_v1"), true))
+    /** Pré-busca das fontes do próximo episódio enquanto o atual toca (item 8). */
+    val nextEpPrefetchFlow: StateFlow<Boolean> = _nextEpPrefetch.asStateFlow()
+    var nextEpPrefetch: Boolean
+        get() = _nextEpPrefetch.value
+        set(value) { prefs.edit().putBoolean(sk("pref_next_ep_prefetch_v1"), value).apply(); _nextEpPrefetch.value = value }
+
+    private val _kidsAgeLimitLocked = MutableStateFlow(prefs.getBoolean(sk("pref_kids_age_limit_locked_v1"), true))
+    /** Trava do limite de idade kids por PIN (item 10). Ligada por padrão. */
+    val kidsAgeLimitLockedFlow: StateFlow<Boolean> = _kidsAgeLimitLocked.asStateFlow()
+    var kidsAgeLimitLocked: Boolean
+        get() = _kidsAgeLimitLocked.value
+        set(value) { prefs.edit().putBoolean(sk("pref_kids_age_limit_locked_v1"), value).apply(); _kidsAgeLimitLocked.value = value }
+
+    /**
+     * Troca o limite de idade do perfil infantil com a trava de PIN (item
+     * 10): com a trava ligada E um PIN dos pais definido, só muda com o PIN
+     * certo (ver [checkParentalPin]); sem PIN dos pais definido, a trava
+     * não trava nada — é preciso definir o PIN primeiro. Devolve false
+     * quando recusou (limite mantido) e true quando aplicou.
+     */
+    fun setKidsAgeLimitChecked(newLimit: Int, pin: String?): Boolean {
+        if (kidsAgeLimitLocked && hasParentalPin && (pin == null || !checkParentalPin(pin))) return false
+        kidsAgeLimit = newLimit
+        return true
+    }
+
+    private val _seekPreview = MutableStateFlow(prefs.getBoolean(sk("pref_seek_preview_v1"), true))
+    /** Prévias na busca (item 5): miniatura do momento ao buscar ±10 s. */
+    val seekPreviewFlow: StateFlow<Boolean> = _seekPreview.asStateFlow()
+    var seekPreview: Boolean
+        get() = _seekPreview.value
+        set(value) { prefs.edit().putBoolean(sk("pref_seek_preview_v1"), value).apply(); _seekPreview.value = value }
 
     /** Tentativas falhas seguidas do PIN parental (GLOBAL, do aparelho). */
     var parentalPinFailures: Int

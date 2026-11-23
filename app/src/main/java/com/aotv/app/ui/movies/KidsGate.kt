@@ -50,8 +50,13 @@ class KidsGateViewModel @Inject constructor(
         }.getOrNull()?.also { cache[Triple(tmdbId, type, maxAge)] = it } ?: true
     }
 
-    private companion object {
+    internal companion object {
         val cache = java.util.concurrent.ConcurrentHashMap<Triple<Int, String, Int>, Boolean>()
+
+        /** Limpa o cache de títulos conferidos (troca de perfil sem restart, v1.45.0 item 1). */
+        fun clearCache() {
+            cache.clear()
+        }
     }
 }
 

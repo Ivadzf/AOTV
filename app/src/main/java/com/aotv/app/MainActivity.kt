@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v1.45.0 (item 4): a URL base da IntroDB vem da pref
+        // `pref_introdb_base_url_v1` — o padrão é a API pública.
+        com.aotv.app.data.remote.IntroDbService.baseUrl = platformPrefs.introDbBaseUrl
         offerPartyDeepLink(intent)
         offerAddonDeepLink(intent)
         offerWatchNextDeepLink(intent)
@@ -76,11 +80,28 @@ class MainActivity : ComponentActivity() {
                 var picking by rememberSaveable {
                     mutableStateOf(platformPrefs.profiles.value.size > 1 && !intent.getBooleanExtra(EXTRA_PICKED, false))
                 }
-                // Trocar de perfil (ou ligar o infantil no perfil ativo) reabre a Activity. Toda tela,
-                // ViewModel e cache de memória nasce de novo já com os dados do perfil escolhido.
+                // Troca de perfil SEM reiniciar o app (v1.45.0, item 1 —
+                // ideia do NuvioAstra, reimplementada). Antes este efeito
+                // chamava restartApp(picked = true) e a Activity inteira
+                // nascia de novo. Agora: [ProfileEpoch.beginSwitch] limpa
+                // os caches em memória registrados, o [ProfileEpoch.epoch]
+                // avança e a navegação é recriada com `key(epoch)` — os
+                // ViewModels nascem de novo já com o perfil novo, sem
+                // recriar a Activity. O progresso do que estava tocando é
+                // salvo pelo onDispose do player ao sair da composição; o
+                // MiniPlayer é fechado aqui p/ não tocar por cima do perfil
+                // novo. As prefs por perfil já eram relidas por
+                // `refreshLayout()` no `selectProfile` — nada muda lá.
+                // restartApp continua existindo p/ os caminhos que ainda
+                // precisam dele (ver `onRestartApp`).
+                val profileEpoch by com.aotv.app.data.local.ProfileEpoch.epoch.collectAsStateWithLifecycle()
                 LaunchedEffect(Unit) {
                     combine(platformPrefs.profileId, platformPrefs.profiles) { id, list -> id to list.firstOrNull { it.id == id }?.kids }
-                        .distinctUntilChanged().drop(1).collect { restartApp(picked = true) }
+                        .distinctUntilChanged().drop(1).collect {
+                            com.aotv.app.ui.movies.MiniPlayerState.close()
+                            com.aotv.app.ui.movies.KidsGateViewModel.clearCache()
+                            com.aotv.app.data.local.ProfileEpoch.beginSwitch()
+                        }
                 }
                 if (onboarding) {
                     com.aotv.app.ui.common.ProvideTvMode(deviceLayout == DeviceLayout.TV) {
@@ -100,10 +121,12 @@ class MainActivity : ComponentActivity() {
                 // emissão só invalida este wrapper; o conteúdo é pulado quando
                 // os parâmetros não mudam.
                 PosterInfoScope(posterInfo) {
-                    MoviesNavigation(
-                        deviceLayout = deviceLayout,
-                        onRestartApp = onRestartApp,
-                    )
+                    key(profileEpoch) {
+                        MoviesNavigation(
+                            deviceLayout = deviceLayout,
+                            onRestartApp = onRestartApp,
+                        )
+                    }
                 }
             }
         }

@@ -72,6 +72,11 @@ class ProfilesViewModel @Inject constructor(
     fun kidsAgeLimitOf(profileId: String): Int =
         (prefs.rawPref("kids_age_limit_v1", profileId) as? Int) ?: 12
 
+    // Trava do limite kids por PIN ligada? (v1.45.0, item 10).
+    val kidsAgeLimitLocked: Boolean get() = prefs.kidsAgeLimitLocked
+    val kidsAgeLimitLockedFlow = prefs.kidsAgeLimitLockedFlow
+    fun setKidsAgeLimitLocked(v: Boolean) { prefs.kidsAgeLimitLocked = v }
+
     fun setKidsAgeLimit(profileId: String, value: Int) {
         prefs.writeRawPref("kids_age_limit_v1", value.coerceIn(0, 18), profileId)
     }
@@ -196,6 +201,7 @@ fun ProfilesScreen(
 ) {
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val current by vm.profileId.collectAsStateWithLifecycle()
+    val ageLimitLocked by vm.kidsAgeLimitLockedFlow.collectAsStateWithLifecycle()
     val me = profiles.firstOrNull { it.id == current }
     var editing by remember { mutableStateOf(startEditing) }
     // null fechado, Profile com id vazio é "novo perfil".
@@ -203,6 +209,9 @@ fun ProfilesScreen(
     // PIN dos pais: perfil pra trocar depois de confirmar, ou "entrar em editar" pendente.
     var pendingSwitch by remember { mutableStateOf<Profile?>(null) }
     var pendingEdit by remember { mutableStateOf(false) }
+    // v1.45.0 (item 10): mudança do limite de idade kids esperando o PIN
+    // dos pais — (perfil editado, limite novo).
+    var pendingLimitSave by remember { mutableStateOf<Pair<Profile, Int>?>(null) }
     // PIN do perfil (Lote 3): trocar p/ um perfil com PIN ou editar um perfil com PIN.
     var pendingSwitchPin by remember { mutableStateOf<Profile?>(null) }
     var pendingEditProfile by remember { mutableStateOf<Profile?>(null) }
@@ -217,8 +226,24 @@ fun ProfilesScreen(
     }
     // Ao abrir um gate parental, lê a trava do momento (ela pode ter vencido
     // desde a última abertura — o diálogo não fica com o estado velho).
-    LaunchedEffect(pendingSwitch, pendingEdit) {
-        if (pendingSwitch != null || pendingEdit) refreshParentalLockout()
+    LaunchedEffect(pendingSwitch, pendingEdit, pendingLimitSave) {
+        if (pendingSwitch != null || pendingEdit || pendingLimitSave != null) refreshParentalLockout()
+    }
+
+    // Salva o perfil editado/criado (extraído do onSave p/ o gate de PIN do
+    // limite kids reutilizar o mesmo caminho — v1.45.0, item 10).
+    fun saveProfile(edited: Profile, limit: Int) {
+        val original = profiles.firstOrNull { it.id == edited.id }
+        val becameKids = edited.kids && original?.kids != true
+        if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons, kidsAgeLimit = limit)
+        else {
+            vm.update(edited)
+            if (edited.kids) vm.setKidsAgeLimit(edited.id, limit)
+        }
+        panel = null
+        // Marcou infantil pela 1ª vez sem PIN nenhum definido no aparelho: convida a criar
+        // um agora, senão o modo infantil não trava nada (qualquer um sai dele na hora).
+        if (becameKids && !vm.hasPin()) showSetPinNudge = true
     }
     // Controle remoto começa no perfil em uso.
     val currentTile = remember { androidx.compose.ui.focus.FocusRequester() }
@@ -359,17 +384,20 @@ fun ProfilesScreen(
                 if (p.pinHash.isNotBlank()) append("  |  Com PIN")
             },
             onDismiss = { panel = null },
-            onSave = { edited, limit ->
-                val becameKids = edited.kids && !p.kids
-                if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons, kidsAgeLimit = limit)
-                else {
-                    vm.update(edited)
-                    if (edited.kids) vm.setKidsAgeLimit(edited.id, limit)
+            // v1.45.0 (item 10): trava do limite kids por PIN dos pais.
+            ageLimitLocked = ageLimitLocked,
+            onAgeLimitLockedChange = { vm.setKidsAgeLimitLocked(it) },
+            onSave = { edited, limit ->,
+                // v1.45.0 (item 10): mudar o limite de idade de um perfil
+                // infantil EXISTENTE, com a trava ligada e PIN dos pais
+                // definido, pede o PIN dos pais antes de salvar. Criar um
+                // perfil novo já define o limite na criação (sem gate).
+                val limitChanged = edited.id.isNotEmpty() && edited.kids && vm.kidsAgeLimitOf(edited.id) != limit
+                if (limitChanged && vm.kidsAgeLimitLocked && vm.hasPin()) {
+                    pendingLimitSave = edited to limit
+                } else {
+                    saveProfile(edited, limit)
                 }
-                panel = null
-                // Marcou infantil pela 1ª vez sem PIN nenhum definido no aparelho: convida a criar
-                // um agora, senão o modo infantil não trava nada (qualquer um sai dele na hora).
-                if (becameKids && !vm.hasPin()) showSetPinNudge = true
             },
             onRemove = { vm.remove(p.id); panel = null },
             onHashPin = { pin -> vm.hashProfilePin(pin) },
@@ -435,6 +463,30 @@ fun ProfilesScreen(
             onDismiss = { pendingEdit = false },
         )
     }
+    // v1.45.0 (item 10): mudar o limite de idade kids pede o PIN dos pais
+    // (mesma trava de 5 erros / 5 min dos outros gates parentais).
+    pendingLimitSave?.let { (edited, limit) ->
+        VerifyPinDialog(
+            lockedOut = parentalLocked,
+            lockoutMinutes = parentalLockoutMin,
+            onWrongPin = {
+                if (vm.recordParentalPinFailure()) {
+                    parentalLocked = true
+                    parentalLockoutMin = vm.parentalLockoutMinutesLeft()
+                }
+            },
+            onConfirm = { pin ->
+                if (vm.checkPin(pin)) {
+                    vm.resetParentalPinFailures()
+                    parentalLocked = false
+                    pendingLimitSave = null
+                    saveProfile(edited, limit)
+                    true
+                } else false
+            },
+            onDismiss = { pendingLimitSave = null },
+        )
+    }
     if (showSetPinNudge) {
         SetPinDialog(
             title = "Criar PIN pro infantil?",
@@ -475,6 +527,9 @@ private fun ProfileEditDialog(
     canRemove: Boolean,
     summary: String = "",
     onDismiss: () -> Unit,
+    // v1.45.0 (item 10): trava do limite kids por PIN dos pais.
+    ageLimitLocked: Boolean = true,
+    onAgeLimitLockedChange: (Boolean) -> Unit = {},
     onSave: (Profile, Int) -> Unit,
     onRemove: () -> Unit,
     onHashPin: (String) -> String,
@@ -645,6 +700,22 @@ private fun ProfileEditDialog(
                                 )
                             }
                         }
+                    }
+                    // v1.45.0 (item 10): travar o limite com o PIN dos pais.
+                    // Sem PIN dos pais definido, a trava não trava nada.
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onAgeLimitLockedChange(!ageLimitLocked) }.padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Travar limite com PIN dos pais", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (ageLimitLocked) "Mudar o limite pede o PIN dos pais"
+                                else "Qualquer um muda o limite",
+                                color = TextTertiary, fontSize = 12.sp,
+                            )
+                        }
+                        Switch(checked = ageLimitLocked, onCheckedChange = onAgeLimitLockedChange, modifier = Modifier.focusProperties { canFocus = false })
                     }
                 }
                 // ── PIN do perfil (Lote 3 item 2c) ──────────────────────────

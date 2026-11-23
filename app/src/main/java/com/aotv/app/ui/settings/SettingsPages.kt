@@ -84,6 +84,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Search
@@ -150,6 +151,7 @@ import com.aotv.app.data.local.DEFAULT_PLAYER_BUTTONS
 import com.aotv.app.data.local.DEFAULT_PLAYER_TOP_ACTIONS
 import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.local.SmartAutoplay
 import com.aotv.app.data.recordings.RecordingService
 import com.aotv.app.data.recordings.RecordingStore
 import com.aotv.app.data.recordings.RecordingThumbs
@@ -211,8 +213,11 @@ object SettingsPageIds {
     /** Controle remoto + Send to TV + Watch Next + gamepad + player externo (Lote 22, v1.32.0). */
     const val RemoteTv = "remotetv"
 
+    /** Chaves pelo celular via QR (v1.45.0, item 9): TMDB, Trakt e IntroDB no teclado do celular. */
+    const val KeysQr = "keys_qr"
+
     /** Páginas escondidas no perfil infantil (igual à tela única antiga). */
-    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, SocialHub, Diagnostico, RemoteTv)
+    val kidsHidden = setOf(Layout, Conteudo, Integracoes, Aparencia, Backup, Trackers, Vpn, WatchParty, SocialHub, Diagnostico, RemoteTv, KeysQr)
 
     fun title(id: String): String = when (id) {
         Layout -> "Layout"
@@ -232,6 +237,7 @@ object SettingsPageIds {
         SocialHub -> "Social Hub"
         Diagnostico -> "Diagnóstico"
         RemoteTv -> "Controle remoto e TV"
+        KeysQr -> "Chaves pelo celular"
         else -> "Configurações"
     }
 }
@@ -256,6 +262,8 @@ fun SettingsPageScreen(
     onOpenLiveChannels: () -> Unit = {},
     onOpenCollections: () -> Unit = {},
     onOpenWatchParty: () -> Unit = {},
+    // v1.45.0 (item 9): "Chaves pelo celular", a partir de Integrações.
+    onOpenKeysQr: () -> Unit = {},
     // Lote 25 (v1.35.0) — Frente B: "Report a problem" + saúde dos addons.
     onOpenReportProblem: () -> Unit = {},
     onOpenAddonHealth: () -> Unit = {},
@@ -275,7 +283,7 @@ fun SettingsPageScreen(
         SettingsPageIds.Detalhe -> DetalhePage(onBack, viewModel, highlightAnchor)
         SettingsPageIds.Streams -> StreamsPage(onBack, highlightAnchor = highlightAnchor)
         SettingsPageIds.Conteudo -> ConteudoPage(onOpenAddons, onOpenPlugins, onOpenKodiAddons, onOpenDebrid, onOpenMediaServers, onOpenAddonHealth, onBack, viewModel, highlightAnchor)
-        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor, onOpenLiveChannels)
+        SettingsPageIds.Integracoes -> IntegracoesPage(onOpenAccounts, onOpenLive, onBack, viewModel, highlightAnchor, onOpenLiveChannels, onOpenKeysQr = onOpenKeysQr)
         SettingsPageIds.Acompanhamento -> AcompanhamentoPage(me.name, me.kids, onOpenProfiles, onBack, viewModel, highlightAnchor)
         SettingsPageIds.Aparencia -> AparenciaPage(onBack, onPlatformChanged, viewModel, highlightAnchor, onOpenReportProblem = onOpenReportProblem)
         SettingsPageIds.Reproducao -> ReproducaoPage(onBack, viewModel, highlightAnchor = highlightAnchor)
@@ -288,6 +296,7 @@ fun SettingsPageScreen(
         SettingsPageIds.SocialHub -> SocialHubScreen(onBack, highlightAnchor, onOpenWatchParty = onOpenWatchParty)
         SettingsPageIds.Diagnostico -> DiagnosticsScreen(onBack, highlightAnchor, onOpenReportProblem = onOpenReportProblem, onOpenAddonHealth = onOpenAddonHealth)
         SettingsPageIds.RemoteTv -> RemoteTvScreen(onBack, highlightAnchor)
+        SettingsPageIds.KeysQr -> KeysQrScreen(onBack, highlightAnchor)
         else -> PlaceholderPage(
             title = "Configurações",
             sub = null,
@@ -2080,6 +2089,8 @@ private fun IntegracoesPage(
     highlightAnchor: String? = null,
     // Lote 12 (v1.22.0): abre o gerenciador de canais.
     onOpenLiveChannels: () -> Unit = {},
+    // v1.45.0 (item 9): abre "Chaves pelo celular".
+    onOpenKeysQr: () -> Unit = {},
 ) {
     // A chave TMDB saiu daqui (Lote 6, v1.15.0): agora mora em Acompanhamento,
     // junto dos trackers. Esta página fica só com contas e TV ao vivo.
@@ -2112,6 +2123,17 @@ private fun IntegracoesPage(
                 sub = "Entre na sua conta e traga addons, Minha Lista, progresso e debrid.",
                 onClick = onOpenAccounts,
                 grouped = true,
+            )
+            // v1.45.0 (item 9): chaves pelo celular via QR — TMDB, Trakt e
+            // IntroDB no teclado do celular, sem digitar no controle remoto.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.QrCode2,
+                iconTint = Accent,
+                title = "Chaves pelo celular",
+                sub = "QR abre uma página no celular p/ digitar a chave TMDB, o Trakt Client ID e a URL da IntroDB.",
+                onClick = onOpenKeysQr,
+                grouped = true,
+                divider = true,
             )
         }
         SettingsSection("TV ao vivo", anchor = SettingsAnchors.INTEGR_LIVE)
@@ -2893,6 +2915,15 @@ private fun ReproducaoPage(
     val audioLang by playerPrefs.audioLang.collectAsStateWithLifecycle()
     var pickAudioLang by remember { mutableStateOf(false) }
     val reuseLastSource by playerPrefs.reuseLastSource.collectAsStateWithLifecycle()
+    // v1.45.0 (itens 6, 7 e 8): corrida de fontes, prioridade do autoplay,
+    // pré-busca do próximo episódio e prévias de busca.
+    val sourceRace by playerPrefs.sourceRace.collectAsStateWithLifecycle()
+    val sourceRaceWifiOnly by playerPrefs.sourceRaceWifiOnly.collectAsStateWithLifecycle()
+    val autoplayAddonPriority by playerPrefs.autoplayAddonPriority.collectAsStateWithLifecycle()
+    val autoplayQualityPriority by playerPrefs.autoplayQualityPriority.collectAsStateWithLifecycle()
+    val nextEpPrefetch by playerPrefs.nextEpPrefetch.collectAsStateWithLifecycle()
+    val seekPreview by playerPrefs.seekPreview.collectAsStateWithLifecycle()
+    var addonPriorityDraft by remember(autoplayAddonPriority) { mutableStateOf(SmartAutoplay.parseAddonPriority(autoplayAddonPriority).joinToString(", ")) }
     // Botões do player (Fase C). A lista guardada vazia é o padrão; aqui a
     // ordem em vigor, com os desligados no fim para religar sem perder o lugar.
     val savedButtons by playerPrefs.buttons.collectAsStateWithLifecycle()
@@ -3435,6 +3466,115 @@ private fun ReproducaoPage(
                 grouped = true,
                 divider = true,
             )
+            // Corrida de fontes (v1.45.0, item 6): testa até 8 links em
+            // paralelo e toca o 1º que entrega vídeo de verdade.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Bolt,
+                title = "Corrida de fontes",
+                sub = if (sourceRace) "Testa até 8 links em paralelo e toca o 1º que entrega vídeo de verdade"
+                    else "Toca a 1ª fonte da lista, sem sondar as outras",
+                trailing = { Switch(checked = sourceRace, onCheckedChange = { playerPrefs.setSourceRace(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSourceRace(!sourceRace) },
+                grouped = true,
+                divider = true,
+            )
+            // Corrida só no Wi-Fi (v1.45.0, item 6): em dados móveis, a
+            // corrida não sonda — toca a 1ª fonte (evita gastar dados).
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Wifi,
+                title = "Corrida só no Wi-Fi",
+                sub = if (sourceRaceWifiOnly) "Em dados móveis, toca a 1ª fonte sem sondar as outras"
+                    else "A corrida sonda mesmo em dados móveis (gasta mais dados no início)",
+                trailing = { Switch(checked = sourceRaceWifiOnly, onCheckedChange = { playerPrefs.setSourceRaceWifiOnly(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSourceRaceWifiOnly(!sourceRaceWifiOnly) },
+                grouped = true,
+                divider = true,
+            )
+            // Pré-busca do próximo episódio (v1.45.0, item 8): enquanto o
+            // episódio atual toca, busca as fontes do próximo em 2º plano.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Download,
+                title = "Pré-busca do próximo episódio",
+                sub = if (nextEpPrefetch) "Na metade do episódio, busca as fontes do próximo — o \"Próximo\" abre sem rede"
+                    else "O próximo episódio só busca as fontes quando você aperta \"Próximo\"",
+                trailing = { Switch(checked = nextEpPrefetch, onCheckedChange = { playerPrefs.setNextEpPrefetch(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setNextEpPrefetch(!nextEpPrefetch) },
+                grouped = true,
+                divider = true,
+            )
+            // Prévias ao buscar (v1.45.0, item 5): miniatura do momento ao
+            // buscar ±10 s, sem pausar (sem ffmpeg).
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Image,
+                title = "Prévias ao buscar",
+                sub = if (seekPreview) "Mostra a miniatura do momento ao buscar ±10 s, sem pausar"
+                    else "Buscar mostra só \"+10s\" / \"−10s\", sem miniatura",
+                trailing = { Switch(checked = seekPreview, onCheckedChange = { playerPrefs.setSeekPreview(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { playerPrefs.setSeekPreview(!seekPreview) },
+                grouped = true,
+                divider = true,
+            )
+        }
+        // Autoplay inteligente (v1.45.0, item 7): prioridade de qualidades
+        // e de addons. A última fonte escolhida à mão vale 7 dias e ganha
+        // das duas listas quando ainda existe.
+        SettingsCard {
+            PrefRow(
+                "Prioridade de qualidades",
+                listOf(
+                    "1080p,720p,2160p,480p" to "1080p primeiro",
+                    "2160p,1080p,720p,480p" to "4K primeiro",
+                    "720p,1080p,480p" to "720p primeiro",
+                    "480p,720p,1080p,2160p" to "Leve primeiro",
+                ),
+                autoplayQualityPriority, playerPrefs::setAutoplayQualityPriority,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Addons em ordem de prioridade, separados por vírgula (vazio = ordem do gerenciador de addons).",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.aotv.app.ui.common.TvTextFieldGate(Modifier.weight(1f)) { gate ->
+                    OutlinedTextField(
+                        value = addonPriorityDraft,
+                        onValueChange = { addonPriorityDraft = it },
+                        label = { Text("Addons prioritários") },
+                        placeholder = { Text("Ex.: Torrentio, Comet", color = TextTertiary) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = gate,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Accent,
+                            unfocusedBorderColor = Border,
+                            focusedContainerColor = Surface2,
+                            unfocusedContainerColor = Surface2,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedLabelColor = Accent,
+                            unfocusedLabelColor = TextTertiary,
+                            cursorColor = Accent,
+                        ),
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                com.aotv.app.ui.common.AotvButton(
+                    "Salvar prioridade", onClick = {
+                        val names = addonPriorityDraft.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                        val json = org.json.JSONArray().apply { names.forEach { put(it) } }.toString()
+                        playerPrefs.setAutoplayAddonPriority(json)
+                        addonPriorityDraft = names.joinToString(", ")
+                    },
+                    compact = true, tone = com.aotv.app.ui.common.ButtonTone.PRIMARY,
+                )
+                if (autoplayAddonPriority.isNotBlank()) com.aotv.app.ui.common.AotvButton(
+                    "Limpar", onClick = { playerPrefs.setAutoplayAddonPriority(""); addonPriorityDraft = "" },
+                    compact = true,
+                )
+            }
         }
         // Velocidade padrão (v1.9.0): o player abre nela; mudar no player salva aqui.
         SettingsCard {
@@ -3608,6 +3748,8 @@ private fun MpvPage(
     val mpvScriptsEnabled by playerPrefs.mpvScripts.collectAsStateWithLifecycle()
     val mpvIpcEnabled by playerPrefs.mpvIpc.collectAsStateWithLifecycle()
     val mpvSubPos by playerPrefs.mpvSubPos.collectAsStateWithLifecycle()
+    // v1.45.0 (item 2): volume do mpv, 0–200%.
+    val mpvVolume by playerPrefs.mpvVolume.collectAsStateWithLifecycle()
     val enhanceHwMode by playerPrefs.enhanceHwMode.collectAsStateWithLifecycle()
     val enhanceHwClass by playerPrefs.enhanceHwClass.collectAsStateWithLifecycle()
     SettingsPageScaffold("MPV", "Motor do player, opções do Libmpv, scripts Lua e Melhorar imagem", onBack, highlightAnchor = highlightAnchor) {
@@ -3684,7 +3826,19 @@ private fun MpvPage(
                 listOf(100 to "Embaixo", 90 to "Um pouco acima", 80 to "Acima", 70 to "Mais acima", 50 to "Meio da tela"),
                 mpvSubPos, playerPrefs::setMpvSubPos,
             )
+            Spacer(Modifier.height(14.dp))
+            // v1.45.0 (item 2): volume do mpv, 0–200%. Acima de 100% é
+            // ganho digital e pode distorcer no topo — o aviso fica abaixo.
+            PrefRow(
+                "Volume do mpv",
+                listOf(0 to "0% (mudo)", 50 to "50%", 100 to "100%", 125 to "125%", 150 to "150%", 175 to "175%", 200 to "200% (máximo)"),
+                mpvVolume, playerPrefs::setMpvVolume,
+            )
         }
+        Text(
+            "Volume do mpv acima de 100% é ganho digital: deixa o som mais alto, mas pode distorcer no topo, principalmente em falas altas. O Volume Boost (em Reprodução) continua valendo só no ExoPlayer.",
+            fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
+        )
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Speed,
