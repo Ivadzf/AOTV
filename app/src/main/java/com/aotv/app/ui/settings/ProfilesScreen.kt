@@ -387,7 +387,7 @@ fun ProfilesScreen(
             // v1.45.0 (item 10): trava do limite kids por PIN dos pais.
             ageLimitLocked = ageLimitLocked,
             onAgeLimitLockedChange = { vm.setKidsAgeLimitLocked(it) },
-            onSave = { edited, limit ->,
+            onSave = { edited, limit ->
                 // v1.45.0 (item 10): mudar o limite de idade de um perfil
                 // infantil EXISTENTE, com a trava ligada e PIN dos pais
                 // definido, pede o PIN dos pais antes de salvar. Criar um
