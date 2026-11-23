@@ -756,8 +756,6 @@ fun MoviePlayerScreen(
     val sourceRaceWifiOnly by playerPrefsVm.sourceRaceWifiOnly.collectAsState()
     val nextEpPrefetch by playerPrefsVm.nextEpPrefetch.collectAsState()
     val seekPreviewEnabled by playerPrefsVm.seekPreview.collectAsState()
-    // v1.45.0 (item 6): corrida de fontes — 1 instância por tela.
-    val sourceRaceService = remember { com.aotv.app.data.remote.SourceRaceService() }
     val playerAutoSwitchAtStart by playerPrefsVm.autoSwitchAtStart.collectAsState()
     s.enhanceInterpPreset = playerEnhanceInterpPreset
     s.enhanceHwMode = playerEnhanceHwMode
@@ -772,6 +770,11 @@ fun MoviePlayerScreen(
     s.mpvVolumePercent = playerMpvVolume
     s.seekPreviewEnabled = seekPreviewEnabled
     s.autoSwitchAtStart = playerAutoSwitchAtStart
+    // v1.45.0 (itens 6 e 8): corrida de fontes e pré-busca — espelha as
+    // prefs na sessão (os efeitos de fonte/reprodução leem de lá).
+    s.sourceRaceEnabled = sourceRaceEnabled
+    s.sourceRaceWifiOnly = sourceRaceWifiOnly
+    s.nextEpPrefetch = nextEpPrefetch
     s.onEnhanceHwClassSave = { playerPrefsVm.setEnhanceHwClass(it) }
     // Hotfix v1.38.1: a troca de motor dentro do player persiste na pref
     // (o chip "Motor" chama s.switchEngine(), que invoca este callback).
@@ -3603,6 +3606,15 @@ class PlayerSession(
     var seekPreviewEnabled by run { mutableStateOf(true) }
     var seekPreviewBitmap by run { mutableStateOf<android.graphics.Bitmap?>(null) }
     private val seekPreviewService = com.aotv.app.data.remote.SeekPreviewService()
+    // v1.45.0 (item 6): corrida de fontes — os toggles e o serviço vivem
+    // na sessão porque PlayerSourceEffects/PlayerPlaybackEffects (funções
+    // separadas) não enxergam os `val`s locais do composable
+    // MoviePlayerScreen; a tela só espelha as prefs aqui (ver :755-757).
+    var sourceRaceEnabled by run { mutableStateOf(true) }
+    var sourceRaceWifiOnly by run { mutableStateOf(true) }
+    val sourceRaceService = com.aotv.app.data.remote.SourceRaceService()
+    // v1.45.0 (item 8): pré-busca das fontes do próximo episódio.
+    var nextEpPrefetch by run { mutableStateOf(true) }
     /** Capítulos do arquivo em reprodução (mpv; vazio no ExoPlayer — ver [MpvPlayer.readChapters]). */
     var mpvChapters by run { mutableStateOf<List<MpvChapter>>(emptyList()) }
     /** Estado atual do painel, p/ aplicar e p/ o painel. */
