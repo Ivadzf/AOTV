@@ -317,9 +317,9 @@ fun DownloadsScreen(
         val completedRows = ArrayList<Any>()
         for (group in completedGrouped.groups) {
             completedRows += group
-            completedRows += group.episodes
+            completedRows.addAll(group.episodes)
         }
-        completedRows += completedGrouped.singles
+        completedRows.addAll(completedGrouped.singles)
 
         LazyColumn(
             Modifier.fillMaxSize(),

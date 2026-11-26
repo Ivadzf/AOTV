@@ -179,7 +179,8 @@ class NuvioProfileImport @Inject constructor(
         val debridSkipped = mutableListOf<String>()
         val failed = mutableListOf<String>()
         for (np in wanted) {
-            val local = resolveLocalProfile(np) ?: run {
+            val local = resolveLocalProfile(np)
+            if (local == null) {
                 failed += "${np.name} (sem espaço para outro perfil)"
                 repeat(6) { done++; onProgress(done, total) }
                 continue
