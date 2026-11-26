@@ -170,6 +170,15 @@ class HomeCustomizeViewModel @Inject constructor(
                     col != null && col.folders.isEmpty() -> "Coleção sem pastas"
                     sys?.catalog == true && !catalogOn -> "Catálogo AOTV desligado"
                     sys == null && col == null && addonOn[r.ref?.base] == false -> "Addon desligado"
+                    // Lote 1 pós-v1.45.0 (v1.46.0 — correção BestCine): fileira de
+                    // TV ligada cujo catálogo não veio na descoberta ao vivo e cujo
+                    // addon respondeu sem catálogo de TV — em vez de sumir em
+                    // silêncio na Início, mostra o motivo aqui. A chave da fileira
+                    // é a chave do catálogo (base|type|id); o diagnóstico casa
+                    // pela base do addon.
+                    sys == null && col == null && (r.ref?.type == "tv" || r.ref?.type == "channel") &&
+                        tv.options.none { it.key == r.key } &&
+                        tv.diag.any { it.addonBase == r.ref?.base } -> "Catálogo de TV indisponível — o addon não devolveu catálogo de TV"
                     else -> null
                 },
                 canUp = r.key !in pinned && HomeLayout.canMove(layout, r.key, -1, movable),

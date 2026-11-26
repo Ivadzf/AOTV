@@ -197,6 +197,22 @@ object ClipDownload {
 
     fun isFullId(id: String): Boolean = id.endsWith(":full")
 
+    /**
+     * Id da entidade do download INTELIGENTE (Lote 1 pós-v1.45.0, v1.46.0
+     * — Frente B, item 3): o ":smart" distingue do download manual do
+     * mesmo episódio (":full") — sem mudança de esquema do Room. É SÓ
+     * este sufixo que o download inteligente pode apagar sozinho quando
+     * o episódio é assistido (ver [BatchDownloadManager]); um id sem
+     * ele nunca é apagado sem confirmação do usuário.
+     */
+    fun smartId(tmdbId: Int, type: String, lastEpisode: String): String =
+        "$tmdbId:$type:$lastEpisode:smart"
+
+    fun isSmartId(id: String): Boolean = id.endsWith(":smart")
+
+    /** "T1:E3" — o rótulo de episódio usado no [DownloadEntity.lastEpisode]. */
+    fun episodeLabel(season: Int, episode: Int): String = "T$season:E$episode"
+
     /** Nome exibido do vídeo inteiro: "Filme (completo)" — é o título guardado na entidade. */
     fun fullDisplayTitle(title: String): String = "$title (completo)"
 
@@ -641,6 +657,14 @@ class ClipDownloader(context: Context) {
         streamUrl: String,
         onProgress: ((downloaded: Int, total: Int) -> Unit)? = null,
         playingHeight: Int? = null,
+        /**
+         * Download inteligente (Lote 1 pós-v1.45.0, v1.46.0 — Frente B,
+         * item 3): a entidade ganha o id ":smart" (ver
+         * [ClipDownload.smartId]) em vez de ":full" — é só esse sufixo
+         * que o download inteligente pode apagar sozinho quando o
+         * episódio é assistido. O resto é idêntico ao manual.
+         */
+        smart: Boolean = false,
     ): ClipResult = withContext(Dispatchers.IO) {
         val eligibility = ClipDownload.classifyFullSource(streamUrl)
         when (eligibility) {
@@ -656,7 +680,8 @@ class ClipDownloader(context: Context) {
         }
         val (cleanUrl, extraHeaders) = splitKodiStreamHeaders(streamUrl)
         val headers = STREAM_HEADERS + extraHeaders
-        val id = ClipDownload.fullId(tmdbId, type, lastEpisode)
+        val id = if (smart) ClipDownload.smartId(tmdbId, type, lastEpisode)
+            else ClipDownload.fullId(tmdbId, type, lastEpisode)
         val displayTitle = ClipDownload.fullDisplayTitle(title)
         if (dao.get(id)?.status == "downloading") {
             return@withContext ClipResult.Failed("O vídeo inteiro já está baixando.")

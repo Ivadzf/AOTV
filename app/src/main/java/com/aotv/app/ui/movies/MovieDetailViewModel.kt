@@ -753,6 +753,31 @@ class MovieDetailViewModel @Inject constructor(
                 // nota do TMDB. O resolver lê título, IMDb id e título
                 // original do estado, já preenchidos no update acima.
                 if (episodes?.isNotEmpty() == true) enrichSeasonRatings(tmdbId, 1, episodes)
+                // Lote v1.46.0 item 6: pré-carrega as outras temporadas juntas (T2..TN, em
+                // paralelo com no máximo 3 por vez) — antes só a T1 vinha com o detalhe e o
+                // resto carregava por aba sob demanda. Mesmo tratamento do loadSeason: só
+                // funde lista não vazia (falha ou lista vazia não cacheia nem apaga nada) e
+                // nunca toca no erro da tela — a aba continua carregando sob demanda como
+                // antes, e trocar de aba chama loadSeason (que re-busca e enriquece as notas).
+                // Sem detalhe (sem nº de temporadas) ou sem chave, nada a pré-carregar.
+                val totalSeasons = detailDto?.numberOfSeasons ?: 0
+                if (apiKey.isNotBlank() && tmdbId > 0 && totalSeasons > 1) {
+                    launch {
+                        (2..totalSeasons).chunked(3).forEach { chunk ->
+                            chunk.map { s ->
+                                async {
+                                    if (_uiState.value.seasons[s]?.isNotEmpty() == true) null
+                                    else runCatching { tmdb.getSeason(tmdbId, s, apiKey = apiKey).episodes.map { it.toDomain() } }.getOrNull()
+                                        ?.takeIf { it.isNotEmpty() }?.let { eps -> s to eps }
+                                }
+                            }.forEach { deferred ->
+                                val loaded = deferred.await() ?: return@forEach
+                                val (s, eps) = loaded
+                                _uiState.update { st -> st.copy(seasons = st.seasons + (s to eps)) }
+                            }
+                        }
+                    }
+                }
                 // Logo do título: TMDB (PT-BR) principal, metahub fallback.
                 launch {
                     val tmdbLogo = if (apiKey.isNotBlank() && tmdbId > 0)

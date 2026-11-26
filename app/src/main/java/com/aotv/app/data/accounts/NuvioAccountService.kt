@@ -26,8 +26,11 @@ data class NuvioSession(
     val email: String,
 )
 
-/** Perfil da conta Nuvio. [index] é o número que as consultas usam (1 é o principal). */
-data class NuvioProfile(val index: Int, val name: String, val usesPrimaryAddons: Boolean)
+/** Perfil da conta Nuvio. [index] é o número que as consultas usam (1 é o principal). [avatarUrl] é a foto do perfil quando o servidor a devolve (vazio = sem foto — o app mantém o avatar local). [kids] é o marcador infantil do perfil, quando o servidor o devolve. [usesPrimaryPlugins] espelha [usesPrimaryAddons] para os repositórios de plugins: ligado, o perfil usa os plugins do principal. [pluginRepos] são os repositórios que o payload do perfil trouxe (fallback quando a tabela de plugins vem vazia). */
+data class NuvioProfile(val index: Int, val name: String, val usesPrimaryAddons: Boolean, val avatarUrl: String = "", val kids: Boolean = false, val usesPrimaryPlugins: Boolean = false, val pluginRepos: List<String> = emptyList())
+
+/** Repositório de plugins do Nuvio. [url] é a URL do repositório como veio do servidor (só trim — plugins são repositórios, não manifests, então não ganha "/manifest.json"). */
+data class RemotePlugin(val url: String, val name: String, val enabled: Boolean = true)
 
 /** Código para entrar pelo site do Nuvio (nuvio.tv/link). */
 data class NuvioDeviceCode(val deviceCode: String, val userCode: String, val url: String, val intervalSec: Int, val nonce: String, val server: String, val key: String)
@@ -119,8 +122,29 @@ class NuvioAccountService @Inject constructor(
     }
 
     suspend fun profiles(): Result<List<NuvioProfile>> = rpcRows("sync_pull_profiles", JSONObject()).map { rows ->
-        rows.map { NuvioProfile(it.optInt("profile_index", 1), it.optString("name").ifBlank { "Perfil" }, it.optBoolean("uses_primary_addons")) }
-            .sortedBy { it.index }
+        rows.map {
+            NuvioProfile(
+                it.optInt("profile_index", 1), it.optString("name").ifBlank { "Perfil" }, it.optBoolean("uses_primary_addons"),
+                // Foto do perfil: o servidor nem sempre devolve — tenta os nomes
+                // conhecidos e fica vazio quando não há (o app mantém o avatar local).
+                it.optString("avatar_url").ifBlank { it.optString("avatar").ifBlank { it.optString("photo_url").ifBlank { it.optString("image_url") } } },
+                it.optBoolean("kids", it.optBoolean("is_kids", it.optBoolean("is_child", false))),
+                it.optBoolean("uses_primary_plugins", it.optBoolean("usesPrimaryPlugins", false)),
+                parsePluginRepos(it),
+            )
+        }.sortedBy { it.index }
+    }
+
+    /** Repositórios que o payload do perfil trouxe (`pluginRepos`/`plugin_repos`): array de URLs ou de objetos com `url`/`repo_url`/`repo`. */
+    private fun parsePluginRepos(o: JSONObject): List<String> {
+        val arr = o.optJSONArray("pluginRepos") ?: o.optJSONArray("plugin_repos") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            when (val v = arr.opt(i)) {
+                is String -> v.trim().takeIf { it.isNotBlank() }
+                is JSONObject -> v.optString("url").ifBlank { v.optString("repo_url").ifBlank { v.optString("repo") } }.trim().takeIf { it.isNotBlank() }
+                else -> null
+            }
+        }.distinct()
     }
 
     /** Addons do perfil. Perfil que usa os addons do principal lê os do perfil 1, como no Nuvio. */
@@ -140,6 +164,30 @@ class NuvioAccountService @Inject constructor(
                 RemoteAddon(url, o.optString("name").ifBlank { host }, url.startsWith("http") && host.isNotBlank() && host != "localhost" && !host.startsWith("127."))
             }.distinctBy { it.url }
         )
+    }
+
+    /**
+     * Repositórios de plugins do perfil. Perfil que usa os plugins do principal lê os do perfil 1, como no Nuvio.
+     * Sem `order=sort_order` (a coluna não está confirmada na tabela de plugins — sem ela o PostgREST
+     * recusaria a consulta; a ordem vem do sort por URL aqui). A URL vai como veio do servidor, só trim:
+     * plugins são repositórios, não manifests. Quando a tabela vem vazia, vale o `pluginRepos` do
+     * payload do perfil ([NuvioProfile.pluginRepos]) — a tabela continua sendo a fonte principal.
+     */
+    suspend fun plugins(profile: NuvioProfile): Result<List<RemotePlugin>> = withContext(Dispatchers.IO) {
+        val idx = if (profile.index != 1 && profile.usesPrimaryPlugins) 1 else profile.index
+        val s = fresh() ?: return@withContext Result.failure(IllegalStateException("Entre na conta Nuvio"))
+        val r = getRaw("${s.server}/rest/v1/plugins?select=*&profile_id=eq.$idx", s.key, s.access)
+        val arr = runCatching { JSONArray(r.second) }.getOrNull()
+            ?: return@withContext Result.failure(IllegalStateException(errorOf(r.second, r.first)))
+        val rows = (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            if (!o.optBoolean("enabled", true)) return@mapNotNull null
+            val url = o.optString("url").trim()
+            if (url.isBlank()) return@mapNotNull null
+            RemotePlugin(url, o.optString("name").ifBlank { url }, true)
+        }.distinctBy { it.url.lowercase() }.sortedBy { it.url.lowercase() }
+        if (rows.isNotEmpty()) return@withContext Result.success(rows)
+        Result.success(profile.pluginRepos.map { RemotePlugin(it, it, true) }.distinctBy { it.url.lowercase() }.sortedBy { it.url.lowercase() })
     }
 
     suspend fun library(profile: NuvioProfile): Result<List<RemoteLibraryItem>> {

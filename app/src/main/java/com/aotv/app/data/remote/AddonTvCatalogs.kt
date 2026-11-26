@@ -80,11 +80,16 @@ data class AddonTvCatalogsResult(
  * Um addon ligado que respondeu mas não tem catálogo de TV: [declaredTypes]
  * é o que os catálogos dele declaram no manifest. P/ o diagnóstico do app
  * ("BestCine respondeu, mas só declara Filmes e Séries") em vez do silêncio.
+ * [configurationRequired] é o `behaviorHints.configurationRequired` do
+ * manifest (Lote 1 pós-v1.45.0, v1.46.0 — correção BestCine): quando o addon
+ * exige configuração, os catálogos podem ser pagos (os canais do BestCine
+ * viraram VIP) e o manifest da conta gratuita vem sem catálogo nenhum.
  */
 data class AddonTvDiag(
     val addonName: String,
     val addonBase: String,
     val declaredTypes: List<String>,
+    val configurationRequired: Boolean = false,
 )
 
 /** Id de canal de addon desmontado: base do addon + catálogo + id da meta + type. */
@@ -161,7 +166,7 @@ class AddonTvCatalogLoader @Inject constructor(
         // Diagnóstico (Lote 16, v1.26.0): addon que respondeu mas não rendeu
         // catálogo de TV — guarda o que ele DECLARA, em vez do silêncio.
         val diagnostics = perAddon.filterNotNull().filter { it.catalogs.isEmpty() }.map { r ->
-            AddonTvDiag(r.addonName, r.base, r.declaredTypes)
+            AddonTvDiag(r.addonName, r.base, r.declaredTypes, r.configurationRequired)
         }
         AddonTvCatalogsResult(
             catalogs = perAddon.filterNotNull().flatMap { it.catalogs },
@@ -193,6 +198,8 @@ class AddonTvCatalogLoader @Inject constructor(
         val addonName: String,
         val base: String,
         val declaredTypes: List<String>,
+        /** `behaviorHints.configurationRequired` do manifest (correção BestCine, v1.46.0). */
+        val configurationRequired: Boolean,
     )
 
     /** Catálogos de TV do manifest de um addon (null = não respondeu ou não é manifest). */
@@ -215,6 +222,12 @@ class AddonTvCatalogLoader @Inject constructor(
             if (addonId.isBlank()) return@runCatching null
             val addonName = json.get("name")?.takeIf { it.isJsonPrimitive }?.asString?.trim().orEmpty().ifBlank { addonId }
             val base = AddonLinks.baseOf(url)
+            // Correção BestCine (v1.46.0): o manifest da conta gratuita vem com
+            // `catalogs: []` e `configurationRequired: true` — os canais viraram
+            // VIP, então o diagnóstico precisa dizer que exige configuração.
+            val behaviorHints = json.get("behaviorHints")?.takeIf { it.isJsonObject }?.asJsonObject
+            val configurationRequired = behaviorHints?.get("configurationRequired")
+                ?.takeIf { it.isJsonPrimitive }?.asBoolean == true
             CatalogsOfResult(
                 catalogs = AddonLinks.tvCatalogs(json).map { c ->
                     AddonTvCatalog(addonId, addonName, base, c.id, c.name, c.type)
@@ -222,6 +235,7 @@ class AddonTvCatalogLoader @Inject constructor(
                 addonName = addonName,
                 base = base,
                 declaredTypes = AddonLinks.declaredCatalogTypes(json),
+                configurationRequired = configurationRequired,
             )
         }.getOrNull()
     }

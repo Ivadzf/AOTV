@@ -38,6 +38,7 @@ object SettingsAnchors {
     const val DETAIL_QUOTES = "detalhe-frases"
     // Streams
     const val STREAMS_SHEET = "streams-folha"
+    const val STREAMS_CONTINUE = "streams-continuar"
     const val STREAMS_BADGES = "streams-emblemas"
     const val STREAMS_LOGO_BADGES = "streams-selos-logo"
     const val STREAMS_PINNED = "streams-fixadas"
@@ -489,6 +490,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         keywords = listOf("logo", "addon", "imagem"),
         pageId = SettingsPageIds.Streams,
         anchor = SettingsAnchors.STREAMS_SHEET,
+    ),
+    // Lote v1.46.0 item 9: arte do card do Continuar (thumb do episódio ou capa da série).
+    SettingOptionEntry(
+        title = "Arte do card do Continuar",
+        sub = "Thumb do episódio ou capa da série no Continuar assistindo",
+        keywords = listOf("continuar", "arte", "capa", "thumb", "episódio", "pôster", "série"),
+        pageId = SettingsPageIds.Streams,
+        anchor = SettingsAnchors.STREAMS_CONTINUE,
     ),
     SettingOptionEntry(
         title = "Mostrar tamanho",

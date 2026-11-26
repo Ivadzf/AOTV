@@ -64,8 +64,12 @@ class AccountImporter @Inject constructor(
         ImportReport(added, skipped, failed)
     }
 
-    suspend fun importLibrary(items: List<RemoteLibraryItem>, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport {
-        val profile = prefs.profileId.value
+    suspend fun importLibrary(items: List<RemoteLibraryItem>, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport =
+        importLibraryForProfile(items, prefs.profileId.value, onProgress)
+
+    /** Minha Lista de um perfil do Nuvio para um perfil local qualquer (não precisa ser o ativo). */
+    suspend fun importLibraryForProfile(items: List<RemoteLibraryItem>, targetProfileId: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport {
+        val profile = targetProfileId
         val done = java.util.concurrent.atomic.AtomicInteger()
         val results = parallel(items) { it ->
             val (tmdbId, found) = resolve(it.id, it.series) ?: return@parallel 2.also { onProgress(done.incrementAndGet(), items.size) }
@@ -81,8 +85,12 @@ class AccountImporter @Inject constructor(
         return ImportReport(results.count { it == 0 }, results.count { it == 1 }, results.count { it == 2 })
     }
 
-    suspend fun importProgress(items: List<RemoteProgress>, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport {
-        val profile = prefs.profileId.value
+    suspend fun importProgress(items: List<RemoteProgress>, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport =
+        importProgressForProfile(items, prefs.profileId.value, onProgress)
+
+    /** Continuar assistindo de um perfil do Nuvio para um perfil local qualquer (não precisa ser o ativo). */
+    suspend fun importProgressForProfile(items: List<RemoteProgress>, targetProfileId: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): ImportReport {
+        val profile = targetProfileId
         // Só o mais recente de cada título (série tem um por episódio).
         val latest = items.filter { it.positionMs > 0 }
             .groupBy { baseId(it.id) + it.series }

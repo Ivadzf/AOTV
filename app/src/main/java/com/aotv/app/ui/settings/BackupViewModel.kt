@@ -342,6 +342,10 @@ class BackupViewModel @Inject constructor(
         val targetProfileId = root.optJSONObject("profile")?.optString("id").orEmpty()
             .takeIf { id -> profiles.any { it.id == id } }
             ?: prefs.profileId.value
+        // Troca p/ o perfil do backup ANTES de escrever addons/prefs: os
+        // setters resolvem contra o perfil ativo (com herança primária), e
+        // escrever antes da troca cairia na lista do perfil errado.
+        prefs.selectProfile(targetProfileId)
         // Addons (ordem + ativação; o setter avisa os fluxos e recarrega o layout).
         root.optJSONArray("addons")?.let { arr ->
             val entries = (0 until arr.length()).mapNotNull { i ->
@@ -368,8 +372,6 @@ class BackupViewModel @Inject constructor(
             }
             refreshGlobalFlows(obj)
         }
-        // Troca p/ o perfil do backup: recarrega layout, coleções e prefs do perfil.
-        prefs.selectProfile(targetProfileId)
         // Plugins: reinstala os repositórios (rede) e aplica habilitados/ordem.
         var pluginNote = ""
         root.optJSONObject("plugins")?.let { obj ->
@@ -462,6 +464,7 @@ class BackupViewModel @Inject constructor(
             id, o.optString("name", "Perfil"), o.optInt("color", 0), o.optBoolean("kids", false),
             o.optString("avatarUrl", ""), o.optString("avatarId", ""),
             o.optString("pinHash", ""), o.optBoolean("usePrimaryAddons", false),
+            o.optBoolean("usePrimaryPlugins", false),
         )
     }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
@@ -39,6 +40,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.aotv.app.data.accounts.NuvioProfile
 import com.aotv.app.data.local.MAX_PROFILES
 import com.aotv.app.data.local.PROFILE_COLORS
 import com.aotv.app.data.local.PlatformPrefs
@@ -58,9 +60,9 @@ class ProfilesViewModel @Inject constructor(
     val profileId = prefs.profileId
 
     fun select(id: String) = prefs.selectProfile(id)
-    fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false, kidsAgeLimit: Int = 12) {
+    fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false, usePrimaryPlugins: Boolean = false, kidsAgeLimit: Int = 12) {
         prefs.addProfile(name, kids)?.let {
-            prefs.updateProfile(it.copy(color = color, avatarUrl = avatarUrl.trim(), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons))
+            prefs.updateProfile(it.copy(color = color, avatarUrl = avatarUrl.trim(), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons, usePrimaryPlugins = usePrimaryPlugins))
             if (kids) setKidsAgeLimit(it.id, kidsAgeLimit)
         }
     }
@@ -198,10 +200,14 @@ fun ProfilesScreen(
     onOpenSettings: (() -> Unit)? = null,
     startEditing: Boolean = false,
     vm: ProfilesViewModel = hiltViewModel(),
+    // v1.46.0 (Lote 1 item 1): importar os perfis do Nuvio — o diálogo
+    // precisa da conta Nuvio, que vive no AccountsViewModel.
+    accountsVm: AccountsViewModel = hiltViewModel(),
 ) {
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     val current by vm.profileId.collectAsStateWithLifecycle()
     val ageLimitLocked by vm.kidsAgeLimitLockedFlow.collectAsStateWithLifecycle()
+    val accountsUi by accountsVm.ui.collectAsStateWithLifecycle()
     val me = profiles.firstOrNull { it.id == current }
     var editing by remember { mutableStateOf(startEditing) }
     // null fechado, Profile com id vazio é "novo perfil".
@@ -216,6 +222,12 @@ fun ProfilesScreen(
     var pendingSwitchPin by remember { mutableStateOf<Profile?>(null) }
     var pendingEditProfile by remember { mutableStateOf<Profile?>(null) }
     var showSetPinNudge by remember { mutableStateOf(false) }
+    // v1.46.0 (Lote 1 item 1): diálogo "De qual perfil do Nuvio?".
+    var showNuvioImport by remember { mutableStateOf(false) }
+    // Conta Nuvio conectada: garante a lista de perfis carregada para o diálogo.
+    LaunchedEffect(accountsUi.nuvio) {
+        if (accountsUi.nuvio != null) accountsVm.refreshNuvioProfiles()
+    }
     // Trava do PIN parental (Lote 23): com o PIN travado, o diálogo de
     // troca/edição mostra o tempo restante e não aceita tentativa.
     var parentalLocked by remember { mutableStateOf(false) }
@@ -235,7 +247,7 @@ fun ProfilesScreen(
     fun saveProfile(edited: Profile, limit: Int) {
         val original = profiles.firstOrNull { it.id == edited.id }
         val becameKids = edited.kids && original?.kids != true
-        if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons, kidsAgeLimit = limit)
+        if (edited.id.isEmpty()) vm.add(edited.name, edited.kids, edited.color, edited.avatarUrl, edited.avatarId, edited.usePrimaryAddons, edited.usePrimaryPlugins, kidsAgeLimit = limit)
         else {
             vm.update(edited)
             if (edited.kids) vm.setKidsAgeLimit(edited.id, limit)
@@ -321,6 +333,17 @@ fun ProfilesScreen(
             icon = if (editing) Icons.Default.Check else Icons.Default.Edit,
             tone = if (editing) com.aotv.app.ui.common.ButtonTone.PRIMARY else com.aotv.app.ui.common.ButtonTone.SECONDARY,
         )
+        // v1.46.0 (Lote 1 item 1): importar os perfis do Nuvio de uma vez.
+        // Só aparece com a conta Nuvio conectada.
+        if (accountsUi.nuvio != null) {
+            Spacer(Modifier.height(16.dp))
+            com.aotv.app.ui.common.AotvButton(
+                "Importar perfis do Nuvio",
+                { accountsVm.clearMessage(); showNuvioImport = true },
+                icon = Icons.Default.CloudDownload,
+                tone = com.aotv.app.ui.common.ButtonTone.SECONDARY,
+            )
+        }
         // Configurações (Fase A): sem o "Mais" da barra, o caminho p/ Configurações é a aba Perfil.
         val openSettings = onOpenSettings
         if (openSettings != null) {
@@ -380,6 +403,7 @@ fun ProfilesScreen(
             summary = if (p.id.isEmpty()) "" else buildString {
                 append("Perfil ${profiles.indexOfFirst { it.id == p.id } + 1}")
                 if (p.usePrimaryAddons) append("  |  Addons primários ativados")
+                if (p.usePrimaryPlugins) append("  |  Plugins primários ativados")
                 avatarPreset(p.avatarId)?.let { append("  |  Avatar: ${it.name}") }
                 if (p.pinHash.isNotBlank()) append("  |  Com PIN")
             },
@@ -494,6 +518,18 @@ fun ProfilesScreen(
             onDismiss = { showSetPinNudge = false },
         )
     }
+    // v1.46.0 (Lote 1 item 1): "De qual perfil do Nuvio?".
+    if (showNuvioImport) {
+        NuvioProfileImportDialog(
+            profiles = accountsUi.nuvioProfiles,
+            busy = accountsUi.busy == "nuvio_import_all",
+            progress = accountsUi.progress,
+            message = accountsUi.message,
+            error = accountsUi.error,
+            onDismiss = { showNuvioImport = false },
+            onImport = { selected -> accountsVm.nuvioImportAllProfiles(selected) },
+        )
+    }
 }
 
 /** Perfil da grade. Foco do controle aumenta o avatar com anel branco (.prof-tile.is-focus). */
@@ -544,6 +580,7 @@ private fun ProfileEditDialog(
     var avatarUrl by remember { mutableStateOf(initial.avatarUrl) }
     var avatarId by remember { mutableStateOf(initial.avatarId) }
     var usePrimaryAddons by remember { mutableStateOf(initial.usePrimaryAddons) }
+    var usePrimaryPlugins by remember { mutableStateOf(initial.usePrimaryPlugins) }
     var pinHash by remember { mutableStateOf(initial.pinHash) }
     var showSetProfilePin by remember { mutableStateOf(false) }
     var confirmRemovePin by remember { mutableStateOf(false) }
@@ -551,6 +588,7 @@ private fun ProfileEditDialog(
     val draft = initial.copy(
         name = name, kids = kids, color = color, avatarUrl = avatarUrl.trim(),
         avatarId = avatarId, pinHash = pinHash, usePrimaryAddons = usePrimaryAddons,
+        usePrimaryPlugins = usePrimaryPlugins,
     )
     // Na TV o nome vem do teclado na tela. Perfil novo já abre pedindo o nome.
     val tv = com.aotv.app.ui.common.LocalIsTv.current
@@ -642,9 +680,10 @@ private fun ProfileEditDialog(
                     }
                 }
                 // ── Usar addons primários (Lote 3 item 2d) ──────────────────
-                // Espelho do Nuvio: o perfil usa as fontes fixadas do perfil
-                // principal em vez das suas (addons em si são do aparelho).
-                // O principal não mostra o toggle (ele já é o primário).
+                // Espelho do Nuvio: com o toggle ligado o perfil usa os
+                // addons do perfil principal em vez dos seus; desligado,
+                // cada perfil tem os seus. O principal não mostra o toggle
+                // (ele já é o primário).
                 if (initial.id != com.aotv.app.data.local.MAIN_PROFILE) {
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { usePrimaryAddons = !usePrimaryAddons }.padding(vertical = 6.dp),
@@ -658,6 +697,23 @@ private fun ProfileEditDialog(
                             )
                         }
                         Switch(checked = usePrimaryAddons, onCheckedChange = { usePrimaryAddons = it }, modifier = Modifier.focusProperties { canFocus = false })
+                    }
+                    // ── Usar plugins primários (v1.46.0, Lote 1 item 1) ─────
+                    // Mesmo espelho do Nuvio para os repositórios de plugins:
+                    // ligado, o perfil usa os plugins do principal; desligado,
+                    // cada perfil tem os seus.
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { usePrimaryPlugins = !usePrimaryPlugins }.padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Usar plugins primários", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Compartilhar os repositórios de plugins do perfil principal em vez de gerenciar uma lista separada",
+                                color = TextTertiary, fontSize = 12.sp,
+                            )
+                        }
+                        Switch(checked = usePrimaryPlugins, onCheckedChange = { usePrimaryPlugins = it }, modifier = Modifier.focusProperties { canFocus = false })
                     }
                 }
                 Row(
@@ -755,5 +811,106 @@ private fun ProfileEditDialog(
             TextButton(onClick = { onSave(draft, ageLimit) }, enabled = name.isNotBlank()) { Text("Salvar", color = Accent, fontWeight = FontWeight.Bold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar", color = TextSecondary) } },
+    )
+}
+
+/**
+ * "De qual perfil do Nuvio?" (v1.46.0, Lote 1 item 1). Lista os perfis da
+ * conta Nuvio com "Todos os perfis" e escolha individual; o principal
+ * (índice 1) substitui o Principal do app. Desenho reimplementado do
+ * diálogo do JOTV 1.0.24 — nada de código do JOTV aqui.
+ */
+@Composable
+private fun NuvioProfileImportDialog(
+    profiles: List<NuvioProfile>,
+    busy: Boolean,
+    progress: String?,
+    message: String?,
+    error: String?,
+    onDismiss: () -> Unit,
+    onImport: (Set<Int>) -> Unit,
+) {
+    // null = ainda sem escolha do usuário: todos marcados.
+    var selected by remember { mutableStateOf<Set<Int>?>(null) }
+    val sel = selected ?: profiles.map { it.index }.toSet()
+    val done = !busy && (message != null || error != null)
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        containerColor = BackgroundCard,
+        title = { Text("De qual perfil do Nuvio?", color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Cada perfil escolhido vira um perfil do aparelho, com a própria lista e o próprio progresso. O principal do Nuvio substitui o Principal do app.",
+                    color = TextSecondary, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+                if (profiles.isEmpty()) {
+                    Text("Carregando perfis da conta Nuvio…", color = TextTertiary, fontSize = 13.sp)
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .clickable { selected = if (sel.size == profiles.size) emptySet() else profiles.map { it.index }.toSet() }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Checkbox(
+                            checked = sel.size == profiles.size,
+                            onCheckedChange = { checked -> selected = if (checked) profiles.map { it.index }.toSet() else emptySet() },
+                        )
+                        Text("Todos os perfis", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                    }
+                    profiles.forEach { p ->
+                        val checked = sel.contains(p.index)
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .clickable { selected = if (checked) sel - p.index else sel + p.index }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { isChecked -> selected = if (isChecked) sel + p.index else sel - p.index },
+                            )
+                            ProfileAvatar(
+                                Profile(id = "nuvio-${p.index}", name = p.name, avatarUrl = p.avatarUrl),
+                                40.dp,
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                                val sub = when {
+                                    p.index == 1 -> "Principal — substitui o Principal do app"
+                                    p.usesPrimaryAddons && p.usesPrimaryPlugins -> "Usa os addons e plugins do perfil principal"
+                                    p.usesPrimaryAddons -> "Usa os addons do perfil principal"
+                                    p.usesPrimaryPlugins -> "Usa os plugins do perfil principal"
+                                    else -> "Perfil próprio"
+                                }
+                                Text(sub, color = TextTertiary, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+                if (busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = Accent)
+                    if (progress != null) Text(progress, color = TextSecondary, fontSize = 13.sp)
+                }
+                if (message != null) Text(message, color = TextPrimary, fontSize = 13.sp, lineHeight = 18.sp)
+                if (error != null) Text(error, color = LiveRed, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+        },
+        confirmButton = {
+            if (done) {
+                TextButton(onClick = onDismiss) { Text("Pronto", color = Accent, fontWeight = FontWeight.Bold) }
+            } else {
+                TextButton(
+                    onClick = { onImport(sel) },
+                    enabled = sel.isNotEmpty() && profiles.isNotEmpty() && !busy,
+                ) { Text("Importar ${if (sel.size == profiles.size) "todos" else "${sel.size}"}", color = Accent, fontWeight = FontWeight.Bold) }
+            }
+        },
+        dismissButton = {
+            if (!done) TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancelar", color = TextSecondary) }
+        },
     )
 }

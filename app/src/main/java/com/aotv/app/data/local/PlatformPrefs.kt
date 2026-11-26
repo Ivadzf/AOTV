@@ -51,7 +51,9 @@ data class HomeCatalogRef(val base: String, val type: String, val id: String, va
  * [avatarUrl] URL de imagem colada pelo usuário (http/https); [avatarId] id
  * de um preset do catálogo embutido ([AVATAR_CATALOG]); [pinHash] hash do
  * PIN do perfil ("" = sem PIN); [usePrimaryAddons] resolve as fontes fixadas
- * com a lista do perfil principal em vez da própria (ver [pinnedOwnerId]).
+ * com a lista do perfil principal em vez da própria (ver [pinnedOwnerId]) e
+ * os addons com a lista do principal (ver [addonOwnerId]); [usePrimaryPlugins]
+ * faz o mesmo para os repositórios de plugins (ver [pluginOwnerId]).
  */
 data class Profile(
     val id: String,
@@ -62,6 +64,7 @@ data class Profile(
     val avatarId: String = "",
     val pinHash: String = "",
     val usePrimaryAddons: Boolean = false,
+    val usePrimaryPlugins: Boolean = false,
 )
 
 /** Cores dos perfis, nas cores do AOTV (turquesa e vermelho escuro). */
@@ -298,6 +301,10 @@ internal val SCOPED_KEYS = listOf(
     "pref_autoplay_addon_priority_v1", "pref_autoplay_quality_priority_v1",
     "pref_next_ep_prefetch_v1",
     "pref_kids_age_limit_locked_v1", "pref_seek_preview_v1",
+    // Lote v1.46.0 — download inteligente (desligado por padrão, + só Wi-Fi)
+    // e arte do card do Continuar (thumb do episódio ou capa da série).
+    "pref_smart_download_v1", "pref_smart_download_wifi_only_v1",
+    "pref_continue_artwork_v1",
 )
 
 /**
@@ -482,6 +489,7 @@ class PlatformPrefs @Inject constructor(
                 // nunca tivesse avatar/PIN/primários, sem perder nome, cor ou infantil.
                 o.optString("avatar_url", ""), o.optString("avatar_id", ""),
                 o.optString("pin_hash", ""), o.optBoolean("use_primary_addons", false),
+                o.optBoolean("use_primary_plugins", false),
             )
         }
     }.getOrDefault(emptyList()).ifEmpty { listOf(Profile(MAIN_PROFILE, "Principal")) }
@@ -492,7 +500,8 @@ class PlatformPrefs @Inject constructor(
             arr.put(
                 org.json.JSONObject().put("id", it.id).put("name", it.name).put("color", it.color).put("kids", it.kids)
                     .put("avatar_url", it.avatarUrl).put("avatar_id", it.avatarId)
-                    .put("pin_hash", it.pinHash).put("use_primary_addons", it.usePrimaryAddons),
+                    .put("pin_hash", it.pinHash).put("use_primary_addons", it.usePrimaryAddons)
+                    .put("use_primary_plugins", it.usePrimaryPlugins),
             )
         }
         prefs.edit().putString("profiles", arr.toString()).apply()
@@ -520,6 +529,10 @@ class PlatformPrefs @Inject constructor(
         // Trocar "usar addons primários" muda DE QUAL perfil vem a lista de
         // fontes fixadas: recarrega o fluxo efetivo na hora.
         _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
+        // O mesmo vale para addons e plugins: a flag muda o dono efetivo, e
+        // o debrid recarrega sozinho observando os perfis (ver DebridService).
+        _addons.value = readAddonEntries()
+        _pluginRepos.value = readPluginRepos()
     }
 
     /**
@@ -531,7 +544,15 @@ class PlatformPrefs @Inject constructor(
         if (list.size <= 1 || list.none { it.id == id }) return false
         val ed = prefs.edit()
         SCOPED_KEYS.forEach { ed.remove(scopedKey(it, id)) }
+        // Addons e plugins têm escopo próprio (não entram em SCOPED_KEYS, p/
+        // não mudar o backup): a chave do perfil removido sai aqui.
+        ed.remove(scopedKey(KEY_ADDONS_V2, id)).remove(scopedKey(KEY_PLUGIN_REPOS, id))
         ed.apply()
+        // Debrid: as contas vivem noutro SharedPreferences ("aotv_debrid") —
+        // sai só a chave com escopo do perfil removido (ver
+        // DebridService.accountsKeyFor); as do principal ficam.
+        context.getSharedPreferences("aotv_debrid", Context.MODE_PRIVATE).edit()
+            .remove(com.aotv.app.data.debrid.DebridService.accountsKeyFor(id)).apply()
         removeNuvioProfileLink(id)
         saveProfiles(list.filterNot { it.id == id })
         if (_profileId.value == id) selectProfile(_profiles.value.first().id)
@@ -2405,21 +2426,39 @@ class PlatformPrefs @Inject constructor(
         set(value) { prefs.edit().putBoolean(sk("pref_badge_pack_enabled"), value).apply(); _badgePackEnabled.value = value }
 
     /**
-     * SEMÂNTICA DE "USAR ADDONS PRIMÁRIOS" (Lote 3, v1.11.0) — espelho do
-     * NuvioAccountService (perfil do Nuvio com usesPrimaryAddons resolve os
-     * addons com o índice 1, o principal). No AOTV a lista de addons Stremio
-     * em si é DO APARELHO (addonEntries, sem escopo por perfil — ver o
-     * comentário em SCOPED_KEYS), então não há "addons do perfil" para
-     * trocar. O que É por perfil é a lista de FONTES FIXADAS
-     * (pref_stream_pinned, Fase C: a ordem/fixação na folha de fontes). Com
-     * o toggle ligado, o perfil lê E grava a lista de fixadas do perfil
-     * principal em vez da sua — igual ao Nuvio, só que sobre o que de fato
-     * é por perfil aqui. O perfil principal com o toggle ligado é no-op
-     * (ele já é o primário). A importação da conta Nuvio (que já usa
-     * usesPrimaryAddons no servidor) NÃO muda com isto.
+     * SEMÂNTICA DE "USAR PRIMÁRIOS" (Lote 3, v1.11.0; plugins e escopo em
+     * v1.46.0, Lote 1 item 1) — espelho do NuvioAccountService (perfil do
+     * Nuvio com usesPrimaryAddons resolve os addons com o índice 1, o
+     * principal). A lista de addons Stremio ([addonEntries]) e os
+     * repositórios de plugins ([pluginRepoList]) são POR PERFIL, com
+     * herança primária: com o toggle ligado, o perfil lê E grava a lista
+     * do perfil principal em vez da sua ([addonOwnerId]/[pluginOwnerId]);
+     * desligado, cada perfil tem a sua. O perfil principal com o toggle
+     * ligado é no-op (ele já é o primário). As chaves de debrid seguem a
+     * flag de addons primários (ver DebridService) — não há flag própria
+     * de debrid no Nuvio. O que também é por perfil é a lista de FONTES
+     * FIXADAS (pref_stream_pinned, Fase C: a ordem/fixação na folha de
+     * fontes), que usa [pinnedOwnerId]. A importação da conta Nuvio (que
+     * já usa usesPrimaryAddons no servidor) troca para o perfil de
+     * destino antes de escrever, e os accessors resolvem o dono sozinhos.
      */
     fun pinnedOwnerId(): String =
         if (profile.usePrimaryAddons && _profileId.value != MAIN_PROFILE) MAIN_PROFILE else _profileId.value
+
+    /**
+     * Dono efetivo dos addons do perfil ativo: com "usar addons primários"
+     * ligado, o perfil lê e grava os addons do principal em vez dos seus.
+     * O principal é dono de si mesmo.
+     */
+    fun addonOwnerId(): String =
+        if (profile.usePrimaryAddons && _profileId.value != MAIN_PROFILE) MAIN_PROFILE else _profileId.value
+
+    /**
+     * Dono efetivo dos repositórios de plugins do perfil ativo: igual ao
+     * de addons, com a flag de plugins ([Profile.usePrimaryPlugins]).
+     */
+    fun pluginOwnerId(): String =
+        if (profile.usePrimaryPlugins && _profileId.value != MAIN_PROFILE) MAIN_PROFILE else _profileId.value
 
     private fun readStringList(key: String): List<String> = readStringListFor(key, _profileId.value)
 
@@ -3390,25 +3429,31 @@ class PlatformPrefs @Inject constructor(
 
     /**
      * Lista completa de addons (ordem = prioridade, 1º é tentado primeiro) com o flag de ativo.
-     * Guardada em JSON. Migra automaticamente do formato antigo (uma URL por linha).
+     * Guardada em JSON, POR PERFIL com herança primária (ver [addonOwnerId]): o principal usa a
+     * chave antiga ("stremio_addons_v2"), então quem já usava o app não perde nada; os demais
+     * ganham "p.<id>.stremio_addons_v2". Migra automaticamente do formato antigo (uma URL por linha).
      */
     var addonEntries: List<AddonEntry>
-        get() {
-            val raw = prefs.getString(KEY_ADDONS_V2, null)
-            if (raw != null) return decodeEntries(raw)
-            // Migração do formato legado (texto com uma URL por linha). Instalação nova
-            // entra sem addon nenhum — a pessoa escolhe e instala pela Loja.
-            val legacy = prefs.getString("stremio_addons", null)
-            return (legacy?.split("\n", ",") ?: emptyList()).map { it.trim() }
-                .filter { it.startsWith("http") }
-                .map { AddonEntry(it, true) }
-        }
+        get() = readAddonEntries()
         set(value) {
             val clean = value.distinctBy { it.url }
-            prefs.edit().putString(KEY_ADDONS_V2, encodeEntries(clean)).apply()
+            prefs.edit().putString(scopedKey(KEY_ADDONS_V2, addonOwnerId()), encodeEntries(clean)).apply()
             _addons.value = clean
             refreshLayout()
         }
+
+    private fun readAddonEntries(): List<AddonEntry> {
+        val raw = prefs.getString(scopedKey(KEY_ADDONS_V2, addonOwnerId()), null)
+        if (raw != null) return decodeEntries(raw)
+        // Migração do formato legado (texto com uma URL por linha). A lista
+        // antiga era do aparelho: só o principal a herda; os demais perfis
+        // começam sem addon nenhum — cada um escolhe e instala pela Loja.
+        if (addonOwnerId() != MAIN_PROFILE) return emptyList()
+        val legacy = prefs.getString("stremio_addons", null)
+        return (legacy?.split("\n", ",") ?: emptyList()).map { it.trim() }
+            .filter { it.startsWith("http") }
+            .map { AddonEntry(it, true) }
+    }
 
     private val _addons = MutableStateFlow(addonEntries)
     /** Lista de addons que avisa quem observa. A loja instala e o gerenciador já vê. */
@@ -3486,8 +3531,11 @@ class PlatformPrefs @Inject constructor(
     // filesDir/plugin-code/<id>.js e os cookies em filesDir/plugin-cookies/<id>.json
     // (ver PluginStore); aqui só vão metadados, nunca código nem cookie.
 
-    private fun readPluginRepos(): List<com.aotv.app.data.plugins.PluginRepo> = runCatching {
-        val arr = org.json.JSONArray(prefs.getString(KEY_PLUGIN_REPOS, null) ?: "[]")
+    private fun readPluginRepos(): List<com.aotv.app.data.plugins.PluginRepo> =
+        readPluginReposFor(pluginOwnerId())
+
+    private fun readPluginReposFor(ownerId: String): List<com.aotv.app.data.plugins.PluginRepo> = runCatching {
+        val arr = org.json.JSONArray(prefs.getString(scopedKey(KEY_PLUGIN_REPOS, ownerId), null) ?: "[]")
         (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             com.aotv.app.data.plugins.PluginRepo(
@@ -3501,7 +3549,11 @@ class PlatformPrefs @Inject constructor(
     private val _pluginRepos = MutableStateFlow(readPluginRepos())
     val pluginRepos: StateFlow<List<com.aotv.app.data.plugins.PluginRepo>> = _pluginRepos.asStateFlow()
 
-    /** Repositórios instalados (ordem = ordem de instalação). */
+    /**
+     * Repositórios instalados (ordem = ordem de instalação). POR PERFIL com
+     * herança primária (ver [pluginOwnerId]): o principal usa a chave antiga
+     * ("plugin_repos_v1"), então quem já usava o app não perde nada.
+     */
     var pluginRepoList: List<com.aotv.app.data.plugins.PluginRepo>
         get() = _pluginRepos.value
         set(value) {
@@ -3511,7 +3563,7 @@ class PlatformPrefs @Inject constructor(
                     .put("version", r.version).put("updatedAt", r.updatedAt)
                     .put("enabled", r.enabled))
             }
-            prefs.edit().putString(KEY_PLUGIN_REPOS, arr.toString()).apply()
+            prefs.edit().putString(scopedKey(KEY_PLUGIN_REPOS, pluginOwnerId()), arr.toString()).apply()
             _pluginRepos.value = value
         }
 
@@ -3985,6 +4037,10 @@ class PlatformPrefs @Inject constructor(
         _badgePackJson.value = prefs.getString(sk("pref_badge_pack_json"), "") ?: ""
         _badgePackEnabled.value = prefs.getBoolean(sk("pref_badge_pack_enabled"), true)
         _streamPinned.value = readStringListFor("pref_stream_pinned", pinnedOwnerId())
+        // Addons e plugins são por perfil com herança primária: a troca de
+        // perfil (ou da flag) recarrega os fluxos do dono efetivo.
+        _addons.value = readAddonEntries()
+        _pluginRepos.value = readPluginRepos()
         _sourcePreset.value = prefs.getString(sk("pref_source_preset_v1"), "balanced") ?: "balanced"
         _sourceStrategy.value = prefs.getString(sk("pref_source_strategy_v1"), "quality") ?: "quality"
         _sourceLangFilter.value = prefs.getString(sk("pref_source_lang_filter_v1"), "") ?: ""
@@ -4262,6 +4318,32 @@ class PlatformPrefs @Inject constructor(
     var nextEpPrefetch: Boolean
         get() = _nextEpPrefetch.value
         set(value) { prefs.edit().putBoolean(sk("pref_next_ep_prefetch_v1"), value).apply(); _nextEpPrefetch.value = value }
+
+    // Lote v1.46.0 — download inteligente (item 3) e arte do Continuar (item 9).
+    private val _smartDownload = MutableStateFlow(prefs.getBoolean(sk("pref_smart_download_v1"), false))
+    /** Download inteligente: baixa os próximos episódios e apaga conforme assistidos. DESLIGADO por padrão, p/ não ocupar espaço. */
+    val smartDownloadFlow: StateFlow<Boolean> = _smartDownload.asStateFlow()
+    var smartDownload: Boolean
+        get() = _smartDownload.value
+        set(value) { prefs.edit().putBoolean(sk("pref_smart_download_v1"), value).apply(); _smartDownload.value = value }
+
+    private val _smartDownloadWifiOnly = MutableStateFlow(prefs.getBoolean(sk("pref_smart_download_wifi_only_v1"), true))
+    /** Download inteligente só no Wi-Fi. */
+    val smartDownloadWifiOnlyFlow: StateFlow<Boolean> = _smartDownloadWifiOnly.asStateFlow()
+    var smartDownloadWifiOnly: Boolean
+        get() = _smartDownloadWifiOnly.value
+        set(value) { prefs.edit().putBoolean(sk("pref_smart_download_wifi_only_v1"), value).apply(); _smartDownloadWifiOnly.value = value }
+
+    private val _continueArtwork = MutableStateFlow(prefs.getString(sk("pref_continue_artwork_v1"), "episode") ?: "episode")
+    /** Arte do card do Continuar: "episode" (thumb do episódio) ou "poster" (capa da série). */
+    val continueArtworkFlow: StateFlow<String> = _continueArtwork.asStateFlow()
+    var continueArtwork: String
+        get() = _continueArtwork.value
+        set(value) {
+            val clean = if (value == "poster") "poster" else "episode"
+            prefs.edit().putString(sk("pref_continue_artwork_v1"), clean).apply()
+            _continueArtwork.value = clean
+        }
 
     private val _kidsAgeLimitLocked = MutableStateFlow(prefs.getBoolean(sk("pref_kids_age_limit_locked_v1"), true))
     /** Trava do limite de idade kids por PIN (item 10). Ligada por padrão. */

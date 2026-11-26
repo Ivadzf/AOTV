@@ -57,15 +57,32 @@ fun ContinueCard(
      * o próprio conteúdo, não o que está atrás. Funciona em qualquer API.
      */
     frosted: Boolean = false,
+    /** Lote v1.46.0 item 8: selo "NOVO" (episódio novo não visto). null = sem selo. */
+    badge: String? = null,
+    /** Lote v1.46.0 item 8: true = a temporada atual é mais recente que a última assistida. */
+    newSeason: Boolean = false,
+    /**
+     * Lote v1.46.0 item 9: arte do card — "episode" (thumb do episódio, como antes) ou
+     * "poster" (capa da série). Qualquer outro valor cai p/ "episode". A arte escolhida
+     * que falha (ou está vazia) cai p/ a outra, nunca some.
+     */
+    artworkMode: String = "episode",
 ) {
     val width = continueCardWidth(compact)
     val font = LocalDensity.current.fontScale.coerceAtLeast(1f)
-    val height = maxOf(100f, 100f + 12f * (font - 1f)).dp
+    val hasBadge = badge != null || newSeason
+    val height = maxOf(100f + if (hasBadge) 16f else 0f, 100f + 12f * (font - 1f)).dp
     val shape = RoundedCornerShape(14.dp)
     var focused by remember { mutableStateOf(false) }
-    var failed by remember(artwork?.imageUrl) { mutableStateOf(false) }
-    val image = if (failed) artwork?.posterUrl.orEmpty().ifBlank { item.posterUrl }
-        else artwork?.imageUrl.orEmpty().ifBlank { item.backdropUrl }.ifBlank { item.posterUrl }
+    // Arte do episódio e do pôster (os dois dados já existem no ContinueArtwork).
+    val episodeArt = artwork?.imageUrl.orEmpty().ifBlank { item.backdropUrl }.ifBlank { item.posterUrl }
+    val posterArt = artwork?.posterUrl.orEmpty().ifBlank { item.posterUrl }
+    val chosenArt = if (artworkMode == "poster") posterArt.ifBlank { episodeArt } else episodeArt
+    var failed by remember(chosenArt) { mutableStateOf(false) }
+    // A arte escolhida falhou: cai p/ a outra (a do episódio cai p/ o pôster, como antes).
+    val image = if (failed) {
+        if (artworkMode == "poster") episodeArt else posterArt
+    } else chosenArt
     val isSeries = item.type == MediaType.SERIES
     // Linha 2: "T1 E1" (já vem formatado pelo chamador) ou "Filme" / "Série".
     val episodeLabel = when {
@@ -95,6 +112,13 @@ fun ContinueCard(
             Modifier.weight(1f).fillMaxHeight().padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            // Lote v1.46.0 item 8: selos no topo do card (só quando há algum).
+            if (hasBadge) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (badge != null) ContinueBadgePill(badge)
+                    if (newSeason) ContinueBadgePill("NOVA TEMPORADA")
+                }
+            }
             Text(
                 item.title.ifBlank { artwork?.title.orEmpty() },
                 color = Color.White, fontSize = 15.sp, lineHeight = 19.sp,
@@ -119,5 +143,16 @@ fun ContinueCard(
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+/** Pílula de selo do card do Continuar ("NOVO", "NOVA TEMPORADA", Lote v1.46.0 item 8). */
+@Composable
+private fun ContinueBadgePill(text: String) {
+    Box(
+        Modifier.background(Accent, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = OnAccent, fontSize = 10.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
     }
 }

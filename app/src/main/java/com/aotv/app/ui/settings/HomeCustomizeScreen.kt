@@ -38,6 +38,7 @@ import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aotv.app.data.local.SystemRow
+import com.aotv.app.data.remote.AddonTvDiag
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
 
@@ -291,7 +292,7 @@ fun HomeCustomizeScreen(
                         }
                         st.tvDiag.forEach { d ->
                             Text(
-                                "${d.addonName} respondeu, mas só declara ${d.declaredTypes.joinToString(", ") { tvTypeLabel(it) }} — sem catálogo de TV.",
+                                tvDiagText(d),
                                 color = TextTertiary, fontSize = 13.sp, lineHeight = 18.sp,
                                 modifier = Modifier.padding(top = 8.dp),
                             )
@@ -556,6 +557,25 @@ private fun tvTypeLabel(type: String): String = when (type) {
     "tv" -> "TV"
     "channel" -> "Canais"
     else -> type
+}
+
+/**
+ * Texto do diagnóstico de um addon sem catálogo de TV (Lote 1 pós-v1.45.0,
+ * v1.46.0 — correção BestCine). Com a lista vazia, o formato antigo saía
+ * com o vazio no meio da frase e parecia cortado; agora diz que não declara
+ * nenhum catálogo. Quando o manifest marca `behaviorHints.configurationRequired`,
+ * diz que exige configuração (os catálogos podem ser pagos — os canais do
+ * BestCine viraram VIP). Com a lista NÃO vazia, o texto antigo é mantido.
+ */
+private fun tvDiagText(d: AddonTvDiag): String {
+    if (d.declaredTypes.isEmpty()) {
+        return if (d.configurationRequired) {
+            "${d.addonName} respondeu, mas não declara nenhum catálogo — exige configuração (os catálogos podem ser pagos)."
+        } else {
+            "${d.addonName} respondeu, mas não declara nenhum catálogo — sem catálogo de TV."
+        }
+    }
+    return "${d.addonName} respondeu, mas só declara ${d.declaredTypes.joinToString(", ") { tvTypeLabel(it) }} — sem catálogo de TV."
 }
 
 @Composable

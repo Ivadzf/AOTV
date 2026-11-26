@@ -43,8 +43,11 @@ internal fun rememberDetailPrimary(
     val seriesFinished = isSeries && state.resumeDurationMs > 0 && state.resumePositionMs >= state.resumeDurationMs * 0.9
     val hasAnySource = if (isSeries) state.seasons.values.any { it.isNotEmpty() } else playerSources.isNotEmpty()
 
-    // Há progresso salvo para retomar? (posição entre 10 s e 95% da duração, com fonte salva)
-    val canResume = state.resumeSourceUrl.isNotBlank() && state.resumePositionMs > 10_000 &&
+    // Há progresso salvo para retomar? (posição entre 10 s e 95% da duração).
+    // Lote v1.46.0 item 10: o Continuar NÃO exige mais fonte salva — progresso de outro
+    // aparelho (só posição + episódio) também retoma; sem fonte, o play resolve as fontes
+    // na hora (ver playInternal). Com fonte salva, igual a antes.
+    val canResume = state.resumePositionMs > 10_000 &&
         (state.resumeDurationMs <= 0 || state.resumePositionMs < state.resumeDurationMs * 0.95)
 
     // Episódio terminado leva ao PRÓXIMO episódio, ou à próxima temporada no fim dela.
@@ -105,13 +108,29 @@ internal fun rememberDetailPrimary(
         }
         if (canResume) {
             val total = if (histSeason > 0) state.seasons[histSeason]?.size ?: 0 else 0
-            // A fonte salva PRECISA estar na lista do player, senão ele acha que toca a fonte 0
-            // e a troca automática pula para outra coisa.
-            val saved = playerSources.any { it.url == state.resumeSourceUrl }
-            val sources = if (saved) playerSources
-                else listOf(MoviePlayerSource("Fonte salva", state.resumeSourceUrl)) + playerSources
-            direct(state.resumeSourceUrl, state.resumePositionMs, state.resumeLastEpisode, sources, histSeason, histEpisode, total)
-            return
+            // Sem fonte salva (Lote v1.46.0 item 10): resolve na hora pelo caminho normal —
+            // a série abre o episódio (o player busca as fontes do episódio e retoma a
+            // posição salva sozinho) e o filme toca a melhor fonte a partir da posição salva.
+            // Nunca toca direto sem fonte.
+            if (state.resumeSourceUrl.isBlank() && isSeries && histSeason > 0 && histEpisode > 0) {
+                onPlayEpisode(item.tmdbId, histSeason, histEpisode, total)
+                return
+            }
+            if (state.resumeSourceUrl.isBlank() && !isSeries) {
+                val first = playerSources.getOrNull(viewModel.bestSourceIndex()) ?: return
+                direct(first.url, state.resumePositionMs, state.resumeLastEpisode, playerSources, 0, 0, 0)
+                return
+            }
+            if (state.resumeSourceUrl.isNotBlank()) {
+                // A fonte salva PRECISA estar na lista do player, senão ele acha que toca a fonte 0
+                // e a troca automática pula para outra coisa.
+                val saved = playerSources.any { it.url == state.resumeSourceUrl }
+                val sources = if (saved) playerSources
+                    else listOf(MoviePlayerSource("Fonte salva", state.resumeSourceUrl)) + playerSources
+                direct(state.resumeSourceUrl, state.resumePositionMs, state.resumeLastEpisode, sources, histSeason, histEpisode, total)
+                return
+            }
+            // Série com posição mas sem episódio no histórico: segue p/ o fluxo normal abaixo.
         }
         if (isSeries) {
             // Série sem progresso toca o 1º episódio da temporada escolhida.
@@ -136,7 +155,9 @@ internal fun rememberDetailPrimary(
      */
     fun pendingMovieUrl(): String? {
         if (isSeries || !enabled) return null
-        if (canResume) return state.resumeSourceUrl
+        // Lote v1.46.0 item 10: sem fonte salva, a retomada usa a melhor fonte (o play
+        // direto já faz isso) — antes voltava a URL vazia e a guarda de duração não tinha o que checar.
+        if (canResume) return state.resumeSourceUrl.ifBlank { playerSources.getOrNull(viewModel.bestSourceIndex())?.url }
         return playerSources.getOrNull(viewModel.bestSourceIndex())?.url
     }
 

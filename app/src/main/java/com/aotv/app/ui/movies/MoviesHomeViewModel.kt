@@ -72,6 +72,13 @@ class MoviesHomeViewModel @Inject constructor(
         // Lote 25 (v1.35.0) — Frente D, item 14: sincronia contínua do
         // histórico (Trakt/Simkl) — pull na abertura + worker de 15 min.
         com.aotv.app.data.sync.HistoryContinuousSync.pullOnOpen(appContext, simkl, trakt, prefs)
+        // Lote v1.46.0 item 9: a arte do card do Continuar segue a pref ao vivo
+        // (mudar nas Configurações aplica na hora, sem reiniciar).
+        viewModelScope.launch {
+            prefs.continueArtworkFlow.collect { mode ->
+                _uiState.update { it.copy(continueArtworkMode = mode) }
+            }
+        }
     }
 
 
@@ -188,6 +195,15 @@ class MoviesHomeViewModel @Inject constructor(
         val continueRemaining: Map<Int, Int> = emptyMap(),   // tmdbId -> minutos restantes
         val continueEpisode: Map<Int, String> = emptyMap(),  // tmdbId -> selo do episódio ("T2 E5")
         val continueArtwork: Map<String, com.aotv.app.data.repository.ContinueArtwork> = emptyMap(),
+        /** Lote v1.46.0 item 8: selo NOVO no card do Continuar (tmdbId -> "NOVO", só o
+         * episódio novo não visto da fileira "Novos episódios"). */
+        val continueBadges: Map<Int, String> = emptyMap(),
+        /** Lote v1.46.0 item 8: séries cuja temporada atual é mais recente que a última
+         * assistida (ganham o selo "NOVA TEMPORADA" no card do Continuar). */
+        val continueNewSeason: Set<Int> = emptySet(),
+        /** Lote v1.46.0 item 9: arte do card do Continuar ("episode" | "poster",
+         * pref pref_continue_artwork_v1). */
+        val continueArtworkMode: String = "episode",
         // ── Fileiras fixas da home estilo Netflix ──
         val nowPlaying: List<MovieItem> = emptyList(),     // Filmes nos cinemas
         val releases2026: List<MovieItem> = emptyList(),   // Lançamentos 2026
@@ -349,6 +365,18 @@ class MoviesHomeViewModel @Inject constructor(
     // ── Novos episódios ──────────────────────────────────────────────────────
     private var lastNewEpKey = ""
 
+    /**
+     * Selos NOVO do Continuar (Lote v1.46.0 item 8): episódio novo não visto da fileira
+     * "Novos episódios" (só o selo "NOVO" — a data de estreia futura fica só na fileira),
+     * restrito a quem está no Continuar assistindo. Recalculado sempre que o Continuar ou
+     * os Novos episódios mudam, porque os dois carregam em momentos diferentes.
+     */
+    private fun continueBadgesOf(state: UiState): Map<Int, String> {
+        val ids = state.continueWatching.map { it.tmdbId }.toSet()
+        return state.newEpisodes.filter { it.badge == "NOVO" && it.item.tmdbId in ids }
+            .associate { it.item.tmdbId to it.badge }
+    }
+
     /** Busca o detalhe de cada série (até 15) e monta a fileira "Novos episódios". */
     private fun buildNewEpisodes(series: List<Triple<Int, String, String>>) {
         lastNewEpSeries = series
@@ -377,7 +405,11 @@ class MoviesHomeViewModel @Inject constructor(
                     newEpisodeOf(item, last, d.nextEpisodeToAir, seen, now)
                 }
             }.awaitAll().filterNotNull()
-            _uiState.update { it.copy(newEpisodes = sortNewEpisodes(out).filterNot { ep -> prefs.isNotToday(ep.item.tmdbId) }) }
+            _uiState.update { st ->
+                val eps = sortNewEpisodes(out).filterNot { ep -> prefs.isNotToday(ep.item.tmdbId) }
+                val next = st.copy(newEpisodes = eps)
+                next.copy(continueBadges = continueBadgesOf(next))
+            }
         }
     }
     // ── Fileira "Próximos" (Lote 8, v1.18.0) ─────────────────────────────
@@ -655,10 +687,31 @@ class MoviesHomeViewModel @Inject constructor(
         if (season <= 0 || episode <= 0) return null
         val apiKey = prefs.tmdbApiKey
         if (apiKey.isBlank()) return h
-        val epsInSeason = runCatching { tmdb.getSeason(h.tmdbId, season, apiKey = apiKey).episodes.size }.getOrNull() ?: return h
-        if (episode in 1 until epsInSeason) return h.copy(lastEpisode = "T$season:E${episode + 1}", positionMs = 0, durationMs = 0)
+        val seasonEps = runCatching { tmdb.getSeason(h.tmdbId, season, apiKey = apiKey).episodes }.getOrNull() ?: return h
+        val epsInSeason = seasonEps.size
+        if (episode in 1 until epsInSeason) {
+            // Lote v1.46.0 item 7: só avança p/ o próximo episódio quando ele JÁ FOI EXIBIDO
+            // (mesma guarda da próxima temporada abaixo) — sem data, sem estreia ou com erro
+            // de rede, mantém o item como está (mesmo padrão de erro do resto da função).
+            val nextAir = seasonEps.firstOrNull { it.episodeNumber == episode + 1 }?.airDate
+                ?.takeIf { it.isNotBlank() }?.let { airDateMs(it) }
+            if (nextAir == null || System.currentTimeMillis() < nextAir) return h
+            return h.copy(lastEpisode = "T$season:E${episode + 1}", positionMs = 0, durationMs = 0)
+        }
         val numberOfSeasons = runCatching { tmdb.getSeriesDetail(h.tmdbId, append = "", apiKey = apiKey).numberOfSeasons }.getOrNull() ?: return h
-        if (season < numberOfSeasons) return h.copy(lastEpisode = "T${season + 1}:E1", positionMs = 0, durationMs = 0)
+        if (season < numberOfSeasons) {
+            // Lote v1.46.0 item 7: só avança p/ a próxima temporada quando o E1 dela JÁ FOI
+            // EXIBIDO — antes avançava só por a temporada existir no TMDB e a série ficava
+            // no Continuar p/ sempre esperando uma estreia futura. Sem data, sem estreia ou
+            // com erro de rede, mantém o item como está (nunca inventa data de estreia).
+            val firstAir = runCatching {
+                tmdb.getSeason(h.tmdbId, season + 1, apiKey = apiKey).episodes
+                    .firstOrNull { it.episodeNumber == 1 }?.airDate
+            }.getOrNull()
+            val aired = firstAir?.takeIf { it.isNotBlank() }?.let { airDateMs(it) }
+            if (aired == null || System.currentTimeMillis() < aired) return h
+            return h.copy(lastEpisode = "T${season + 1}:E1", positionMs = 0, durationMs = 0)
+        }
         return null
     }
 
@@ -1045,7 +1098,10 @@ class MoviesHomeViewModel @Inject constructor(
     /** "Não hoje" (Lote 13): dispensa o episódio novo até amanhã. */
     fun markNewEpisodeNotToday(tmdbId: Int) {
         prefs.markNotToday(tmdbId)
-        _uiState.update { it.copy(newEpisodes = it.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId }) }
+        _uiState.update { st ->
+            val next = st.copy(newEpisodes = st.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId })
+            next.copy(continueBadges = continueBadgesOf(next))
+        }
     }
 
     /**
@@ -1057,7 +1113,13 @@ class MoviesHomeViewModel @Inject constructor(
     fun markContinueNotToday(tmdbId: Int) {
         if (tmdbId <= 0) return
         prefs.markNotToday(tmdbId)
-        _uiState.update { it.copy(continueWatching = it.continueWatching.filterNot { m -> m.tmdbId == tmdbId }) }
+        _uiState.update {
+            it.copy(
+                continueWatching = it.continueWatching.filterNot { m -> m.tmdbId == tmdbId },
+                continueBadges = it.continueBadges - tmdbId,
+                continueNewSeason = it.continueNewSeason - tmdbId,
+            )
+        }
     }
 
     /** Abandonar série (Lote 23): some do Continuar, de "Novos episódios" e do calendário; avisa os trackers. */
@@ -1072,6 +1134,8 @@ class MoviesHomeViewModel @Inject constructor(
                 continueProgress = st.continueProgress - tmdbId,
                 continueRemaining = st.continueRemaining - tmdbId,
                 continueEpisode = st.continueEpisode - tmdbId,
+                continueBadges = st.continueBadges - tmdbId,
+                continueNewSeason = st.continueNewSeason - tmdbId,
                 newEpisodes = st.newEpisodes.filterNot { ep -> ep.item.tmdbId == tmdbId },
             )
         }
@@ -1327,12 +1391,13 @@ class MoviesHomeViewModel @Inject constructor(
                 // Selo do episódio ("T2:E5" -> "T2 E5"), igual ao que a Minha Lista da TV já mostra.
                 val episode = continueList.filter { it.lastEpisode.isNotBlank() }
                     .associate { it.tmdbId to it.lastEpisode.replace(":", " ") }
-                _uiState.update {
-                    it.copy(
+                _uiState.update { st ->
+                    val next = st.copy(
                         continueWatching = items, continueProgress = progress,
                         continueRemaining = remaining, continueEpisode = episode,
-                        continueArtwork = it.continueArtwork.filterKeys { key -> items.any { m -> com.aotv.app.data.local.posterKey(m) == key } },
+                        continueArtwork = st.continueArtwork.filterKeys { key -> items.any { m -> com.aotv.app.data.local.posterKey(m) == key } },
                     )
+                    next.copy(continueBadges = continueBadgesOf(next))
                 }
                 // Toda vez que o histórico muda, a recomendação é refeita. É isso que faz a
                 // lista acompanhar o que a pessoa anda assistindo.
@@ -1354,11 +1419,11 @@ class MoviesHomeViewModel @Inject constructor(
                     )
                 }
                 coroutineScope {
-                    continueList.take(20).map { h -> async {
+                    val newSeasonIds = continueList.take(20).map { h -> async {
                         // Ao vivo (Lote 8, v1.18.0): o tmdbId do canal é
                         // sintético — sem busca de arte no TMDB p/ ele.
-                        if (h.type == com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE) return@async
-                        val item = items.firstOrNull { it.tmdbId == h.tmdbId && it.type.name == h.type } ?: return@async
+                        if (h.type == com.aotv.app.ui.live.LivePlayerViewModel.LIVE_TYPE) return@async null
+                        val item = items.firstOrNull { it.tmdbId == h.tmdbId && it.type.name == h.type } ?: return@async null
                         val art = continueArt.resolve(item, h.lastEpisode)
                         _uiState.update { current -> current.copy(
                             continueArtwork = current.continueArtwork + (com.aotv.app.data.local.posterKey(item) to art),
@@ -1369,7 +1434,18 @@ class MoviesHomeViewModel @Inject constructor(
                                 )
                             },
                         ) }
-                    } }.awaitAll()
+                        // Lote v1.46.0 item 8: selo "NOVA TEMPORADA" — a temporada atual
+                        // (última exibida, ou o nº de temporadas) é mais recente que a última
+                        // assistida. Detalhe via cache (o mesmo de "Novos episódios"); sem
+                        // detalhe ou sem episódio no histórico, sem selo — nunca inventado.
+                        if (item.type != MediaType.SERIES) return@async null
+                        val watchedSeason = Regex("T(\\d+):E(\\d+)").find(h.lastEpisode)
+                            ?.groupValues?.get(1)?.toIntOrNull() ?: return@async null
+                        val d = seriesDetailCache.get(item.tmdbId) ?: return@async null
+                        val latestSeason = d.lastEpisodeToAir?.season ?: d.numberOfSeasons
+                        if (latestSeason > watchedSeason) item.tmdbId else null
+                    } }.awaitAll().filterNotNull().toSet()
+                    _uiState.update { it.copy(continueNewSeason = newSeasonIds) }
                 }
             }
         }

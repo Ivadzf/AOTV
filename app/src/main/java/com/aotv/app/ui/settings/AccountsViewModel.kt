@@ -7,6 +7,7 @@ import com.aotv.app.data.accounts.ImportReport
 import com.aotv.app.data.accounts.NuvioAccountService
 import com.aotv.app.data.accounts.NuvioDeviceCode
 import com.aotv.app.data.accounts.NuvioProfile
+import com.aotv.app.data.accounts.NuvioProfileImport
 import com.aotv.app.data.accounts.NuvioSession
 import com.aotv.app.data.accounts.StremioAccountService
 import com.aotv.app.data.accounts.StremioLink
@@ -31,6 +32,8 @@ class AccountsViewModel @Inject constructor(
     private val stremio: StremioAccountService,
     private val nuvio: NuvioAccountService,
     private val importer: AccountImporter,
+    // v1.46.0 (Lote 1 item 1): importar todos os perfis do Nuvio de uma vez.
+    private val profileImport: NuvioProfileImport,
     private val debrid: DebridService,
     private val prefs: PlatformPrefs,
     private val collections: com.aotv.app.data.collections.CollectionsRepository,
@@ -197,15 +200,28 @@ class AccountsViewModel @Inject constructor(
 
     private suspend fun fetchProfiles() {
         val list = nuvio.profiles().getOrThrow()
-        // Cria no app os perfis do Nuvio que ainda não existem (só o nome, com o vínculo
-        // para a importação). Nada é importado aqui e nenhum perfil local é apagado.
-        list.forEach { np ->
-            val existing = prefs.profiles.value.firstOrNull { it.name.equals(np.name, ignoreCase = true) }
-            val linked = existing ?: prefs.addProfile(np.name, kids = false)
-            if (linked != null) prefs.setNuvioProfileLink(linked.id, np.index)
-        }
+        // Cada perfil do Nuvio vira um perfil local (o principal do Nuvio,
+        // índice 1, SUBSTITUI o Principal do app — renomeado, sem apagar
+        // nada dele — ver NuvioProfileImport.resolveLocalProfile). Nada é
+        // importado aqui e nenhum perfil local é apagado.
+        list.forEach { np -> profileImport.resolveLocalProfile(np) }
         val active = prefs.nuvioProfileIndexFor(prefs.profileId.value)
         local.update { it.copy(nuvioProfiles = list, nuvioProfile = active ?: list.firstOrNull()?.index ?: 1) }
+    }
+
+    /** Recarrega os perfis do Nuvio (a tela de perfis chama ao abrir o diálogo de importação). */
+    fun refreshNuvioProfiles() {
+        if (nuvio.session.value == null) return
+        loadNuvioProfiles()
+    }
+
+    /**
+     * Importa todos os perfis do Nuvio de uma vez ([selected] vazio = todos).
+     * No fim o app troca para o perfil principal importado, sem reiniciar
+     * (ProfileEpoch, v1.45.0).
+     */
+    fun nuvioImportAllProfiles(selected: Set<Int>) = act("nuvio_import_all") {
+        profileImport.importAll(selected, ::step).getOrThrow().summary()
     }
 
     fun pickNuvioProfile(index: Int) {

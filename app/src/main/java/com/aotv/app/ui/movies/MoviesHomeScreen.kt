@@ -1328,7 +1328,12 @@ private fun ContinueRow(
                 com.aotv.app.ui.common.ContinueCard(item, click,
                     artwork = state.continueArtwork[com.aotv.app.data.local.posterKey(item)],
                     progress = state.continueProgress[item.tmdbId], remaining = state.continueRemaining[item.tmdbId],
-                    episode = state.continueEpisode[item.tmdbId].orEmpty(), compact = display.compact, frosted = frosted,
+                    episode = state.continueEpisode[item.tmdbId].orEmpty(),
+                    // Lote v1.46.0 itens 8 e 9: selos NOVO / NOVA TEMPORADA e arte escolhida.
+                    badge = state.continueBadges[item.tmdbId],
+                    newSeason = item.tmdbId in state.continueNewSeason,
+                    artworkMode = state.continueArtworkMode,
+                    compact = display.compact, frosted = frosted,
                     // Segurar abre o painel de opções (Lote 14, v1.24.0); sem onOptions, o long-press não faz nada.
                     onLongClick = onOptions?.let { options -> { options(item) } })
             }
@@ -1924,7 +1929,10 @@ private fun LocalGridView(
             items = state.continueWatching
             progress = state.continueProgress
             remaining = state.continueRemaining
-            badges = null
+            // Lote v1.46.0 item 8: os mesmos selos da fileira (NOVO ganha da NOVA TEMPORADA).
+            badges = state.continueBadges + state.continueNewSeason
+                .filter { it !in state.continueBadges }
+                .associateWith { "NOVA TEMPORADA" }
             subs = null
         }
         MoviesHomeViewModel.LOCAL_NEW_EPISODES -> {

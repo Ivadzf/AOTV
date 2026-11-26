@@ -3,6 +3,7 @@ package com.aotv.app.ui.movies
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aotv.app.data.clips.BatchDownloadManager
 import com.aotv.app.data.clips.ClipDownload
 import com.aotv.app.data.clips.ClipDownloader
 import com.aotv.app.data.clips.ClipExportResult
@@ -189,6 +190,18 @@ class DownloadsViewModel @Inject constructor(
     /** Retoma um download parado ("failed"/"queued") — re-download do zero (ver [DownloadRepository.resumeDownload]). */
     fun resume(entity: DownloadEntity) {
         viewModelScope.launch {
+            // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, item 2): o lote e o
+            // inteligente baixam por [ClipDownloader.downloadFull], NÃO
+            // pelo DownloadManager — o "Retomar" normal jogaria a URL HLS
+            // no DownloadManager, que baixaria a playlist .m3u8 como se
+            // fosse .mp4. ":full" e ":smart" retomam pela fila do lote.
+            if (ClipDownload.isFullId(entity.id) || ClipDownload.isSmartId(entity.id)) {
+                if (!batchManager.retry(entity)) {
+                    _message.value = "Não deu para retomar: a fonte deste download não foi guardada."
+                }
+                refresh()
+                return@launch
+            }
             repo.resumeDownload(entity)
             refresh()
         }
@@ -208,6 +221,40 @@ class DownloadsViewModel @Inject constructor(
     // (downloadId 0, como o clipe).
     private val clipDownloader by lazy { ClipDownloader(context) }
     private val clipExporter by lazy { ClipExporter(context) }
+
+    // LOTE 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2 e 3): download em
+    // lote + inteligente. O gerente é singleton por applicationContext
+    // (ver [BatchDownloadManager.get]) — a MESMA instância (e a mesma
+    // fila) que a tela de detalhes usa p/ enfileirar episódios; sem
+    // isso, o download começado no detalhe morreria ao voltar p/ cá.
+    private val batchManager by lazy { BatchDownloadManager.get(context) }
+
+    /** Progresso (0..100) por id dos episódios do lote — a tela mescla com o do DownloadManager e o do vídeo inteiro. */
+    val batchProgress: StateFlow<Map<String, Int>> = batchManager.batchProgress
+
+    /** Mensagem curta do lote/inteligente p/ toast — a tela consome como [message]. */
+    val batchMessage: StateFlow<String?> = batchManager.message
+
+    /** A tela chama depois de mostrar a mensagem do lote, p/ não repetir no retorno. */
+    fun consumeBatchMessage() {
+        batchManager.consumeMessage()
+    }
+
+    /** Download inteligente ligado? (desligado por padrão — ver PlatformPrefs). */
+    val smartDownload: StateFlow<Boolean> = prefs.smartDownloadFlow
+
+    /** Download inteligente só em Wi-Fi? (ligado por padrão). */
+    val smartDownloadWifiOnly: StateFlow<Boolean> = prefs.smartDownloadWifiOnlyFlow
+
+    /** Liga/desliga o download inteligente (o toggle mora na aba Downloads). */
+    fun setSmartDownload(value: Boolean) {
+        prefs.smartDownload = value
+    }
+
+    /** Liga/desliga o "só Wi-Fi" do download inteligente. */
+    fun setSmartDownloadWifiOnly(value: Boolean) {
+        prefs.smartDownloadWifiOnly = value
+    }
 
     /** Progresso (0..100) do vídeo inteiro por id (":full") — a tela mescla com [queryProgress]. */
     private val _fullProgress = MutableStateFlow<Map<String, Int>>(emptyMap())

@@ -326,7 +326,7 @@ object AotvBackup {
     private fun profileJson(p: Profile, includeSecrets: Boolean): JSONObject {
         val o = JSONObject().put("id", p.id).put("name", p.name).put("color", p.color)
             .put("kids", p.kids).put("avatarUrl", p.avatarUrl).put("avatarId", p.avatarId)
-            .put("usePrimaryAddons", p.usePrimaryAddons)
+            .put("usePrimaryAddons", p.usePrimaryAddons).put("usePrimaryPlugins", p.usePrimaryPlugins)
         if (includeSecrets && p.pinHash.isNotBlank()) o.put("pinHash", p.pinHash)
         return o
     }

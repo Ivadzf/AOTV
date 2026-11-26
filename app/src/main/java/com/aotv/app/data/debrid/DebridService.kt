@@ -1,13 +1,19 @@
 package com.aotv.app.data.debrid
 
 import android.content.Context
+import com.aotv.app.data.local.MAIN_PROFILE
+import com.aotv.app.data.local.PlatformPrefs
 import com.aotv.app.data.torrent.TorrentMagnet
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -15,14 +21,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Debrid do app. Guarda as contas (do aparelho), diz quais torrents o serviço tem prontos e
- * troca o magnet pelo link direto na hora de tocar. O magnet continua sendo a fonte guardada.
+ * Debrid do app. Guarda as contas POR PERFIL, com herança primária (ver
+ * [accountsOwnerId]), diz quais torrents o serviço tem prontos e troca o
+ * magnet pelo link direto na hora de tocar. O magnet continua sendo a fonte
+ * guardada. O resto (ligado, preferido, esconder sem cache) é do aparelho.
  */
 @Singleton
 class DebridService @Inject constructor(
     @ApplicationContext context: Context,
+    private val prefs: PlatformPrefs,
 ) {
-    private val prefs = context.getSharedPreferences("aotv_debrid", Context.MODE_PRIVATE)
+    private val debridPrefs = context.getSharedPreferences("aotv_debrid", Context.MODE_PRIVATE)
     private val http = DebridHttp(
         com.aotv.app.data.remote.AppDns.mediaClient.newBuilder()
             .callTimeout(25, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
@@ -32,11 +41,40 @@ class DebridService @Inject constructor(
     private val pm = PremiumizeApi(http)
     private val ad = AllDebridApi(http)
 
-    private val _accounts = MutableStateFlow(readAccounts())
+    /**
+     * Dono efetivo das contas: com "usar addons primários" ligado, o perfil
+     * usa as contas do principal em vez das suas. Não existe flag própria
+     * de debrid no Nuvio — a chave de debrid faz parte da "configuração
+     * primária" (ver PlatformPrefs.addonOwnerId).
+     */
+    private fun accountsOwnerId(): String = prefs.addonOwnerId()
+
+    @Volatile
+    private var accountsOwner: String = accountsOwnerId()
+
+    private val _accounts = MutableStateFlow(readAccounts(accountsOwner))
     val accounts: StateFlow<List<DebridAccount>> = _accounts.asStateFlow()
 
     private val _settings = MutableStateFlow(readSettings())
     val settings: StateFlow<DebridSettings> = _settings.asStateFlow()
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Recarrega as contas do dono efetivo. Público para a importação da
+     * conta Nuvio: depois de trocar de perfil, a leitura seguinte já vê as
+     * contas do destino — sem esperar o coletor. O cache do serviço é do
+     * dono antigo e sai junto (o que o serviço tinha pronto era da conta
+     * antiga).
+     */
+    fun refreshAccounts() {
+        val owner = accountsOwnerId()
+        if (owner == accountsOwner) return
+        accountsOwner = owner
+        cache.clear()
+        resolved.clear()
+        _accounts.value = readAccounts(owner)
+    }
 
     /** Conta que resolve os torrents agora. null com debrid desligado ou sem conta. */
     fun active(): DebridAccount? {
@@ -231,10 +269,21 @@ class DebridService @Inject constructor(
         return TorrentMagnet.parse(magnetOrHash)?.infoHash
     }
 
+    init {
+        // Troca de perfil (ou da flag de primários) muda o dono das contas:
+        // recarrega o fluxo para o dono novo. Fica no fim da classe de
+        // propósito: o coletor escreve em `cache`/`resolved` (ver
+        // [refreshAccounts]) e tudo o que ele toca já existe aqui. O
+        // coletor também dispara na inscrição, com o dono atual —
+        // [refreshAccounts] ignora quando o dono não mudou.
+        scope.launch { prefs.profileId.collect { refreshAccounts() } }
+        scope.launch { prefs.profiles.collect { refreshAccounts() } }
+    }
+
     // ── Persistência ────────────────────────────────────────────────────────────
 
-    private fun readAccounts(): List<DebridAccount> = runCatching {
-        val arr = org.json.JSONArray(prefs.getString("accounts", "[]"))
+    private fun readAccounts(ownerId: String): List<DebridAccount> = runCatching {
+        val arr = org.json.JSONArray(debridPrefs.getString(accountsKeyFor(ownerId), "[]"))
         (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
             val p = DebridProvider.of(o.optString("p")) ?: return@mapNotNull null
@@ -253,22 +302,32 @@ class DebridService @Inject constructor(
                     .put("r", it.refresh).put("ci", it.clientId).put("cs", it.clientSecret).put("ex", it.expiresAt)
             )
         }
-        prefs.edit().putString("accounts", arr.toString()).apply()
+        debridPrefs.edit().putString(accountsKeyFor(accountsOwner), arr.toString()).apply()
         _accounts.value = list
     }
 
     private fun readSettings() = DebridSettings(
-        enabled = prefs.getBoolean("enabled", true),
-        preferred = prefs.getString("preferred", "").orEmpty(),
-        hideUncached = prefs.getBoolean("hide_uncached", false),
+        enabled = debridPrefs.getBoolean("enabled", true),
+        preferred = debridPrefs.getString("preferred", "").orEmpty(),
+        hideUncached = debridPrefs.getBoolean("hide_uncached", false),
     )
 
     private fun writeSettings(s: DebridSettings) {
-        prefs.edit().putBoolean("enabled", s.enabled).putString("preferred", s.preferred).putBoolean("hide_uncached", s.hideUncached).apply()
+        debridPrefs.edit().putBoolean("enabled", s.enabled).putString("preferred", s.preferred).putBoolean("hide_uncached", s.hideUncached).apply()
         _settings.value = s
     }
 
-    private companion object {
+    companion object {
         const val RESOLVED_TTL = 15 * 60_000L
+
+        /**
+         * Chave das contas de um dono na pref "aotv_debrid": "accounts" para
+         * o principal, "accounts.p.<id>" para os demais — mesmo padrão de
+         * [com.aotv.app.data.local.scopedKey], com o escopo depois do nome.
+         * O principal usa a chave antiga, então quem já usava o app não
+         * perde nada.
+         */
+        fun accountsKeyFor(ownerId: String): String =
+            if (ownerId == MAIN_PROFILE) "accounts" else "accounts.p.$ownerId"
     }
 }

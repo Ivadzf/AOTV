@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.clips.BatchDownload
 import com.aotv.app.data.clips.ClipDownload
+import com.aotv.app.data.clips.SeasonDownloadGroup
 import com.aotv.app.data.local.MobileDataUsage
 import com.aotv.app.data.local.entity.DownloadEntity
 import com.aotv.app.data.repository.OrphanFile
@@ -68,12 +70,24 @@ fun DownloadsScreen(
     // Progresso do vídeo inteiro (Lote mpv 4 — Frente 2) + mensagens
     // (exportação e vídeo inteiro chegam por toast).
     val fullProgress by vm.fullProgress.collectAsStateWithLifecycle()
+    // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2 e 3): progresso do
+    // lote, mensagens do lote/inteligente e os toggles do inteligente.
+    val batchProgress by vm.batchProgress.collectAsStateWithLifecycle()
+    val batchMessage by vm.batchMessage.collectAsStateWithLifecycle()
+    val smartDownload by vm.smartDownload.collectAsStateWithLifecycle()
+    val smartDownloadWifiOnly by vm.smartDownloadWifiOnly.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val context = LocalContext.current
     LaunchedEffect(message) {
         message?.let { text ->
             Toast.makeText(context, text, Toast.LENGTH_LONG).show()
             vm.consumeMessage()
+        }
+    }
+    LaunchedEffect(batchMessage) {
+        batchMessage?.let { text ->
+            Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            vm.consumeBatchMessage()
         }
     }
 
@@ -171,6 +185,54 @@ fun DownloadsScreen(
             }
         }
 
+        // Download inteligente (Lote 1 pós-v1.45.0, v1.46.0 — Frente B,
+        // item 3): o toggle mora AQUI, na aba Downloads — desligado por
+        // padrão, p/ não ocupar espaço sem o usuário pedir. Ligado, o
+        // próximo episódio baixa quando um é marcado como assistido e os
+        // assistidos (só os do inteligente) são apagados.
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(horizontal = com.aotv.app.ui.common.pagePadding()).padding(top = 10.dp)
+                .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Download inteligente",
+                    fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary,
+                )
+                Text(
+                    "Baixa o próximo episódio ao marcar um como assistido e apaga os assistidos. Só apaga downloads do inteligente — os seus downloads manuais nunca são apagados por aqui.",
+                    fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            Switch(checked = smartDownload, onCheckedChange = { vm.setSmartDownload(it) })
+        }
+        if (smartDownload) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(horizontal = com.aotv.app.ui.common.pagePadding()).padding(top = 10.dp)
+                    .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Só Wi-Fi (download inteligente)",
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary,
+                    )
+                    Text(
+                        "Com isto ligado, o próximo episódio só baixa em Wi-Fi.",
+                        fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+                Switch(checked = smartDownloadWifiOnly, onCheckedChange = { vm.setSmartDownloadWifiOnly(it) })
+            }
+        }
+
         // Aviso do limite de dados móveis (Lote 5): só aviso, nada é bloqueado.
         if (mobileLimitReached) {
             Row(
@@ -247,32 +309,61 @@ fun DownloadsScreen(
             return@Column
         }
 
+        // Fileiras por série → temporada (Lote 1 pós-v1.45.0, v1.46.0 —
+        // Frente B, item 2): episódios baixados agrupados como no
+        // detalhe da série (cabeçalho da fileira + episódios em ordem);
+        // filmes e avulsos ficam soltos, na ordem que chegaram.
+        val completedGrouped = BatchDownload.groupDownloadsBySeason(completed)
+        val completedRows = ArrayList<Any>()
+        for (group in completedGrouped.groups) {
+            completedRows += group
+            completedRows += group.episodes
+        }
+        completedRows += completedGrouped.singles
+
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = com.aotv.app.ui.common.pagePadding(), vertical = 8.dp) + WindowInsets.navigationBars.asPaddingValues(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             if (tab == DownloadsTab.COMPLETED) {
-                items(completed, key = { it.id }) { d ->
-                    DownloadRow(
-                        d = d,
-                        // O vídeo inteiro (":full:") não passa pelo
-                        // DownloadManager: o progresso dele vem do ViewModel.
-                        percent = progress[d.id] ?: fullProgress[d.id] ?: 0,
-                        onClick = { if (d.status == "done") onPlayLocal(d) },
-                        onDelete = { pendingDelete = d },
-                        onResume = null,
-                        // Lote do remodel v1.44.0 — Frente 1: Compartilhar
-                        // e Salvar na pasta valem p/ TODO download
-                        // concluído com arquivo local — não só p/ a entrada
-                        // ":full:" (o card do Davi, "The Mentalist T6:E4",
-                        // é um download NORMAL e ficava sem os botões
-                        // porque a v1.43.0 só passava as ações quando
-                        // `isFullId(d.id)`). Sem arquivo (em andamento) os
-                        // botões somem em vez de quebrar.
-                        onShare = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.shareDownload(d) }) else null,
-                        onSaveToFolder = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.copyDownloadToFolder(d) }) else null,
-                    )
+                items(
+                    completedRows,
+                    key = { item ->
+                        when (item) {
+                            is SeasonDownloadGroup -> "season:${item.tmdbId}:${item.season}"
+                            is DownloadEntity -> item.id
+                            else -> "row:${item.hashCode()}"
+                        }
+                    },
+                ) { item ->
+                    when (item) {
+                        is SeasonDownloadGroup -> SeasonDownloadHeader(group = item)
+                        is DownloadEntity -> {
+                            val d = item
+                            DownloadRow(
+                                d = d,
+                                // O vídeo inteiro (":full:") não passa pelo
+                                // DownloadManager: o progresso dele vem do ViewModel.
+                                // O lote também não (ver batchProgress).
+                                percent = progress[d.id] ?: fullProgress[d.id] ?: batchProgress[d.id] ?: 0,
+                                onClick = { if (d.status == "done") onPlayLocal(d) },
+                                onDelete = { pendingDelete = d },
+                                onResume = null,
+                                // Lote do remodel v1.44.0 — Frente 1: Compartilhar
+                                // e Salvar na pasta valem p/ TODO download
+                                // concluído com arquivo local — não só p/ a entrada
+                                // ":full:" (o card do Davi, "The Mentalist T6:E4",
+                                // é um download NORMAL e ficava sem os botões
+                                // porque a v1.43.0 só passava as ações quando
+                                // `isFullId(d.id)`). Sem arquivo (em andamento) os
+                                // botões somem em vez de quebrar.
+                                onShare = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.shareDownload(d) }) else null,
+                                onSaveToFolder = if (d.status == "done" && d.localUri.isNotBlank()) ({ vm.copyDownloadToFolder(d) }) else null,
+                            )
+                        }
+                        else -> { /* inalcançável: a lista só tem grupo e entidade */ }
+                    }
                 }
                 items(completedClips, key = { "clip:${it.id}" }) { clip ->
                     ClipDownloadRow(
@@ -295,7 +386,7 @@ fun DownloadsScreen(
                 items(leftovers, key = { it.id }) { d ->
                     DownloadRow(
                         d = d,
-                        percent = progress[d.id] ?: fullProgress[d.id] ?: 0,
+                        percent = progress[d.id] ?: fullProgress[d.id] ?: batchProgress[d.id] ?: 0,
                         onClick = { if (d.status == "done") onPlayLocal(d) },
                         onDelete = { pendingDelete = d },
                         // Retomar (Lote 18 item 4): "failed" e "queued" começam
@@ -344,6 +435,23 @@ private operator fun PaddingValues.plus(other: PaddingValues): PaddingValues = P
         other.calculateEndPadding(androidx.compose.ui.unit.LayoutDirection.Ltr),
     bottom = calculateBottomPadding() + other.calculateBottomPadding(),
 )
+
+/**
+ * Cabeçalho da fileira de uma temporada na aba Completos (Lote 1
+ * pós-v1.45.0, v1.46.0 — Frente B, item 2): a mesma organização de
+ * episódios e temporadas do detalhe da série — "Série · Temporada N
+ * (X episódios)" acima das linhas daquela temporada.
+ */
+@Composable
+private fun SeasonDownloadHeader(group: SeasonDownloadGroup) {
+    Text(
+        "${group.title} · Temporada ${group.season} (${group.episodes.size} ${if (group.episodes.size == 1) "episódio" else "episódios"})",
+        fontWeight = FontWeight.Bold,
+        fontSize = 15.sp,
+        color = TextPrimary,
+        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+    )
+}
 
 @Composable
 private fun DownloadRow(

@@ -1687,6 +1687,23 @@ private fun StreamsPage(
                 divider = true,
             )
         }
+        SettingsSection("Continuar assistindo", anchor = SettingsAnchors.STREAMS_CONTINUE)
+        // Lote v1.46.0 item 9: a pref vive no PlatformPrefs singleton (o mesmo que a Início
+        // observa) — via SettingsViewModel, nunca por instância nova: mudar aqui aplica na
+        // hora no card do Continuar, sem reiniciar. O setter só aceita "poster"/"episode".
+        val continuePrefs = hiltViewModel<SettingsViewModel>().prefs
+        val continueArtwork by continuePrefs.continueArtworkFlow.collectAsStateWithLifecycle()
+        SettingsCard {
+            PrefRow(
+                "Arte do card",
+                listOf("episode" to "Thumb do episódio", "poster" to "Capa da série"),
+                continueArtwork, { continuePrefs.continueArtwork = it },
+            )
+            Text(
+                "O card do \"Continuar assistindo\" mostra a thumb do episódio ou a capa da série. Se a arte escolhida não existir, o card cai para a outra.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
         SettingsSection("Emblemas", anchor = SettingsAnchors.STREAMS_BADGES)
         com.aotv.app.ui.common.SettingsGroup {
             com.aotv.app.ui.common.SettingsRow(

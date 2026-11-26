@@ -3,6 +3,7 @@ package com.aotv.app.ui.movies
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.ui.focus.focusProperties
 import kotlin.math.roundToInt
 import androidx.compose.animation.core.*
@@ -95,6 +96,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.aotv.app.data.clips.BatchDownloadManager
+import com.aotv.app.data.clips.BatchEpisodeRequest
 import com.aotv.app.data.ratings.MODE_AVERAGE
 import com.aotv.app.data.ratings.MODE_TRAKT
 import com.aotv.app.data.ratings.episodeRatingOriginCaption
@@ -1512,6 +1515,32 @@ fun MovieDetailScreen(
 
         // ── (A) Painel de FONTES/SERVIDORES do episódio selecionado ────────────
         // Reaproveita o visual do bloco "Fontes" do filme (SourceRow), como bottom sheet.
+        // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2, 3 e 4): o gerente
+        // de lote/inteligente (singleton por applicationContext — a MESMA
+        // fila que a tela de Downloads mostra). O download em lote e o
+        // inteligente precisam da fonte RESOLVIDA do episódio, e ela só
+        // existe aqui, quando a folha abre: o efeito abaixo cumpre o
+        // pedido pendente (próximo do inteligente ou episódio querido da
+        // temporada) com a melhor fonte baixável da lista; o
+        // `onDownloadStremio` abaixo desvia o download p/ o lote quando
+        // a folha foi aberta por "Baixar episódio".
+        val batchManager = remember { BatchDownloadManager.get(detailContext) }
+        LaunchedEffect(state.selectedEpisode, state.episodeStremioStreams) {
+            val selected = state.selectedEpisode ?: return@LaunchedEffect
+            val selectedSeason = selected.first
+            val selectedEpisode = selected.second
+            val streams = state.episodeStremioStreams
+            if (streams.isEmpty()) return@LaunchedEffect
+            batchManager.maybeAutoDownload(
+                tmdbId = detailItem.tmdbId,
+                type = detailItem.type.name,
+                title = title,
+                posterUrl = detailItem.posterUrl,
+                season = selectedSeason,
+                episode = selectedEpisode,
+                streams = streams,
+            )
+        }
         state.selectedEpisode?.let { (season, episode) ->
             EpisodeServersSheet(
                 season = season,
@@ -1537,7 +1566,37 @@ fun MovieDetailScreen(
                     )
                 },
                 isDownloadable = { viewModel.isDownloadable(it) },
-                onDownloadStremio = { s -> viewModel.downloadSource(s.url, "T$season:E$episode") },
+                // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, item 4): a folha
+                // foi aberta por "Baixar episódio" — o download sai da
+                // fonte TOCADA aqui. .mp4 segue o caminho antigo
+                // (DownloadManager, com "Só Wi-Fi" e fila); HLS/outra
+                // fonte vai p/ a fila do lote ([ClipDownloader.downloadFull]
+                // resolve a fonte na hora, como o player: a URL da fonte
+                // é a URL tocável — o que não é HLS nem MP4 direto é
+                // recusado com o motivo, sem baixar nada). Sem pedido de
+                // download (abriu por "Ver fontes"), nada muda.
+                onDownloadStremio = { s ->
+                    if (batchManager.consumeDownloadModeRequest(detailItem.tmdbId, season, episode)) {
+                        if (viewModel.isDownloadable(s.url)) {
+                            viewModel.downloadSource(s.url, "T$season:E$episode")
+                        } else {
+                            batchManager.enqueueEpisode(
+                                BatchEpisodeRequest(
+                                    tmdbId = detailItem.tmdbId,
+                                    type = detailItem.type.name,
+                                    title = title,
+                                    posterUrl = detailItem.posterUrl,
+                                    season = season,
+                                    episode = episode,
+                                    streamUrl = s.url,
+                                ),
+                            )
+                            Toast.makeText(detailContext, "Episódio na fila de downloads.", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        viewModel.downloadSource(s.url, "T$season:E$episode")
+                    }
+                },
                 kodiAddons = state.kodiVideoAddons,
                 onOpenKodiAddon = { addonId ->
                     viewModel.clearSelectedEpisode()
@@ -1554,6 +1613,12 @@ fun MovieDetailScreen(
         // temporada" — o EpisodeOptionsDialog original é de outra frente e
         // não pode ganhar parâmetros sem mexer no arquivo dele.
         episodeOptions?.let { ep ->
+            // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, item 3): números
+            // lançados da temporada — o gatilho do download inteligente
+            // precisa deles p/ achar o próximo episódio.
+            val releasedNumbers = state.seasons[ep.seasonNumber].orEmpty()
+                .filter { episodeItem -> isEpisodeReleased(episodeItem) }
+                .map { episodeItem -> episodeItem.episodeNumber }.sorted()
             EpisodeOptionsDialogL23(
                 episodeLabel = "T${ep.seasonNumber} E${ep.episodeNumber} · ${ep.name.ifBlank { "Episódio ${ep.episodeNumber}" }}",
                 episode = ep,
@@ -1562,12 +1627,50 @@ fun MovieDetailScreen(
                 watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
                 hasPrevious = ep.episodeNumber > 1,
                 onDismiss = { episodeOptions = null },
-                onToggleWatched = { viewModel.toggleEpisodeWatched(ep.seasonNumber, ep.episodeNumber) },
-                onMarkPrevious = { viewModel.markPreviousEpisodesWatched(ep.seasonNumber, ep.episodeNumber) },
-                onMarkSeason = { viewModel.markSeasonWatched(ep.seasonNumber) },
-                onMarkEpisodes = { numbers -> numbers.forEach { n -> viewModel.markEpisodeWatched(ep.seasonNumber, n) } },
+                onToggleWatched = {
+                    // Só marcação (não desmarcação) alimenta o inteligente.
+                    val markingWatched = !state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}")
+                    viewModel.toggleEpisodeWatched(ep.seasonNumber, ep.episodeNumber)
+                    if (markingWatched) {
+                        batchManager.noteEpisodeWatched(detailItem.tmdbId, detailItem.type.name, title, detailItem.posterUrl, ep.seasonNumber, ep.episodeNumber, releasedNumbers)
+                    }
+                },
+                onMarkPrevious = {
+                    viewModel.markPreviousEpisodesWatched(ep.seasonNumber, ep.episodeNumber)
+                    val lastPrevious = releasedNumbers.filter { n -> n < ep.episodeNumber }.maxOrNull()
+                    if (lastPrevious != null) {
+                        batchManager.noteEpisodeWatched(detailItem.tmdbId, detailItem.type.name, title, detailItem.posterUrl, ep.seasonNumber, lastPrevious, releasedNumbers)
+                    }
+                },
+                onMarkSeason = {
+                    viewModel.markSeasonWatched(ep.seasonNumber)
+                    val lastReleased = releasedNumbers.maxOrNull()
+                    if (lastReleased != null) {
+                        batchManager.noteEpisodeWatched(detailItem.tmdbId, detailItem.type.name, title, detailItem.posterUrl, ep.seasonNumber, lastReleased, releasedNumbers)
+                    }
+                },
+                onMarkEpisodes = { numbers ->
+                    numbers.forEach { n -> viewModel.markEpisodeWatched(ep.seasonNumber, n) }
+                    val lastMarked = numbers.maxOrNull()
+                    if (lastMarked != null) {
+                        batchManager.noteEpisodeWatched(detailItem.tmdbId, detailItem.type.name, title, detailItem.posterUrl, ep.seasonNumber, lastMarked, releasedNumbers)
+                    }
+                },
                 onUnmarkEpisodes = { numbers -> numbers.forEach { n -> viewModel.toggleEpisodeWatched(ep.seasonNumber, n) } },
                 onViewSources = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+                // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2 e 4):
+                // "Baixar episódio" abre a folha de fontes em modo
+                // download (a fonte tocada lá é a baixada); "Baixar
+                // temporada inteira" marca os lançados como queridos —
+                // cada um baixa quando a fonte dele for resolvida.
+                onDownloadEpisode = {
+                    batchManager.requestEpisodeDownload(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber)
+                    viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber)
+                },
+                onDownloadSeason = {
+                    batchManager.wantSeason(detailItem.tmdbId, detailItem.type.name, title, detailItem.posterUrl, ep.seasonNumber, releasedNumbers)
+                    Toast.makeText(detailContext, "Temporada na fila: cada episódio baixa quando a fonte dele for resolvida.", Toast.LENGTH_LONG).show()
+                },
             )
         }
 
@@ -2239,10 +2342,16 @@ private fun rememberSourceListData(
     }
     // Fonte que vai tocar em cada versão (a viva, fora as de outro filme). O grupo pode ter o
     // mesmo arquivo em mais de um addon — a seção é o addon dessa fonte.
+    // Lote v1.46.0 item 5: o jogável PREFERE o addon do filtro — antes era sempre o 1º vivo,
+    // então filtrar por um addon sumia com o grupo quando o jogável era de outro addon.
+    // Sem filtro, igual a antes; com filtro, só cai p/ outro addon quando o filtrado não tem
+    // versão viva (nesse caso o filtro por addonOf tira o grupo da lista, como antes).
+    fun memberAddon(s: com.aotv.app.data.remote.StremioStream) =
+        fact(s).addon.ifBlank { s.addon }.ifBlank { "Outras fontes" }
     fun playable(group: ReleaseGroup) =
-        group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
-    fun addonOf(group: ReleaseGroup) =
-        fact(playable(group)).addon.ifBlank { playable(group).addon }.ifBlank { "Outras fontes" }
+        group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle && (sourceFilter.isEmpty() || memberAddon(it) == sourceFilter) }
+            ?: group.members.firstOrNull { !fact(it).dead && !fact(it).wrongTitle } ?: group.lead
+    fun addonOf(group: ReleaseGroup) = memberAddon(playable(group))
     // Ordem das fixadas (Fase C): índice na lista de fixadas; quem não está fixado vai depois.
     val pinIndex = remember(pinned) { pinned.withIndex().associate { it.value to it.index } }
     // Fontes presentes (dentro do filtro de idioma), ordenadas pelo melhor stream.
@@ -3578,6 +3687,14 @@ private fun EpisodeOptionsDialogL23(
     onMarkEpisodes: (List<Int>) -> Unit,
     onUnmarkEpisodes: (List<Int>) -> Unit,
     onViewSources: () -> Unit,
+    /**
+     * Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2 e 4): "Baixar
+     * episódio" abre a folha de fontes em modo download; "Baixar
+     * temporada inteira" marca os lançados da temporada como queridos.
+     * null = sem download (compat: o diálogo antigo não tinha).
+     */
+    onDownloadEpisode: (() -> Unit)? = null,
+    onDownloadSeason: (() -> Unit)? = null,
 ) {
     val released = isEpisodeReleased(episode)
     val releasedNumbers = seasonEpisodes.filter { isEpisodeReleased(it) }.map { it.episodeNumber }.sorted()
@@ -3672,6 +3789,25 @@ private fun EpisodeOptionsDialogL23(
                     icon = Icons.Default.List,
                     onClick = { onDismiss(); onViewSources() },
                 )
+                // Lote 1 pós-v1.45.0 (v1.46.0 — Frente B, itens 2 e 4):
+                // download com escolha da fonte (a folha abre em modo
+                // download) e temporada inteira. Episódio não lançado
+                // não baixa (nem tem fonte ainda); a temporada baixa
+                // só os lançados (o contador diz quantos).
+                if (released && onDownloadEpisode != null) {
+                    EpisodeOptionsRowL23(
+                        label = "Baixar episódio",
+                        icon = Icons.Default.Download,
+                        onClick = { onDismiss(); onDownloadEpisode?.invoke() },
+                    )
+                }
+                if (releasedNumbers.isNotEmpty() && onDownloadSeason != null) {
+                    EpisodeOptionsRowL23(
+                        label = "Baixar temporada inteira (${releasedNumbers.size} ${if (releasedNumbers.size == 1) "episódio" else "episódios"})",
+                        icon = Icons.Default.Download,
+                        onClick = { onDismiss(); onDownloadSeason?.invoke() },
+                    )
+                }
             }
         }
     }
