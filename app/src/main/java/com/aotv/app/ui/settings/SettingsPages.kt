@@ -1436,7 +1436,7 @@ private fun DetalhePage(
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Movie,
                 title = "Fundo cinematográfico",
-                sub = "Arte desfocada em tela cheia atrás da página. Desligado, fica o backdrop no topo.",
+                sub = "Ligado: fundo preto com a arte desfocada em tela cheia. Desligado: gradiente com as cores do pôster e o backdrop no topo.",
                 trailing = { Switch(checked = cinematic, onCheckedChange = { viewModel.setDetailCinematic(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setDetailCinematic(!cinematic) },
                 grouped = true,

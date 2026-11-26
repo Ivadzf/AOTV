@@ -1,5 +1,6 @@
 package com.aotv.app.ui.common
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -277,6 +278,32 @@ fun PosterCard(
 }
 
 /**
+ * Matiz dominante do pôster pela URL, numa leitura de 8 por 12 pixels. Com
+ * o cache ligado (memória e disco): a leitura reaproveita o pôster já
+ * baixado em vez de baixar de novo, e o resultado fica guardado para a
+ * próxima abertura. Null quando a leitura falha (sem crash — o chamador
+ * decide se tenta de novo). Só o caminho do detalhe/Hero usa esta leitura;
+ * a leitura antecipada dos cartões continua só do disco (ver
+ * [rememberPosterVisual]).
+ */
+private suspend fun readPosterHue(
+    context: Context,
+    url: String,
+    // Políticas de cache do chamador (padrão: tudo ligado — o caminho do
+    // detalhe/Hero). Os cartões passam DISABLED (ver [rememberPosterVisual]):
+    // a leitura 8×12 é descartável e nunca vai p/ o cache de memória.
+    memory: CachePolicy = CachePolicy.ENABLED,
+    network: CachePolicy = CachePolicy.ENABLED,
+): Int? {
+    val small = context.imageLoader.execute(
+        ImageRequest.Builder(context).data(url).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
+            .allowHardware(false).memoryCachePolicy(memory).networkCachePolicy(network).build(),
+    )
+    val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return null
+    return withContext(Dispatchers.Default) { posterHue(bmp) }
+}
+
+/**
  * Matiz dominante do pôster (0–359, null sem cor ou sem leitura). A cor sai de uma
  * leitura de 8 por 12 pixels, vinda do cache em disco, que nunca é desenhada.
  * O cartão parado na tela usa a mesma leitura em [rememberPosterVisual].
@@ -298,16 +325,18 @@ internal fun rememberPosterHue(item: MovieItem): Int? {
         val cached = info?.tint(key)
         if (cached != null) { hue = cached; return@LaunchedEffect }
         // Blindado (Lote 13, v1.23.0): falha no disco não derruba o app.
-        val h = runCatching {
-            val small = context.imageLoader.execute(
-                ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                    .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
-            )
-            val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
-            withContext(Dispatchers.Default) { posterHue(bmp) }
-        }.getOrNull() ?: return@LaunchedEffect
-        hue = h
-        info?.putTint(key, h)
+        // Hotfix v1.47.1 (Fix 4): a leitura usa o cache (antes o DISABLED
+        // baixava o pôster de novo a cada abertura) e tenta 1x de novo após
+        // 500 ms — na internet lenta a primeira tentativa falha e o detalhe
+        // ficava sem o gradiente do pôster até reabrir.
+        var h = runCatching { readPosterHue(context, item.posterUrl) }.getOrNull()
+        if (h == null) {
+            delay(500)
+            h = runCatching { readPosterHue(context, item.posterUrl) }.getOrNull()
+        }
+        val hueValue = h ?: return@LaunchedEffect
+        hue = hueValue
+        info?.putTint(key, hueValue)
     }
     return hue
 }
@@ -403,16 +432,18 @@ internal fun rememberPosterVisual(
                 if (hue != null) return@launch
                 val cached = info?.tint(key)
                 if (cached != null) { hue = cached; return@launch }
-                val h = runCatching {
-                    val small = context.imageLoader.execute(
-                        ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                            .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).build(),
-                    )
-                    val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
-                    withContext(Dispatchers.Default) { posterHue(bmp) }
-                }.getOrNull() ?: return@launch
-                hue = h
-                info?.putTint(key, h)
+                // Hotfix v1.47.1 (Fix 4): tenta 1x de novo após 500 ms — na
+                // internet lenta a primeira tentativa falha e a matiz ficava
+                // sem leitura até reabrir. Mesmas políticas de antes (sem
+                // memória; rede ligada — a imagem falhou, só a rede resolve).
+                var h = runCatching { readPosterHue(context, item.posterUrl, CachePolicy.DISABLED, CachePolicy.ENABLED) }.getOrNull()
+                if (h == null) {
+                    delay(500)
+                    h = runCatching { readPosterHue(context, item.posterUrl, CachePolicy.DISABLED, CachePolicy.ENABLED) }.getOrNull()
+                }
+                val hueValue = h ?: return@launch
+                hue = hueValue
+                info?.putTint(key, hueValue)
             }
         }
     } }
@@ -429,16 +460,18 @@ internal fun rememberPosterVisual(
         if (cached != null) { hue = cached; return@LaunchedEffect }
         // Blindado (Lote 13, v1.23.0): falha no disco não derruba o app.
         // Na TV este é o ÚNICO caminho da matiz (fromDisplayed = false).
-        val h = runCatching {
-            val small = context.imageLoader.execute(
-                ImageRequest.Builder(context).data(item.posterUrl).size(8, 12).precision(Precision.INEXACT).scale(Scale.FILL)
-                    .allowHardware(false).memoryCachePolicy(CachePolicy.DISABLED).networkCachePolicy(CachePolicy.DISABLED).build(),
-            )
-            val bmp = (small.drawable as? BitmapDrawable)?.bitmap ?: return@runCatching null
-            withContext(Dispatchers.Default) { posterHue(bmp) }
-        }.getOrNull() ?: return@LaunchedEffect
-        hue = h
-        info?.putTint(key, h)
+        // Hotfix v1.47.1 (Fix 4): tenta 1x de novo após 500 ms — o pôster
+        // pode ter chegado ao disco nesse meio-tempo (o AsyncImage baixa
+        // em paralelo). Políticas intactas: só do disco, sem rede — o
+        // networkCachePolicy DISABLED do Coil PROÍBE a rede, não o disco.
+        var h = runCatching { readPosterHue(context, item.posterUrl, CachePolicy.DISABLED, CachePolicy.DISABLED) }.getOrNull()
+        if (h == null) {
+            delay(500)
+            h = runCatching { readPosterHue(context, item.posterUrl, CachePolicy.DISABLED, CachePolicy.DISABLED) }.getOrNull()
+        }
+        val hueValue = h ?: return@LaunchedEffect
+        hue = hueValue
+        info?.putTint(key, hueValue)
     }
     // Cartão parado na tela por 0,7 s pede a leitura das fontes. Saiu antes da vez, sai da fila.
     // Sem selos de qualidade nem pede: a leitura não aparece em lugar nenhum.

@@ -103,21 +103,47 @@ class NuvioProfileImport @Inject constructor(
     private val collections: CollectionsRepository,
 ) {
     /**
+     * Resolve a foto do perfil: URL direta do payload vence; senão a URL do
+     * catálogo pelo `avatar_id`; senão vazio (o perfil fica com o avatar
+     * local). O id do catálogo do Nuvio NÃO vai para `Profile.avatarId`
+     * (esse é o id do catálogo local de presets do app) — só a URL resolvida
+     * vira `avatarUrl` do perfil local. Pública porque a sincronização de
+     * perfis no login ([com.aotv.app.ui.settings.AccountsViewModel]) resolve
+     * a foto da mesma forma, com o mesmo mapa buscado 1x.
+     */
+    fun resolveAvatarUrl(np: NuvioProfile, catalog: Map<String, String>): String {
+        val direct = sanitizeAvatarValue(np.avatarUrl)
+        if (direct.isNotBlank()) return direct
+        val id = sanitizeAvatarValue(np.avatarId)
+        if (id.isBlank()) return ""
+        return catalog[id].orEmpty()
+    }
+
+    /**
      * Resolve o perfil local de um perfil do Nuvio, criando quando não há.
      * Índice 1 vira o Principal do app (renomeado, nunca apagado); os
      * demais procuram primeiro pelo vínculo, depois pelo nome, e só então
      * criam um perfil novo. null quando o aparelho já tem o máximo de
      * perfis ([com.aotv.app.data.local.MAX_PROFILES]). As flags primárias
      * vêm do Nuvio (o principal fica com as duas desligadas — ele já é o
-     * primário).
+     * primário). [catalog] é o mapa id do catálogo -> URL pública
+     * ([NuvioAccountService.avatarCatalog], buscado 1x por importação ou
+     * sincronização): sem ele a foto de catálogo não resolve e o perfil
+     * fica com o avatar local. O literal "null" gravado no avatar é
+     * tratado como vazio: reimportar com a foto vazia LIMPA o "null"
+     * antigo em vez de preservá-lo. A cor do Nuvio (`avatar_color_hex`)
+     * vira o índice mais próximo em PROFILE_COLORS quando presente e válida.
      */
-    fun resolveLocalProfile(np: NuvioProfile): Profile? {
+    fun resolveLocalProfile(np: NuvioProfile, catalog: Map<String, String> = emptyMap()): Profile? {
         val current = prefs.profiles.value
+        val newAvatarUrl = resolveAvatarUrl(np, catalog)
+        val mappedColor = if (np.avatarColorHex.isNotBlank()) closestProfileColorIndex(np.avatarColorHex) else -1
         if (np.index == 1) {
             val main = current.firstOrNull { it.id == MAIN_PROFILE } ?: current.firstOrNull() ?: return null
             val updated = main.copy(
                 name = np.name,
-                avatarUrl = np.avatarUrl.ifBlank { main.avatarUrl },
+                avatarUrl = newAvatarUrl.ifBlank { sanitizeAvatarValue(main.avatarUrl) },
+                color = if (mappedColor >= 0) mappedColor else main.color,
                 usePrimaryAddons = false,
                 usePrimaryPlugins = false,
                 kids = main.kids || np.kids,
@@ -131,7 +157,8 @@ class NuvioProfileImport @Inject constructor(
             ?: current.firstOrNull { it.name.equals(np.name, ignoreCase = true) }
         if (existing != null) {
             val updated = existing.copy(
-                avatarUrl = np.avatarUrl.ifBlank { existing.avatarUrl },
+                avatarUrl = newAvatarUrl.ifBlank { sanitizeAvatarValue(existing.avatarUrl) },
+                color = if (mappedColor >= 0) mappedColor else existing.color,
                 usePrimaryAddons = np.usesPrimaryAddons,
                 usePrimaryPlugins = np.usesPrimaryPlugins,
                 kids = existing.kids || np.kids,
@@ -142,7 +169,8 @@ class NuvioProfileImport @Inject constructor(
         }
         val created = prefs.addProfile(np.name, kids = np.kids) ?: return null
         val updated = created.copy(
-            avatarUrl = np.avatarUrl, usePrimaryAddons = np.usesPrimaryAddons,
+            avatarUrl = newAvatarUrl, color = if (mappedColor >= 0) mappedColor else created.color,
+            usePrimaryAddons = np.usesPrimaryAddons,
             usePrimaryPlugins = np.usesPrimaryPlugins,
         )
         prefs.updateProfile(updated)
@@ -165,6 +193,10 @@ class NuvioProfileImport @Inject constructor(
         if (wanted.isEmpty()) return Result.failure(IllegalStateException("Nenhum perfil do Nuvio selecionado"))
         val originalProfileId = prefs.profileId.value
         val profilesBefore = prefs.profiles.value.size
+        // Foto do catálogo do Nuvio: busca 1x por importação; sem rede ou
+        // com formato desconhecido o mapa vem vazio e cada perfil fica com
+        // o avatar local — a foto nunca trava a importação.
+        val avatarCatalogUrls = runCatching { nuvio.avatarCatalog() }.getOrDefault(emptyMap())
         val total = wanted.size * 6
         var done = 0
         var replacedMain = false
@@ -179,7 +211,7 @@ class NuvioProfileImport @Inject constructor(
         val debridSkipped = mutableListOf<String>()
         val failed = mutableListOf<String>()
         for (np in wanted) {
-            val local = resolveLocalProfile(np)
+            val local = resolveLocalProfile(np, avatarCatalogUrls)
             if (local == null) {
                 failed += "${np.name} (sem espaço para outro perfil)"
                 repeat(6) { done++; onProgress(done, total) }

@@ -34,8 +34,14 @@ val AVATAR_CATALOG = listOf(
 /** Preset pelo id; null quando o id não está no catálogo (perfil antigo ou id inválido). */
 fun avatarPreset(id: String): AvatarPreset? = AVATAR_CATALOG.firstOrNull { it.id == id }
 
-/** URL de avatar válida p/ carregar: http/https, sem espaço. "" = sem URL (usa catálogo/inicial). */
-fun validAvatarUrl(url: String): String {
+/** Literal "null" (texto) vira vazio; qualquer outro valor só ganha trim. O servidor já devolveu a string "null" no lugar de foto ausente e ela ficou persistida nos perfis. */
+fun sanitizeAvatarUrlField(url: String): String {
     val u = url.trim()
+    return if (u.equals("null", ignoreCase = true)) "" else u
+}
+
+/** URL de avatar válida p/ carregar: http/https, sem espaço. "" = sem URL (usa catálogo/inicial). O literal "null" nunca é URL válida. */
+fun validAvatarUrl(url: String): String {
+    val u = sanitizeAvatarUrlField(url)
     return if ((u.startsWith("http://") || u.startsWith("https://")) && !u.contains(" ")) u else ""
 }

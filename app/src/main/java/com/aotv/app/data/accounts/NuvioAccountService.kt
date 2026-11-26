@@ -1,6 +1,7 @@
 package com.aotv.app.data.accounts
 
 import android.content.Context
+import com.aotv.app.data.local.PROFILE_COLORS
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,8 +27,58 @@ data class NuvioSession(
     val email: String,
 )
 
-/** Perfil da conta Nuvio. [index] é o número que as consultas usam (1 é o principal). [avatarUrl] é a foto do perfil quando o servidor a devolve (vazio = sem foto — o app mantém o avatar local). [kids] é o marcador infantil do perfil, quando o servidor o devolve. [usesPrimaryPlugins] espelha [usesPrimaryAddons] para os repositórios de plugins: ligado, o perfil usa os plugins do principal. [pluginRepos] são os repositórios que o payload do perfil trouxe (fallback quando a tabela de plugins vem vazia). */
-data class NuvioProfile(val index: Int, val name: String, val usesPrimaryAddons: Boolean, val avatarUrl: String = "", val kids: Boolean = false, val usesPrimaryPlugins: Boolean = false, val pluginRepos: List<String> = emptyList())
+/** Perfil da conta Nuvio. [index] é o número que as consultas usam (1 é o principal). [avatarUrl] é a foto do perfil quando o servidor a devolve (vazio = sem foto — o app mantém o avatar local). [avatarId] é o id do avatar no catálogo do Nuvio (ex. "avatar_lalo") — NÃO é o id do catálogo local de presets do app; a importação resolve esse id para URL e grava a URL em [avatarUrl]. [avatarColorHex] é a cor do perfil no Nuvio ("#RRGGBB"), mapeada para o índice mais próximo em [PROFILE_COLORS] na importação. [kids] é o marcador infantil do perfil, quando o servidor o devolve. [usesPrimaryPlugins] espelha [usesPrimaryAddons] para os repositórios de plugins: ligado, o perfil usa os plugins do principal. [pluginRepos] são os repositórios que o payload do perfil trouxe (fallback quando a tabela de plugins vem vazia). */
+data class NuvioProfile(val index: Int, val name: String, val usesPrimaryAddons: Boolean, val avatarUrl: String = "", val kids: Boolean = false, val usesPrimaryPlugins: Boolean = false, val pluginRepos: List<String> = emptyList(), val avatarId: String = "", val avatarColorHex: String = "")
+
+/**
+ * Literal "null" gravado como texto vira vazio. O servidor já devolveu a
+ * string "null" no lugar de foto/cor ausente e ela ficou persistida nos
+ * perfis; sem isso a reimportação preservaria o "null" (não é branco).
+ */
+fun sanitizeAvatarValue(raw: String): String {
+    val v = raw.trim()
+    return if (v.equals("null", ignoreCase = true)) "" else v
+}
+
+/** URL pública da imagem de um avatar de catálogo pelo caminho guardado no servidor. "" quando não há caminho. */
+fun avatarCatalogPublicUrl(storagePath: String): String {
+    val p = sanitizeAvatarValue(storagePath).trimStart('/')
+    return if (p.isBlank()) "" else "https://api.nuvio.tv/storage/v1/object/public/avatars/$p"
+}
+
+/**
+ * Índice em [PROFILE_COLORS] mais próximo do hex ("#RRGGBB" ou "RRGGBB",
+ * aceita o formato curto "#RGB"). Distância euclidiana em RGB. -1 quando o
+ * hex está em branco ou é inválido — o chamador mantém a cor atual.
+ */
+fun closestProfileColorIndex(hex: String): Int {
+    val h = sanitizeAvatarValue(hex).removePrefix("#")
+    val expanded = when (h.length) {
+        3 -> h.map { "$it$it" }.joinToString("")
+        6 -> h
+        else -> return -1
+    }
+    val rgb = expanded.toLongOrNull(16) ?: return -1
+    val r = ((rgb shr 16) and 0xFF).toInt()
+    val g = ((rgb shr 8) and 0xFF).toInt()
+    val b = (rgb and 0xFF).toInt()
+    var best = -1
+    var bestDist = Long.MAX_VALUE
+    PROFILE_COLORS.forEachIndexed { i, c ->
+        val cr = ((c shr 16) and 0xFF).toInt()
+        val cg = ((c shr 8) and 0xFF).toInt()
+        val cb = (c and 0xFF).toInt()
+        val dr = (r - cr).toLong()
+        val dg = (g - cg).toLong()
+        val db = (b - cb).toLong()
+        val d = dr * dr + dg * dg + db * db
+        if (d < bestDist) {
+            bestDist = d
+            best = i
+        }
+    }
+    return best
+}
 
 /** Repositório de plugins do Nuvio. [url] é a URL do repositório como veio do servidor (só trim — plugins são repositórios, não manifests, então não ganha "/manifest.json"). */
 data class RemotePlugin(val url: String, val name: String, val enabled: Boolean = true)
@@ -127,12 +178,59 @@ class NuvioAccountService @Inject constructor(
                 it.optInt("profile_index", 1), it.optString("name").ifBlank { "Perfil" }, it.optBoolean("uses_primary_addons"),
                 // Foto do perfil: o servidor nem sempre devolve — tenta os nomes
                 // conhecidos e fica vazio quando não há (o app mantém o avatar local).
-                it.optString("avatar_url").ifBlank { it.optString("avatar").ifBlank { it.optString("photo_url").ifBlank { it.optString("image_url") } } },
+                // Avatar de catálogo vem como avatar_id (avatar_url null) e é
+                // resolvido para URL na importação, não aqui.
+                sanitizeAvatarValue(it.optString("avatar_url").ifBlank { it.optString("avatar").ifBlank { it.optString("photo_url").ifBlank { it.optString("image_url") } } }),
                 it.optBoolean("kids", it.optBoolean("is_kids", it.optBoolean("is_child", false))),
                 it.optBoolean("uses_primary_plugins", it.optBoolean("usesPrimaryPlugins", false)),
                 parsePluginRepos(it),
+                avatarId = sanitizeAvatarValue(it.optString("avatar_id").ifBlank { it.optString("avatarId") }),
+                avatarColorHex = sanitizeAvatarValue(it.optString("avatar_color_hex").ifBlank { it.optString("avatar_color").ifBlank { it.optString("avatarColorHex") } }),
             )
         }.sortedBy { it.index }
+    }
+
+    /**
+     * Catálogo de avatares do Nuvio (RPC `get_avatar_catalog`, SEM token de
+     * acesso: só a publishable key da sessão, como no login por dispositivo).
+     * Devolve id do catálogo -> URL pública da imagem. Cada entrada traz o
+     * `storage_path`; a URL é `https://api.nuvio.tv/storage/v1/object/public/avatars/<storage_path>`.
+     * Falha (sem rede, sem sessão, formato desconhecido) devolve mapa vazio —
+     * a importação segue com o avatar local. Chamado 1x por importação; o
+     * mapa é montado aqui, não a cada perfil. Os nomes dos campos são lidos
+     * com tolerância (`id` ou `avatar_id`; `storage_path` ou `path`; `url`
+     * direta quando houver) porque o formato exato do catálogo não foi
+     * confirmado além do `storage_path`.
+     */
+    suspend fun avatarCatalog(): Map<String, String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val s = fresh() ?: return@runCatching emptyMap<String, String>()
+            val r = post("${s.server}/rest/v1/rpc/get_avatar_catalog", JSONObject(), s.key, null)
+            if (r.first !in 200..299) return@runCatching emptyMap<String, String>()
+            val arr = catalogArray(r.third) ?: return@runCatching emptyMap<String, String>()
+            val out = mutableMapOf<String, String>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = sanitizeAvatarValue(o.optString("id").ifBlank { o.optString("avatar_id") })
+                if (id.isBlank()) continue
+                val direct = sanitizeAvatarValue(o.optString("url").ifBlank { o.optString("image_url") })
+                val url = if (direct.startsWith("http")) direct else avatarCatalogPublicUrl(o.optString("storage_path").ifBlank { o.optString("path") })
+                if (url.isNotBlank()) out[id] = url
+            }
+            out
+        }.getOrDefault(emptyMap())
+    }
+
+    /** Array do catálogo: o RPC devolve um array direto; aceita um objeto com o array dentro (`data`/`avatars`/`catalog`/`items`). */
+    private fun catalogArray(raw: String): JSONArray? {
+        val direct = runCatching { JSONArray(raw) }.getOrNull()
+        if (direct != null) return direct
+        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        for (key in listOf("data", "avatars", "catalog", "items")) {
+            val arr = o.optJSONArray(key)
+            if (arr != null) return arr
+        }
+        return null
     }
 
     /** Repositórios que o payload do perfil trouxe (`pluginRepos`/`plugin_repos`): array de URLs ou de objetos com `url`/`repo_url`/`repo`. */

@@ -487,6 +487,12 @@ class PlatformPrefs @Inject constructor(
     /** Chave já no escopo do perfil ativo. */
     private fun sk(key: String) = scopedKey(key, _profileId.value)
 
+    /** Literal "null" gravado como texto vira vazio: o servidor já devolveu a string "null" no lugar de foto ausente e ela ficou persistida nos perfis. Vale na leitura (limpa o legado) e na escrita (nunca grava "null" de novo) — a exibição já sanitiza por fora ([com.aotv.app.ui.settings.validAvatarUrl]). */
+    private fun sanitizeStoredAvatarUrl(raw: String): String {
+        val v = raw.trim()
+        return if (v.equals("null", ignoreCase = true)) "" else v
+    }
+
     private fun readProfiles(): List<Profile> = runCatching {
         val arr = org.json.JSONArray(prefs.getString("profiles", "[]"))
         (0 until arr.length()).mapNotNull { i ->
@@ -495,7 +501,7 @@ class PlatformPrefs @Inject constructor(
                 o.getString("id"), o.optString("name", "Perfil"), o.optInt("color", 0), o.optBoolean("kids", false),
                 // Campos novos (v1.11.0): opt* com default = perfil antigo lê como se
                 // nunca tivesse avatar/PIN/primários, sem perder nome, cor ou infantil.
-                o.optString("avatar_url", ""), o.optString("avatar_id", ""),
+                sanitizeStoredAvatarUrl(o.optString("avatar_url", "")), o.optString("avatar_id", ""),
                 o.optString("pin_hash", ""), o.optBoolean("use_primary_addons", false),
                 o.optBoolean("use_primary_plugins", false),
             )
@@ -503,8 +509,9 @@ class PlatformPrefs @Inject constructor(
     }.getOrDefault(emptyList()).ifEmpty { listOf(Profile(MAIN_PROFILE, "Principal")) }
 
     private fun saveProfiles(list: List<Profile>) {
+        val clean = list.map { it.copy(avatarUrl = sanitizeStoredAvatarUrl(it.avatarUrl)) }
         val arr = org.json.JSONArray()
-        list.forEach {
+        clean.forEach {
             arr.put(
                 org.json.JSONObject().put("id", it.id).put("name", it.name).put("color", it.color).put("kids", it.kids)
                     .put("avatar_url", it.avatarUrl).put("avatar_id", it.avatarId)
@@ -513,7 +520,7 @@ class PlatformPrefs @Inject constructor(
             )
         }
         prefs.edit().putString("profiles", arr.toString()).apply()
-        _profiles.value = list
+        _profiles.value = clean
     }
 
     /** Cria um perfil. null quando já tem o máximo. */

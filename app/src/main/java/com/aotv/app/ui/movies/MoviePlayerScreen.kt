@@ -15,9 +15,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -826,7 +824,7 @@ fun MoviePlayerScreen(
     }
     s.onAmbilightSave = { saveAmbilightState(nightPrefs, it) }
     s.onSensorySave = { saveSensoryFriendlyState(nightPrefs, SensoryFriendlyState(it)) }
-    DisposableEffect(s) { onDispose { s.nightController.release(); s.fpsMeter.stop() } }
+    DisposableEffect(s) { onDispose { s.nightController.release(); s.fpsMeter.stop(); s.restoreScreenBrightness() } }
     // Modo privado (Lote 2, item 7 — v1.10.0): a tela lê o fluxo e entrega à
     // sessão; o chip salva de volta por onPrivateModeToggle. Mudar no Perfil
     // aplica na hora, mesmo com o player aberto.
@@ -1894,7 +1892,6 @@ private fun PlayerPlaybackEffects(s: PlayerSession) = with(s) {
 @OptIn(UnstableApi::class)
 @Composable
 private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) = with(s) {
-    val tapInteraction = remember { MutableInteractionSource() }
     val focusRequester = remember { FocusRequester() }
     // Root é dono do foco (D-pad), inclusive enquanto a fonte ainda está sendo resolvida.
     LaunchedEffect(activeUrl, streamUrl) { runCatching { focusRequester.requestFocus() } }
@@ -2109,12 +2106,6 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     else -> { controlsVisible = true; false }
                 }
             }
-            .clickable(interactionSource = tapInteraction, indication = null) {
-                // Lote 24 item 10: qualquer toque é interação (mesmo travado).
-                noteUserInteraction()
-                if (locked) lockHintVisible = !lockHintVisible
-                else controlsVisible = !controlsVisible
-            }
             // Gestos (celular): metade direita = volume, metade esquerda = brilho. (off se travado)
             .then(
                 if (streamUrl != null && !locked) Modifier.pointerInput(Unit) {
@@ -2150,25 +2141,48 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     }
                 } else Modifier
             )
-            // Duplo toque p/ pular (Lote 2 item 4, v1.47.0 — lição do Notflix):
-            // metade esquerda volta, direita avança, no intervalo configurado.
-            // Detector separado do `clickable` acima p/ o toque simples continuar
-            // instantâneo: o duplo toque também dispara o clickable 2x, e os
-            // controles voltam ao estado inicial — só o seekHud fica.
+            // Toque simples + duplo toque UNIFICADOS (hotfix v1.47.1 item 3):
+            // UM único `detectTapGestures`, sem o `.clickable` separado que
+            // existia antes. O detector de duplo toque do Lote 2 (v1.47.0)
+            // engolia o toque — ele consome o down/up enquanto espera o 2º
+            // toque e não tinha `onTap` — então o toque simples nunca chegava
+            // ao clickable e, depois de alguns toques, nenhum toque respondia
+            // mais (só o botão de volume abria os controles, via onKeyEvent).
+            // O `onTap` abaixo faz exatamente o que o clickable fazia.
+            // Trade-off conhecido: o toque simples agora espera o timeout de
+            // duplo toque antes de mostrar os controles (padrão do YouTube).
+            // O detector fica SEMPRE ativo (não só com stream e destravado)
+            // porque o toque simples também vale travado (alterna o aviso de
+            // trava) e com a fonte ainda sendo resolvida (alterna os
+            // controles), como o clickable fazia; o duplo toque é que só
+            // busca com stream carregado e destravado. As chaves do
+            // `pointerInput` são os valores lidos pelo detector: com
+            // `Unit` ele congelaria os valores da 1ª composição (ex.: o
+            // `locked` de quando o player abriu) e o duplo toque buscaria
+            // mesmo travado. Os detectores de arrasto (vertical e
+            // horizontal) não mudam e continuam antes deste na cadeia.
             .then(
-                if (streamUrl != null && !locked) Modifier.pointerInput(Unit) {
+                Modifier.pointerInput(locked, streamUrl, skipBackSecs, skipFwdSecs) {
                     detectTapGestures(
+                        onTap = {
+                            // Lote 24 item 10: qualquer toque é interação (mesmo travado).
+                            noteUserInteraction()
+                            if (locked) lockHintVisible = !lockHintVisible
+                            else controlsVisible = !controlsVisible
+                        },
                         onDoubleTap = { off ->
-                            if (off.x < size.width / 2f) {
-                                seekBy(-skipBackSecs * 1000L, showControls = false)
-                                seekHud = "−${skipBackSecs}s"
-                            } else {
-                                seekBy(skipFwdSecs * 1000L, showControls = false)
-                                seekHud = "+${skipFwdSecs}s"
+                            if (streamUrl != null && !locked) {
+                                if (off.x < size.width / 2f) {
+                                    seekBy(-skipBackSecs * 1000L, showControls = false)
+                                    seekHud = "−${skipBackSecs}s"
+                                } else {
+                                    seekBy(skipFwdSecs * 1000L, showControls = false)
+                                    seekHud = "+${skipFwdSecs}s"
+                                }
                             }
                         },
                     )
-                } else Modifier
+                }
             ),
     ) {
         when {
@@ -4885,6 +4899,29 @@ class PlayerSession(
         a.window.attributes = a.window.attributes.apply { screenBrightness = brightLevel }
         gestureHud = "Brilho" to brightLevel
     }
+    // Hotfix v1.47.1 (item 6): o brilho do player é da JANELA da Activity
+    // (a única do app) — `WindowManager.LayoutParams.screenBrightness`
+    // não é por tela, é por janela. O `changeBrightness` acima escrevia o
+    // valor arrastado e NADA o restaurava: o brilho baixo ficava valendo
+    // p/ o app inteiro até a Activity morrer, e reabrir o app mostrava o
+    // brilho baixo de novo — fora do app o sistema volta ao normal, o que
+    // bate exatamente com o relato do Davi. É a ÚNICA escrita de
+    // `screenBrightness` no app inteiro (conferido por busca); nem a
+    // MainActivity nem o modo sensorial/noturno (só áudio e transições)
+    // mexem no brilho. O valor de entrada é guardado aqui como propriedade
+    // comum (esta classe NÃO é @Composable — nada de `remember` ou
+    // `DisposableEffect` aqui) no momento em que a sessão é criada, ou
+    // seja, na abertura do player; -1f = brilho do sistema. A restauração
+    // roda no `onDispose` da tela (ver `MoviePlayerScreen`, junto com o
+    // `nightController.release()`). Sem arrastar, é um no-op (o valor de
+    // entrada já é o atual).
+    val entryScreenBrightness: Float = activity?.window?.attributes?.screenBrightness ?: -1f
+    fun restoreScreenBrightness() {
+        val a = activity ?: return
+        runCatching {
+            a.window.attributes = a.window.attributes.apply { screenBrightness = entryScreenBrightness }
+        }
+    }
     // Poll de posição + salva progresso a cada ~10s (Continuar assistindo)
     var markedWatchedEp by run { mutableIntStateOf(-1) }
     // Avaliação pós-filme (v1.17.0): o gatilho de filme dispara 1x por título.
@@ -4901,7 +4938,15 @@ class PlayerSession(
         // do stream progressivo (HLS/DASH = sem miniatura).
         if (seekPreviewEnabled) {
             seekPreviewBitmap = null
-            scope.launch {
+            // Hotfix v1.47.1: o trabalho bloqueante NÃO pode rodar na Main.
+            // `thumbnailForUrl` chama `MediaMetadataRetriever.setDataSource`
+            // + `getFrameAtTime` (I/O de rede + decode síncronos) e
+            // `thumbnailForScreenshotFile` decodifica o arquivo em disco —
+            // na internet lenta do Davi cada duplo toque congelava a UI e
+            // os toques por segundos ("tela parada até o vídeo voltar").
+            // O `scope` é `rememberCoroutineScope()` (Main), então o bloco
+            // inteiro vai p/ IO e só a escrita de estado volta p/ a Main.
+            scope.launch(Dispatchers.IO) {
                 val bmp = runCatching {
                     if (mpvActive) {
                         delay(350)
@@ -4913,7 +4958,9 @@ class PlayerSession(
                         seekPreviewService.thumbnailForUrl(streamUrl ?: embedUrl, target)
                     }
                 }.getOrNull()
-                if (bmp != null) seekPreviewBitmap = bmp
+                if (bmp != null) {
+                    withContext(Dispatchers.Main) { seekPreviewBitmap = bmp }
+                }
             }
         }
         if (showControls) controlsVisible = true

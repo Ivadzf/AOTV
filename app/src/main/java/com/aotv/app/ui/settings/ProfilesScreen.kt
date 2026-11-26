@@ -61,7 +61,7 @@ class ProfilesViewModel @Inject constructor(
     fun select(id: String) = prefs.selectProfile(id)
     fun add(name: String, kids: Boolean, color: Int, avatarUrl: String = "", avatarId: String = "", usePrimaryAddons: Boolean = false, usePrimaryPlugins: Boolean = false, kidsAgeLimit: Int = 12) {
         prefs.addProfile(name, kids)?.let {
-            prefs.updateProfile(it.copy(color = color, avatarUrl = avatarUrl.trim(), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons, usePrimaryPlugins = usePrimaryPlugins))
+            prefs.updateProfile(it.copy(color = color, avatarUrl = sanitizeAvatarUrlField(avatarUrl), avatarId = avatarId, usePrimaryAddons = usePrimaryAddons, usePrimaryPlugins = usePrimaryPlugins))
             if (kids) setKidsAgeLimit(it.id, kidsAgeLimit)
         }
     }
@@ -567,7 +567,8 @@ private fun ProfileEditDialog(
     // Lote 3 (v1.11.0): avatar por URL, preset do catálogo, "usar addons
     // primários" e PIN do perfil. O perfil principal (id "main") não tem o
     // toggle de primários — ele JÁ é o primário.
-    var avatarUrl by remember { mutableStateOf(initial.avatarUrl) }
+    // O literal "null" gravado no perfil aparece vazio aqui, nunca como texto.
+    var avatarUrl by remember { mutableStateOf(sanitizeAvatarUrlField(initial.avatarUrl)) }
     var avatarId by remember { mutableStateOf(initial.avatarId) }
     var usePrimaryAddons by remember { mutableStateOf(initial.usePrimaryAddons) }
     var usePrimaryPlugins by remember { mutableStateOf(initial.usePrimaryPlugins) }
@@ -576,7 +577,7 @@ private fun ProfileEditDialog(
     var confirmRemovePin by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
     val draft = initial.copy(
-        name = name, kids = kids, color = color, avatarUrl = avatarUrl.trim(),
+        name = name, kids = kids, color = color, avatarUrl = sanitizeAvatarUrlField(avatarUrl),
         avatarId = avatarId, pinHash = pinHash, usePrimaryAddons = usePrimaryAddons,
         usePrimaryPlugins = usePrimaryPlugins,
     )

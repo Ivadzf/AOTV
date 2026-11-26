@@ -200,13 +200,21 @@ class AccountsViewModel @Inject constructor(
 
     private suspend fun fetchProfiles() {
         val list = nuvio.profiles().getOrThrow()
+        // Foto do catálogo do Nuvio: busca 1x por sincronização; sem rede ou
+        // com formato desconhecido o mapa vem vazio e cada perfil fica com o
+        // avatar local — a foto nunca trava a sincronização. O mesmo mapa
+        // resolve a foto dos perfis locais criados/renomeados aqui e da
+        // prévia do diálogo de importação (que lê nuvioProfiles) — sem ele
+        // o login criava os perfis sem foto e só o "Importar todos" resolvia.
+        val catalog = runCatching { nuvio.avatarCatalog() }.getOrDefault(emptyMap())
+        val resolved = list.map { it.copy(avatarUrl = profileImport.resolveAvatarUrl(it, catalog)) }
         // Cada perfil do Nuvio vira um perfil local (o principal do Nuvio,
         // índice 1, SUBSTITUI o Principal do app — renomeado, sem apagar
         // nada dele — ver NuvioProfileImport.resolveLocalProfile). Nada é
         // importado aqui e nenhum perfil local é apagado.
-        list.forEach { np -> profileImport.resolveLocalProfile(np) }
+        resolved.forEach { np -> profileImport.resolveLocalProfile(np, catalog) }
         val active = prefs.nuvioProfileIndexFor(prefs.profileId.value)
-        local.update { it.copy(nuvioProfiles = list, nuvioProfile = active ?: list.firstOrNull()?.index ?: 1) }
+        local.update { it.copy(nuvioProfiles = resolved, nuvioProfile = active ?: resolved.firstOrNull()?.index ?: 1) }
     }
 
     /** Recarrega os perfis do Nuvio (a tela de perfis chama ao abrir o diálogo de importação). */

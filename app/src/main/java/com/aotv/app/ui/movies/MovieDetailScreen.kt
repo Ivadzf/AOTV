@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Restore
@@ -243,6 +244,10 @@ fun MovieDetailScreen(
     }
     // Folha Sobre o título (Lote 11, v1.21.0) e guarda de duração.
     var aboutOpen by remember { mutableStateOf(false) }
+    // Hotfix v1.47.1 (Fix 5b): folha "Mais opções" do botão "..." ao lado
+    // do Reproduzir (Trailer, Minha Lista, Gostei... — as mesmas ações da
+    // fileira de botões redondos, que continua como está).
+    var detailOptionsOpen by remember { mutableStateOf(false) }
     var guardPending by remember { mutableStateOf<GuardPending?>(null) }
     // Painel de opções do episódio (Lote 14, v1.24.0): segurar o card abre
     // marcar/desmarcar, anteriores, temporada e ver fontes.
@@ -492,7 +497,9 @@ fun MovieDetailScreen(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(((if (wide) (configuration.screenHeightDp * .95f).coerceIn(280f, 400f) else 420f) + (fontScale - 1f) * 180f).dp)
+                        // Hotfix v1.47.1 (Fix 5a): hero 420dp → 380dp no celular — o
+                        // vão entre os botões de ação e a sinopse era grande demais.
+                        .height(((if (wide) (configuration.screenHeightDp * .95f).coerceIn(280f, 400f) else 380f) + (fontScale - 1f) * 180f).dp)
                         // clipToBounds: a imagem com .scale() (Ken Burns) não vaza p/ baixo
                         // do hero (era a "faixa" esverdeada atrás da sinopse).
                         .clipToBounds()
@@ -786,8 +793,20 @@ fun MovieDetailScreen(
                             onClick = { tryPrimaryPlay() },
                             icon = if (primary.enabled) Icons.Default.PlayArrow else null,
                             enabled = primary.enabled,
-                            modifier = Modifier.fillMaxWidth(if (fontScale > 1.3f || configuration.screenWidthDp < 420) 1f else .62f).focusRequester(primaryFocus)
+                            // Hotfix v1.47.1 (Fix 5b): 1f → 0.78f no celular — o "..."
+                            // (52dp + 10dp de vão) precisa caber ao lado do Reproduzir.
+                            modifier = Modifier.fillMaxWidth(if (fontScale > 1.3f || configuration.screenWidthDp < 420) 0.78f else .62f).focusRequester(primaryFocus)
                                 .onFocusChanged { if (it.isFocused) primaryGotFocus = true },
+                        )
+                        // Hotfix v1.47.1 (Fix 5b): "..." ao lado do Reproduzir, estilo
+                        // Nuvio — abre a folha de opções do título. A fileira de
+                        // botões redondos continua como está (só adiciona).
+                        GlassCircleButton(
+                            icon = Icons.Default.MoreHoriz,
+                            onClick = { detailOptionsOpen = true },
+                            size = 52.dp,
+                            iconTint = TextPrimary,
+                            contentDescription = "Mais opções",
                         )
                         // Ações em vidro (layout atual). Com ações em ícones (Fase B) elas
                         // descem p/ uma fileira de ícones com rótulo, abaixo do Reproduzir.
@@ -864,7 +883,8 @@ fun MovieDetailScreen(
                     // Ações em ícones (Fase B): as mesmas ações de cima, em ícones com
                     // rótulo pequeno — nada novo, nada removido.
                     if (iconActions) {
-                        Spacer(Modifier.height(12.dp))
+                        // Hotfix v1.47.1 (Fix 5a): 12dp → 8dp — aperta o vão até a sinopse.
+                        Spacer(Modifier.height(8.dp))
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(22.dp),
@@ -989,25 +1009,8 @@ fun MovieDetailScreen(
                         ErrorRetryCard(message = loadError, onRetry = { viewModel.retry() })
                     }
 
-                    // Série terminada → "Próximo seriado" (abre a 1ª série relacionada).
-                    if (nextSeries != null) {
-                        Spacer(Modifier.height(10.dp))
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                                .background(BackgroundCard2)
-                                .clickable { onRelatedClick(nextSeries) }
-                                .padding(horizontal = pad, vertical = 13.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Icon(Icons.Default.SkipNext, null, tint = Accent, modifier = Modifier.size(22.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("Próximo seriado", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = SoraFontFamily)
-                                Text(nextSeries.title, color = TextTertiary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
-                        }
-                    }
+                    // Hotfix v1.47.1 (Fix 5c): o "Próximo seriado" saiu daqui p/
+                    // o FIM do detalhe (último item do LazyColumn).
 
                     Spacer(Modifier.height(16.dp))
 
@@ -1452,7 +1455,8 @@ fun MovieDetailScreen(
                                 // (Lote 11, v1.21.0) blur anti-spoiler + esconder-spoilers do calendário.
                                 spoilerBlur = spoilerBlurOn,
                                 hideUnairedSpoilers = calendarHideSpoilersOn,
-                                modifier = Modifier.width(300.dp),
+                                // (v1.47.1) card mais largo p/ legibilidade no celular.
+                                modifier = Modifier.width(340.dp),
                                 onPlay = {
                                     onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
                                 },
@@ -1639,6 +1643,32 @@ fun MovieDetailScreen(
                             val click = remember(rel) { { onRelatedClick(rel) } }
                             com.aotv.app.ui.common.PosterCard(item = rel, onClick = click, modifier = Modifier.width(com.aotv.app.ui.common.posterWidth()))
                         }
+                    }
+                }
+            }
+
+            // Hotfix v1.47.1 (Fix 5c): "Próximo seriado" no FIM do detalhe
+            // (antes ficava logo depois da sinopse). Série terminada abre a
+            // 1ª série relacionada. Fora do filtro de abas: aparece no fim
+            // de qualquer aba ativa, sempre depois de temporadas/episódios e
+            // das demais seções.
+            if (nextSeries != null) {
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = pad, end = pad, top = 18.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(BackgroundCard2)
+                            .clickable { onRelatedClick(nextSeries) }
+                            .padding(horizontal = pad, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.Default.SkipNext, null, tint = Accent, modifier = Modifier.size(22.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Próximo seriado", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = SoraFontFamily)
+                            Text(nextSeries.title, color = TextTertiary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = TextTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -1939,6 +1969,34 @@ fun MovieDetailScreen(
             )
         }
 
+        // ── Folha "Mais opções" do botão "..." (Hotfix v1.47.1, Fix 5b) ───
+        // As mesmas ações da fileira de botões redondos (que continua lá).
+        if (detailOptionsOpen) {
+            DetailOptionsSheet(
+                title = title,
+                isSeries = isSeries,
+                hasTrailer = state.trailerKey.isNotBlank(),
+                trailerLoading = trailerLoading,
+                isSaved = state.isSaved,
+                isDropped = isDropped,
+                tasteLiked = state.tasteLiked,
+                tasteDisliked = state.tasteDisliked,
+                tasteFavorite = state.tasteFavorite,
+                hasAbout = hasAbout,
+                onTrailer = { openTrailer() },
+                onToggleSave = { viewModel.toggleSave() },
+                onToggleDrop = {
+                    if (isDropped) l23Vm.undropSeries(detailItem.tmdbId)
+                    else l23Vm.dropSeries(detailItem.tmdbId)
+                },
+                onToggleLike = { viewModel.toggleTasteLike() },
+                onToggleDislike = { viewModel.toggleTasteDislike() },
+                onToggleFavorite = { viewModel.toggleTasteFavorite() },
+                onAbout = { aboutOpen = true },
+                onDismiss = { detailOptionsOpen = false },
+            )
+        }
+
         // ── Filmografia do ATOR (clicou no elenco) ──────────────────────────────
         state.personName?.let { person ->
             PersonFilmographySheet(
@@ -2072,6 +2130,126 @@ private fun AboutTitleSheet(
                 }
             }
         }
+    }
+}
+
+// ── Folha "Mais opções" do botão "..." (Hotfix v1.47.1, Fix 5b) ───────────
+// As mesmas ações da fileira de botões redondos — nada novo, nada removido.
+// Mesmo visual da folha Sobre (scrim + card inferior); a fileira continua
+// existindo, a folha é só um atalho ao lado do Reproduzir, estilo Nuvio.
+@Composable
+private fun DetailOptionsSheet(
+    title: String,
+    isSeries: Boolean,
+    hasTrailer: Boolean,
+    trailerLoading: Boolean,
+    isSaved: Boolean,
+    isDropped: Boolean,
+    tasteLiked: Boolean,
+    tasteDisliked: Boolean,
+    tasteFavorite: Boolean,
+    hasAbout: Boolean,
+    onTrailer: () -> Unit,
+    onToggleSave: () -> Unit,
+    onToggleDrop: () -> Unit,
+    onToggleLike: () -> Unit,
+    onToggleDislike: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onAbout: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.75f))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onDismiss),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .background(Background)
+                .border(1.dp, Border, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = {})
+                .padding(com.aotv.app.ui.common.pagePadding())
+                .navigationBarsPadding(),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("OPÇÕES", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, fontFamily = ManropeFontFamily, letterSpacing = 1.2.sp)
+                    Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, fontFamily = SoraFontFamily, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                GlassCircleButton(icon = Icons.Default.Close, onClick = onDismiss, size = 38.dp, iconTint = TextSecondary, contentDescription = "Fechar")
+            }
+            Spacer(Modifier.height(6.dp))
+            if (hasTrailer) {
+                DetailOptionRow(
+                    icon = Icons.Default.Theaters,
+                    label = if (trailerLoading) "Carregando trailer" else "Trailer",
+                    onClick = { onDismiss(); onTrailer() },
+                )
+            }
+            DetailOptionRow(
+                icon = if (isSaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                label = if (isSaved) "Salvo ✓" else "Minha Lista",
+                tint = if (isSaved) Accent else TextPrimary,
+                onClick = { onDismiss(); onToggleSave() },
+            )
+            if (isSeries) {
+                DetailOptionRow(
+                    icon = if (isDropped) Icons.Default.Restore else Icons.Default.Block,
+                    label = if (isDropped) "Desfazer abandono" else "Abandonar série",
+                    tint = if (isDropped) Accent else LiveRed,
+                    onClick = { onDismiss(); onToggleDrop() },
+                )
+            }
+            DetailOptionRow(
+                icon = Icons.Default.ThumbUp,
+                label = if (tasteLiked) "Gostei ✓" else "Gostei",
+                tint = if (tasteLiked) Accent else TextPrimary,
+                onClick = { onDismiss(); onToggleLike() },
+            )
+            DetailOptionRow(
+                icon = Icons.Default.ThumbDown,
+                label = if (tasteDisliked) "Não gostei ✓" else "Não gostei",
+                tint = if (tasteDisliked) LiveRed else TextPrimary,
+                onClick = { onDismiss(); onToggleDislike() },
+            )
+            DetailOptionRow(
+                icon = if (tasteFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                label = if (tasteFavorite) "Favorito ✓" else "Favorito",
+                tint = if (tasteFavorite) Gold else TextPrimary,
+                onClick = { onDismiss(); onToggleFavorite() },
+            )
+            if (hasAbout) {
+                DetailOptionRow(
+                    icon = Icons.Default.Info,
+                    label = "Sobre o título",
+                    onClick = { onDismiss(); onAbout() },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+/** Uma linha da folha de opções: ícone + rótulo, mesma ação do botão redondo. */
+@Composable
+private fun DetailOptionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color = TextPrimary,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        Text(label, color = TextPrimary, fontSize = 15.sp, fontFamily = ManropeFontFamily, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -3354,7 +3532,7 @@ private fun EpisodeRowCard(
         // Thumbnail 16:9 com overlay + play glass
         Box(
             Modifier
-                .then(if (stacked) Modifier.fillMaxWidth().aspectRatio(16f / 9f) else Modifier.width(120.dp).height(68.dp))
+                .then(if (stacked) Modifier.fillMaxWidth().aspectRatio(16f / 9f) else Modifier.width(160.dp).height(90.dp))
                 .align(Alignment.CenterVertically)
                 .clip(RoundedCornerShape(12.dp))
                 .background(BackgroundCard2)
@@ -3423,8 +3601,8 @@ private fun EpisodeRowCard(
                 Text(
                     "EP ${episode.episodeNumber}",
                     color = Color.White,
-                    fontSize = 9.sp,
-                    lineHeight = 12.sp,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
                     fontWeight = FontWeight.ExtraBold,
                     fontFamily = ManropeFontFamily,
                     letterSpacing = 0.5.sp,
@@ -3441,10 +3619,10 @@ private fun EpisodeRowCard(
                 Text(
                     displayTitle,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 13.5.sp,
+                    fontSize = 15.sp,
                     color = TextPrimary,
                     maxLines = 2,
-                    lineHeight = 18.sp,
+                    lineHeight = 20.sp,
                     overflow = TextOverflow.Ellipsis,
                     fontFamily = SoraFontFamily,
                     modifier = if (stacked) Modifier.fillMaxWidth() else Modifier.weight(1f, fill = false),
@@ -3455,8 +3633,8 @@ private fun EpisodeRowCard(
                     Text(
                         if (watched) "VISTO" else "VENDO",
                         color = badgeColor,
-                        fontSize = 8.5.sp,
-                        lineHeight = 12.sp,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
                         fontFamily = ManropeFontFamily,
                         letterSpacing = 0.5.sp,
@@ -3471,8 +3649,8 @@ private fun EpisodeRowCard(
             if (epMeta.isNotEmpty()) {
                 Text(
                     epMeta.joinToString("  ·  "),
-                    fontSize = 10.5.sp,
-                    lineHeight = 14.sp,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
                     color = TextSecondary,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = ManropeFontFamily,
@@ -3484,13 +3662,13 @@ private fun EpisodeRowCard(
             if (episode.overview.isNotBlank() && !hideSpoiler) {
                 Text(
                     episode.overview,
-                    fontSize = 11.5.sp,
+                    fontSize = 13.sp,
                     color = TextTertiary,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     fontFamily = ManropeFontFamily,
                     modifier = Modifier.padding(top = 3.dp),
-                    lineHeight = 15.sp,
+                    lineHeight = 18.sp,
                 )
             }
         }

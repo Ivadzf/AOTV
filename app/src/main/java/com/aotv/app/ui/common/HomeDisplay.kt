@@ -35,10 +35,14 @@ fun homeGridSpacing(density: HomeDensity): Dp = if (density == HomeDensity.COMPA
 /**
  * Fundo da Início tingido com a matiz do destaque (Fase B, opt-in). Sem matiz
  * (pôster sem cor ou ainda sem leitura) volta ao fundo sólido de sempre.
+ * Hotfix v1.47.1 (Fix 4): presença mais forte — o meio (L 0.09) tinha quase
+ * a mesma luminosidade do Background (0xFF0D0D0D, L ~0.05), então o gradiente
+ * sumia e o detalhe ficava preto mesmo com a matiz lida. Mesma matiz, mesma
+ * estrutura (topo → meio → Background); só mais luz e saturação.
  */
 fun dynamicHomeBackground(hue: Int?): Brush {
     if (hue == null || hue < 0) return Brush.verticalGradient(listOf(Background, Background))
-    val top = Color.hsl(hue.toFloat(), 0.45f, 0.15f)
-    val mid = Color.hsl(hue.toFloat(), 0.38f, 0.09f)
+    val top = Color.hsl(hue.toFloat(), 0.55f, 0.22f)
+    val mid = Color.hsl(hue.toFloat(), 0.45f, 0.14f)
     return Brush.verticalGradient(listOf(top, mid, Background))
 }
