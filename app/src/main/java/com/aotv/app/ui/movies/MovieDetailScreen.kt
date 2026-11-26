@@ -205,6 +205,11 @@ fun MovieDetailScreen(
     // Lote 2 item 9h — folha expansível do trailer (entre o mini e a tela cheia).
     var trailerSheet by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
     var trailerLoading by remember { mutableStateOf(false) }
+    // Lote 21 (v1.31.0) — autoplay do trailer: mini-player embutido no topo do
+    // detalhe (não o overlay de tela cheia); minimizar vira PiP flutuante.
+    // Declarados ANTES do `activeTrailerStream` (abaixo), que já lê `trailerMini`.
+    var trailerMini by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
+    var trailerMiniPip by remember { mutableStateOf(false) }
     // Um só ExoPlayer içado p/ o trailer: mini, folha e tela cheia usam a MESMA
     // instância (criada só quando há trailer ativo) — expandir não recomeça o vídeo.
     val activeTrailerStream = trailerMini ?: trailerSheet ?: trailerExo
@@ -213,10 +218,6 @@ fun MovieDetailScreen(
         activeTrailerStream?.let { com.aotv.app.ui.common.createTrailerExo(trailerContext, it.videoUrl, it.audioUrl) }
     }
     DisposableEffect(trailerPlayer) { onDispose { trailerPlayer?.release() } }
-    // Lote 21 (v1.31.0) — autoplay do trailer: mini-player embutido no topo do
-    // detalhe (não o overlay de tela cheia); minimizar vira PiP flutuante.
-    var trailerMini by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
-    var trailerMiniPip by remember { mutableStateOf(false) }
     // Uma tentativa de autoplay por título (reseta ao trocar de título).
     var trailerAutoplayed by remember(item.tmdbId) { mutableStateOf(false) }
     // Autoplay: 3 s após abrir, só com a pref ligada e (por padrão) só no

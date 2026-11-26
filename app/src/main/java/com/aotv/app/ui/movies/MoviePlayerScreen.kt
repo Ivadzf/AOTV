@@ -309,6 +309,11 @@ fun MoviePlayerScreen(
     val playerEqEnabled by playerPrefsVm.equalizer.collectAsState()
     val playerEqPreset by playerPrefsVm.eqPreset.collectAsState()
     val playerEqBands by playerPrefsVm.eqBands.collectAsState()
+    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis — declarados
+    // aqui (antes do registro das ações remotas) porque o `description` das
+    // ações "avancar_10s"/"voltar_10s" já lê os valores.
+    val playerSkipBackSecs by playerPrefsVm.skipBackSecs.collectAsState()
+    val playerSkipFwdSecs by playerPrefsVm.skipFwdSecs.collectAsState()
     // Lote 16 item 4: sincronizar a taxa de quadros (pref, ligada por padrão).
     val playerFrameRate by playerPrefsVm.frameRate.collectAsState()
     // Estado e regra do player moram na sessão. A função de tela ficou pequena e o Android volta
@@ -545,9 +550,6 @@ fun MoviePlayerScreen(
     val playerTopActionsPref by playerPrefsVm.topActions.collectAsState()
     val playerTapSeek by playerPrefsVm.tapSeek.collectAsState()
     val playerSwipeSeek by playerPrefsVm.swipeSeek.collectAsState()
-    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis.
-    val playerSkipBackSecs by playerPrefsVm.skipBackSecs.collectAsState()
-    val playerSkipFwdSecs by playerPrefsVm.skipFwdSecs.collectAsState()
     val playerVolBoost by playerPrefsVm.volBoost.collectAsState()
     val playerVolBoostLevel by playerPrefsVm.volBoostLevel.collectAsState()
     val playerMini by playerPrefsVm.mini.collectAsState()

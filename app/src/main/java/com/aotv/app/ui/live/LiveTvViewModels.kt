@@ -12,6 +12,7 @@ import com.aotv.app.data.live.VodCategory
 import com.aotv.app.data.live.VodEpisode
 import com.aotv.app.data.live.VodItem
 import com.aotv.app.data.live.VodSeriesDetail
+import com.aotv.app.data.remote.AddonTvCatalog
 import com.aotv.app.data.remote.AddonTvCatalogLoader
 import com.aotv.app.data.remote.AddonTvCatalogs
 import com.aotv.app.data.remote.AddonTvChannel

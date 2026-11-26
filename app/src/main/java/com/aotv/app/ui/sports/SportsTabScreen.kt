@@ -61,6 +61,7 @@ import com.aotv.app.data.sports.ChannelFix
 import com.aotv.app.data.sports.EspnSportsRepository
 import com.aotv.app.data.sports.GameStatus
 import com.aotv.app.data.sports.LeagueGame
+import com.aotv.app.data.sports.LeagueTable
 import com.aotv.app.data.sports.SPORTS_LEAGUES
 import com.aotv.app.data.sports.SportsLeague
 import com.aotv.app.data.sports.leagueChannels
