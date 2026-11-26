@@ -2,18 +2,32 @@
   "latest": {
     "assets": {
       "universal": {
-        "sha256": "765e9da9a297115feb6087e3f319aec69d9918977e1d6b4347053c6576936825",
-        "size": 123456424,
-        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.45.0/AOTV-v1.45.0.apk"
+        "sha256": "67657759e8231d0ed33b463dc252528e88b6f5b82f21d2355838662c195daba9",
+        "size": 123543020,
+        "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.46.0/AOTV-v1.46.0.apk"
       }
     },
-    "changelog": "v1.45.0 — Troca de perfil sem reiniciar o app, volume de 0 a 200% no mpv, guia EPG do canal embaixo do preview na TV ao vivo, prévia ao buscar no vídeo, corrida de fontes, autoplay inteligente, pré-busca do próximo episódio, chaves pelo celular via QR e perfil infantil com limite travado por PIN. Obs.: o pulo de abertura via IntroDB já existia desde a v1.8.1 — nesta versão só a URL da IntroDB virou configurável; o herói da TV ainda toca o trailer sozinho; nada de ffmpeg neste lote.",
-    "published_at": "2026-11-24T00:37:20Z",
-    "tag": "v1.45.0",
-    "version": "1.45.0",
-    "versionCode": 84
+    "changelog": "v1.46.0 — Lote 1: perfis independentes (addons, plugins e debrid por perfil, com herança do perfil principal), importar todos os perfis do Nuvio de uma vez, download em lote de vários episódios ou da temporada inteira, download inteligente (baixa os próximos episódios e apaga ao assistir, desligado por padrão), correções vindas do JOTV 1.0.23 e correção do BestCine (os canais de TV viraram VIP: o app agora avisa quando a lista vem vazia e quando uma fileira ligada não carrega mais). Obs.: o download inteligente dispara ao marcar o episódio como assistido no diálogo; a temporada inteira baixa episódio a episódio ao abrir a folha de fontes de cada um.",
+    "published_at": "2026-11-26T13:07:46Z",
+    "tag": "v1.46.0",
+    "version": "1.46.0",
+    "versionCode": 85
   },
   "versions": [
+    {
+      "assets": {
+        "universal": {
+          "sha256": "67657759e8231d0ed33b463dc252528e88b6f5b82f21d2355838662c195daba9",
+          "size": 123543020,
+          "url": "https://github.com/Ivadzf/AOTV/releases/download/v1.46.0/AOTV-v1.46.0.apk"
+        }
+      },
+      "changelog": "v1.46.0 — Lote 1: perfis independentes (addons, plugins e debrid por perfil, com herança do perfil principal), importar todos os perfis do Nuvio de uma vez, download em lote de vários episódios ou da temporada inteira, download inteligente (baixa os próximos episódios e apaga ao assistir, desligado por padrão), correções vindas do JOTV 1.0.23 e correção do BestCine (os canais de TV viraram VIP: o app agora avisa quando a lista vem vazia e quando uma fileira ligada não carrega mais). Obs.: o download inteligente dispara ao marcar o episódio como assistido no diálogo; a temporada inteira baixa episódio a episódio ao abrir a folha de fontes de cada um.",
+      "published_at": "2026-11-26T13:07:46Z",
+      "tag": "v1.46.0",
+      "version": "1.46.0",
+      "versionCode": 85
+    },
     {
       "assets": {
         "universal": {
