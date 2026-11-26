@@ -117,7 +117,15 @@ class LiveTvViewModel @Inject constructor(
     private val query = MutableStateFlow("")
     private val clock = MutableStateFlow(System.currentTimeMillis())
 
-    val view: StateFlow<View> = combine(repo.state, filter, query, clock, addonTv, prefs.liveVisibleAddonIdsFlow) { st, f, q, now, atv, visibleAddonIds ->
+    // combine de 6 flows SÓ compila na forma vararg (build #235): os valores
+    // vêm do array, na ordem, com cast (mesmo padrão do 2º ViewModel deste arquivo).
+    val view: StateFlow<View> = combine(repo.state, filter, query, clock, addonTv, prefs.liveVisibleAddonIdsFlow) { arr ->
+        val st = arr[0] as LiveTvRepository.State
+        val f = arr[1] as String
+        val q = arr[2] as String
+        val now = arr[3] as Long
+        val atv = arr[4] as AddonTvData
+        val visibleAddonIds = arr[5] as Set<String>?
         val favs = st.favorites
         // Lote 12 (v1.22.0): canais de exibição — ocultos fora, nome/número/
         // grupo/logo próprios aplicados e na ordem do usuário. O guia já vem
