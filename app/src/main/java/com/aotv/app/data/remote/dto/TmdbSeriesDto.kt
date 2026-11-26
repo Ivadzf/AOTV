@@ -37,6 +37,8 @@ data class TmdbSeriesDetailDto(
     @SerializedName("last_air_date")       val lastAirDate: String? = null,
     // Estúdios de produção (folha Sobre, v1.21.0). Só vem em /tv/{id}.
     @SerializedName("production_companies") val productionCompanies: List<TmdbCompanyDto> = emptyList(),
+    // Temporadas com pôster (Lote 2 item 9e — toggle Pôsteres/Texto). Só vem em /tv/{id}.
+    @SerializedName("seasons") val seasons: List<TmdbSeasonDto> = emptyList(),
 )
 
 data class TmdbNextEpisodeDto(
@@ -79,6 +81,8 @@ fun TmdbSeriesDetailDto.toDomain(embedId: String = id.toString()) = SeriesItem(
 data class TmdbSeasonDto(
     @SerializedName("season_number") val seasonNumber: Int,
     val episodes: List<TmdbEpisodeDto> = emptyList(),
+    // Pôster da temporada (só vem em /tv/{id}; o detalhe /season/{n} não traz).
+    @SerializedName("poster_path") val posterPath: String? = null,
 )
 
 data class TmdbEpisodeDto(

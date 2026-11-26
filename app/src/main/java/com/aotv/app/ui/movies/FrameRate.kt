@@ -16,6 +16,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 // Frame-rate matching + medidor de FPS + fallback Dolby Vision 7 → HDR10
 // (Lote 16 item 4, v1.26.0). Pensado p/ a TV Philco do Davi (Android TV
@@ -31,6 +34,10 @@ import androidx.media3.ui.PlayerView
 //   val meter = remember { FpsMeter() }
 //   LaunchedEffect(fpsMeterOn) { if (on) meter.start() else meter.stop() }
 //   // Linha p/ o painel de infos: fpsDisplayLine(fpsDoStream, meter.currentFps)
+//   // Medidor global (Lote 2 item 3, v1.47.0): overlay em qualquer tela:
+//   val meter = remember { GlobalFrameMeter() }
+//   LaunchedEffect(on) { if (on) meter.start() else meter.stop() }
+//   FrameMeterOverlay(meter) // lê meter.stats (fps, p90, %>16ms, %>33ms)
 //   // DV perfil 7 sem suporte no aparelho:
 //   if (dvProfile7NeedsHdr10Fallback(player)) applyHdr10Fallback(player)
 //   // Tudo com runCatching por dentro; nada aqui lança.
@@ -47,6 +54,9 @@ import androidx.media3.ui.PlayerView
 //   decodificados do vídeo: ele diz a quantos Hz a tela está
 //   desenhando, e o fps DO STREAM vem do videoFormat. Não há API
 //   pública p/ contar quadros decodificados por segundo no Media3.
+// - O medidor global (Lote 2 item 3) mede o mesmo vsync da UI: NÃO há
+//   como separar UI/render/GPU com API pública, e o overlay mostra só
+//   o que o Choreographer vê (fps, p90, % >16 ms / >33 ms).
 // - O fallback DV→HDR10 só existe quando o manifesto traz OUTRA faixa
 //   de vídeo sem DV (o HLS/DASH costuma trazer a rendição HDR10 junto;
 //   se só houver a faixa DV, não há p/ onde cair e applyHdr10Fallback
@@ -170,6 +180,92 @@ fun fpsDisplayLine(streamFps: Float?, displayFps: Float?): String? {
     val stream = streamFps?.takeIf { it > 0f }?.let { "%.3f".format(it).trimEnd('0').trimEnd('.') + " fps" }
     val display = displayFps?.takeIf { it > 0f }?.let { "tela ${"%.0f".format(it)} Hz" }
     return listOfNotNull(stream, display).joinToString(" · ").takeIf { it.isNotBlank() }
+}
+
+/** Estatísticas do medidor global de quadros (Lote 2 item 3, v1.47.0). */
+data class FrameMeterStats(
+    /** Quadros por segundo (média da janela). */
+    val fps: Float,
+    /** Percentil 90 do tempo de quadro, em ms. */
+    val p90Ms: Float,
+    /** % dos quadros acima de 16 ms (perdeu o vsync de 60 Hz). */
+    val pctOver16: Float,
+    /** % dos quadros acima de 33 ms (perdeu 2 vsyncs seguidos). */
+    val pctOver33: Float,
+    /** Amostras na janela. */
+    val samples: Int,
+)
+
+/**
+ * Medidor global de quadros (Lote 2 item 3, v1.47.0): Choreographer com a
+ * janela dos últimos 240 intervalos de vsync (mesmo modelo do
+ * [com.aotv.app.ui.settings.FrameTimeSampler] do Diagnóstico) + publicação
+ * a cada 500 ms p/ o overlay não recompor a cada quadro. Mede o VSYNC DA
+ * UI — não separa UI/render/GPU e não conta quadros decodificados do vídeo
+ * (não há API pública p/ isso; ver o doc do arquivo). Só vale na thread
+ * principal. O overlay lê [stats].
+ */
+class GlobalFrameMeter {
+    private val intervals = ArrayDeque<Long>()
+    private var lastNanos = 0L
+    private var running = false
+    private var lastPublishMs = 0L
+    private val _stats = MutableStateFlow<FrameMeterStats?>(null)
+    val stats: StateFlow<FrameMeterStats?> = _stats.asStateFlow()
+
+    private val callback: Choreographer.FrameCallback = Choreographer.FrameCallback { t ->
+        if (lastNanos != 0L) {
+            val dt = (t - lastNanos) / 1_000_000
+            if (dt in 1..1000) {
+                intervals.addLast(dt)
+                while (intervals.size > 240) intervals.removeFirst()
+            }
+        }
+        lastNanos = t
+        if (running) {
+            Choreographer.getInstance().postFrameCallback(callback)
+            val nowMs = t / 1_000_000
+            if (nowMs - lastPublishMs >= 500) {
+                lastPublishMs = nowMs
+                _stats.value = computeStats()
+            }
+        }
+    }
+
+    /** Começa a medir (chamar 1x; sem efeito se já estiver medindo). */
+    fun start() {
+        if (running) return
+        running = true
+        lastNanos = 0L
+        lastPublishMs = 0L
+        intervals.clear()
+        _stats.value = null
+        Choreographer.getInstance().postFrameCallback(callback)
+    }
+
+    /** Para de medir e limpa a janela. */
+    fun stop() {
+        running = false
+        Choreographer.getInstance().removeFrameCallback(callback)
+        intervals.clear()
+        _stats.value = null
+    }
+
+    private fun computeStats(): FrameMeterStats? {
+        if (intervals.size < 10) return null
+        val sorted = intervals.sorted()
+        val p90 = sorted[((sorted.size - 1) * 0.90).toInt()].toFloat()
+        val avg = intervals.average()
+        val fps = if (avg > 0) (1000.0 / avg).toFloat() else 0f
+        val size = intervals.size.toFloat()
+        return FrameMeterStats(
+            fps = fps,
+            p90Ms = p90,
+            pctOver16 = intervals.count { it > 16 } * 100f / size,
+            pctOver33 = intervals.count { it > 33 } * 100f / size,
+            samples = intervals.size,
+        )
+    }
 }
 
 // ── Dolby Vision perfil 7 → HDR10 ─────────────────────────────────────────

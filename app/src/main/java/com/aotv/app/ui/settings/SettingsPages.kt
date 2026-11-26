@@ -169,6 +169,7 @@ import com.aotv.app.ui.movies.effectivePlayerButtons
 import com.aotv.app.ui.movies.effectivePlayerTopActions
 import com.aotv.app.ui.movies.playerButtonLabel
 import com.aotv.app.ui.movies.playerTopActionLabel
+import com.aotv.app.ui.common.frostedColor
 import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.AccentSoft
@@ -407,11 +408,14 @@ private fun SettingsSection(text: String, anchor: String? = null) {
     )
 }
 
-/** Bloco com fundo de cartão para agrupar controles que não são uma linha só. */
+/** Bloco com fundo de cartão para agrupar controles que não são uma linha só.
+ * Com [frosted], o fundo vira vidro fosco ([frostedColor], mesmo toggle
+ * `pref_panel_blur` da pílula) em vez de opaco — Lote 2 (v1.47.0): só a
+ * página Reprodução usa; o resto mantém o padrão opaco. */
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+private fun SettingsCard(frosted: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2).padding(16.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(frostedColor(frosted, BackgroundCard2)).padding(16.dp),
         content = content,
     )
 }
@@ -2130,6 +2134,8 @@ private fun IntegracoesPage(
     val context = LocalContext.current
     val livePrefs = remember(context) { com.aotv.app.data.local.PlatformPrefs(context) }
     val liveMultiviewLayout by livePrefs.liveMultiviewLayoutFlow.collectAsStateWithLifecycle()
+    // Lote 2 (v1.47.0, item 7): estilo da aba Ao vivo ("aotv" ou "bestcine").
+    val liveStyle by livePrefs.liveStyleFlow.collectAsStateWithLifecycle()
     SettingsPageScaffold("Integrações", "Contas e TV ao vivo", onBack, highlightAnchor = highlightAnchor) {
         SettingsSection("Contas", anchor = SettingsAnchors.INTEGR_ACCOUNTS)
         com.aotv.app.ui.common.SettingsGroup {
@@ -2190,6 +2196,22 @@ private fun IntegracoesPage(
                 sub = "Ocultar, reordenar, renomear, trocar a logo e associar o guia de cada canal.",
                 onClick = onOpenLiveChannels,
                 grouped = true,
+            )
+        }
+        // Lote 2 (v1.47.0, item 7): estilo da aba Ao vivo — Padrão AOTV
+        // (cartões por grupo + fileiras) ou BestCine (grade de canais com o
+        // programa atual + categorias no topo). Só vale no celular; na TV a
+        // aba segue o padrão AOTV.
+        SettingsSection("Estilo da aba Ao vivo", anchor = SettingsAnchors.INTEGR_LIVE_STYLE)
+        SettingsCard {
+            PrefRow(
+                "Estilo da aba",
+                listOf("aotv" to "Padrão AOTV", "bestcine" to "BestCine"),
+                liveStyle, { livePrefs.liveStyle = it },
+            )
+            Text(
+                "BestCine: grade de canais com o programa atual, a barra de progresso e os horários, e as categorias no topo. Padrão AOTV: cartões por grupo e fileiras de canais.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
             )
         }
         SettingsSection("Guia de programação")
@@ -2633,6 +2655,8 @@ private fun AparenciaPage(
     val deviceLayout = com.aotv.app.ui.common.currentDeviceLayout(currentMode)
     // Blur nos painéis (Lote 3 item 4, v1.11.0; padrão: ligado).
     val panelBlur by viewModel.panelBlur.collectAsStateWithLifecycle()
+    // Lote 2 item 3 (v1.47.0): medidor de quadros global.
+    val frameMeter by viewModel.frameMeter.collectAsStateWithLifecycle()
     // Lote 24 (v1.34.0), item 1: preto puro por cima do tema escolhido.
     val homeAmoled by viewModel.homeAmoled.collectAsStateWithLifecycle()
     SettingsPageScaffold("Aparência", "Tema e aparelho", onBack, highlightAnchor = highlightAnchor) {
@@ -2664,6 +2688,16 @@ private fun AparenciaPage(
                 sub = "Desfoca o conteúdo atrás das folhas (detalhe e player) e deixa a pílula, o mini player e os cartões em vidro fosco. Abaixo do Android 12, um fundo escuro fosco no lugar do desfoque.",
                 trailing = { Switch(checked = panelBlur, onCheckedChange = { viewModel.setPanelBlur(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { viewModel.setPanelBlur(!panelBlur) },
+                grouped = true,
+            )
+            // Lote 2 item 3 (v1.47.0): medidor de quadros global — overlay em
+            // qualquer tela com fps, p90 e % de quadros acima de 16 ms / 33 ms.
+            com.aotv.app.ui.common.SettingsRow(
+                icon = Icons.Default.Speed,
+                title = "Medidor de quadros",
+                sub = "Mostra um overlay em qualquer tela com fps, p90 e % de quadros acima de 16 ms / 33 ms. Mede o vsync da interface — não separa UI, render e GPU (não há API pública p/ isso).",
+                trailing = { Switch(checked = frameMeter, onCheckedChange = { viewModel.setFrameMeter(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
+                onClick = { viewModel.setFrameMeter(!frameMeter) },
                 grouped = true,
             )
         }
@@ -2917,6 +2951,13 @@ private fun ReproducaoPage(
     highlightAnchor: String? = null,
 ) {
     val audio by viewModel.audioPref.collectAsStateWithLifecycle()
+    // Lote 2 (v1.47.0) — blur na Reprodução: com o toggle "Blur nos painéis"
+    // ligado, os cartões e grupos da página viram vidro fosco (frostedColor),
+    // o mesmo tratamento da pílula e dos cartões de Continuar assistindo.
+    // Blur real por trás não alcança aqui: a página é tela cheia na
+    // mesma janela (não há conteúdo atrás p/ desfocar) e o efeito desfoca
+    // o próprio conteúdo onde é aplicado — desfocaria o texto dos ajustes.
+    val panelBlurOn by viewModel.panelBlur.collectAsStateWithLifecycle()
     val maxQ by viewModel.maxQuality.collectAsStateWithLifecycle()
     val heroTrailer by viewModel.heroTrailer.collectAsStateWithLifecycle()
     val trailerAutoplay by viewModel.trailerAutoplay.collectAsStateWithLifecycle()
@@ -2950,6 +2991,9 @@ private fun ReproducaoPage(
     val effectiveTopActions = effectivePlayerTopActions(savedTopActions)
     val tapSeek by playerPrefs.tapSeek.collectAsStateWithLifecycle()
     val swipeSeek by playerPrefs.swipeSeek.collectAsStateWithLifecycle()
+    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis.
+    val skipBackSecs by playerPrefs.skipBackSecs.collectAsStateWithLifecycle()
+    val skipFwdSecs by playerPrefs.skipFwdSecs.collectAsStateWithLifecycle()
     val volBoost by playerPrefs.volBoost.collectAsStateWithLifecycle()
     val volBoostLevel by playerPrefs.volBoostLevel.collectAsStateWithLifecycle()
     val mini by playerPrefs.mini.collectAsStateWithLifecycle()
@@ -3003,7 +3047,7 @@ private fun ReproducaoPage(
     SettingsPageScaffold("Reprodução", "Áudio, qualidade, botões do player e legendas", onBack, highlightAnchor = highlightAnchor) {
         // Reprodução do perfil ativo. Ordena as fontes e limita a qualidade escolhida no Assistir.
         SettingsSection("Reprodução", anchor = SettingsAnchors.PLAY_MAIN)
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow("Áudio preferido", listOf("any" to "Qualquer", "dub" to "Dublado", "leg" to "Legendado"), audio, viewModel::setAudio)
             Spacer(Modifier.height(14.dp))
             PrefRow("Qualidade máxima", listOf(0 to "Sem limite", 2160 to "4K", 1080 to "1080p", 720 to "720p"), maxQ, viewModel::setMaxQuality)
@@ -3012,12 +3056,12 @@ private fun ReproducaoPage(
         // ao dar play, governador de bateria e saída de áudio. O gate e
         // o governador são por perfil; a saída de áudio é do aparelho.
         SettingsSection("Dados móveis, bateria e áudio", anchor = SettingsAnchors.PLAY_MAIN)
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow("Dados móveis ao dar play", listOf("ask" to "Perguntar sempre", "allow" to "Liberar sempre", "block" to "Só Wi-Fi"), mobileDataGate, playerPrefs::setMobileDataGate)
             Spacer(Modifier.height(14.dp))
             PrefRow("Saída de áudio", listOf("auto" to "Automática", "speakers" to "Alto-falantes", "receiver" to "Receiver (HDMI)"), audioOutput, playerPrefs::setAudioOutput)
         }
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Bolt,
                 title = "Governador de bateria",
@@ -3038,7 +3082,7 @@ private fun ReproducaoPage(
                 grouped = true,
             )
         }
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Movie,
                 title = "Trailer no destaque",
@@ -3138,7 +3182,7 @@ private fun ReproducaoPage(
         // e DRM, ficam as cores do pôster. O modo sensorial suaviza estouros
         // de som e pisca-pisca e desliga a rotação do herói.
         SettingsSection("Ambilight e conforto", anchor = SettingsAnchors.PLAY_COMFORT)
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Lightbulb,
                 title = "Ambilight no player",
@@ -3159,7 +3203,7 @@ private fun ReproducaoPage(
                 grouped = true,
             )
         }
-        if (ambilight) SettingsCard {
+        if (ambilight) SettingsCard(frosted = panelBlurOn) {
             PrefRow(
                 "Intensidade do Ambilight",
                 listOf("low" to "Baixa", "medium" to "Média", "high" to "Alta"),
@@ -3167,14 +3211,14 @@ private fun ReproducaoPage(
             )
         }
         SettingsSection("Legendas", anchor = SettingsAnchors.PLAY_SUBS)
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow("Cor da legenda", SUB_COLORS, subColor, playerPrefs::setSubColor)
             Spacer(Modifier.height(14.dp))
             PrefRow("Fonte da legenda", SUB_FONTS, subFont, playerPrefs::setSubFont)
             Spacer(Modifier.height(14.dp))
             PrefRow("Opacidade do fundo", SUB_BG_OPACITIES, subBgOpacity, playerPrefs::setSubBgOpacity)
         }
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.ClosedCaption,
                 title = "Contorno da legenda",
@@ -3188,7 +3232,7 @@ private fun ReproducaoPage(
         // Legendas nível 2 (Lote 16 item 3, v1.26.0): só mostrar a legenda
         // quando o áudio é estrangeiro, esconder as faixas SDH/CC e o SubDL
         // como 2ª fonte (chave grátis do usuário — nunca embutida).
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Translate,
                 title = "Só legendas em língua estrangeira",
@@ -3263,7 +3307,7 @@ private fun ReproducaoPage(
         // Botões do player (Fase C). Sobe e desce reordena, o switch tira da
         // barra. Desligado, o botão some do player mas continua aqui p/ religar.
         SettingsSection("Botões do player", anchor = SettingsAnchors.PLAY_BUTTONS)
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             (effectiveButtons + disabledButtons).forEachIndexed { i, id ->
                 val enabled = id in effectiveButtons
                 val pos = effectiveButtons.indexOf(id)
@@ -3288,7 +3332,7 @@ private fun ReproducaoPage(
             "O botão Voltar sempre aparece. Estes são os opcionais do topo do player.",
             fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp,
         )
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             listOf(
                 "cast" to Icons.Default.Cast,
                 "rotate" to Icons.Default.ScreenRotation,
@@ -3311,7 +3355,7 @@ private fun ReproducaoPage(
             }
         }
         SettingsSection("Reprodução no player", anchor = SettingsAnchors.PLAY_PLAYER)
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.TouchApp,
                 title = "Tocar na barra para buscar",
@@ -3324,7 +3368,7 @@ private fun ReproducaoPage(
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.SwapHoriz,
                 title = "Deslizar para avançar/retroceder",
-                sub = if (swipeSeek) "Deslizar sobre o vídeo avança ou retrocede 10s"
+                sub = if (swipeSeek) "Deslizar sobre o vídeo avança ${skipFwdSecs}s ou retrocede ${skipBackSecs}s"
                     else "Deslizar sobre o vídeo não busca",
                 trailing = { Switch(checked = swipeSeek, onCheckedChange = { playerPrefs.setSwipeSeek(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setSwipeSeek(!swipeSeek) },
@@ -3520,22 +3564,42 @@ private fun ReproducaoPage(
                 divider = true,
             )
             // Prévias ao buscar (v1.45.0, item 5): miniatura do momento ao
-            // buscar ±10 s, sem pausar (sem ffmpeg).
+            // buscar, sem pausar (sem ffmpeg).
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Image,
                 title = "Prévias ao buscar",
-                sub = if (seekPreview) "Mostra a miniatura do momento ao buscar ±10 s, sem pausar"
-                    else "Buscar mostra só \"+10s\" / \"−10s\", sem miniatura",
+                sub = if (seekPreview) "Mostra a miniatura do momento ao buscar, sem pausar"
+                    else "Buscar mostra só o indicador de pulo, sem miniatura",
                 trailing = { Switch(checked = seekPreview, onCheckedChange = { playerPrefs.setSeekPreview(it) }, modifier = Modifier.focusProperties { canFocus = false }) },
                 onClick = { playerPrefs.setSeekPreview(!seekPreview) },
                 grouped = true,
                 divider = true,
             )
         }
+        // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis — voltar e
+        // avançar independentes (5/10/15/20/30 s). Valem p/ botões em tela,
+        // DPAD, duplo toque, deslizar e controle remoto.
+        SettingsCard(frosted = panelBlurOn) {
+            PrefRow(
+                "Pulo p/ trás",
+                listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 20 to "20 s", 30 to "30 s"),
+                skipBackSecs, playerPrefs::setSkipBackSecs,
+            )
+            Spacer(Modifier.height(12.dp))
+            PrefRow(
+                "Pulo p/ frente",
+                listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 20 to "20 s", 30 to "30 s"),
+                skipFwdSecs, playerPrefs::setSkipFwdSecs,
+            )
+            Text(
+                "Vale p/ os botões em tela (o número aparece no ícone), as setas do controle remoto, o duplo toque no vídeo, o deslizar e o controle remoto.",
+                fontSize = 14.sp, color = TextSecondary, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
         // Autoplay inteligente (v1.45.0, item 7): prioridade de qualidades
         // e de addons. A última fonte escolhida à mão vale 7 dias e ganha
         // das duas listas quando ainda existe.
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow(
                 "Prioridade de qualidades",
                 listOf(
@@ -3594,7 +3658,7 @@ private fun ReproducaoPage(
             }
         }
         // Velocidade padrão (v1.9.0): o player abre nela; mudar no player salva aqui.
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow(
                 "Velocidade padrão",
                 listOf(0.5f to "0,5x", 1f to "1x", 1.5f to "1,5x", 2f to "2x"),
@@ -3602,7 +3666,7 @@ private fun ReproducaoPage(
             )
         }
         // Modo de tela padrão (Lote 12 — Frente 2): o player abre nele; mudar no chip "Tela" salva aqui.
-        SettingsCard {
+        SettingsCard(frosted = panelBlurOn) {
             PrefRow(
                 "Modo de tela padrão",
                 listOf(0 to "Automático", 1 to "Ajustar", 2 to "Preencher", 3 to "Zoom", 4 to "Esticar"),
@@ -3615,7 +3679,7 @@ private fun ReproducaoPage(
             )
         }
         Column(Modifier.alpha(if (volBoost) 1f else 0.45f)) {
-            SettingsCard {
+            SettingsCard(frosted = panelBlurOn) {
                 PrefRow(
                     "Nível do Volume Boost",
                     listOf(1.0f to "100%", 1.25f to "125%", 1.5f to "150%", 1.75f to "175%", 2.0f to "200%"),
@@ -3628,7 +3692,7 @@ private fun ReproducaoPage(
             }
         }
         Column(Modifier.alpha(if (autoNext) 1f else 0.45f)) {
-            SettingsCard {
+            SettingsCard(frosted = panelBlurOn) {
                 PrefRow(
                     "Atraso do \"A seguir\"",
                     listOf(5 to "5 s", 10 to "10 s", 15 to "15 s", 30 to "30 s"),
@@ -3641,7 +3705,7 @@ private fun ReproducaoPage(
             }
         }
         Column(Modifier.alpha(if (autoSwitch) 1f else 0.45f)) {
-            SettingsCard {
+            SettingsCard(frosted = panelBlurOn) {
                 // Lote 19 item 7 (d), v1.29.0 — título igual ao da tela REPRODUÇÃO
                 // do JOTV. O padrão do AOTV continua 12 s (o da foto é 20 s).
                 PrefRow(
@@ -3660,7 +3724,7 @@ private fun ReproducaoPage(
         // (chip "Equalizador") — aqui só o liga/desliga, porque os presets
         // precisam da sessão de áudio do vídeo tocando p/ existir.
         SettingsSection("Equalizador", anchor = SettingsAnchors.PLAY_EQ)
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.Tune,
                 title = "Equalizador",
@@ -3682,7 +3746,7 @@ private fun ReproducaoPage(
         )
         // Pular abertura automático (Lote 9 item 2, v1.19.0): pula a abertura
         // e o encerramento sozinho ao entrar no segmento (1x por episódio).
-        com.aotv.app.ui.common.SettingsGroup {
+        com.aotv.app.ui.common.SettingsGroup(frosted = panelBlurOn) {
             com.aotv.app.ui.common.SettingsRow(
                 icon = Icons.Default.SkipNext,
                 title = "Pular abertura automaticamente",

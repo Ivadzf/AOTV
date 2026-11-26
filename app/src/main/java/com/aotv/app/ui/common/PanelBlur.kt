@@ -63,9 +63,15 @@ import androidx.compose.ui.graphics.graphicsLayer
  *   em si vira vidro fosco translúcido (o vídeo aparece através dele,
  *   escurecido); o vídeo NÃO é desfocado.
  * - Diálogos (AlertDialog / Dialog): janela separada, sem blur.
- * - Configurações: NADA de blur aqui por decisão do Davi (Lote 4) — nem o
- *   efeito nas telas, nem superfícies novas; só o toggle que já existe em
- *   Aparência, onde estava.
+ * - Configurações → Reprodução (Lote 2, v1.47.0): os cartões e grupos da
+ *   página usam vidro fosco ([frostedColor], mesmo toggle) em vez de
+ *   opacos. Blur real (RenderEffect) não se aplica aqui: a página é tela
+ *   cheia na mesma janela (não há conteúdo atrás p/ desfocar) e o efeito
+ *   desfoca o próprio conteúdo onde é aplicado — desfocaria o texto dos
+ *   ajustes. (O parágrafo anterior que dizia "NADA de blur nas
+ *   Configurações" estava errado e foi removido: nunca houve decisão do
+ *   Davi sobre isso — o pedido dele foi "blur mais presente no app, como
+ *   na pílula e nas configurações do player".)
  * - Fundo Cinematográfico do detalhe: JÁ é blur real (28f) e não foi mexido;
  *   com a folha aberta ele desliga sozinho (como antes) p/ não pagar dois
  *   blurs ao mesmo tempo — no detalhe, sem blur de folha desde o remodel

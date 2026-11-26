@@ -79,7 +79,9 @@ import com.aotv.app.ui.theme.TextTertiary
  * topo, cartão do perfil e as 18 páginas em 8 cartões por grupo — Conta,
  * Aparência, Layout, Conteúdo & Descoberta, Reprodução, Integrações,
  * Acompanhamento e Conexão (VPN + Watch Party, Lote 10, + Social Hub,
- * Lote 19). Cada página é uma
+ * Lote 19). Lote 2 (v1.47.0), item 10: o cartão Conta ganhou a linha
+ * "Alternar perfil", que abre o seletor "Quem está assistindo?" (o cartão
+ * do perfil no topo também abre o seletor). Cada página é uma
  * `?anchor=` opcional p/ a busca profunda — ver SettingsPages.kt).
  *
  * A busca profunda casa também cada OPÇÃO dentro das páginas (ver
@@ -111,6 +113,9 @@ fun SettingsScreen(
     var query by remember { mutableStateOf("") }
     val q = query.trim()
     fun match(vararg texts: String) = q.isEmpty() || texts.any { it.contains(q, ignoreCase = true) }
+    // Lote 2 (v1.47.0), item 10: "Alternar perfil" não é uma página —
+    // abre o seletor "Quem está assistindo?"; o resto abre a página do hub.
+    fun openEntry(entry: HubEntry) = if (entry.id == "alternar_perfil") onOpenProfiles() else onOpenPage(entry.id)
     // Páginas escondidas no perfil infantil — igual à tela única antiga, que escondia
     // Início, Addons, Contas/TMDB/TV ao vivo e Aparelho com o infantil ativo.
     val pageResults = hubEntries.filter { !me.kids || !it.kidsHidden }
@@ -194,7 +199,7 @@ fun SettingsScreen(
                                         iconTint = Accent,
                                         title = entry.title,
                                         sub = entry.sub,
-                                        onClick = { onOpenPage(entry.id) },
+                                        onClick = { openEntry(entry) },
                                         grouped = true,
                                         divider = i > 0,
                                     )
@@ -228,7 +233,7 @@ fun SettingsScreen(
                                     iconTint = Accent,
                                     title = entry.title,
                                     sub = entry.sub,
-                                    onClick = { onOpenPage(entry.id) },
+                                    onClick = { openEntry(entry) },
                                     grouped = true,
                                     divider = i > 0,
                                 )
@@ -384,6 +389,19 @@ private val hubEntries = listOf(
         keywords = listOf("Backup", "restauração", "exportar", "importar", "JSON", "Wi-Fi", "QR", "PIN", "sincronizar"),
         kidsHidden = true,
     ),
+    // Lote 2 (v1.47.0), item 10: "Alternar perfil" (estilo Nuvio) — NÃO é
+    // uma página das Configurações: o id é um pseudo-id (não está em
+    // SettingsPageIds) e o toque abre o seletor "Quem está assistindo?"
+    // via onOpenProfiles (ver openEntry abaixo). Fica no cartão Conta,
+    // logo depois do Backup, na ordem do Nuvio (Conta, Alternar perfil).
+    // Não é kidsHidden: o seletor tem os gates de PIN (como antes).
+    HubEntry(
+        id = "alternar_perfil",
+        title = "Alternar perfil",
+        sub = "Mude para um perfil diferente.",
+        icon = Icons.Default.People,
+        keywords = listOf("Alternar", "perfil", "trocar", "mudar", "Quem está assistindo", "conta"),
+    ),
     HubEntry(
         id = SettingsPageIds.Trackers,
         title = "Trackers e Sincronização",
@@ -448,7 +466,7 @@ private val hubEntriesById = hubEntries.associateBy { it.id }
  * real) — grupos omitidos de propósito.
  */
 private val hubCards: List<List<String>> = listOf(
-    listOf(SettingsPageIds.Backup),
+    listOf(SettingsPageIds.Backup, "alternar_perfil"),
     listOf(SettingsPageIds.Aparencia, SettingsPageIds.Diagnostico),
     listOf(SettingsPageIds.Layout, SettingsPageIds.Detalhe, SettingsPageIds.Streams),
     listOf(SettingsPageIds.Conteudo),

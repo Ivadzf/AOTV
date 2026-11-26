@@ -692,6 +692,32 @@ data class PeriodScore(
     val text: String get() = "$home x $away"
 }
 
+/** Um destaque do jogo (artilheiro etc.): 1º da 1ª categoria de `leaders` por time. */
+data class TopPerformer(
+    val team: String,
+    val player: String,
+    /** Categoria da fonte ("Goals", "Assists"...). */
+    val label: String,
+    /** Valor da fonte, em PT quando dá p/ traduzir ("10 gols · 30 jogos"). */
+    val value: String,
+)
+
+/** Um jogo recente de um time (do `lastFiveGames` do summary). */
+data class RecentGame(
+    val dateMs: Long,
+    val opponent: String,
+    val opponentLogo: String,
+    val atHome: Boolean,
+    val score: String,
+    val result: FormResult,
+)
+
+/** Últimos jogos de um time (do `lastFiveGames` do summary). */
+data class TeamRecentGames(
+    val team: String,
+    val games: List<RecentGame>,
+)
+
 /** Página do jogo: placar, gols, estatísticas, escalações e emissoras. */
 data class GameDetail(
     val game: LeagueGame,
@@ -703,6 +729,10 @@ data class GameDetail(
     val broadcasts: List<String>,
     /** Placar por período (Lote 20, v1.30.0): só os períodos alcançados. */
     val periodScores: List<PeriodScore> = emptyList(),
+    /** Destaques do jogo (Lote 2, v1.47.0): 1º de cada categoria por time. */
+    val topPerformers: List<TopPerformer> = emptyList(),
+    /** Últimos jogos dos dois times (Lote 2, v1.47.0): do `lastFiveGames`. */
+    val lastFiveGames: List<TeamRecentGames> = emptyList(),
 )
 
 /**
@@ -1176,7 +1206,76 @@ object EspnSportsApi {
                 if (name.isNotBlank() && name !in broadcasts) broadcasts += name
             }
         }
-        return GameDetail(game, goals, stats, homeLineup, awayLineup, broadcasts, periodScoresOf(goals, game.homeTeam, game.awayTeam, game))
+        // Lote 2 (v1.47.0, item 8): destaques e últimos jogos, do mesmo summary.
+        val topPerformers = parseTopPerformers(root)
+        val lastFiveGames = parseLastFiveGames(root)
+        return GameDetail(game, goals, stats, homeLineup, awayLineup, broadcasts, periodScoresOf(goals, game.homeTeam, game.awayTeam, game), topPerformers, lastFiveGames)
+    }
+
+    /**
+     * Destaques do jogo (Lote 2, item 8): o 1º atleta da 1ª categoria de
+     * `leaders` de cada time (futebol: o artilheiro). "Matches: 30, Goals:
+     * 10" vira "10 gols · 30 jogos"; outra categoria mostra o valor cru da
+     * fonte. Sem `leaders`, lista vazia — a seção some.
+     */
+    private fun parseTopPerformers(root: JSONObject): List<TopPerformer> {
+        val out = ArrayList<TopPerformer>()
+        val teams = root.optJSONArray("leaders") ?: return out
+        for (i in 0 until teams.length()) {
+            val t = teams.optJSONObject(i) ?: continue
+            val teamName = t.optJSONObject("team")?.optString("displayName").orEmpty()
+            val cats = t.optJSONArray("leaders") ?: continue
+            val cat = cats.optJSONObject(0) ?: continue
+            val first = cat.optJSONArray("leaders")?.optJSONObject(0) ?: continue
+            val player = first.optJSONObject("athlete")?.optString("displayName").orEmpty()
+            val raw = first.optString("displayValue").orEmpty()
+            if (teamName.isBlank() || player.isBlank()) continue
+            val label = cat.optString("displayName").ifBlank { cat.optString("name") }
+            val value = if (cat.optString("name") == "goalsLeaders") {
+                val goals = Regex("Goals: (\\d+)").find(raw)?.groupValues?.getOrNull(1)
+                val matches = Regex("Matches: (\\d+)").find(raw)?.groupValues?.getOrNull(1)
+                if (goals != null && matches != null) "$goals ${if (goals == "1") "gol" else "gols"} · $matches jogos"
+                else raw
+            } else raw
+            out += TopPerformer(teamName, player, label, value)
+        }
+        return out
+    }
+
+    /**
+     * Últimos jogos dos times (Lote 2, item 8): o `lastFiveGames` do
+     * summary — data, adversário, placar e o resultado do ponto de vista
+     * do time (`gameResult`: W/D/L). Sem o campo, lista vazia.
+     */
+    private fun parseLastFiveGames(root: JSONObject): List<TeamRecentGames> {
+        val out = ArrayList<TeamRecentGames>()
+        val teams = root.optJSONArray("lastFiveGames") ?: return out
+        for (i in 0 until teams.length()) {
+            val t = teams.optJSONObject(i) ?: continue
+            val teamName = t.optJSONObject("team")?.optString("displayName").orEmpty()
+            if (teamName.isBlank()) continue
+            val games = ArrayList<RecentGame>()
+            val events = t.optJSONArray("events") ?: org.json.JSONArray()
+            for (j in 0 until events.length()) {
+                val e = events.optJSONObject(j) ?: continue
+                val result = when (e.optString("gameResult")) {
+                    "W" -> FormResult.W
+                    "L" -> FormResult.L
+                    else -> FormResult.D
+                }
+                val opp = e.optJSONObject("opponent")
+                games += RecentGame(
+                    dateMs = parseDateMs(e.optString("gameDate")),
+                    opponent = opp?.optString("displayName").orEmpty(),
+                    opponentLogo = e.optString("opponentLogo").orEmpty(),
+                    atHome = e.optString("atVs") == "vs",
+                    score = e.optString("score").orEmpty(),
+                    result = result,
+                )
+            }
+            if (games.isNotEmpty()) out += TeamRecentGames(teamName, games)
+        }
+        return out
     }
 }
 

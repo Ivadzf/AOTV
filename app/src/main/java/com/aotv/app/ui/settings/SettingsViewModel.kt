@@ -308,6 +308,10 @@ class SettingsViewModel @Inject constructor(
     val panelBlur: StateFlow<Boolean> = platformPrefs.panelBlurFlow
     fun setPanelBlur(v: Boolean) { platformPrefs.panelBlur = v }
 
+    // ── Medidor de quadros global (Lote 2 item 3, v1.47.0; do aparelho) ──
+    val frameMeter: StateFlow<Boolean> = platformPrefs.frameMeterFlow
+    fun setFrameMeter(v: Boolean) { platformPrefs.frameMeter = v }
+
     // ── Ícone do app (Lote 11, v1.21.0) — do aparelho ─────────────────────
     // A troca (liga/desliga os activity-alias) mora em AppIconVariants; aqui
     // só o estado p/ a tela e a gravação da pref depois que a troca dá certo.

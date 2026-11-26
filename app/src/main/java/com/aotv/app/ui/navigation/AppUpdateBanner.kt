@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aotv.app.data.local.MobileDataUsage
+import com.aotv.app.ui.settings.UpdateDownloadProgress
 import com.aotv.app.ui.theme.Accent
 import com.aotv.app.ui.theme.BorderSubtle
 import com.aotv.app.ui.theme.DangerText
@@ -61,16 +63,24 @@ fun AppUpdateBanner(
     frosted: Boolean = false,
     /** APK já baixado em 2º plano, pronto p/ instalar. */
     ready: Boolean = false,
+    /** Progresso do download manual (null = sem download em curso). */
+    downloadProgress: UpdateDownloadProgress? = null,
+    /** Changelog da versão pendente ("" = sem notas). */
+    changelog: String = "",
+    /** Abre o diálogo "Novidades" da versão pendente. */
+    onShowChangelog: () -> Unit = {},
 ) {
     val sizeText = if (sizeBytes > 0) " • " + MobileDataUsage.formatBytes(sizeBytes) else ""
     val shape = RoundedCornerShape(16.dp)
+    // Lote 2 item 5 (v1.47.0): aviso maior — título maior e mais respiro.
+    val prog = downloadProgress
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             .shadow(10.dp, shape)
             .clip(shape)
             .background(if (frosted) GlassBg.copy(alpha = 0.62f) else GlassBg)
             .border(1.dp, BorderSubtle, shape)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(
@@ -81,7 +91,7 @@ fun AppUpdateBanner(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     if (ready) "Atualização pronta para instalar" else "Atualização disponível", color = TextPrimary,
-                    fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Text(
@@ -90,12 +100,31 @@ fun AppUpdateBanner(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (changelog.isNotBlank()) {
+                TextButton(onClick = onShowChangelog) {
+                    Text("Novidades", fontWeight = FontWeight.SemiBold)
+                }
+            }
             TextButton(onClick = onUpdate, enabled = !downloading) {
                 Text(if (downloading) "Baixando…" else if (ready) "Instalar" else "Atualizar", fontWeight = FontWeight.SemiBold)
             }
             IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Default.Close, "Dispensar", tint = TextSecondary, modifier = Modifier.size(18.dp))
             }
+        }
+        // Lote 2 item 5 (v1.47.0): barra + "X de Y MB • N%" enquanto baixa
+        // (mesmo texto das Configurações — Lote 21 —, agora com barra).
+        if (downloading && prog != null && prog.totalBytes > 0) {
+            LinearProgressIndicator(
+                progress = { prog.fraction },
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(3.dp)),
+                color = Accent,
+                trackColor = BorderSubtle,
+            )
+            Text(
+                "${MobileDataUsage.formatBytes(prog.downloadedBytes)} de ${MobileDataUsage.formatBytes(prog.totalBytes)} • ${prog.percent}%",
+                color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp,
+            )
         }
         if (downloadError != null) Text(
             "Falha no download: $downloadError", color = DangerText,

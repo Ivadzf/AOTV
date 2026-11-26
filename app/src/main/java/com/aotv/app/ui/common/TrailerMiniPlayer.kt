@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.aotv.app.data.remote.YoutubeTrailer
 
@@ -44,8 +45,12 @@ fun TrailerMiniPlayer(
     onExpand: () -> Unit,
     onMinimize: (() -> Unit)? = null,
     onClose: () -> Unit,
+    // Lote 2 item 9h — player compartilhado (o detalhe iça um só): com ele, o
+    // player próprio nasce ocioso (URL em branco) e não toca nada.
+    sharedExo: ExoPlayer? = null,
 ) {
-    val exo = rememberTrailerExo(stream.videoUrl, stream.audioUrl)
+    val ownedExo = rememberTrailerExo(if (sharedExo != null) "" else stream.videoUrl, if (sharedExo != null) null else stream.audioUrl)
+    val exo = sharedExo ?: ownedExo
     Box(
         modifier.clip(RoundedCornerShape(12.dp)).background(Color.Black),
     ) {

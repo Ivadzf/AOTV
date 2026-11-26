@@ -258,14 +258,16 @@ class HomeCustomizeViewModel @Inject constructor(
     val state: StateFlow<UiState> = combine(baseState, layoutPrefsFlow) { base, lp ->
         // Catálogos do destaque, na ordem das fileiras (a mesma do seletor de
         // fonte do destaque). Sem escolha explícita (null), todos os que servem
-        // p/ o destaque estão dentro. Subir/descer aqui move a fileira na Início
+        // p/ o destaque estão dentro — EXCETO o Continuar assistindo (Lote 2
+        // item 6, v1.47.0): os itens dele não têm nota nem sinopse e dominam
+        // as 12 vagas do Hero. Subir/descer aqui move a fileira na Início
         // — a ordem do destaque É a ordem das fileiras.
         val opts = base.heroOptions.drop(1)
         val heroCatalogOptions = opts.mapIndexed { i, o ->
             HeroCatalogOption(
                 key = o.key,
                 label = o.label,
-                selected = lp.heroCatalogs?.contains(o.key) ?: true,
+                selected = lp.heroCatalogs?.contains(o.key) ?: (o.key != SystemRow.CONTINUE.key),
                 canUp = i > 0,
                 canDown = i < opts.size - 1,
             )
@@ -314,11 +316,14 @@ class HomeCustomizeViewModel @Inject constructor(
 
     /**
      * Liga/desliga um catálogo no destaque. Na primeira mudança, a escolha
-     * explícita parte de todos os que servem p/ o destaque (o padrão).
+     * explícita parte de todos os que servem p/ o destaque (o padrão) —
+     * menos o Continuar assistindo (Lote 2 item 6, v1.47.0): os itens dele
+     * não têm nota nem sinopse e dominam as 12 vagas do Hero. A fileira
+     * continua na Início; quem quiser religa o toggle aqui mesmo.
      */
     fun setHeroCatalog(key: String, on: Boolean) {
         val heroable = prefs.homeLayout.filter { isHeroable(it) }.map { it.key }
-        val current = prefs.heroCatalogs ?: heroable.toSet()
+        val current = prefs.heroCatalogs ?: (heroable - SystemRow.CONTINUE.key).toSet()
         prefs.heroCatalogs = if (on) current + key else current - key
     }
 

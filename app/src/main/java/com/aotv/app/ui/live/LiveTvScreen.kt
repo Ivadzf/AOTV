@@ -6,10 +6,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GridView
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -80,6 +84,8 @@ fun LiveTvScreen(
     // para não quebrar o D-pad. Grupos favoritos do hub (a estrela no cartão).
     val isTv = com.aotv.app.ui.common.LocalIsTv.current
     val groupFavorites by prefs.liveGroupFavoritesFlow.collectAsStateWithLifecycle()
+    // Lote 2 item 7 (v1.47.0): estilo da aba Ao vivo — "aotv" ou "bestcine".
+    val liveStyle by prefs.liveStyleFlow.collectAsStateWithLifecycle()
     // PIN parental por grupo (Lote 11, v1.21.0): grupos trancados com o PIN
     // dos pais (o mesmo PIN global). O desbloqueio vale só p/ a sessão:
     // fechar o app tranca de novo. Na TV não há cadeado nem gate — a tela
@@ -100,6 +106,14 @@ fun LiveTvScreen(
     // (LiveChannel.sourceId); o nome vem do JSON de fontes do repo ("aotv_live",
     // mesmas chaves do readSources — sem 2ª instância do repositório).
     var sourceFilter by remember { mutableStateOf("") }
+    // Lote 2 item 2 (v1.47.0): seletor de addons da TV (chip "Addons…" na fileira de fontes).
+    var addonPickerOpen by remember { mutableStateOf(false) }
+    if (addonPickerOpen) TvAddonPickerDialog(
+        options = v.tvAddons,
+        onToggle = { id, visible -> viewModel.setTvAddonVisible(id, visible) },
+        onSelectAll = viewModel::showAllTvAddons,
+        onDismiss = { addonPickerOpen = false },
+    )
     // Bônus Lote 23 — lockout do PIN: até quando o PIN travou, p/ recompor o
     // diálogo quando a 5ª falha trava no meio da tentativa.
     var pinLockedUntilMs by remember { mutableStateOf(0L) }
@@ -118,11 +132,11 @@ fun LiveTvScreen(
         }
         out
     }
-    /** Chave do filtro: a fonte do canal; canais de addon de TV caem num só chip ("Addons"). */
-    fun sourceKey(c: com.aotv.app.data.live.LiveChannel): String =
-        if (c.sourceId.startsWith("addon-tv:")) "addon-tv" else c.sourceId
+    /** Chave do filtro: a fonte do canal; cada addon de TV é uma fonte própria ("addon-tv:<id>") — os chips viram abas por addon (Lote 2, item 2). */
+    fun sourceKey(c: com.aotv.app.data.live.LiveChannel): String = c.sourceId
     fun sourceLabel(key: String): String =
-        if (key == "addon-tv") "Addons" else sourceNames[key] ?: key
+        if (key.startsWith("addon-tv:")) v.addonNames[key.removePrefix("addon-tv:")] ?: key.removePrefix("addon-tv:")
+        else sourceNames[key] ?: key
     // Canais da fonte escolhida (a lista já vem filtrada por favoritos/grupo/
     // busca na ViewModel — aqui só soma a fonte).
     val shownRows = if (sourceFilter.isBlank()) v.rows
@@ -130,6 +144,10 @@ fun LiveTvScreen(
     val sourceOptions = remember(v.groupedRows) {
         v.groupedRows.values.flatten().map { it.channel }.distinctBy { it.id }
             .groupBy(::sourceKey).map { (k, cs) -> k to cs.size }
+    }
+    // Lote 2 item 2: o filtro de fonte some junto com o addon oculto — volta p/ "Todos".
+    LaunchedEffect(sourceOptions) {
+        if (sourceFilter.isNotBlank() && sourceOptions.none { it.first == sourceFilter }) sourceFilter = ""
     }
 
     /** Tocar um canal respeitando o cadeado do grupo (só no celular). */
@@ -266,7 +284,7 @@ fun LiveTvScreen(
         if (searching) {
             OutlinedTextField(
                 value = v.query, onValueChange = viewModel::setQuery, singleLine = true,
-                placeholder = { Text("Nome do canal ou grupo") },
+                placeholder = { Text("Nome do canal, grupo ou programa") },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Accent, unfocusedBorderColor = Border,
@@ -311,6 +329,16 @@ fun LiveTvScreen(
                 item { com.aotv.app.ui.common.FilterChipPill("Todos ${v.total}", sourceFilter.isBlank(), { sourceFilter = "" }) }
                 items(sourceOptions, key = { it.first }) { (key, n) ->
                     com.aotv.app.ui.common.FilterChipPill("${sourceLabel(key)} $n", sourceFilter == key, { sourceFilter = key })
+                }
+                // Lote 2 item 2 (v1.47.0): seletor de addons — abre o diálogo
+                // p/ escolher quais addons aparecem na aba.
+                if (v.tvAddons.isNotEmpty()) {
+                    item {
+                        com.aotv.app.ui.common.FilterChipPill(
+                            "Addons…", false, { addonPickerOpen = true },
+                            icon = Icons.Default.Tune,
+                        )
+                    }
                 }
             }
         }
@@ -392,6 +420,26 @@ fun LiveTvScreen(
             Text(it, color = DangerText, fontSize = 13.sp, modifier = Modifier.padding(horizontal = pad, vertical = 4.dp))
         }
 
+        // Lote 2 item 7 (v1.47.0): estilo BestCine — grade de canais com o
+        // programa atual + barra de progresso e categorias no topo (variante
+        // celular da barra lateral; na TV segue o padrão AOTV). Vem antes do
+        // estado vazio p/ os chips ficarem visíveis mesmo sem resultado.
+        if (!guide && !isTv && liveStyle == "bestcine") {
+            BestCineLiveGrid(
+                rows = shownRows,
+                groups = v.groups,
+                filter = v.filter,
+                favoriteCount = v.favoriteCount,
+                total = v.total,
+                now = v.now,
+                showLogos = v.showLogos,
+                onSelectFilter = viewModel::setFilter,
+                onPlay = { row -> playChannel(row.channel) },
+                onToggleFavorite = { row -> viewModel.toggleFavorite(row.channel.id) },
+            )
+            return@Column
+        }
+
         if (shownRows.isEmpty()) {
             Text(
                 if (v.loading) "Carregando canais…"
@@ -462,6 +510,195 @@ fun LiveTvScreen(
                     showLogos = v.showLogos, showNames = v.showNames, showNumbers = v.showNumbers, cleanGroups = v.cleanGroupNames,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Seletor de addons da TV (Lote 2, item 2, v1.47.0): lista os addons com
+ * catálogo de TV e deixa ligar/desligar cada um na aba. Sem seleção = todos
+ * (a pref guarda null). A contagem é de canais visíveis do addon.
+ */
+@Composable
+private fun TvAddonPickerDialog(
+    options: List<LiveTvViewModel.TvAddonOption>,
+    onToggle: (String, Boolean) -> Unit,
+    onSelectAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BackgroundCard,
+        title = { Text("Addons na TV", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Só os addons ligados aparecem na aba Ao vivo.",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                    items(options, key = { it.id }) { opt ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onToggle(opt.id, !opt.visible) }.padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.LiveTv,
+                                null,
+                                tint = if (opt.visible) Accent else TextSecondary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(opt.name, color = TextPrimary, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    "${opt.channelCount} ${if (opt.channelCount == 1) "canal" else "canais"}",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            if (opt.visible) Icon(Icons.Default.Check, "Visível", tint = Accent, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Pronto", color = Accent) } },
+        dismissButton = { TextButton(onClick = onSelectAll) { Text("Mostrar todos", color = TextSecondary) } },
+    )
+}
+
+/**
+ * Grade estilo BestCine (Lote 2, item 7, v1.47.0): categorias no topo
+ * (variante celular da barra lateral — no print de referência do Davi são
+ * os chips Todos / Favoritos / Anime / Comédia…) e grade de canais com a
+ * logo, o programa atual, a barra de progresso e os horários. O zapping
+ * continua no player ([LivePlayerScreen.step], mesma lógica dos dois
+ * estilos); o toque no cartão abre o canal pela mesma [playChannel].
+ */
+@Composable
+private fun ColumnScope.BestCineLiveGrid(
+    rows: List<LiveRow>,
+    groups: List<Pair<String, Int>>,
+    filter: String,
+    favoriteCount: Int,
+    total: Int,
+    now: Long,
+    showLogos: Boolean,
+    onSelectFilter: (String) -> Unit,
+    onPlay: (LiveRow) -> Unit,
+    onToggleFavorite: (LiveRow) -> Unit,
+) {
+    val pad = com.aotv.app.ui.common.pagePadding()
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = pad, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item { com.aotv.app.ui.common.FilterChipPill("Todos $total", filter == LiveTvViewModel.ALL, { onSelectFilter(LiveTvViewModel.ALL) }) }
+        item {
+            com.aotv.app.ui.common.FilterChipPill(
+                "Favoritos $favoriteCount", filter == LiveTvViewModel.FAV, { onSelectFilter(LiveTvViewModel.FAV) },
+                icon = Icons.Default.Star,
+            )
+        }
+        items(groups, key = { it.first }) { (name, n) ->
+            val key = "g:$name"
+            com.aotv.app.ui.common.FilterChipPill("$name $n", filter == key, { onSelectFilter(key) })
+        }
+    }
+    if (rows.isEmpty()) {
+        Text(
+            "Nenhum canal aqui.",
+            color = TextTertiary, fontSize = 14.sp, modifier = Modifier.padding(pad),
+        )
+        return
+    }
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 110.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = pad, end = pad, top = 4.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items(rows, key = { it.channel.id }) { row ->
+            BestCineChannelCard(
+                row = row,
+                now = now,
+                showLogos = showLogos,
+                onPlay = { onPlay(row) },
+                onToggleFavorite = { onToggleFavorite(row) },
+            )
+        }
+    }
+}
+
+/** Cartão de canal da grade BestCine: logo, nome, programa atual, progresso e horários. */
+@Composable
+private fun BestCineChannelCard(
+    row: LiveRow,
+    now: Long,
+    showLogos: Boolean,
+    onPlay: () -> Unit,
+    onToggleFavorite: () -> Unit,
+) {
+    val channel = row.channel
+    val program = row.now
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(BackgroundCard2)
+            .clickable { onPlay() }
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+            if (showLogos && channel.logo.isNotBlank()) {
+                AsyncImage(
+                    model = channel.logo,
+                    contentDescription = channel.name,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                Text(
+                    channel.name, color = TextPrimary, fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Box(
+                Modifier.align(Alignment.TopEnd).size(28.dp).clip(CircleShape).background(FillSubtle)
+                    .clickable { onToggleFavorite() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (row.favorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    if (row.favorite) "Desfavoritar" else "Favoritar",
+                    tint = if (row.favorite) Gold else TextSecondary,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        Text(
+            channel.name, color = TextPrimary, fontSize = 14.sp,
+            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            program?.title ?: "Sem programação",
+            color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        if (program != null) {
+            LinearProgressIndicator(
+                progress = { program.progress(now) },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(999.dp)),
+                color = Accent,
+                trackColor = FillSubtle,
+            )
+            Text(
+                "${hhmm(program.start)} – ${hhmm(program.stop)}",
+                color = TextTertiary, fontSize = 11.sp,
+            )
         }
     }
 }

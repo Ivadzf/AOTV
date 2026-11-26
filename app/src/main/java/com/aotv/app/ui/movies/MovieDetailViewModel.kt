@@ -325,6 +325,10 @@ class MovieDetailViewModel @Inject constructor(
         val writers: List<String> = emptyList(),
         /** Estúdios de produção (TMDB, folha Sobre v1.21.0). Vazio = sem dado (a linha some). */
         val studios: List<String> = emptyList(),
+        /** Estúdios com id + logo (Lote 2 item 9b — seção Produção). Vazio = sem dado. */
+        val studioDetails: List<com.aotv.app.data.remote.dto.TmdbCompanyDto> = emptyList(),
+        /** Pôster por temporada (Lote 2 item 9e — toggle Pôsteres/Texto). Vazio = sem dado. */
+        val seasonPosters: Map<Int, String> = emptyMap(),
         val related: List<MovieItem> = emptyList(),
         // ── Coleção/franquia do filme, em ordem cronológica de lançamento ──
         val collectionName: String = "",
@@ -643,7 +647,7 @@ class MovieDetailViewModel @Inject constructor(
                 // Mostra o filme JÁ (hero). As fontes dos addons entram conforme chegam.
                 val trailer = detailDto?.videos.bestTrailerKey()
                 val trailers = detailDto?.videos.trailerKeys()
-                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, directors = detailDto?.credits.crewNames("Director").orEmpty(), writers = detailDto?.credits.crewNames("Writer", "Screenplay", "Story").orEmpty(), studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() }, related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
+                _uiState.update { it.copy(item = detail, runtimeMin = detailDto?.runtime ?: 0, originalTitle = detailDto?.originalTitle.orEmpty(), budget = detailDto?.budget ?: 0, revenue = detailDto?.revenue ?: 0, cast = castList, directors = detailDto?.credits.crewNames("Director").orEmpty(), writers = detailDto?.credits.crewNames("Writer", "Screenplay", "Story").orEmpty(), studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() }, studioDetails = detailDto?.productionCompanies.orEmpty(), related = relatedList, trailerKey = trailer, trailerKeys = trailers, isLoading = false, error = if (detailDto == null && apiKey.isNotBlank() && tmdbId > 0) LOAD_ERROR_MSG else null) }
 
                 loadDetailExtras(tmdbId, detail?.title.orEmpty(), detail?.year?.toIntOrNull(), true, detailDto?.originalTitle.orEmpty())
 
@@ -725,6 +729,11 @@ class MovieDetailViewModel @Inject constructor(
                         directors = detailDto?.credits.crewNames("Director").orEmpty(),
                         writers = detailDto?.credits.crewNames("Writer", "Screenplay", "Story").orEmpty(),
                         studios = detailDto?.productionCompanies.orEmpty().map { c -> c.name }.filter { it.isNotBlank() },
+                        studioDetails = detailDto?.productionCompanies.orEmpty(),
+                        // Pôsteres das temporadas (Lote 2 item 9e): do /tv/{id}; sem pôster, fora do mapa.
+                        seasonPosters = detailDto?.seasons.orEmpty().mapNotNull { s ->
+                            s.posterPath?.takeIf { it.isNotBlank() }?.let { s.seasonNumber to "https://image.tmdb.org/t/p/w342$it" }
+                        }.toMap(),
                         related = relatedList,
                         trailerKey = trailer,
                         trailerKeys = trailers,

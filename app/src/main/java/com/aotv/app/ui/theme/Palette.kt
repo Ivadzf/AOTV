@@ -398,6 +398,37 @@ data class AotvPalette(
             accentSecondary = Color(0xFF7E57C2),
         )
 
+        /** Vidro (Lote 2 item 9j — inspirada no Liquid Glass): fundo azul-acinzentado escuro, destaque azul-celeste claro e vidro mais translúcido (o vidro é a assinatura: GlassBg com alpha menor que o padrão). Paleta estática, como as outras 12. */
+        val Glass = Default.copy(
+            id = "glass",
+            name = "Vidro",
+            background = Color(0xFF0E141B),
+            backgroundElevated = Color(0xFF141B24),
+            backgroundCard = Color(0xFF161E28),
+            backgroundCard2 = Color(0xFF1A2330),
+            surface2 = Color(0xFF1E2836),
+            accent = Color(0xFF7DD3FC),
+            accentFill = Color(0xFF38BDF8),
+            accentDark = Color(0xFF0284C7),
+            accentSoft = Color(0xFF12283A),
+            accentSecondary = Color(0xFF2DD4BF),
+            onAccent = Color(0xFF082F49),
+            textPrimary = Color(0xFFF1F5F9),
+            textSecondary = Color(0xFFCBD5E1),
+            textTertiary = Color(0xFF94A3B8),
+            border = Color(0xFF26313F),
+            borderSubtle = Color(0x14FFFFFF),
+            glassBg = Color(0xA61E2938),
+            panelBackground = Color(0xE6172230),
+            focusBackground = Color(0xFF1E2938),
+            focusSurface = Color(0xFFF1F5F9),
+            onFocusSurface = Color(0xFF0F172A),
+            focusRing = Color(0xFF7DD3FC),
+            fillSubtle = Color(0x14FFFFFF),
+            fillTint = Color(0xFFFFFFFF),
+            searchFocused = Color(0xFF16283A),
+        )
+
         /** Netflixy (Lote 24, v1.34.0): destaque vermelho vivo sobre fundo bem escuro. */
         val Netflixy = Default.copy(
             id = "netflixy",
@@ -474,7 +505,7 @@ data class AotvPalette(
         val Custom: AotvPalette = derivedCustomPalette(DEFAULT_CUSTOM_COLORS)
 
         /** Todas as paletas, na ordem do seletor. */
-        val all: List<AotvPalette> = listOf(Default, Netflixy, Cyberpunk, Primefly, Amoled, White, Crimson, Ocean, Violet, Emerald, Amber, Pink, Custom)
+        val all: List<AotvPalette> = listOf(Default, Netflixy, Cyberpunk, Primefly, Amoled, White, Crimson, Ocean, Violet, Emerald, Amber, Pink, Glass, Custom)
 
         /**
          * Paleta pelo id salvo; id desconhecido (ou vazio) volta ao Padrão.

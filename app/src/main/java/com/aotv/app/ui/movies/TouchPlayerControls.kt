@@ -14,11 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,6 +50,9 @@ internal fun TouchPlayerControls(
     panelBlur: Boolean = true,
     /** Divisões da barra (Lote 16 item 5): intro/recap/créditos da IntroDB. */
     markers: List<ProgressMarker> = emptyList(),
+    /** Intervalos de pulo em segundos (Lote 2 item 4, v1.47.0). */
+    skipBackSecs: Int = 10,
+    skipFwdSecs: Int = 10,
 ) {
     var more by remember { mutableStateOf(false) }
     var controlsHeight by remember { mutableFloatStateOf(0f) }
@@ -163,8 +164,8 @@ internal fun TouchPlayerControls(
                             if (isPlaying) "Pausar" else "Assistir", tint = TextOnLight, modifier = Modifier.size(24.dp))
                     }
                 }
-                CtlButton(Icons.Default.Replay10, "Voltar 10 segundos", 40.dp, compact = true, onClick = onBack)
-                CtlButton(Icons.Default.Forward10, "Avançar 10 segundos", 40.dp, compact = true, onClick = onForward)
+                SkipButton(skipBackSecs, false, "Voltar $skipBackSecs segundos", onClick = onBack)
+                SkipButton(skipFwdSecs, true, "Avançar $skipFwdSecs segundos", onClick = onForward)
                 if (singleRow) LazyRow(Modifier.weight(1f), state = optionState,
                     horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     items(shownOptions, key = { it.index }) { (index, action) -> TouchPlayerActionIcon(action, index == focusedIndex) }
@@ -215,7 +216,7 @@ private fun SheetWindowBlur(enabled: Boolean) {
         runCatching {
             window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
             val attrs = window.attributes
-            attrs.blurBehindRadius = 24
+            attrs.blurBehindRadius = 32
             window.attributes = attrs
         }
     }

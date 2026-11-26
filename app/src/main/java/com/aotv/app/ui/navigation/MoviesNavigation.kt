@@ -132,7 +132,13 @@ private sealed class MoviesRoute(val route: String) {
     // Esportes parte 2 (Lote 13, v1.23.0 — Frente 1): tabelas de ligas +
     // League Networks e a página do jogo (placar, gols, estatísticas,
     // escalações). A página do jogo leva liga + id do evento da ESPN.
-    object SportsTables : MoviesRoute("live_sports_tables")
+    // Lote 2 (v1.47.0, item 8): a página de tabelas aceita a liga (?league=)
+    // — "Ver tabela completa" da aba abre direto na liga.
+    object SportsTables : MoviesRoute("live_sports_tables?league={league}") {
+        fun create(league: String = "") =
+            if (league.isBlank()) "live_sports_tables"
+            else "live_sports_tables?league=" + android.net.Uri.encode(league)
+    }
     object SportsGame : MoviesRoute("live_sports_game/{league}/{eventId}") {
         fun create(league: String, eventId: String) =
             "live_sports_game/" + android.net.Uri.encode(league) + "/" + android.net.Uri.encode(eventId)
@@ -159,6 +165,11 @@ private sealed class MoviesRoute(val route: String) {
     object CollectionFolder : MoviesRoute("movies_collection_folder/{collectionId}/{folderId}") {
         fun create(collectionId: String, folderId: String) =
             "movies_collection_folder/" + android.net.Uri.encode(collectionId) + "/" + android.net.Uri.encode(folderId)
+    }
+    // Página da produtora (Lote 2 item 9b): abre da seção Produção do detalhe.
+    object Company : MoviesRoute("movies_company/{companyId}?name={name}") {
+        fun create(companyId: Int, name: String) =
+            "movies_company/$companyId?name=" + android.net.Uri.encode(name)
     }
 }
 
@@ -305,11 +316,15 @@ fun MoviesNavigation(
     }
 
     // Fullscreen: player, detalhe e telas de fluxo (loja, contas, debrid, etc.).
-    // Busca e Perfil NÃO são fullscreen (Fase A): a pílula fica visível nas 4 abas.
-    // Configurações cobre o hub e as páginas (movies_settings/...).
+    // Busca NÃO é fullscreen (Fase A): a pílula fica visível nas abas.
+    // Lote 2 (v1.47.0), item 10: a aba Perfil virou o hub das Configurações —
+    // o hub exato ("movies_settings") NÃO é fullscreen (a pílula fica
+    // visível, como no Nuvio); só as páginas ("movies_settings/...") são.
+    // O seletor de perfis ("movies_profiles") virou tela de fluxo, sem pílula.
     val isFullscreen = currentRoute?.startsWith("movies_player") == true ||
         currentRoute?.startsWith("movies_detail") == true ||
-        currentRoute?.startsWith("movies_settings") == true ||
+        currentRoute?.startsWith("movies_settings/") == true ||
+        currentRoute == MoviesRoute.Profiles.route ||
         currentRoute == MoviesRoute.AddonStore.route ||
         currentRoute == MoviesRoute.HomeCustomize.route ||
         currentRoute == MoviesRoute.Debrid.route ||
@@ -322,7 +337,7 @@ fun MoviesNavigation(
         currentRoute == MoviesRoute.LiveOnDemand.route ||
         currentRoute == MoviesRoute.LiveMultiview.route ||
         currentRoute == MoviesRoute.LiveChannelsManage.route ||
-        currentRoute == MoviesRoute.SportsTables.route ||
+        currentRoute?.startsWith("live_sports_tables") == true ||
         currentRoute?.startsWith("live_sports_game") == true ||
         currentRoute?.startsWith("movies_live_guide") == true ||
         currentRoute?.startsWith("movies_search_query") == true ||
@@ -529,10 +544,28 @@ fun MoviesNavigation(
                         onPlayDirectLocked = onPlayDirectLockedCb,
                         onBack = onBackCb,
                         onRelatedClick = onRelatedCb,
+                        // Lote 2 item 9b — produtora abre a página dela.
+                        onCompanyClick = { id, name -> navController.navigate(MoviesRoute.Company.create(id, name)) },
                         onOpenKodiAddon = { addonId, searchTitle -> navController.navigate(MoviesRoute.KodiBrowser.create(addonId, searchTitle)) },
                         viewModel = detailVm,
                     )
                 }
+            }
+
+            composable(
+                MoviesRoute.Company.route,
+                arguments = listOf(
+                    navArgument("companyId") { type = NavType.IntType },
+                    navArgument("name") { type = NavType.StringType; defaultValue = "" },
+                ),
+            ) {
+                tvScale(isTV) { com.aotv.app.ui.collections.CompanyScreen(
+                    onBack = { navController.popBackStack() },
+                    onItemClick = { item ->
+                        movieCache[cacheKey(item.tmdbId, item.type, item.embedId)] = item
+                        navController.navigate(MoviesRoute.Detail.create(item.embedId, item.tmdbId, item.type))
+                    },
+                ) }
             }
 
             composable(
@@ -707,10 +740,12 @@ fun MoviesNavigation(
             }
 
             // Quem está assistindo. Escolher outro perfil remonta a navegação (key no MainActivity).
+            // Lote 2 (v1.47.0), item 10: o seletor saiu da aba Perfil (que
+            // virou o hub das Configurações) e vive dentro de "Alternar
+            // perfil" no hub — sem botão de Configurações aqui dentro.
             composable(MoviesRoute.Profiles.route) {
                 tvScale(isTV) { com.aotv.app.ui.settings.ProfilesScreen(
                     onPicked = { navController.popBackStack() },
-                    onOpenSettings = { navController.navigate(MoviesRoute.Settings.route) },
                 ) }
             }
 
@@ -809,18 +844,24 @@ fun MoviesNavigation(
                     onOpenMultiview = { navController.navigate(MoviesRoute.LiveMultiview.route) },
                     onSearchTitle = { title -> navController.navigate(MoviesRoute.SearchWithQuery.create(title)) },
                     // Lote 13 (v1.23.0 — Frente 1): tabelas de ligas.
-                    onOpenTables = { navController.navigate(MoviesRoute.SportsTables.route) },
+                    onOpenTables = { navController.navigate(MoviesRoute.SportsTables.create()) },
                 )
             }
             // Tabelas de ligas (Lote 13, v1.23.0 — Frente 1): placar do dia,
             // tabela, League Networks e Fix Channel. O jogo abre a página
             // dele; "Assistir" abre o player do canal resolvido.
-            composable(MoviesRoute.SportsTables.route) {
+            composable(
+                MoviesRoute.SportsTables.route,
+                arguments = listOf(
+                    navArgument("league") { type = NavType.StringType; defaultValue = "" },
+                ),
+            ) { entry ->
                 tvScale(isTV) {
                     com.aotv.app.ui.sports.SportsTablesScreen(
                         onBack = { navController.popBackStack() },
                         onPlayChannel = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
                         onOpenGame = { league, eventId -> navController.navigate(MoviesRoute.SportsGame.create(league, eventId)) },
+                        initialLeagueId = entry.arguments?.getString("league").orEmpty(),
                     )
                 }
             }
@@ -848,6 +889,7 @@ fun MoviesNavigation(
                 com.aotv.app.ui.sports.SportsTabScreen(
                     onOpenGame = { league, eventId -> navController.navigate(MoviesRoute.SportsGame.create(league, eventId)) },
                     onPlayChannel = { id -> navController.navigate(MoviesRoute.LivePlayer.create(id)) },
+                    onOpenLeague = { league -> navController.navigate(MoviesRoute.SportsTables.create(league)) },
                 )
             }
             composable(MoviesRoute.LiveSources.route) {
@@ -1126,6 +1168,13 @@ fun MoviesNavigation(
     val updateState by settingsVm.updateState.collectAsStateWithLifecycle()
     val updateDownloading by settingsVm.updateDownloading.collectAsStateWithLifecycle()
     val updateDownloadError by settingsVm.updateDownloadError.collectAsStateWithLifecycle()
+    // Lote 2 item 5 (v1.47.0): progresso do download p/ o banner.
+    val updateDownloadProgress by settingsVm.updateDownloadProgress.collectAsStateWithLifecycle()
+    // Lote 2 item 3 (v1.47.0): medidor de quadros global.
+    val frameMeterOn by settingsVm.frameMeter.collectAsStateWithLifecycle()
+    val frameMeter = remember { com.aotv.app.ui.movies.GlobalFrameMeter() }
+    LaunchedEffect(frameMeterOn) { if (frameMeterOn) frameMeter.start() else frameMeter.stop() }
+    DisposableEffect(Unit) { onDispose { frameMeter.stop() } }
     val updateNeedsPermission by settingsVm.updateNeedsPermission.collectAsStateWithLifecycle()
     val whatsNewText by settingsVm.whatsNewText.collectAsStateWithLifecycle()
     val whatsNewDotVisible by settingsVm.whatsNewDotVisible.collectAsStateWithLifecycle()
@@ -1140,6 +1189,10 @@ fun MoviesNavigation(
         settingsVm.checkWhatsNewOnStart()
     }
     var updateBannerDismissed by remember { mutableStateOf(false) }
+    // Lote 2 item 5 (v1.47.0): changelog da versão pendente aberto pelo
+    // botão "Novidades" do banner (não confundir com o "What's new" da
+    // versão instalada, mais abaixo).
+    var pendingChangelog by remember { mutableStateOf<String?>(null) }
     val updateAvailable =
         updateState as? com.aotv.app.data.remote.UpdateCheckResult.Available
 
@@ -1390,8 +1443,11 @@ fun MoviesNavigation(
                     currentRoute = currentRoute,
                     items = pillItems,
                     profile = profile,
-                    profilesRoute = MoviesRoute.Profiles.route,
-                    onProfile = { navTab(MoviesRoute.Profiles.route) },
+                    // Lote 2 (v1.47.0), item 10: a aba Perfil é o hub das
+                    // Configurações — o seletor de perfis vive dentro de
+                    // "Alternar perfil" no hub (ver SettingsScreen).
+                    profilesRoute = MoviesRoute.Settings.route,
+                    onProfile = { navTab(MoviesRoute.Settings.route) },
                     showProfile = showProfileTab,
                     frosted = panelBlurOn,
                     showWhatsNewDot = whatsNewDotVisible,
@@ -1428,8 +1484,37 @@ fun MoviesNavigation(
                     onDismiss = { updateBannerDismissed = true },
                     frosted = panelBlurOn,
                     ready = settingsVm.isUpdateReady(availableUpdate.release.tag),
+                    downloadProgress = updateDownloadProgress,
+                    changelog = availableUpdate.release.changelog,
+                    onShowChangelog = { pendingChangelog = availableUpdate.release.changelog },
                 )
             }
+        }
+        // Lote 2 item 5 (v1.47.0): "Novidades" da versão pendente (o diálogo
+        // "What's new" mais abaixo é da versão instalada).
+        val pending = pendingChangelog
+        if (pending != null && availableUpdate != null) {
+            AlertDialog(
+                onDismissRequest = { pendingChangelog = null },
+                title = { Text("Novidades da ${availableUpdate.release.tag}") },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text(pending)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { pendingChangelog = null }) { Text("Entendi") }
+                },
+            )
+        }
+        // Lote 2 item 3 (v1.47.0): overlay do medidor de quadros — canto
+        // superior direito, abaixo do banner de atualização quando ele aparece.
+        if (frameMeterOn) {
+            com.aotv.app.ui.movies.FrameMeterOverlay(
+                meter = frameMeter,
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                    .padding(top = if (!hideBar && availableUpdate != null && !updateBannerDismissed) 96.dp else 8.dp, end = 16.dp),
+            )
         }
         // Sem permissão p/ instalar apps desconhecidos: mesmo diálogo da
         // página Aparência (o banner só baixa; a permissão é do sistema).
@@ -1608,10 +1693,11 @@ private fun MoviesBottomBar(
     showProfile: Boolean = true,
     /**
      * Vidro fosco (Lote 4): com o toggle `pref_panel_blur` ligado, a pílula
-     * ("gota") fica mais translúcida (0.62 em vez de 0.72) p/ o conteúdo
-     * aparecer através dela. Blur real não alcança aqui: o RenderEffect
-     * desfoca o próprio conteúdo (ícones inclusos), não o que está atrás
-     * da barra. Funciona em qualquer API.
+     * ("gota") fica mais translúcida (0.50 em vez de 0.72) p/ o conteúdo
+     * aparecer através dela — Lote 2 item 9i baixou de 0.62 p/ 0.50. Blur
+     * real não alcança aqui: o RenderEffect desfoca o próprio conteúdo
+     * (ícones inclusos), não o que está atrás da barra. Funciona em
+     * qualquer API.
      */
     frosted: Boolean = false,
     /** Bolinha "What's new" no avatar do Perfil (Lote 18, v1.28.0). */
@@ -1631,7 +1717,7 @@ private fun MoviesBottomBar(
         Row(
             Modifier.fillMaxWidth(0.94f).widthIn(max = 560.dp)
                 .shadow(10.dp, MaterialTheme.shapes.extraLarge)
-                .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.62f) else com.aotv.app.ui.theme.GlassBg)
+                .clip(MaterialTheme.shapes.extraLarge).background(if (frosted) com.aotv.app.ui.theme.GlassBg.copy(alpha = 0.50f) else com.aotv.app.ui.theme.GlassBg)
                 .border(1.dp, com.aotv.app.ui.theme.BorderSubtle, MaterialTheme.shapes.extraLarge)
                 .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically,

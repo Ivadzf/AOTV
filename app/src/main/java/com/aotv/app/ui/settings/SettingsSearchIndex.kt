@@ -53,6 +53,8 @@ object SettingsAnchors {
     const val INTEGR_LIVE = "integracoes-tv"
     // Live TV parte 2 (Lote 12 — Frente 1, v1.22.0): Multiview e canais.
     const val INTEGR_LIVE_MANAGE = "integracoes-tv-canais"
+    // Lote 2 (v1.47.0, item 7): estilo da aba Ao vivo (Padrão AOTV / BestCine).
+    const val INTEGR_LIVE_STYLE = "integracoes-tv-estilo"
     // Acompanhamento
     const val TRACK_PROFILE = "acompanhamento-perfil"
     const val TRACK_TMDB = "acompanhamento-tmdb"
@@ -947,6 +949,15 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         anchor = SettingsAnchors.INTEGR_LIVE_MANAGE,
         kidsHidden = true,
     ),
+    // Lote 2 (v1.47.0, item 7): estilo da aba Ao vivo.
+    SettingOptionEntry(
+        title = "Estilo da aba Ao vivo",
+        sub = "Padrão AOTV ou BestCine: grade de canais com o programa atual e categorias no topo",
+        keywords = listOf("estilo", "ao vivo", "bestcine", "grade", "canais", "categorias", "estilo da aba"),
+        pageId = SettingsPageIds.Integracoes,
+        anchor = SettingsAnchors.INTEGR_LIVE_STYLE,
+        kidsHidden = true,
+    ),
     // ── Acompanhamento ───────────────────────────────────────────────────
     SettingOptionEntry(
         title = "Trocar de perfil/conta",
@@ -1024,6 +1035,14 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
         title = "Blur nos painéis",
         sub = "Desfoque atrás das folhas e da pílula",
         keywords = listOf("blur", "desfoque", "vidro", "painéis"),
+        pageId = SettingsPageIds.Aparencia,
+        anchor = SettingsAnchors.APPEAR_PANELS,
+        kidsHidden = true,
+    ),
+    SettingOptionEntry(
+        title = "Medidor de quadros",
+        sub = "Overlay com fps, p90 e % de quadros lentos",
+        keywords = listOf("medidor", "quadros", "fps", "p90", "overlay", "desempenho"),
         pageId = SettingsPageIds.Aparencia,
         anchor = SettingsAnchors.APPEAR_PANELS,
         kidsHidden = true,
@@ -1286,8 +1305,23 @@ val settingsOptionIndex: List<SettingOptionEntry> = listOf(
     ),
     SettingOptionEntry(
         title = "Deslizar para avançar/retroceder",
-        sub = "Deslizar sobre o vídeo avança ou retrocede 10s",
-        keywords = listOf("deslizar", "gesto", "avançar", "retroceder", "10s"),
+        sub = "Deslizar sobre o vídeo avança ou retrocede no intervalo configurado",
+        keywords = listOf("deslizar", "gesto", "avançar", "retroceder", "pulo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis.
+    SettingOptionEntry(
+        title = "Pulo p/ trás",
+        sub = "Segundos do pulo p/ trás: 5, 10, 15, 20 ou 30 s",
+        keywords = listOf("pulo", "voltar", "retroceder", "segundos", "intervalo"),
+        pageId = SettingsPageIds.Reproducao,
+        anchor = SettingsAnchors.PLAY_PLAYER,
+    ),
+    SettingOptionEntry(
+        title = "Pulo p/ frente",
+        sub = "Segundos do pulo p/ frente: 5, 10, 15, 20 ou 30 s",
+        keywords = listOf("pulo", "avançar", "segundos", "intervalo"),
         pageId = SettingsPageIds.Reproducao,
         anchor = SettingsAnchors.PLAY_PLAYER,
     ),

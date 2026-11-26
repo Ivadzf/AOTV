@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
@@ -90,6 +92,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -162,6 +165,8 @@ fun MovieDetailScreen(
     onPlayEpisode: (Int, Int, Int, Int) -> Unit,
     onBack: () -> Unit,
     onRelatedClick: (MovieItem) -> Unit = {},
+    // Lote 2 item 9b — tocar uma produtora abre a página dela (id, nome).
+    onCompanyClick: (Int, String) -> Unit = { _, _ -> },
     // (url, startPos, lastEp, sources, season, episode, episodeTotal)
     // season/episode/episodeTotal != 0 habilitam os botões anterior/próximo episódio no player.
     onPlayDirect: (String, Long, String, List<MoviePlayerSource>, Int, Int, Int) -> Unit = { _, _, _, _, _, _, _ -> },
@@ -197,7 +202,17 @@ fun MovieDetailScreen(
     // Trailer: 1º tenta extrair p/ o ExoPlayer (toca até com embed bloqueado); senão IFrame.
     var trailerOpen by remember { mutableStateOf(false) }  // IFrame (fallback)
     var trailerExo by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
+    // Lote 2 item 9h — folha expansível do trailer (entre o mini e a tela cheia).
+    var trailerSheet by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
     var trailerLoading by remember { mutableStateOf(false) }
+    // Um só ExoPlayer içado p/ o trailer: mini, folha e tela cheia usam a MESMA
+    // instância (criada só quando há trailer ativo) — expandir não recomeça o vídeo.
+    val activeTrailerStream = trailerMini ?: trailerSheet ?: trailerExo
+    val trailerContext = androidx.compose.ui.platform.LocalContext.current
+    val trailerPlayer = remember(activeTrailerStream?.videoUrl, activeTrailerStream?.audioUrl) {
+        activeTrailerStream?.let { com.aotv.app.ui.common.createTrailerExo(trailerContext, it.videoUrl, it.audioUrl) }
+    }
+    DisposableEffect(trailerPlayer) { onDispose { trailerPlayer?.release() } }
     // Lote 21 (v1.31.0) — autoplay do trailer: mini-player embutido no topo do
     // detalhe (não o overlay de tela cheia); minimizar vira PiP flutuante.
     var trailerMini by remember { mutableStateOf<com.aotv.app.data.remote.YoutubeTrailer.TrailerStream?>(null) }
@@ -216,7 +231,7 @@ fun MovieDetailScreen(
     LaunchedEffect(state.trailerKey) {
         if (state.trailerKey.isBlank() || trailerAutoplayed) return@LaunchedEffect
         kotlinx.coroutines.delay(3_000)
-        if (trailerAutoplayed || trailerMini != null || trailerExo != null || trailerOpen) return@LaunchedEffect
+        if (trailerAutoplayed || trailerMini != null || trailerSheet != null || trailerExo != null || trailerOpen) return@LaunchedEffect
         trailerAutoplayed = true
         if (!viewModel.trailerAutoplayOn()) return@LaunchedEffect
         if (viewModel.trailerAutoplayWifiOnly() && !com.aotv.app.data.local.MobileDataUsage.isWifiActive(detailContext)) return@LaunchedEffect
@@ -254,9 +269,14 @@ fun MovieDetailScreen(
         if (!durationGuardMismatch(runtime, sec)) return null
         return runtime to (sec / 60).roundToInt()
     }
+    // Lote 2 item 9d — fontes do filme numa folha (a lista inline saiu): o botão
+    // principal abre a folha; a retomada (Continuar) continua tocando direto.
+    var movieSourcesOpen by remember { mutableStateOf(false) }
     /** Botão principal com a guarda: pergunta antes de tocar, quando a duração destoa. */
     fun tryPrimaryPlay() {
         if (!primary.enabled) return
+        // Filme sem retomada: escolhe a fonte na folha (não toca a melhor direto).
+        if (item.type != MediaType.SERIES && !primary.canResume) { movieSourcesOpen = true; return }
         val g = primary.pendingMovieUrl?.let { guardFor(it) }
         if (g == null) { primary.play(); return }
         guardPending = GuardPending.Primary(fileMin = g.second, runtimeMin = g.first)
@@ -320,7 +340,7 @@ fun MovieDetailScreen(
 
     // Ken Burns scale animation — parado com a folha de fontes aberta: a
     // animação infinita recompõe o hero a cada quadro por baixo da folha.
-    val sheetOpen = state.selectedEpisode != null
+    val sheetOpen = state.selectedEpisode != null || movieSourcesOpen
     val infiniteTransition = rememberInfiniteTransition(label = "kenburns")
     val scale by infiniteTransition.animateFloat(
         initialValue = 1.08f,
@@ -334,11 +354,16 @@ fun MovieDetailScreen(
 
     // Preferências da página de detalhes (Fase B). Mudam na hora, sem reabrir.
     val cinematicBg by detailPrefs.cinematic.collectAsStateWithLifecycle()
+    // Lote 2 item 9a — fundo Ambilight: gradiente com a matiz do pôster (o mesmo
+    // da Início); sem matiz, o fundo sólido de sempre. O cinematográfico segue preto.
+    val posterHue = com.aotv.app.ui.common.rememberPosterHue(detailItem)
     val posterTransition by detailPrefs.posterTransition.collectAsStateWithLifecycle()
     val iconActions by detailPrefs.iconActions.collectAsStateWithLifecycle()
     val detailTabsOn by detailPrefs.tabs.collectAsStateWithLifecycle()
     val episodeStyleId by detailPrefs.episodeStyle.collectAsStateWithLifecycle()
     val episodeStyle = EpisodeCardStyle.fromId(episodeStyleId)
+    // Lote 2 item 9e — temporadas por pôsteres ou texto (padrão: pôsteres).
+    val seasonStyleId by detailPrefs.seasonStyle.collectAsStateWithLifecycle()
     // Notas dos episódios (Lote 2 item 5, por perfil; padrão: mostrar).
     val showEpisodeRatings by detailPrefs.episodeRatings.collectAsStateWithLifecycle()
     // Lote 24 item 12 (v1.34.0) — modo da nota dos episódios (rótulo de origem do mapa).
@@ -419,12 +444,14 @@ fun MovieDetailScreen(
 
     // Abrir o trailer (extrai p/ o ExoPlayer; WebView = fallback). Usado pelo
     // botão em vidro (layout atual) e pelo ícone (ações em ícones, Fase B).
+    // Lote 2 item 9h: abre a folha expansível (o mesmo player do mini) — a
+    // tela cheia só vem do botão de expandir da folha.
     fun openTrailer() {
         if (!trailerLoading) detailScope.launch {
             trailerLoading = true
             val s = viewModel.trailerStream()
             trailerLoading = false
-            if (s != null) trailerExo = s else trailerOpen = true
+            if (s != null) trailerSheet = s else trailerOpen = true
         }
     }
 
@@ -435,7 +462,10 @@ fun MovieDetailScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(if (cinematicBg) Color.Black else Background),
+            .then(
+                if (cinematicBg) Modifier.background(Color.Black)
+                else Modifier.background(com.aotv.app.ui.common.dynamicHomeBackground(posterHue)),
+            ),
     ) {
         // REMODEL v1.44.0: sem blur neste Box — a capa/backdrop fica nítida
         // mesmo com folha aberta (estilo Nuvio); a folha escurece a página
@@ -1073,72 +1103,111 @@ fun MovieDetailScreen(
                             }
                             // Direção e roteiro (remodel v1.44.0): abaixo da sinopse do filme.
                             CrewCredits(state.directors, state.writers, Modifier.padding(top = 14.dp))
+                            // Produção (Lote 2 item 9b): logos em cartões brancos, como no
+                            // BestCine; tocar abre a página da produtora. Sem logo, o nome.
+                            if (state.studioDetails.isNotEmpty()) {
+                                Text(
+                                    "Produção",
+                                    fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary,
+                                    modifier = Modifier.padding(top = 22.dp, bottom = 10.dp),
+                                )
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    items(state.studioDetails, key = { it.id }) { studio ->
+                                        val logoUrl = studio.logoPath?.takeIf { it.isNotBlank() }
+                                            ?.let { "https://image.tmdb.org/t/p/w185$it" }
+                                        Box(
+                                            Modifier
+                                                .width(104.dp).height(56.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(Color.White)
+                                                .clickable(enabled = studio.id > 0) { onCompanyClick(studio.id, studio.name) }
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (logoUrl != null) {
+                                                AsyncImage(
+                                                    model = logoUrl,
+                                                    contentDescription = studio.name,
+                                                    contentScale = ContentScale.Fit,
+                                                    modifier = Modifier.fillMaxSize(),
+                                                )
+                                            } else {
+                                                Text(
+                                                    studio.name, color = Color.Black, fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily,
+                                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                                    textAlign = TextAlign.Center,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Fontes do FILME (séries têm fontes por episódio na aba Episódios)
+            // Fontes do FILME (Lote 2 item 9d): a lista inline saiu — as fontes
+            // vivem numa folha, aberta pelo Reproduzir ou por este cartão.
             if (!isSeries && (!detailTabsOn || activeDetailTab == "fontes")) {
-                // Fontes disponíveis — section header
                 item {
                     val sourceCount = state.stremioStreams.size
-
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = pad)
-                            .padding(top = 24.dp, bottom = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Bottom,
-                    ) {
-                        Column {
-                            com.aotv.app.ui.common.Eyebrow("Disponível em", Modifier.padding(bottom = 3.dp))
-                            Text("Fontes", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
-                        }
-                        if (state.isLoading) {
-                            CircularProgressIndicator(
-                                color = Accent,
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        } else {
-                            Text(
-                                "$sourceCount encontrada${if (sourceCount != 1) "s" else ""}",
-                                fontSize = 13.sp,
-                                color = TextTertiary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontFamily = ManropeFontFamily,
-                            )
-                        }
-                    }
-                }
-
-                item {
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = pad),
+                            .padding(horizontal = pad)
+                            .padding(top = 24.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        SourceList(
-                            streams = state.stremioStreams,
-                            facts = state.movieFacts(),
-                            debridTag = state.debridTag,
-                            mediaTitle = state.item?.title.orEmpty(),
-                            onPlay = { playStremio(it) },
-                            onDownload = { dl(it.url) },
-                            kodiAddons = state.kodiVideoAddons,
-                            onOpenKodiAddon = { addonId -> onOpenKodiAddon(addonId, title) },
-                            // v1.8.1 — botão Recarregar da lista: re-busca as fontes do filme.
-                            onReloadSources = { viewModel.reloadMovieSources() },
-                            loading = state.stremioLoading,
-                            // Lote 17 — mesmo ranking da folha do player, diagnóstico
-                            // honesto sem fonte e a última fonte deste título.
-                            ranked = viewModel.rankedSources(),
-                            diagnosis = viewModel.sourceDiagnosis(),
-                            lastPick = viewModel.lastPickForTitle(),
-                        )
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            Column {
+                                com.aotv.app.ui.common.Eyebrow("Disponível em", Modifier.padding(bottom = 3.dp))
+                                Text("Fontes", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
+                            }
+                            if (state.isLoading) {
+                                CircularProgressIndicator(
+                                    color = Accent,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            } else {
+                                Text(
+                                    "$sourceCount encontrada${if (sourceCount != 1) "s" else ""}",
+                                    fontSize = 13.sp,
+                                    color = TextTertiary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFamily = ManropeFontFamily,
+                                )
+                            }
+                        }
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(BackgroundCard)
+                                .border(1.dp, Border, RoundedCornerShape(14.dp))
+                                .clickable(enabled = primary.enabled) { movieSourcesOpen = true }
+                                .padding(horizontal = 14.dp, vertical = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "Ver fontes",
+                                    fontSize = 15.sp, color = TextPrimary,
+                                    fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily,
+                                )
+                                Icon(Icons.Default.ChevronRight, "Ver fontes", tint = TextTertiary)
+                            }
+                        }
                         if (state.stremioLoading) {
                             Text(
                                 "Buscando em addons Stremio…",
@@ -1155,23 +1224,103 @@ fun MovieDetailScreen(
 
             // ── Episódios tab (series only) ─────────────────────────────────
             if (isSeries && (!detailTabsOn || activeDetailTab == "episodios")) {
-                // Season chips (FilterChipPill pattern)
+                // Temporadas (Lote 2 item 9e): pôsteres (padrão) ou texto, com
+                // toggle no cabeçalho — como no BestCine. Sem pôster no TMDB,
+                // só os chips de texto (o toggle nem aparece).
+                val postersOn = seasonStyleId == "posters" && state.seasonPosters.isNotEmpty()
                 item {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
                             .padding(horizontal = pad)
                             .padding(top = 18.dp, bottom = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        (1..maxOf(1, numberOfSeasons)).forEach { season ->
-                            val selected = state.selectedSeason == season
-                            SeasonChip(
-                                label = "Temporada $season",
-                                selected = selected,
-                                onClick = { viewModel.loadSeason(detailItem.tmdbId, season) },
+                        Text("Temporadas", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
+                        if (state.seasonPosters.isNotEmpty()) {
+                            com.aotv.app.ui.common.FilterChipPill(
+                                if (postersOn) "Pôsteres" else "Texto",
+                                true,
+                                onClick = { detailPrefs.setSeasonStyle(if (postersOn) "text" else "posters") },
                             )
+                        }
+                    }
+                }
+                if (postersOn) {
+                    item {
+                        LazyRow(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = pad)
+                                .padding(top = 4.dp, bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items((1..maxOf(1, numberOfSeasons)).toList(), key = { it }) { season ->
+                                val selected = state.selectedSeason == season
+                                val posterUrl = state.seasonPosters[season]
+                                Column(
+                                    Modifier
+                                        .width(104.dp)
+                                        .clickable { viewModel.loadSeason(detailItem.tmdbId, season) },
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .width(104.dp).aspectRatio(2f / 3f)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(BackgroundCard)
+                                            .border(
+                                                if (selected) 2.dp else 1.dp,
+                                                if (selected) Accent else Border,
+                                                RoundedCornerShape(12.dp),
+                                            ),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        if (posterUrl != null) {
+                                            AsyncImage(
+                                                model = posterUrl,
+                                                contentDescription = "Temporada $season",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize(),
+                                            )
+                                        } else {
+                                            Text(
+                                                "T$season", color = TextTertiary, fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold, fontFamily = ManropeFontFamily,
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        "Temporada $season",
+                                        fontSize = 13.sp, color = if (selected) TextPrimary else TextSecondary,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                        fontFamily = ManropeFontFamily, maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Season chips (FilterChipPill pattern)
+                    item {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = pad)
+                                .padding(top = 6.dp, bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            (1..maxOf(1, numberOfSeasons)).forEach { season ->
+                                val selected = state.selectedSeason == season
+                                SeasonChip(
+                                    label = "Temporada $season",
+                                    selected = selected,
+                                    onClick = { viewModel.loadSeason(detailItem.tmdbId, season) },
+                                )
+                            }
                         }
                     }
                 }
@@ -1275,28 +1424,44 @@ fun MovieDetailScreen(
                     }
                 }
 
-                // Episode rows
-                items(episodes, key = { it.episodeNumber }) { ep ->
-                    EpisodeRowCard(
-                        episode = ep,
-                        // (D) visto (≥90%) vs vendo (em andamento)
-                        watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
-                        watching = state.watchingEpisode == "${ep.seasonNumber}:${ep.episodeNumber}",
-                        style = episodeStyle,
-                        // (Lote 2 item 5) notas desligadas somem da meta do card.
-                        showRating = showEpisodeRatings,
-                        // (Lote 11, v1.21.0) blur anti-spoiler + esconder-spoilers do calendário.
-                        spoilerBlur = spoilerBlurOn,
-                        hideUnairedSpoilers = calendarHideSpoilersOn,
-                        modifier = Modifier.padding(horizontal = pad, vertical = 5.dp),
-                        onPlay = {
-                            onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
-                        },
-                        // (A) tocar o card abre o painel de fontes/servidores do episódio
-                        onSelect = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
-                        // (Lote 14, v1.24.0) segurar o card abre o painel de opções do episódio.
-                        onLongClick = { episodeOptions = ep },
+                // Episódios na horizontal (Lote 2 item 9f): fileira rolável abaixo
+                // das temporadas, reutilizando o EpisodeRowCard (largura fixa).
+                item {
+                    Text(
+                        "Temporada ${state.selectedSeason}",
+                        fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = pad).padding(top = 14.dp, bottom = 10.dp),
                     )
+                }
+                item {
+                    LazyRow(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(horizontal = pad),
+                    ) {
+                        items(episodes, key = { it.episodeNumber }) { ep ->
+                            EpisodeRowCard(
+                                episode = ep,
+                                // (D) visto (≥90%) vs vendo (em andamento)
+                                watched = state.watchedEpisodes.contains("${ep.seasonNumber}:${ep.episodeNumber}"),
+                                watching = state.watchingEpisode == "${ep.seasonNumber}:${ep.episodeNumber}",
+                                style = episodeStyle,
+                                // (Lote 2 item 5) notas desligadas somem da meta do card.
+                                showRating = showEpisodeRatings,
+                                // (Lote 11, v1.21.0) blur anti-spoiler + esconder-spoilers do calendário.
+                                spoilerBlur = spoilerBlurOn,
+                                hideUnairedSpoilers = calendarHideSpoilersOn,
+                                modifier = Modifier.width(300.dp),
+                                onPlay = {
+                                    onPlayEpisode(detailItem.tmdbId, ep.seasonNumber, ep.episodeNumber, state.seasons[ep.seasonNumber]?.size ?: 0)
+                                },
+                                // (A) tocar o card abre o painel de fontes/servidores do episódio
+                                onSelect = { viewModel.selectEpisode(ep.seasonNumber, ep.episodeNumber) },
+                                // (Lote 14, v1.24.0) segurar o card abre o painel de opções do episódio.
+                                onLongClick = { episodeOptions = ep },
+                            )
+                        }
+                    }
                 }
 
                 // Busca sem resultado: avisa e oferece limpar (diferente de
@@ -1489,7 +1654,8 @@ fun MovieDetailScreen(
         // Lote 21 (v1.31.0) — mini-player do trailer: no topo do detalhe
         // (autoplay) ou PiP flutuante no canto (minimizado). Um só composable
         // e um só player: ao minimizar não desmonta, só muda de lugar — o
-        // trailer continua de onde estava. Expandir abre o overlay de tela cheia.
+        // trailer continua de onde estava. Expandir abre a folha expansível
+        // (Lote 2 item 9h); a tela cheia só vem da folha.
         val miniStream = trailerMini
         if (miniStream != null) {
             Box(
@@ -1506,9 +1672,24 @@ fun MovieDetailScreen(
                         Modifier.fillMaxWidth().padding(horizontal = pad)
                             .padding(top = 56.dp).aspectRatio(16f / 9f)
                     },
-                    onExpand = { trailerMini = null; trailerMiniPip = false; trailerExo = miniStream },
+                    onExpand = { trailerMini = null; trailerMiniPip = false; trailerSheet = miniStream },
                     onMinimize = { trailerMiniPip = true },
                     onClose = { trailerMini = null; trailerMiniPip = false },
+                    sharedExo = trailerPlayer,
+                )
+            }
+        }
+
+        // ── Folha expansível do trailer (Lote 2 item 9h) ────────────────────
+        // O mesmo player do mini e da tela cheia — expandir não recomeça.
+        trailerSheet?.let { sheetStream ->
+            trailerPlayer?.let { exo ->
+                com.aotv.app.ui.common.TrailerSheet(
+                    exo = exo,
+                    title = title,
+                    onExpandFullscreen = { trailerSheet = null; trailerExo = sheetStream },
+                    onMinimize = { trailerSheet = null; trailerMini = sheetStream; trailerMiniPip = true },
+                    onClose = { trailerSheet = null },
                 )
             }
         }
@@ -1605,6 +1786,41 @@ fun MovieDetailScreen(
             )
         }
 
+        // ── Folha de fontes do FILME (Lote 2 item 9d) ─────────────────────────
+        // A lista inline saiu: o Reproduzir (sem retomada) e o cartão "Ver
+        // fontes" abrem esta folha; cada fonte tocada passa pela guarda de
+        // duração (playStremio), como a lista inline fazia.
+        if (movieSourcesOpen && !isSeries) {
+            EpisodeServersSheet(
+                season = 0,
+                episode = 0,
+                sheetTitle = title,
+                stremioStreams = state.stremioStreams,
+                facts = state.movieFacts(),
+                debridTag = state.debridTag,
+                stremioLoading = state.stremioLoading,
+                onDismiss = { movieSourcesOpen = false },
+                onReloadSources = { viewModel.reloadMovieSources() },
+                // Lote 17 — mesmo ranking da folha do player, diagnóstico
+                // honesto sem fonte e a última fonte deste título (como a
+                // lista inline fazia antes da folha).
+                ranked = viewModel.rankedSources(),
+                diagnosis = viewModel.sourceDiagnosis(),
+                lastPick = viewModel.lastPickForTitle(),
+                onPlayStremio = { s ->
+                    movieSourcesOpen = false
+                    playStremio(s)
+                },
+                isDownloadable = { viewModel.isDownloadable(it) },
+                onDownloadStremio = { s -> dl(s.url)?.invoke() },
+                kodiAddons = state.kodiVideoAddons,
+                onOpenKodiAddon = { addonId ->
+                    movieSourcesOpen = false
+                    onOpenKodiAddon(addonId, title)
+                },
+            )
+        }
+
         // ── Painel de opções do episódio (Lote 14, v1.24.0) ───────────────────
         // "Ver fontes" abre a mesma folha que tocar o card; as marcações usam
         // só os episódios do catálogo local da temporada selecionada.
@@ -1676,7 +1892,7 @@ fun MovieDetailScreen(
 
         // ── Trailer no NOSSO ExoPlayer (stream extraído — toca até com embed bloqueado) ──
         trailerExo?.let { s ->
-            com.aotv.app.ui.common.TrailerExoOverlay(s.videoUrl, s.audioUrl, onClose = { trailerExo = null }, title = title)
+            com.aotv.app.ui.common.TrailerExoOverlay(s.videoUrl, s.audioUrl, onClose = { trailerExo = null }, title = title, sharedExo = trailerPlayer)
         }
         // Fallback: IFrame oficial do YouTube (se a extração falhar).
         if (trailerOpen && state.trailerKey.isNotBlank()) {
@@ -1966,6 +2182,8 @@ private fun PersonFilmographySheet(
 }
 
 // ── (A) Bottom sheet de fontes/servidores de um episódio ──────────────────────
+// Lote 2 item 9d: a mesma folha serve o FILME (sheetTitle = título do filme;
+// season/episode ficam 0 e só o cabeçalho muda).
 @Composable
 private fun EpisodeServersSheet(
     season: Int,
@@ -1974,6 +2192,8 @@ private fun EpisodeServersSheet(
     facts: List<com.aotv.app.data.remote.SourceFacts>,
     debridTag: String = "",
     stremioLoading: Boolean,
+    // Título do cabeçalho (filme); null = "Episódio N · Fontes" (série).
+    sheetTitle: String? = null,
     // v1.0.7 — progresso dos plugins do Nuvio (quantos já responderam de
     // quantos); o rodapé mostra "Buscando em plugins… X/55" enquanto houver
     // pendente, para não parecer travado.
@@ -1992,6 +2212,11 @@ private fun EpisodeServersSheet(
     onOpenKodiAddon: (String) -> Unit = {},
     // Fase C — prefs da folha (busca, emblemas, logo, fixadas).
     streamPrefs: StreamPrefsViewModel = hiltViewModel(),
+    // Lote 17 — ranking, diagnóstico e última fonte (a lista inline do filme
+    // passava; a folha do filme passa também — o episódio segue sem).
+    ranked: List<com.aotv.app.data.remote.RankedSource> = emptyList(),
+    diagnosis: String = "",
+    lastPick: com.aotv.app.data.local.LastSourcePick? = null,
     // Lote 3 item 4: com o blur ligado, o card fica translúcido (vidro fosco)
     // e o conteúdo da página atrás aparece desfocado; desligado, opaco como antes.
     blurred: Boolean = false,
@@ -2050,7 +2275,7 @@ private fun EpisodeServersSheet(
                         modifier = Modifier.padding(bottom = 3.dp),
                     )
                     Text(
-                        "Episódio $episode · Fontes",
+                        sheetTitle ?: "Episódio $episode · Fontes",
                         fontFamily = SoraFontFamily,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 20.sp,
@@ -2082,6 +2307,9 @@ private fun EpisodeServersSheet(
                 // Recarregar fica ocupado enquanto addons ou plugins ainda respondem.
                 loading = stremioLoading || (pluginTotal > 0 && pluginDone < pluginTotal),
                 onReloadSources = onReloadSources,
+                ranked = ranked,
+                diagnosis = diagnosis,
+                lastPick = lastPick,
             )
             val cols = if (com.aotv.app.ui.common.isWideLayout()) 2 else 1
 

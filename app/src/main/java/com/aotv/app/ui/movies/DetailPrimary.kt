@@ -25,6 +25,8 @@ internal class DetailPrimary(
     /** Série terminada e a primeira série relacionada, para o "Próximo seriado". */
     val nextSeries: MovieItem?,
     val numberOfSeasons: Int,
+    /** Há progresso salvo para retomar (Lote 2 item 9d: filme sem retomada abre a folha de fontes). */
+    val canResume: Boolean,
 )
 
 @Composable
@@ -167,5 +169,6 @@ internal fun rememberDetailPrimary(
         playerSources = playerSources,
         nextSeries = if (seriesFinished) state.related.firstOrNull { it.type == MediaType.SERIES } else null,
         numberOfSeasons = numberOfSeasons,
+        canResume = canResume,
     )
 }

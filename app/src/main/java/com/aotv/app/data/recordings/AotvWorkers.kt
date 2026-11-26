@@ -154,6 +154,14 @@ class ReminderWorker(appContext: Context, params: WorkerParameters) : CoroutineW
  * chegar até ~15 min depois do apito, e um jogo curto (que começa e termina
  * entre duas passadas sem nunca ser visto no ar) não gera alerta de fim.
  */
+
+// Lote 2 (v1.47.0, item 8): janela do "vai jogar" = a cadência do vigia.
+private const val KICKOFF_WINDOW_MS = 15 * 60 * 1000L
+
+/** "HH:mm" da hora de início do jogo, p/ o "vai jogar". */
+private fun kickoffHhmm(ms: Long): String =
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale("pt", "BR")).format(java.util.Date(ms))
+
 class GameScoreWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
@@ -245,6 +253,9 @@ class GameScoreWorker(appContext: Context, params: WorkerParameters) : Coroutine
         val repo = EspnSportsRepository(context)
         val now = System.currentTimeMillis()
         var ran = false
+        // Lote 2 (v1.47.0, item 8): "vai jogar" — jogos que já foram avisados
+        // (1x por jogo; a guarda é podada no fim p/ os jogos vistos hoje).
+        val notified = prefs.kickoffNotifiedIds.toMutableSet()
         followed.forEach { leagueId ->
             val league = SPORTS_LEAGUES.firstOrNull { it.id == leagueId } ?: return@forEach
             val games = runCatching { repo.gamesOn(league, now) }.getOrNull() ?: return@forEach
@@ -278,9 +289,25 @@ class GameScoreWorker(appContext: Context, params: WorkerParameters) : Coroutine
                     )
                     seenLive -= key
                     seenScores.remove(key)
+                } else if (game.status == GameStatus.SCHEDULED) {
+                    // Lote 2 (v1.47.0, item 8): "vai jogar" — o jogo começa
+                    // em até 15 min (a cadência do vigia) e ainda não avisou.
+                    // Atraso do Doze pode fazer o jogo já estar no ar na
+                    // próxima rodada — aí o alerta de placar cobre.
+                    val startsInMs = game.dateMs - now
+                    if (startsInMs in 1..KICKOFF_WINDOW_MS && game.eventId !in notified) {
+                        LocalNotifications.notify(
+                            context, LocalNotifications.CHANNEL_REMINDERS,
+                            ("kickoff:${game.eventId}").hashCode(), "Vai começar",
+                            "${game.homeTeam} x ${game.awayTeam} — ${league.name} às ${kickoffHhmm(game.dateMs)}",
+                        )
+                        notified += game.eventId
+                    }
                 }
             }
         }
+        // Poda do "vai jogar": só ficam os ids dos jogos vistos nesta rodada.
+        prefs.kickoffNotifiedIds = notified.filter { "espn:$it" in currentKeys }.toSet()
         return ran
     }
 

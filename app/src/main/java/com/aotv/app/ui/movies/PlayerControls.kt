@@ -21,7 +21,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -167,13 +168,16 @@ internal fun CustomPlayerControls(
     panelBlur: Boolean = true,
     /** Divisões da barra (Lote 16 item 5): intro/recap/créditos da IntroDB. */
     markers: List<ProgressMarker> = emptyList(),
+    /** Intervalos de pulo em segundos (Lote 2 item 4, v1.47.0). */
+    skipBackSecs: Int = 10,
+    skipFwdSecs: Int = 10,
 ) {
     if (isTv) {
         TvPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo, position, duration, buffered, onSeekTo, tvChips, tvChipIdx, markers = markers)
         return
     }
     TouchPlayerControls(title, subtitle, clock, resolution, formatTags, playbackInfo,
-        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek, panelBlur = panelBlur, markers = markers)
+        isPlaying, position, duration, buffered, videoUrl, onToggle, onSeekBack, onSeekFwd, onSeekTo, tvChips, tvChipIdx, tapSeek = tapSeek, panelBlur = panelBlur, markers = markers, skipBackSecs = skipBackSecs, skipFwdSecs = skipFwdSecs)
 }
 
 /** Tempo, barra fina com bolinha e duração na mesma linha (.pl-bar-row). Toque ou arraste busca.
@@ -337,6 +341,32 @@ internal fun CtlButton(icon: ImageVector, desc: String, size: Dp, big: Boolean =
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, desc, tint = if (focused) TextOnLight else Color.White, modifier = Modifier.size(if (big) 44.dp else if (size >= 56.dp) 30.dp else if (compact) 20.dp else 24.dp))
+    }
+}
+
+/** Botão de pulo com o número no ícone (Lote 2 item 4, v1.47.0 — lição do
+ * Notflix 1.0.4): seta circular + nº de segundos no meio, igual p/ 5/10/15/
+ * 20/30 (os glifos Replay5/10/30 não cobrem 15/20). Mesmo círculo do CtlButton. */
+@Composable
+internal fun SkipButton(secs: Int, forward: Boolean, desc: String, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .size(40.dp)
+            .onFocusChanged { focused = it.isFocused }
+            .clip(CircleShape)
+            .background(if (focused) Color.White else Color.Black.copy(alpha = 0.42f))
+            .clickable(role = Role.Button) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (forward) Icons.Default.RotateRight else Icons.Default.RotateLeft,
+            null, tint = if (focused) TextOnLight else Color.White, modifier = Modifier.size(20.dp),
+        )
+        Text(
+            "$secs", color = if (focused) TextOnLight else Color.White,
+            fontSize = 10.sp, fontWeight = FontWeight.Bold,
+        )
     }
 }
 

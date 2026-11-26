@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SportsSoccer
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -31,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -103,6 +107,16 @@ private fun sportsHhmm(ms: Long): String =
 /** "HH:mm" da hora da atualização da tabela. */
 private fun sportsUpdatedAt(ms: Long): String = if (ms <= 0L) "" else sportsHhmm(ms)
 
+/**
+ * Cor de um time a partir do nome (Lote 2, item 8): a ESPN não traz cor do
+ * time, então o matiz vem do hash do nome — estável por time, só p/ o
+ * gradiente dos cards de jogo (nunca p/ dado).
+ */
+internal fun teamColorFor(name: String): Color {
+    val hue = ((name.hashCode() % 360) + 360) % 360
+    return Color.hsl(hue.toFloat(), 0.55f, 0.45f)
+}
+
 // ── ViewModels ─────────────────────────────────────────────────────────────
 
 /**
@@ -125,6 +139,8 @@ class SportsTablesViewModel @Inject constructor(
         val gamesLoading: Boolean = false,
         val channels: List<LiveChannel> = emptyList(),
         val fixes: Map<String, ChannelFix> = emptyMap(),
+        /** A liga aberta está seguida (Lote 2, item 8, v1.47.0). */
+        val followed: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(Ui())
@@ -159,9 +175,22 @@ class SportsTablesViewModel @Inject constructor(
                     tableError = if (table == null) "Sem dados da tabela agora — a ESPN não respondeu ou a temporada ainda não começou." else null,
                     games = games, gamesLoading = false,
                     fixes = prefs.sportsChannelFixes,
+                    followed = league.id in prefs.sportsFollowedLeagues,
                 )
             }
         }
+    }
+
+    /** Seguir/deixar de seguir a liga aberta (Lote 2, item 8). */
+    fun toggleFollowLeague() {
+        prefs.toggleSportsFollowedLeague(_ui.value.league.id)
+        _ui.update { it.copy(followed = _ui.value.league.id in prefs.sportsFollowedLeagues) }
+    }
+
+    /** Abre a página já na liga pedida (Lote 2, item 8: "Ver tabela completa" da aba). */
+    fun selectLeagueById(leagueId: String) {
+        val league = SPORTS_LEAGUES.firstOrNull { it.id == leagueId } ?: return
+        selectLeague(league)
     }
 
     fun saveFix(fix: ChannelFix) {
@@ -307,10 +336,16 @@ fun SportsTablesScreen(
     onBack: () -> Unit,
     onPlayChannel: (String) -> Unit,
     onOpenGame: (String, String) -> Unit,
+    /** Liga p/ abrir já selecionada (Lote 2, item 8: "Ver tabela completa" da aba). */
+    initialLeagueId: String = "",
     viewModel: SportsTablesViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
     val pad = com.aotv.app.ui.common.pagePadding()
+    // Liga pedida pela navegação (1x por abertura).
+    LaunchedEffect(initialLeagueId) {
+        if (initialLeagueId.isNotBlank()) viewModel.selectLeagueById(initialLeagueId)
+    }
     Column(Modifier.fillMaxSize().background(Background).padding(top = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(end = pad),
@@ -323,8 +358,25 @@ fun SportsTablesScreen(
                 "Tabelas de ligas", Modifier.weight(1f),
                 sub = "Placar, tabela e canais — dados da ESPN",
                 trailing = {
-                    IconButton(onClick = { viewModel.refresh() }, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Default.Refresh, "Atualizar", tint = TextSecondary)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Lote 2 (v1.47.0, item 8): seguir a liga aberta, como
+                        // no print do Nuvio (botão Follow no topo).
+                        TextButton(onClick = { viewModel.toggleFollowLeague() }) {
+                            Icon(
+                                if (ui.followed) Icons.Default.Star else Icons.Default.StarBorder,
+                                if (ui.followed) "Deixar de seguir" else "Seguir liga",
+                                tint = if (ui.followed) Accent else TextSecondary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                if (ui.followed) "Seguindo" else "Seguir",
+                                color = if (ui.followed) Accent else TextSecondary,
+                                fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        IconButton(onClick = { viewModel.refresh() }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Refresh, "Atualizar", tint = TextSecondary)
+                        }
                     }
                 },
             )
@@ -333,9 +385,10 @@ fun SportsTablesScreen(
             contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Lote 16 (v1.26.0): só as ligas com tabela (as 8 de futebol) — as
-            // 5 novas (NFL, NBA, NHL, MLB, MLS) não têm tabela na ESPN
-            // (o summary só traz o fragmento da divisão dos 2 times do jogo).
+            // Lote 16 (v1.26.0): só as ligas com tabela (11: 7 de pontos
+            // corridos + UCL/UEL/UECL + Libertadores) — as demais não têm
+            // tabela na ESPN (o summary só traz o fragmento da divisão dos
+            // 2 times do jogo).
             items(SPORTS_LEAGUES.filter { it.hasTable }, key = { it.id }) { league ->
                 com.aotv.app.ui.common.FilterChipPill(
                     league.name, ui.league.id == league.id,
@@ -547,29 +600,35 @@ private fun LeagueTableCard(table: LeagueTable) {
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("", modifier = Modifier.width(4.dp))
                 Text("#", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
                 Text("Time", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 TableNumHeader("P")
                 TableNumHeader("V")
                 TableNumHeader("E")
                 TableNumHeader("D")
+                // Lote 2 (v1.47.0, item 8): GP = gols pró (o modelo já tinha
+                // goalsFor; a UI só mostrava o saldo).
+                TableNumHeader("GP")
                 TableNumHeader("SG")
                 TableNumHeader("Pts", bold = true)
                 Text("Últimos 5", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(72.dp), textAlign = TextAlign.Center)
             }
             group.rows.forEach { row ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-                    Box(
-                        Modifier.size(width = 4.dp, height = 28.dp).clip(RoundedCornerShape(2.dp))
-                            .background(
-                                when (row.zone) {
-                                    TableZone.CONTINENTAL -> Accent
-                                    TableZone.RELEGATION -> Color(0xFFE5484D)
-                                    null -> Color.Transparent
-                                },
-                            ),
-                    )
+                // Lote 2 (v1.47.0, item 8): a linha inteira tingida pela zona
+                // (como no print do Nuvio), não só a barrinha lateral.
+                val zoneColor = when (row.zone) {
+                    TableZone.CONTINENTAL -> Accent
+                    TableZone.RELEGATION -> Color(0xFFE5484D)
+                    null -> null
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(zoneColor?.copy(alpha = 0.16f) ?: Color.Transparent)
+                        .padding(vertical = 3.dp, horizontal = 4.dp),
+                ) {
                     Text(row.rank.toString(), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (row.logo.isNotBlank()) AsyncImage(row.logo, row.team, contentScale = ContentScale.Fit, modifier = Modifier.size(20.dp))
@@ -579,6 +638,7 @@ private fun LeagueTableCard(table: LeagueTable) {
                     TableNumCell(row.wins.toString())
                     TableNumCell(row.draws.toString())
                     TableNumCell(row.losses.toString())
+                    TableNumCell(row.goalsFor?.toString() ?: "–")
                     TableNumCell(if (row.goalDiff > 0) "+${row.goalDiff}" else row.goalDiff.toString())
                     TableNumCell(row.points.toString(), bold = true)
                     Row(Modifier.width(72.dp), horizontalArrangement = Arrangement.spacedBy(3.dp, alignment = Alignment.CenterHorizontally)) {
@@ -627,6 +687,16 @@ private fun ZoneLegend(color: Color, label: String) {
     }
 }
 
+/** Abas da página do jogo (Lote 2, item 8 — como no Nuvio). */
+private enum class GameTab(val label: String) {
+    OVERVIEW("Resumo"),
+    STATS("Estatísticas"),
+    LINEUPS("Escalações"),
+    TABLE("Tabela"),
+    INFO("Info do jogo"),
+    FORM("Forma"),
+}
+
 // ── Tela: página do jogo ───────────────────────────────────────────────────
 
 /**
@@ -645,6 +715,9 @@ fun SportsGameScreen(
     val league = viewModel.league
     val pad = com.aotv.app.ui.common.pagePadding()
     var showFixDialog by remember { mutableStateOf(false) }
+    // Lote 2 (v1.47.0, item 8): abas do detalhe da partida — só as que têm
+    // dado aparecem (sem dado, sem aba).
+    var tab by remember { mutableStateOf(GameTab.OVERVIEW) }
     Column(Modifier.fillMaxSize().background(Background).padding(top = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(end = pad),
@@ -689,6 +762,23 @@ fun SportsGameScreen(
         val detail = ui.detail ?: return@Column
         val game = detail.game
         val resolved = viewModel.resolveChannel(game, league)
+        // Abas com dado (Lote 2, item 8): Overview sempre; as outras só quando
+        // a fonte trouxe o dado — sem dado, sem aba.
+        val table = ui.table
+        val hasStats = detail.stats.isNotEmpty()
+        val hasLineups = detail.homeLineup != null || detail.awayLineup != null
+        val hasForm = detail.lastFiveGames.isNotEmpty() ||
+            (table != null && (table.rows.any { it.team == game.homeTeam && it.form.isNotEmpty() } ||
+                table.rows.any { it.team == game.awayTeam && it.form.isNotEmpty() }))
+        val tabs = buildList {
+            add(GameTab.OVERVIEW)
+            if (hasStats) add(GameTab.STATS)
+            if (hasLineups) add(GameTab.LINEUPS)
+            if (table != null) add(GameTab.TABLE)
+            add(GameTab.INFO)
+            if (hasForm) add(GameTab.FORM)
+        }
+        if (tab !in tabs) tab = GameTab.OVERVIEW
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = pad, end = pad, top = 4.dp, bottom = 24.dp),
@@ -696,7 +786,17 @@ fun SportsGameScreen(
         ) {
             item(key = "score") {
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(BackgroundCard2)
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        // Lote 2 (v1.47.0, item 8): gradiente nas cores dos times.
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    teamColorFor(game.homeTeam).copy(alpha = 0.28f),
+                                    teamColorFor(game.awayTeam).copy(alpha = 0.16f),
+                                    BackgroundCard2,
+                                ),
+                            ),
+                        )
                         .padding(horizontal = 16.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -743,9 +843,18 @@ fun SportsGameScreen(
                     }
                 }
             }
+            // Lote 2 (v1.47.0, item 8): abas do detalhe — Resumo, Estatísticas,
+            // Escalações, Tabela, Info do jogo e Forma.
+            item(key = "tabs") {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(tabs, key = { it.name }) { t ->
+                        com.aotv.app.ui.common.FilterChipPill(t.label, tab == t, { tab = t })
+                    }
+                }
+            }
             // Lote 20 (v1.30.0): placar por período — só os períodos que o
             // jogo alcançou; jogo agendado não tem a seção.
-            if (detail.periodScores.isNotEmpty()) {
+            if (tab == GameTab.OVERVIEW && detail.periodScores.isNotEmpty()) {
                 item(key = "periods-header") {
                     com.aotv.app.ui.common.SectionHeader(title = "Placar por período", underline = true, compact = true)
                 }
@@ -768,7 +877,7 @@ fun SportsGameScreen(
                     }
                 }
             }
-            if (detail.goals.isNotEmpty()) {
+            if (tab == GameTab.OVERVIEW && detail.goals.isNotEmpty()) {
                 item(key = "goals-header") {
                     com.aotv.app.ui.common.SectionHeader(title = "Gols", underline = true, compact = true)
                 }
@@ -790,7 +899,38 @@ fun SportsGameScreen(
                     }
                 }
             }
-            if (detail.stats.isNotEmpty()) {
+            // Lote 2 (v1.47.0, item 8): destaques do jogo (artilheiro etc.).
+            if (tab == GameTab.OVERVIEW && detail.topPerformers.isNotEmpty()) {
+                item(key = "top-header") {
+                    com.aotv.app.ui.common.SectionHeader(title = "Destaques", underline = true, compact = true)
+                }
+                items(detail.topPerformers, key = { "top:${it.team}:${it.player}" }) { perf ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(perf.player, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${perf.team} · ${perf.label}: ${perf.value}", color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            // Lote 2 (v1.47.0, item 8): "Passa nos seus canais" — os canais
+            // do usuário que passam esta liga (League Networks), p/ tocar
+            // direto. Sem canal, a seção some (o cartão de placar já avisa).
+            val networkChannels = viewModel.networkChannels(league)
+            if (tab == GameTab.OVERVIEW && networkChannels.isNotEmpty()) {
+                item(key = "watch-header") {
+                    com.aotv.app.ui.common.SectionHeader(title = "Passa nos seus canais", underline = true, compact = true)
+                }
+                items(networkChannels.distinctBy { it.id }, key = { "watch:${it.id}" }) { channel ->
+                    NetworkChannelRow(channel, onPlay = { onPlayChannel(channel.id) })
+                }
+            }
+            if (tab == GameTab.STATS && detail.stats.isNotEmpty()) {
                 item(key = "stats-header") {
                     com.aotv.app.ui.common.SectionHeader(title = "Estatísticas", underline = true, compact = true)
                 }
@@ -830,8 +970,8 @@ fun SportsGameScreen(
                 }
             }
             // `ui` é propriedade delegada (by): smart cast não funciona nela (build #248).
-            val table = ui.table
-            if (table != null) {
+            // (A tabela já foi lida antes da LazyColumn, p/ montar as abas.)
+            if (tab == GameTab.TABLE && table != null) {
                 item(key = "game-table-header") {
                     com.aotv.app.ui.common.SectionHeader(title = "Tabela — ${table.league.name}", underline = true, compact = true)
                 }
@@ -839,20 +979,123 @@ fun SportsGameScreen(
             }
             val homeLineup = detail.homeLineup
             val awayLineup = detail.awayLineup
-            if (homeLineup != null || awayLineup != null) {
+            if (tab == GameTab.LINEUPS && (homeLineup != null || awayLineup != null)) {
                 item(key = "lineups-header") {
                     com.aotv.app.ui.common.SectionHeader(title = "Escalações", underline = true, compact = true)
                 }
                 if (homeLineup != null) item(key = "lineup-home") { LineupCard(homeLineup) }
                 if (awayLineup != null) item(key = "lineup-away") { LineupCard(awayLineup) }
             }
-            if (detail.broadcasts.isNotEmpty()) {
-                item(key = "broadcasts") {
-                    Text(
-                        "Transmissão: ${detail.broadcasts.joinToString(", ")}",
-                        color = TextTertiary, fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
+            // Lote 2 (v1.47.0, item 8): aba Info do jogo — estádio, data, liga
+            // e emissoras.
+            if (tab == GameTab.INFO) {
+                item(key = "info-header") {
+                    com.aotv.app.ui.common.SectionHeader(title = "Info do jogo", underline = true, compact = true)
+                }
+                item(key = "info-body") {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (game.venue.isNotBlank()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Estádio", color = TextSecondary, fontSize = 13.sp)
+                                Text(game.venue, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false), textAlign = TextAlign.End)
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Data", color = TextSecondary, fontSize = 13.sp)
+                            Text(sportsDateTime(game.dateMs), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Liga", color = TextSecondary, fontSize = 13.sp)
+                            Text(league.name, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false), textAlign = TextAlign.End)
+                        }
+                        if (detail.broadcasts.isNotEmpty()) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Transmissão", color = TextSecondary, fontSize = 13.sp)
+                                Text(detail.broadcasts.joinToString(", "), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false), textAlign = TextAlign.End)
+                            }
+                        }
+                    }
+                }
+            }
+            // Lote 2 (v1.47.0, item 8): aba Forma — os últimos jogos dos dois
+            // times, com placar e resultado (do `lastFiveGames` do summary;
+            // sem ele, os últimos 5 da tabela).
+            if (tab == GameTab.FORM) {
+                if (detail.lastFiveGames.isNotEmpty()) {
+                    detail.lastFiveGames.forEach { teamGames ->
+                        item(key = "form-team:${teamGames.team}") {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                com.aotv.app.ui.common.SectionHeader(title = teamGames.team, underline = true, compact = true)
+                                teamGames.games.forEach { recent ->
+                                    Row(
+                                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Box(
+                                            Modifier.size(11.dp).clip(CircleShape).background(
+                                                when (recent.result) {
+                                                    FormResult.W -> Color(0xFF3DDC84)
+                                                    FormResult.D -> Color(0xFF8A93A6)
+                                                    FormResult.L -> Color(0xFFE5484D)
+                                                },
+                                            ),
+                                        )
+                                        Text(
+                                            sportsDateTime(recent.dateMs), color = TextSecondary,
+                                            fontSize = 13.sp, modifier = Modifier.width(96.dp),
+                                        )
+                                        Text(
+                                            (if (recent.atHome) "vs " else "@ ") + recent.opponent,
+                                            color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                                        )
+                                        if (recent.score.isNotBlank()) Text(
+                                            recent.score, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (table != null) {
+                    listOf(game.homeTeam, game.awayTeam).forEach { teamName ->
+                        val row = table.rows.firstOrNull { it.team == teamName }
+                        if (row != null && row.form.isNotEmpty()) {
+                            item(key = "form-table:$teamName") {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    com.aotv.app.ui.common.SectionHeader(title = "$teamName — últimos 5", underline = true, compact = true)
+                                    Row(
+                                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BackgroundCard2)
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        row.form.forEach { result ->
+                                            Box(
+                                                Modifier.size(16.dp).clip(CircleShape).background(
+                                                    when (result) {
+                                                        FormResult.W -> Color(0xFF3DDC84)
+                                                        FormResult.D -> Color(0xFF8A93A6)
+                                                        FormResult.L -> Color(0xFFE5484D)
+                                                    },
+                                                ),
+                                            )
+                                        }
+                                        Text(
+                                            "V = vitória · E = empate · D = derrota",
+                                            color = TextTertiary, fontSize = 12.sp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

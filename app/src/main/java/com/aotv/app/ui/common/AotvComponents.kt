@@ -816,17 +816,21 @@ fun SettingsRow(
     }
 }
 
-/** Cartão agrupado das Configurações (estilo Nuvio): várias linhas num só cartão arredondado. */
+/** Cartão agrupado das Configurações (estilo Nuvio): várias linhas num só cartão arredondado.
+ * Com [frosted], o fundo vira vidro fosco ([frostedColor], mesmo toggle
+ * `pref_panel_blur` da pílula) em vez de opaco — Lote 2 (v1.47.0): só a
+ * página Reprodução usa; o resto mantém o padrão opaco. */
 @Composable
 fun SettingsGroup(
     modifier: Modifier = Modifier,
+    frosted: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(BackgroundCard2)
+            .background(frostedColor(frosted, BackgroundCard2))
             .padding(vertical = 6.dp),
         content = content,
     )

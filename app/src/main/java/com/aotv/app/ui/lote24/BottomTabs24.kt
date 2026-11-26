@@ -26,9 +26,11 @@ enum class BottomTab24(val id: String, val label: String, val route: String) {
     SEARCH("search", "Busca", "movies_search"),
     LIBRARY("library", "Biblioteca", "movies_minha_lista"),
     SPORTS("sports", "Esportes", "movies_sports_tab"),
-    // Junção: a rota do Perfil é a tela de perfis (MoviesRoute.Profiles),
-    // p/ onde o avatar da pílula já navega — não a das Configurações.
-    PROFILE("profile", "Perfil", "movies_profiles");
+    // Lote 2 (v1.47.0), item 10: a aba Perfil virou as Configurações
+    // (estilo Nuvio) — a rota do Perfil é o hub (MoviesRoute.Settings);
+    // o seletor "Quem está assistindo?" vive dentro de "Alternar perfil"
+    // no hub, e a pílula continua apontando p/ cá.
+    PROFILE("profile", "Perfil", "movies_settings");
 
     companion object {
         fun fromId(id: String): BottomTab24? = entries.firstOrNull { it.id == id }

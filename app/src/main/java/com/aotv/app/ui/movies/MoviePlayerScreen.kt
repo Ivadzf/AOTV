@@ -53,10 +53,8 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ClosedCaptionOff
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -428,8 +426,9 @@ fun MoviePlayerScreen(
         s.onImportSubtitleClick = { pickSubtitleFile.launch(arrayOf("*/*")) }
     }
     // Controle remoto (Lote 22, item 1): com o player aberto, o celular
-    // manda play/pause e pulo de 10 s e fecha o player. O servidor chama
-    // de thread própria — tudo é postado p/ a main (o ExoPlayer é de UI).
+    // manda play/pause e pulo (no intervalo configurado, Lote 2 item 4) e
+    // fecha o player. O servidor chama de thread própria — tudo é postado
+    // p/ a main (o ExoPlayer é de UI).
     // Ao sair do player as ações somem do controle (onDispose).
     DisposableEffect(s) {
         val main = android.os.Handler(android.os.Looper.getMainLooper())
@@ -450,31 +449,37 @@ fun MoviePlayerScreen(
         )
         registry.register(
             com.aotv.app.data.remote.RemoteAction(
-                name = "avancar_10s", description = "Avançar 10 s",
+                // O id fica "avancar_10s" (estável p/ o controle remoto); o
+                // intervalo é o configurado (Lote 2 item 4, v1.47.0), lido na
+                // hora da execução — o registro é 1x por sessão (DisposableEffect).
+                name = "avancar_10s", description = "Avançar ${playerSkipFwdSecs} s",
                 run = {
+                    val secs = playerPrefsVm.skipFwdSecs.value
                     main.post {
                         runCatching {
-                            val target = s.activePositionMs() + 10_000
+                            val target = s.activePositionMs() + secs * 1000L
                             val d = s.activeDurationMs()
                             // Duração desconhecida (ao vivo/sem metadado) não
                             // trava o avanço: só limita quando a duração é > 0.
                             s.activeSeekTo(if (d > 0) target.coerceAtMost(d) else target)
                         }
                     }
-                    "Avançou 10 s."
+                    "Avançou $secs s."
                 },
             ),
         )
         registry.register(
             com.aotv.app.data.remote.RemoteAction(
-                name = "voltar_10s", description = "Voltar 10 s",
+                // Id estável "voltar_10s"; intervalo configurado, lido na hora.
+                name = "voltar_10s", description = "Voltar ${playerSkipBackSecs} s",
                 run = {
+                    val secs = playerPrefsVm.skipBackSecs.value
                     main.post {
                         runCatching {
-                            s.activeSeekTo((s.activePositionMs() - 10_000).coerceAtLeast(0))
+                            s.activeSeekTo((s.activePositionMs() - secs * 1000L).coerceAtLeast(0))
                         }
                     }
-                    "Voltou 10 s."
+                    "Voltou $secs s."
                 },
             ),
         )
@@ -540,6 +545,9 @@ fun MoviePlayerScreen(
     val playerTopActionsPref by playerPrefsVm.topActions.collectAsState()
     val playerTapSeek by playerPrefsVm.tapSeek.collectAsState()
     val playerSwipeSeek by playerPrefsVm.swipeSeek.collectAsState()
+    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis.
+    val playerSkipBackSecs by playerPrefsVm.skipBackSecs.collectAsState()
+    val playerSkipFwdSecs by playerPrefsVm.skipFwdSecs.collectAsState()
     val playerVolBoost by playerPrefsVm.volBoost.collectAsState()
     val playerVolBoostLevel by playerPrefsVm.volBoostLevel.collectAsState()
     val playerMini by playerPrefsVm.mini.collectAsState()
@@ -602,6 +610,9 @@ fun MoviePlayerScreen(
     s.routePlayId = playId
     s.tapSeekEnabled = playerTapSeek
     s.swipeSeekEnabled = playerSwipeSeek
+    // Lote 2 item 4 (v1.47.0): intervalos de pulo configuráveis.
+    s.skipBackSecs = playerSkipBackSecs
+    s.skipFwdSecs = playerSkipFwdSecs
     s.volBoostEnabled = playerVolBoost
     s.volBoostLevel = playerVolBoostLevel
     s.miniEnabled = playerMini
@@ -1350,7 +1361,7 @@ private fun PlayerSourceEffects(s: PlayerSession) = with(s) {
 
     // Some o HUD de gesto após 800ms parado
     LaunchedEffect(gestureHud) { if (gestureHud != null) { delay(800); gestureHud = null } }
-    // Some o indicador de busca do gesto ("−10s" / "+10s") após 800ms parado
+    // Some o indicador de busca do gesto ("−Ns" / "+Ns") após 800ms parado
     LaunchedEffect(seekHud) { if (seekHud != null) { delay(800); seekHud = null; s.seekPreviewBitmap = null } }
 
 }
@@ -2083,8 +2094,8 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 }
                 when (kc) {
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { togglePlay(); true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-10_000); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(10_000); true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-skipBackSecs * 1000L); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(skipFwdSecs * 1000L); true }
                     // CIMA abre o painel de Fontes + Episódios (D-pad navegável).
                     KeyEvent.KEYCODE_DPAD_UP -> { if (sourceActions.size > 1) { panelKind = "sources"; sourcePanelIdx = 0; sourcePanelOpen = true }; true }
                     // BAIXO foca a barra de chips (Zoom/Velocidade/Legendas/Áudio/Fontes).
@@ -2117,7 +2128,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                     )
                 } else Modifier
             )
-            // Gesto de deslizar p/ buscar ±10 s (item 5): horizontal sobre o vídeo, um
+            // Gesto de deslizar p/ buscar (item 5): horizontal sobre o vídeo, um
             // passo a cada 8% da largura arrastada. Detector separado do vertical
             // (cada um só dispara depois do limiar na sua direção, como os dois
             // detectores já separados da barra de progresso). Off se travado ou com
@@ -2135,6 +2146,26 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         while (accum >= step) { accum -= step; swipeSeekStep(true) }
                         while (accum <= -step) { accum += step; swipeSeekStep(false) }
                     }
+                } else Modifier
+            )
+            // Duplo toque p/ pular (Lote 2 item 4, v1.47.0 — lição do Notflix):
+            // metade esquerda volta, direita avança, no intervalo configurado.
+            // Detector separado do `clickable` acima p/ o toque simples continuar
+            // instantâneo: o duplo toque também dispara o clickable 2x, e os
+            // controles voltam ao estado inicial — só o seekHud fica.
+            .then(
+                if (streamUrl != null && !locked) Modifier.pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = { off ->
+                            if (off.x < size.width / 2f) {
+                                seekBy(-skipBackSecs * 1000L, showControls = false)
+                                seekHud = "−${skipBackSecs}s"
+                            } else {
+                                seekBy(skipFwdSecs * 1000L, showControls = false)
+                                seekHud = "+${skipFwdSecs}s"
+                            }
+                        },
+                    )
                 } else Modifier
             ),
     ) {
@@ -2273,7 +2304,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                 // HUD de gesto: volume / brilho
                 gestureHud?.let { (label, frac) -> GestureHud(label, frac) }
 
-                // HUD do gesto de busca ("−10s" / "+10s")
+                // HUD do gesto de busca ("−Ns" / "+Ns")
                 seekHud?.let { SeekHud(it, s.seekPreviewBitmap) }
 
                 // TELA TRAVADA: destravar e voltar ficam SEMPRE visíveis (o bloqueio
@@ -2386,8 +2417,8 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         position = position,
                         duration = duration,
                         onToggle = ::togglePlay,
-                        onSeekBack = { seekBy(-10_000) },
-                        onSeekFwd = { seekBy(10_000) },
+                        onSeekBack = { seekBy(-skipBackSecs * 1000L) },
+                        onSeekFwd = { seekBy(skipFwdSecs * 1000L) },
                         onSeekTo = { ms ->
                             val from = position
                             activeSeekTo(ms); controlsVisible = true
@@ -2417,6 +2448,9 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
                         buffered = activeBufferedPositionMs(),
                         tapSeek = tapSeekEnabled,
                         panelBlur = panelBlurOn,
+                        // Lote 2 item 4 (v1.47.0): intervalos de pulo nos botões.
+                        skipBackSecs = skipBackSecs,
+                        skipFwdSecs = skipFwdSecs,
                         // Lote 16 item 5: divisões da barra (intro/recap/créditos da IntroDB).
                         markers = progressMarkers,
                     )
@@ -2663,7 +2697,7 @@ private fun PlayerScreenContent(s: PlayerSession, partyVm: WatchPartyViewModel) 
     }
 }
 
-/** Indicador do gesto de busca ("−10s" / "+10s"), no centro da tela. Some sozinho em 800 ms. Com [bitmap] (v1.45.0, item 5), mostra a miniatura do momento acima do rótulo. */
+/** Indicador do gesto de busca ("−Ns" / "+Ns"), no centro da tela. Some sozinho em 800 ms. Com [bitmap] (v1.45.0, item 5), mostra a miniatura do momento acima do rótulo. */
 @Composable
 private fun BoxScope.SeekHud(label: String, bitmap: android.graphics.Bitmap? = null) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -3237,12 +3271,17 @@ class PlayerSession(
      * Campo da sessão porque a PlayerScreenContent é outra função e não enxerga o
      * `val` local da MoviePlayerScreen (mesmo padrão do showEpisodeRatings, Lote 2). */
     var panelBlurOn by run { mutableStateOf(true) }
-    /** Deslizar na horizontal sobre o vídeo busca ±10 s (item 5). Por enquanto segue
-     * o toggle tap-seek (pref `playerTapSeek`); a pref dedicada
-     * `pref_player_swipe_seek` (a ser criada pelo coordenador — ver relatório
-     * v1.9.0 itens 4/5) desacopla os dois quando existir. */
+    /** Deslizar na horizontal sobre o vídeo busca no intervalo configurado
+     * (Lote 2 item 4, v1.47.0). Por enquanto segue o toggle tap-seek (pref
+     * `playerTapSeek`); a pref dedicada `pref_player_swipe_seek` (a ser criada
+     * pelo coordenador — ver relatório v1.9.0 itens 4/5) desacopla os dois
+     * quando existir. */
     var swipeSeekEnabled by run { mutableStateOf(true) }
-    /** Indicador do gesto de busca ("−10s" / "+10s") — null = escondido. */
+    /** Intervalo do pulo p/ trás em segundos (Lote 2 item 4, v1.47.0; pref `pref_player_skip_back_secs`). */
+    var skipBackSecs by run { mutableIntStateOf(10) }
+    /** Intervalo do pulo p/ frente em segundos (Lote 2 item 4, v1.47.0; pref `pref_player_skip_fwd_secs`). */
+    var skipFwdSecs by run { mutableIntStateOf(10) }
+    /** Indicador do gesto de busca ("−Ns" / "+Ns") — null = escondido. */
     var seekHud by run { mutableStateOf<String?>(null) }
     /** Volume Boost ligado (pref `playerVolBoost`). */
     var volBoostEnabled by run { mutableStateOf(false) }
@@ -4849,7 +4888,7 @@ class PlayerSession(
     // Avaliação pós-filme (v1.17.0): o gatilho de filme dispara 1x por título.
     var markedWatchedMovie by run { mutableStateOf(false) }
     fun seekBy(deltaMs: Long, showControls: Boolean = true) {
-        // Lote 24 item 10: buscar é interação (botão ±10 s ou gesto).
+        // Lote 24 item 10: buscar é interação (botão de pulo ou gesto).
         noteUserInteraction()
         val d = if (duration > 0) duration else activeDurationMs()
         val target = (activePositionMs() + deltaMs).coerceIn(0L, if (d > 0) d else Long.MAX_VALUE)
@@ -4877,13 +4916,14 @@ class PlayerSession(
         }
         if (showControls) controlsVisible = true
     }
-    /** Um passo do gesto de deslizar p/ buscar (item 5): ±10 s, o mesmo passo dos
-     * botões ±10 s. Respeita o bloqueio e o toggle tap-seek; NÃO abre os
+    /** Um passo do gesto de deslizar p/ buscar (item 5): o intervalo
+     * configurado (Lote 2 item 4, v1.47.0), o mesmo passo dos botões.
+     * Respeita o bloqueio e o toggle tap-seek; NÃO abre os
      * controles (só o indicador [seekHud]) p/ o gesto não piscar a UI. */
     fun swipeSeekStep(forward: Boolean) {
         if (locked || !swipeSeekEnabled) return
-        seekBy(if (forward) 10_000 else -10_000, showControls = false)
-        seekHud = if (forward) "+10s" else "−10s"
+        seekBy(if (forward) skipFwdSecs * 1000L else -skipBackSecs * 1000L, showControls = false)
+        seekHud = if (forward) "+${skipFwdSecs}s" else "−${skipBackSecs}s"
     }
     fun togglePlay() {
         // Lote 24 item 10: play/pause é interação.

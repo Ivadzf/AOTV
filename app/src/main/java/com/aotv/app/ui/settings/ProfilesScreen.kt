@@ -15,7 +15,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -191,13 +190,15 @@ fun ProfileAvatar(profile: Profile, size: Dp, modifier: Modifier = Modifier, sho
 /**
  * "Quem está assistindo?". Abre sozinha quando há mais de um perfil e também pela barra e pelas
  * Configurações. Em modo edição, tocar num perfil abre o painel para renomear, trocar a cor,
- * marcar infantil ou remover. Fase A: a aba Perfil dá acesso às Configurações
- * (o "Mais" da barra antiga foi removido) via [onOpenSettings].
+ * marcar infantil ou remover. Lote 2 (v1.47.0), item 10: o seletor saiu da
+ * aba Perfil (que virou o hub das Configurações) e vive dentro de
+ * "Alternar perfil" no hub — sem botão de Configurações aqui dentro; o
+ * Modo privado continua no seletor (é por perfil, e o seletor é onde os
+ * perfis são gerenciados).
  */
 @Composable
 fun ProfilesScreen(
     onPicked: () -> Unit,
-    onOpenSettings: (() -> Unit)? = null,
     startEditing: Boolean = false,
     vm: ProfilesViewModel = hiltViewModel(),
     // v1.46.0 (Lote 1 item 1): importar os perfis do Nuvio — o diálogo
@@ -344,20 +345,9 @@ fun ProfilesScreen(
                 tone = com.aotv.app.ui.common.ButtonTone.SECONDARY,
             )
         }
-        // Configurações (Fase A): sem o "Mais" da barra, o caminho p/ Configurações é a aba Perfil.
-        val openSettings = onOpenSettings
-        if (openSettings != null) {
-            Spacer(Modifier.height(16.dp))
-            com.aotv.app.ui.common.AotvButton(
-                "Configurações",
-                openSettings,
-                icon = Icons.Default.Settings,
-                tone = com.aotv.app.ui.common.ButtonTone.SECONDARY,
-            )
-        }
         // Modo privado (Lote 2, item 7 — v1.10.0): toggle do perfil ativo, no
-        // mesmo lugar onde ficam as Configurações (a aba Perfil é o "hub" do
-        // perfil). Ligado, assistir não salva progresso, não atualiza o
+        // seletor de perfis (é por perfil, e o seletor é onde os perfis são
+        // gerenciados). Ligado, assistir não salva progresso, não atualiza o
         // Continuar assistindo, não marca episódio como visto e não avisa o
         // Trakt. Desligar volta ao normal; o que foi visto no privado NÃO
         // aparece depois, porque nunca foi gravado. O progresso anterior

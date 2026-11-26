@@ -305,6 +305,11 @@ internal val SCOPED_KEYS = listOf(
     // e arte do card do Continuar (thumb do episódio ou capa da série).
     "pref_smart_download_v1", "pref_smart_download_wifi_only_v1",
     "pref_continue_artwork_v1",
+    // Lote 2 (v1.47.0) — busca por addon, addons visíveis no Ao vivo, estilo
+    // da aba Ao vivo, intervalos de pulo e estilo das temporadas. Tudo por perfil.
+    "search_addon_ids_v1", "live_visible_addon_ids_v1", "live_style_v1",
+    "pref_player_skip_back_secs", "pref_player_skip_fwd_secs",
+    "pref_detail_season_style",
 )
 
 /**
@@ -378,6 +383,9 @@ class PlatformPrefs @Inject constructor(
 
         /** Blur real atrás das folhas/painéis (Lote 3, v1.11.0). Do aparelho, como o tema. */
         private const val KEY_PANEL_BLUR = "pref_panel_blur"
+
+        /** Medidor de quadros global (Lote 2 item 3, v1.47.0). Do aparelho, como o blur. */
+        private const val KEY_FRAME_METER = "pref_frame_meter_v1"
 
         /** Incluir chaves e sessões no backup (v1.13.0). Do aparelho. DESLIGADO por padrão. */
         private const val KEY_BACKUP_INCLUDE_SECRETS = "backup_include_secrets"
@@ -532,6 +540,8 @@ class PlatformPrefs @Inject constructor(
         // O mesmo vale para addons e plugins: a flag muda o dono efetivo, e
         // o debrid recarrega sozinho observando os perfis (ver DebridService).
         _addons.value = readAddonEntries()
+        // Lote 2 item 1 (v1.47.0): addons selecionados p/ a pesquisa, por perfil.
+        _searchAddonIds.value = readStringList("search_addon_ids_v1")
         _pluginRepos.value = readPluginRepos()
     }
 
@@ -889,6 +899,33 @@ class PlatformPrefs @Inject constructor(
     var liveMultiviewLayout: Int
         get() = _liveMultiviewLayout.value
         set(value) { val v = if (value == 2 || value == 4) value else 1; prefs.edit().putInt(sk("live_multiview_layout"), v).apply(); _liveMultiviewLayout.value = v }
+
+    // Lote 2 item 2 (v1.47.0) — addons de TV visíveis na aba Ao vivo (ids de
+    // addon). null = todos os addons ligados (sem filtro); vazio = nenhum.
+    private fun readLiveVisibleAddonIds(): Set<String>? = prefs.getStringSet(sk("live_visible_addon_ids_v1"), null)?.toSet()
+    private val _liveVisibleAddonIds = MutableStateFlow(readLiveVisibleAddonIds())
+    val liveVisibleAddonIdsFlow: StateFlow<Set<String>?> = _liveVisibleAddonIds.asStateFlow()
+    var liveVisibleAddonIds: Set<String>?
+        get() = _liveVisibleAddonIds.value
+        set(value) {
+            val ed = prefs.edit()
+            if (value == null) ed.remove(sk("live_visible_addon_ids_v1"))
+            else ed.putStringSet(sk("live_visible_addon_ids_v1"), value.toSet())
+            ed.apply()
+            _liveVisibleAddonIds.value = value
+        }
+
+    // Lote 2 item 7 (v1.47.0) — estilo da aba Ao vivo: "aotv" (chips no topo +
+    // grade de cards) ou "bestcine" (grade de canais + barra lateral de
+    // categorias + busca de programa no EPG + zapping por canal). Por perfil.
+    private val _liveStyle = MutableStateFlow(prefs.getString(sk("live_style_v1"), "aotv") ?: "aotv")
+    val liveStyleFlow: StateFlow<String> = _liveStyle.asStateFlow()
+    var liveStyle: String
+        get() = _liveStyle.value
+        set(value) {
+            val clean = if (value == "bestcine") "bestcine" else "aotv"
+            prefs.edit().putString(sk("live_style_v1"), clean).apply(); _liveStyle.value = clean
+        }
 
     private val _liveHiddenChannels = MutableStateFlow(readStringList("live_hidden_channels_v1"))
     /** Ids dos canais ocultos pelo usuário — somem de todas as vistas (hub, grade, lista, busca, guia e player). */
@@ -1368,6 +1405,18 @@ class PlatformPrefs @Inject constructor(
         get() = _panelBlur.value
         set(value) { prefs.edit().putBoolean(KEY_PANEL_BLUR, value).apply(); _panelBlur.value = value }
 
+    // ── Medidor de quadros global (Lote 2 item 3, v1.47.0) — do aparelho, ──
+    // como o blur: vale p/ todo mundo que usa o aparelho. NÃO vai p/
+    // SCOPED_KEYS. Liga o overlay com fps, p90 e % de quadros >16 ms / >33 ms.
+    private val _frameMeter = MutableStateFlow(prefs.getBoolean(KEY_FRAME_METER, false))
+    /** Medidor de quadros ligado, que avisa quem observa. */
+    val frameMeterFlow: StateFlow<Boolean> = _frameMeter.asStateFlow()
+
+    /** Medidor de quadros ligado. Gravar aqui já avisa quem observa. */
+    var frameMeter: Boolean
+        get() = _frameMeter.value
+        set(value) { prefs.edit().putBoolean(KEY_FRAME_METER, value).apply(); _frameMeter.value = value }
+
     // ── Ícone do app (Lote 11, v1.21.0) — do aparelho, como o tema ────────
     // Variante de ícone colorido (ver AppIconVariants): o ícone é do
     // aparelho, não do perfil — trocar vale p/ todo mundo que usa o aparelho.
@@ -1739,6 +1788,15 @@ class PlatformPrefs @Inject constructor(
     var sportsGameAlerts: Boolean
         get() = _sportsGameAlerts.value
         set(value) { prefs.edit().putBoolean(sk("sports_game_alerts"), value).apply(); _sportsGameAlerts.value = value }
+
+    // Lote 2 item 8 (v1.47.0) — ids de jogos já avisados do lembrete "vai
+    // jogar" (kickoff), p/ o GameScoreWorker não notificar 2x. Do aparelho
+    // (não é dado de perfil) e NÃO entra em SCOPED_KEYS. Sem fluxo: só o
+    // worker lê e grava.
+    /** Ids de eventos já avisados do "vai jogar". Do aparelho. */
+    var kickoffNotifiedIds: Set<String>
+        get() = prefs.getStringSet("sports_kickoff_notified_v1", null)?.toSet().orEmpty()
+        set(value) { prefs.edit().putStringSet("sports_kickoff_notified_v1", value.toSet()).apply() }
 
     // ── Lote 13 — Esportes parte 2 (v1.23.0): Fix Channel ─────────────────
     // Override jogo/rede/time → canal (ver FixChannel.kt): quando o canal
@@ -2287,6 +2345,17 @@ class PlatformPrefs @Inject constructor(
         get() = _detailEpisodeStyle.value
         set(value) { prefs.edit().putString(sk("pref_detail_episode_style"), value).apply(); _detailEpisodeStyle.value = value }
 
+    // Lote 2 item 9e (v1.47.0) — temporadas no detalhe: "posters" (grade de
+    // pôsteres, estilo BestCine) ou "text" (chips de texto, o de antes).
+    private val _detailSeasonStyle = MutableStateFlow(prefs.getString(sk("pref_detail_season_style"), "posters") ?: "posters")
+    val detailSeasonStyleFlow: StateFlow<String> = _detailSeasonStyle.asStateFlow()
+    var detailSeasonStyle: String
+        get() = _detailSeasonStyle.value
+        set(value) {
+            val clean = if (value == "text") "text" else "posters"
+            prefs.edit().putString(sk("pref_detail_season_style"), clean).apply(); _detailSeasonStyle.value = clean
+        }
+
     // (v1.10.0, Lote 2 item 5) Mostrar ou ocultar as notas (ratings do TMDB) nos
     // cards de episódio — detalhe e painel de episódios do player. Padrão true:
     // quem não mexer continua vendo as notas como antes. Desligado, a nota some
@@ -2616,6 +2685,8 @@ class PlatformPrefs @Inject constructor(
         migratePlayerButtonsV127()
         // v1.46.1 (hotfix): junta perfis duplicados herdados da v1.46.0.
         dedupeProfiles()
+        // v1.47.0 (Lote 2 item 6): Continuar assistindo fora do destaque.
+        migrateHeroCatalogsV147()
     }
 
     /**
@@ -2638,6 +2709,29 @@ class PlatformPrefs @Inject constructor(
             }
         }
         prefs.edit().putBoolean(sk("player_buttons_v127_migrated"), true).apply()
+    }
+
+    /**
+     * Migração v1.47.0 (Lote 2 item 6): o Continuar assistindo sai dos
+     * catálogos do destaque por padrão — os itens dele não têm nota nem
+     * sinopse e dominam as 12 vagas do Hero. Remove "sys:continue" dos
+     * conjuntos já gravados, em todos os perfis, uma única vez; quem quiser
+     * religa o toggle em Personalizar Início. A flag é global (não é dado
+     * de perfil) e NÃO entra em SCOPED_KEYS. Opera direto nas prefs (não no
+     * flow `_heroCatalogs`, que só inicializa depois deste init e lê o valor
+     * já migrado).
+     */
+    private fun migrateHeroCatalogsV147() {
+        if (prefs.getBoolean("hero_catalogs_v147_migrated", false)) return
+        val ed = prefs.edit()
+        (_profiles.value.map { it.id } + MAIN_PROFILE).distinct().forEach { id ->
+            val key = scopedKey("home_hero_catalogs_v1", id)
+            val saved = prefs.getStringSet(key, null) ?: return@forEach
+            if (SystemRow.CONTINUE.key in saved) {
+                ed.putStringSet(key, (saved - SystemRow.CONTINUE.key).toSet())
+            }
+        }
+        ed.putBoolean("hero_catalogs_v147_migrated", true).apply()
     }
 
     private val _playerTopActions = MutableStateFlow(readStringList("pref_player_top_actions"))
@@ -2681,6 +2775,23 @@ class PlatformPrefs @Inject constructor(
     var playerSwipeSeek: Boolean
         get() = _playerSwipeSeek.value
         set(value) { prefs.edit().putBoolean(sk("pref_player_swipe_seek"), value).apply(); _playerSwipeSeek.value = value }
+
+    // Lote 2 item 4 (v1.47.0) — intervalos de pulo do player, em segundos
+    // (5/10/15/20/30), voltar e avançar independentes. Padrão 10 (o fixo de
+    // antes). Por perfil, como tapSeek/swipeSeek.
+    private val _playerSkipBackSecs = MutableStateFlow(prefs.getInt(sk("pref_player_skip_back_secs"), 10))
+    /** Segundos do pulo p/ trás (botões, DPAD, duplo toque e deslizar). */
+    val playerSkipBackSecsFlow: StateFlow<Int> = _playerSkipBackSecs.asStateFlow()
+    var playerSkipBackSecs: Int
+        get() = _playerSkipBackSecs.value
+        set(value) { val v = value.coerceIn(5, 30); prefs.edit().putInt(sk("pref_player_skip_back_secs"), v).apply(); _playerSkipBackSecs.value = v }
+
+    private val _playerSkipFwdSecs = MutableStateFlow(prefs.getInt(sk("pref_player_skip_fwd_secs"), 10))
+    /** Segundos do pulo p/ frente (botões, DPAD, duplo toque e deslizar). */
+    val playerSkipFwdSecsFlow: StateFlow<Int> = _playerSkipFwdSecs.asStateFlow()
+    var playerSkipFwdSecs: Int
+        get() = _playerSkipFwdSecs.value
+        set(value) { val v = value.coerceIn(5, 30); prefs.edit().putInt(sk("pref_player_skip_fwd_secs"), v).apply(); _playerSkipFwdSecs.value = v }
 
     private val _playerSpeed = MutableStateFlow(prefs.getFloat(sk("pref_player_speed"), 1f))
     /** Velocidade de reprodução salva do perfil (0,5x–2x; Lote 1, v1.9.0). */
@@ -3777,6 +3888,14 @@ class PlatformPrefs @Inject constructor(
         get() = prefs.getString(sk("pref_discover_catalog_v1"), "").orEmpty()
         set(value) { prefs.edit().putString(sk("pref_discover_catalog_v1"), value).apply() }
 
+    // Lote 2 item 1 (v1.47.0) — addons selecionados p/ a pesquisa (ids de
+    // addon, por perfil). Lista vazia = todos os addons ligados (sem filtro).
+    private val _searchAddonIds = MutableStateFlow(readStringList("search_addon_ids_v1"))
+    val searchAddonIdsFlow: StateFlow<List<String>> = _searchAddonIds.asStateFlow()
+    var searchAddonIds: List<String>
+        get() = _searchAddonIds.value
+        set(value) { writeStringList("search_addon_ids_v1", value); _searchAddonIds.value = value }
+
     // ── Manifests guardados (nome e catálogos de cada addon, para a Início abrir sem rede) ──
     private val _addonMeta = MutableStateFlow(HomeLayout.decodeAddons(prefs.getString("addon_meta_v1", null)))
     val addonMetaFlow: StateFlow<Map<String, CachedAddon>> = _addonMeta.asStateFlow()
@@ -4047,6 +4166,8 @@ class PlatformPrefs @Inject constructor(
         _detailIconActions.value = prefs.getBoolean(sk("pref_detail_icon_actions"), true)
         _detailTabs.value = prefs.getBoolean(sk("pref_detail_tabs"), false)
         _detailEpisodeStyle.value = prefs.getString(sk("pref_detail_episode_style"), "horizontal") ?: "horizontal"
+        // Lote 2 item 9e (v1.47.0): estilo das temporadas, por perfil.
+        _detailSeasonStyle.value = prefs.getString(sk("pref_detail_season_style"), "posters") ?: "posters"
         _detailEpisodeRatings.value = prefs.getBoolean(sk("pref_detail_episode_ratings"), true)
         _detailOriginalTitle.value = prefs.getBoolean(sk("pref_detail_original_title"), false)
         _detailShowAggregateRating.value = prefs.getBoolean(sk("pref_detail_show_aggregate_rating"), true)
@@ -4068,6 +4189,8 @@ class PlatformPrefs @Inject constructor(
         // Addons e plugins são por perfil com herança primária: a troca de
         // perfil (ou da flag) recarrega os fluxos do dono efetivo.
         _addons.value = readAddonEntries()
+        // Lote 2 item 1 (v1.47.0): addons selecionados p/ a pesquisa, por perfil.
+        _searchAddonIds.value = readStringList("search_addon_ids_v1")
         _pluginRepos.value = readPluginRepos()
         _sourcePreset.value = prefs.getString(sk("pref_source_preset_v1"), "balanced") ?: "balanced"
         _sourceStrategy.value = prefs.getString(sk("pref_source_strategy_v1"), "quality") ?: "quality"
@@ -4079,6 +4202,9 @@ class PlatformPrefs @Inject constructor(
         _playerButtons.value = readStringList("pref_player_buttons")
         _playerTopActions.value = readStringList("pref_player_top_actions")
         _playerTapSeek.value = prefs.getBoolean(sk("pref_player_tap_seek"), true)
+        // Lote 2 item 4 (v1.47.0): intervalos de pulo, por perfil.
+        _playerSkipBackSecs.value = prefs.getInt(sk("pref_player_skip_back_secs"), 10)
+        _playerSkipFwdSecs.value = prefs.getInt(sk("pref_player_skip_fwd_secs"), 10)
         _playerFrameRate.value = prefs.getBoolean(sk("pref_player_frame_rate"), true)
         _subForeignOnly.value = prefs.getBoolean(sk("sub_foreign_only"), false)
         _subHideSdh.value = prefs.getBoolean(sk("sub_hide_sdh"), false)
@@ -4178,6 +4304,9 @@ class PlatformPrefs @Inject constructor(
         // Os mapas (nomes, grupos, números, EPG, logos) são lidos direto do
         // disco a cada acesso, sem fluxo — não precisam de reload aqui.
         _liveMultiviewLayout.value = prefs.getInt(sk("live_multiview_layout"), 1).let { if (it == 2 || it == 4) it else 1 }
+        // Lote 2 itens 2 e 7 (v1.47.0): addons visíveis e estilo da aba, por perfil.
+        _liveVisibleAddonIds.value = readLiveVisibleAddonIds()
+        _liveStyle.value = prefs.getString(sk("live_style_v1"), "aotv") ?: "aotv"
         _liveHiddenChannels.value = readStringList("live_hidden_channels_v1")
         _liveChannelOrder.value = readStringList("live_channel_order_v1")
         // Lote 11 (v1.21.0): blur anti-spoiler + o esconder-spoilers do

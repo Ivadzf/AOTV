@@ -28,6 +28,9 @@ class DetailPrefsViewModel @Inject constructor(
     val iconActions: StateFlow<Boolean> = prefs.detailIconActionsFlow
     val tabs: StateFlow<Boolean> = prefs.detailTabsFlow
     val episodeStyle: StateFlow<String> = prefs.detailEpisodeStyleFlow
+    /** Temporadas por pôsteres ou texto (Lote 2 item 9e; padrão: pôsteres). */
+    val seasonStyle: StateFlow<String> = prefs.detailSeasonStyleFlow
+    fun setSeasonStyle(value: String) { prefs.detailSeasonStyle = value }
     /** Notas dos episódios visíveis nos cards (Lote 2 item 5; padrão: mostrar). */
     val episodeRatings: StateFlow<Boolean> = prefs.detailEpisodeRatingsFlow
     /** Título em idioma original na página de detalhes (Lote 3 item 6; padrão: desligado). */

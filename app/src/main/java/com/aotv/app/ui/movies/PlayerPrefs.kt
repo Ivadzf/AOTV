@@ -172,6 +172,12 @@ class PlayerPrefsViewModel @Inject constructor(
     val swipeSeek: StateFlow<Boolean> = prefs.playerSwipeSeekFlow
     fun setSwipeSeek(v: Boolean) { prefs.playerSwipeSeek = v }
 
+    /** Intervalos de pulo em segundos (Lote 2 item 4, v1.47.0): 5/10/15/20/30, voltar e avançar independentes. */
+    val skipBackSecs: StateFlow<Int> = prefs.playerSkipBackSecsFlow
+    fun setSkipBackSecs(v: Int) { prefs.playerSkipBackSecs = v }
+    val skipFwdSecs: StateFlow<Int> = prefs.playerSkipFwdSecsFlow
+    fun setSkipFwdSecs(v: Int) { prefs.playerSkipFwdSecs = v }
+
     val volBoost: StateFlow<Boolean> = prefs.playerVolBoostFlow
     fun setVolBoost(v: Boolean) { prefs.playerVolBoost = v }
 

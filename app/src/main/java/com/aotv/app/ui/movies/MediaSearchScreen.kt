@@ -9,11 +9,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,7 +25,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Mic
@@ -58,6 +63,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.aotv.app.data.local.PlatformPrefs
+import com.aotv.app.data.remote.AddonLinks
+import com.aotv.app.data.remote.AddonMetaResolver
+import com.aotv.app.data.remote.StremioAddonService
 import com.aotv.app.data.remote.TmdbApiService
 import com.aotv.app.data.remote.dto.toMovieItem
 import com.aotv.app.data.repository.DownloadRepository
@@ -74,6 +82,9 @@ import com.aotv.app.ui.common.topInsetsPadding
 import com.aotv.app.ui.theme.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -86,7 +97,66 @@ class MediaSearchViewModel @Inject constructor(
     private val tmdb: TmdbApiService,
     private val prefs: PlatformPrefs,
     private val downloads: DownloadRepository,
+    /** Lote 2 item 1 (v1.47.0): busca por addon (manifests + `search=`). */
+    private val stremio: StremioAddonService,
+    private val addonMetas: AddonMetaResolver,
 ) : ViewModel() {
+
+    /** Uma fileira de resultados da busca por addon ("<Addon> • Filmes"). */
+    data class AddonSearchRow(val label: String, val items: List<MovieItem>)
+
+    /** Um addon no painel da busca (base = chave estável; nome do manifest ou do host). */
+    data class SearchAddonOption(val base: String, val url: String, val name: String, val selected: Boolean)
+
+    /** Addons ligados p/ o painel (com a seleção atual). */
+    private val _addonOptions = MutableStateFlow<List<SearchAddonOption>>(emptyList())
+    val addonOptions: StateFlow<List<SearchAddonOption>> = _addonOptions.asStateFlow()
+
+    /** Fileiras de resultados dos addons p/ a query atual (vazias sem query). */
+    private val _addonRows = MutableStateFlow<List<AddonSearchRow>>(emptyList())
+    val addonRows: StateFlow<List<AddonSearchRow>> = _addonRows.asStateFlow()
+
+    init {
+        // A lista de addons (e os nomes dos manifests) pode mudar — o painel reage.
+        viewModelScope.launch { prefs.addons.collect { refreshAddonOptions() } }
+        viewModelScope.launch { prefs.addonMetaFlow.collect { refreshAddonOptions() } }
+    }
+
+    /**
+     * Recomputa o painel a partir dos addons ligados + nomes guardados dos
+     * manifests. Seleção guardada vazia = todos (sem filtro).
+     */
+    private fun refreshAddonOptions() {
+        val saved = prefs.searchAddonIds
+        val meta = prefs.addonMetaFlow.value
+        _addonOptions.value = prefs.addons.value.filter { it.enabled }.map { e ->
+            val base = AddonLinks.baseOf(e.url)
+            val name = meta[base]?.name?.takeIf { it.isNotBlank() }
+                ?: e.id.ifBlank { AddonLinks.hostOf(e.url) }
+            SearchAddonOption(base, e.url, name, saved.isEmpty() || base in saved)
+        }
+    }
+
+    /** Liga/desliga um addon na busca (e rebusca com a seleção nova). */
+    fun toggleSearchAddon(base: String) {
+        val all = _addonOptions.value.map { it.base }
+        if (all.isEmpty()) return
+        val current = prefs.searchAddonIds.ifEmpty { all }
+        val next = if (base in current) current - base else current + base
+        prefs.searchAddonIds = if (next.toSet() == all.toSet()) emptyList() else next
+        refreshAddonOptions()
+        if (_query.value.isNotBlank()) launchSearch(_query.value, 0)
+    }
+
+    /** Todos os addons de volta (limpa o filtro). */
+    fun selectAllSearchAddons() {
+        prefs.searchAddonIds = emptyList()
+        refreshAddonOptions()
+        if (_query.value.isNotBlank()) launchSearch(_query.value, 0)
+    }
+
+    /** true quando a busca por addon está filtrada p/ só alguns addons. */
+    fun hasAddonFilter(): Boolean = _addonOptions.value.any { !it.selected }
 
     private val _query = MutableStateFlow("")
     private val _results = MutableStateFlow<List<MovieItem>>(emptyList())
@@ -110,6 +180,7 @@ class MediaSearchViewModel @Inject constructor(
         _pastedLink.value = null
         _query.value = ""
         _results.value = emptyList()
+        _addonRows.value = emptyList()
     }
 
     /** Enfileira o download do link colado (só .mp4 direto é baixável). */
@@ -162,7 +233,7 @@ class MediaSearchViewModel @Inject constructor(
             return
         }
         _pastedLink.value = null
-        if (q.isBlank()) { searchJob?.cancel(); _results.value = emptyList(); _noTmdbKey.value = false; return }
+        if (q.isBlank()) { searchJob?.cancel(); _results.value = emptyList(); _addonRows.value = emptyList(); _noTmdbKey.value = false; return }
         launchSearch(q, SEARCH_DEBOUNCE_MS)
     }
 
@@ -208,7 +279,47 @@ class MediaSearchViewModel @Inject constructor(
                 prefs.pushRecentSearch(q)
                 _recents.value = prefs.recentSearches
             }
+            // Lote 2 item 1 (v1.47.0): busca por addon, depois do TMDB (os
+            // resultados do TMDB aparecem primeiro; as fileiras dos addons
+            // entram quando prontas).
+            searchAddons(q)
         }
+    }
+
+    /**
+     * Busca a query nos catálogos dos addons selecionados (ou todos, sem
+     * filtro). P/ cada addon, o 1º catálogo de filmes e o 1º de séries, via
+     * o extra `search=` do Stremio; addon sem suporte a busca devolve vazio
+     * (ou erro) e some sem alarde. Os metas viram MovieItem pelo mesmo
+     * casamento do Descobrir ([AddonMetaResolver.resolve]).
+     */
+    private suspend fun searchAddons(q: String) {
+        val selected = _addonOptions.value.filter { it.selected }
+        if (selected.isEmpty()) { _addonRows.value = emptyList(); return }
+        val rows = coroutineScope {
+            selected.map { opt ->
+                async {
+                    val catalogs = runCatching { stremio.discoverCatalogs(opt.url) }.getOrDefault(emptyList())
+                    val out = mutableListOf<AddonSearchRow>()
+                    catalogs.firstOrNull { it.type == "movie" }?.let { c ->
+                        val metas = runCatching {
+                            stremio.catalogMetasWithExtras(c.base, c.type, c.id, 0, mapOf("search" to q))
+                        }.getOrNull().orEmpty()
+                        val items = runCatching { addonMetas.resolve(metas.take(20), false) }.getOrDefault(emptyList())
+                        if (items.isNotEmpty()) out += AddonSearchRow("${opt.name} • Filmes", items)
+                    }
+                    catalogs.firstOrNull { it.type == "series" }?.let { c ->
+                        val metas = runCatching {
+                            stremio.catalogMetasWithExtras(c.base, c.type, c.id, 0, mapOf("search" to q))
+                        }.getOrNull().orEmpty()
+                        val items = runCatching { addonMetas.resolve(metas.take(20), true) }.getOrDefault(emptyList())
+                        if (items.isNotEmpty()) out += AddonSearchRow("${opt.name} • Séries", items)
+                    }
+                    out
+                }
+            }.awaitAll().flatten()
+        }
+        _addonRows.value = rows
     }
 
     companion object {
@@ -296,6 +407,16 @@ fun MediaSearchScreen(
     // QR da query atual (item 3): o botão fica na pill; sem texto, não abre.
     var qrOpen by remember { mutableStateOf(false) }
     if (qrOpen) SearchQrDialog(query = query, onDismiss = { qrOpen = false })
+    // Lote 2 item 1 (v1.47.0): painel de addons da busca (ícone Extension no canto).
+    val addonOptions by viewModel.addonOptions.collectAsStateWithLifecycle()
+    val addonRows by viewModel.addonRows.collectAsStateWithLifecycle()
+    var addonPickerOpen by remember { mutableStateOf(false) }
+    if (addonPickerOpen) AddonSearchPickerDialog(
+        options = addonOptions,
+        onToggle = viewModel::toggleSearchAddon,
+        onSelectAll = viewModel::selectAllSearchAddons,
+        onDismiss = { addonPickerOpen = false },
+    )
 
     // TV. Teclado do controle à esquerda e resultados à direita, como o search.js do webOS.
     // Lote 22 (v1.32.0, item 8 — teste da faixa bege, reportada pelo Davi
@@ -331,7 +452,7 @@ fun MediaSearchScreen(
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
                 SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
-                    heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl)
+                    heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl, addonRows)
             }
         }
         return
@@ -391,9 +512,18 @@ fun MediaSearchScreen(
                 iconTint = TextSecondary,
                 contentDescription = "Comandos",
             )
+            // Lote 2 item 1 (v1.47.0): pesquisa por addon — abre o painel com
+            // busca e multi-seleção. Ícone em Accent quando há filtro ativo.
+            GlassCircleButton(
+                icon = Icons.Default.Extension,
+                onClick = { addonPickerOpen = true },
+                size = 44.dp,
+                iconTint = if (addonOptions.any { !it.selected }) Accent else TextSecondary,
+                contentDescription = "Addons da busca",
+            )
         }
         SearchBody(query, results, isLoading, recents, viewModel, onItemClick,
-            heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl)
+            heroItems, homeState.heroLogos, discoverState, discoverVm, onPlayUrl, addonRows)
     }
 }
 
@@ -411,6 +541,8 @@ private fun ColumnScope.SearchBody(
     discoverState: DiscoverViewModel.UiState,
     discoverVm: DiscoverViewModel,
     onPlayUrl: (String, String) -> Unit,
+    /** Lote 2 item 1 (v1.47.0): fileiras de resultados dos addons p/ a query. */
+    addonRows: List<MediaSearchViewModel.AddonSearchRow>,
 ) {
         // Link colado (Lote 18 item 3): o cartão fica acima de tudo — a
         // busca por título nem aparece enquanto houver um link colado.
@@ -458,7 +590,7 @@ private fun ColumnScope.SearchBody(
                 )
             }
 
-            results.isEmpty() -> {
+            results.isEmpty() && addonRows.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     if (noTmdbKey) {
                         AotvEmptyState(
@@ -519,6 +651,13 @@ private fun ColumnScope.SearchBody(
                         items(results, key = { it.tmdbId }) { item ->
                             // Busca mistura filme e série, então a etiqueta diz qual é (igual ao webOS).
                             com.aotv.app.ui.common.PosterCard(item = item, onClick = { onItemClick(item) }, typeBadge = true)
+                        }
+                        // Lote 2 item 1 (v1.47.0) + 9c: fileiras dos addons,
+                        // abaixo do grid do TMDB, no mesmo padrão da Início.
+                        addonRows.forEach { row ->
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                AddonSearchRowSection(row = row, onItemClick = onItemClick)
+                            }
                         }
                     }
                 }
@@ -1070,6 +1209,108 @@ private fun GenrePickerDialog(
             { TextButton(onClick = { vm.clearFilters() }) { Text("Limpar", color = TextSecondary) } }
         } else null,
     )
+}
+
+/**
+ * Painel da pesquisa por addon (Lote 2, item 1, v1.47.0): busca sobre os
+ * addons ligados + multi-seleção. Sem nada selecionado = todos (a pref
+ * guarda lista vazia). O botão no canto fica em Accent quando há filtro.
+ */
+@Composable
+private fun AddonSearchPickerDialog(
+    options: List<MediaSearchViewModel.SearchAddonOption>,
+    onToggle: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var filter by remember { mutableStateOf("") }
+    val shown = options.filter { it.name.contains(filter, ignoreCase = true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BackgroundCard,
+        title = { Text("Addons da busca", color = TextPrimary, fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = filter,
+                    onValueChange = { filter = it },
+                    placeholder = { Text("Pesquisar addon…", color = TextTertiary) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Border,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = Accent,
+                    ),
+                )
+                Text(
+                    if (options.isEmpty()) "Nenhum addon ligado."
+                    else "Sem seleção = busca em todos os addons.",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                )
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                    items(shown, key = { it.base }) { opt ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onToggle(opt.base) }.padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Extension,
+                                null,
+                                tint = if (opt.selected) Accent else TextSecondary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Text(
+                                opt.name,
+                                color = TextPrimary,
+                                fontSize = 15.sp,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (opt.selected) Icon(Icons.Default.Check, "Selecionado", tint = Accent, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Pronto", color = Accent) } },
+        dismissButton = { TextButton(onClick = onSelectAll) { Text("Todos", color = TextSecondary) } },
+    )
+}
+
+/**
+ * Fileira de resultados de um addon na busca (Lote 2, itens 1 e 9c): título
+ * "<Addon> • Filmes/Séries" + pôsteres em fileira horizontal, no padrão da
+ * Início ([SectionHeader] + LazyRow de [PosterCard]). Dentro do grid de
+ * resultados, o item ocupa a largura total ([GridItemSpan]).
+ */
+@Composable
+private fun AddonSearchRowSection(
+    row: MediaSearchViewModel.AddonSearchRow,
+    onItemClick: (MovieItem) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        com.aotv.app.ui.common.SectionHeader(title = row.label)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(row.items, key = { "${it.tmdbId}|${it.title}" }) { item ->
+                com.aotv.app.ui.common.PosterCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    modifier = Modifier.width(com.aotv.app.ui.common.posterWidth()),
+                    typeBadge = true,
+                )
+            }
+        }
+    }
 }
 
 // ── Helpers visuais privados desta tela ──────────────────────────────────────

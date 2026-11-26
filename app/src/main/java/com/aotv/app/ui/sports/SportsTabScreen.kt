@@ -42,8 +42,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -179,6 +181,12 @@ class SportsTabViewModel @Inject constructor(
         val recordTeamGames: List<String> = emptyList(),
         val query: String = "",
         val sport: String = "Todos",
+        /** Liga filtrada nos chips (null = todas) — Lote 2, item 8. */
+        val leagueFilter: String? = null,
+        /** Resumo da tabela da liga filtrada (Top 4 + seguidos) — Lote 2, item 8. */
+        val tableSummary: LeagueTable? = null,
+        val tableSummaryLeagueId: String? = null,
+        val tableSummaryLoading: Boolean = false,
     )
 
     private val _ui = MutableStateFlow(Ui())
@@ -215,6 +223,23 @@ class SportsTabViewModel @Inject constructor(
 
     fun setSport(sport: String) {
         _ui.update { it.copy(sport = sport) }
+    }
+
+    /**
+     * Filtra os jogos por liga (Lote 2, item 8 — chips de liga como no print
+     * do Nuvio). Com liga de tabela selecionada, carrega o resumo da tabela
+     * (Top 4 + seguidos); sem liga, o resumo some.
+     */
+    fun setLeagueFilter(leagueId: String?) {
+        if (leagueId == _ui.value.leagueFilter) return
+        _ui.update { it.copy(leagueFilter = leagueId, tableSummary = null, tableSummaryLeagueId = null) }
+        val league = leagueId?.let { id -> SPORTS_LEAGUES.firstOrNull { it.id == id } }
+        if (league == null || !league.hasTable) return
+        viewModelScope.launch {
+            _ui.update { it.copy(tableSummaryLoading = true) }
+            val table = repo.leagueTable(league)
+            _ui.update { it.copy(tableSummary = table, tableSummaryLeagueId = league.id, tableSummaryLoading = false) }
+        }
     }
 
     fun refresh() = load()
@@ -327,6 +352,8 @@ private data class SportsFixTarget(val league: SportsLeague, val game: LeagueGam
 fun SportsTabScreen(
     onOpenGame: (String, String) -> Unit,
     onPlayChannel: (String) -> Unit,
+    /** Abre a página da liga (Lote 2, item 8: "Ver tabela completa" do resumo). */
+    onOpenLeague: (String) -> Unit = {},
     viewModel: SportsTabViewModel = hiltViewModel(),
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
@@ -345,12 +372,17 @@ fun SportsTabScreen(
             games.map { league to it }
         }
     }
-    val sportsPresent = remember(allGames) {
-        allGames.map { sportsGameSport(it.first) }.distinct()
+    val enabledLeagues = remember(ui.enabledLeagueIds) {
+        SPORTS_LEAGUES.filter { it.id in ui.enabledLeagueIds }
     }
-    val sportFiltered = remember(allGames, ui.sport) {
-        if (ui.sport == "Todos") allGames
-        else allGames.filter { sportsGameSport(it.first) == ui.sport }
+    val sportsAvailable = remember(enabledLeagues) {
+        enabledLeagues.map { it.sportLabel }.distinct()
+    }
+    val sportFiltered = remember(allGames, ui.sport, ui.leagueFilter) {
+        var list = if (ui.sport == "Todos") allGames
+            else allGames.filter { sportsGameSport(it.first) == ui.sport }
+        if (ui.leagueFilter != null) list = list.filter { it.first.id == ui.leagueFilter }
+        list
     }
     val liveGames = remember(sportFiltered) {
         sportFiltered.filter { it.second.isLive }.sortedBy { it.second.dateMs }
@@ -378,9 +410,6 @@ fun SportsTabScreen(
     val searchGames = remember(sportFiltered, query) {
         sportFiltered.filter { (league, game) -> sportsGameMatches(game, league, query) }
             .sortedBy { it.second.dateMs }
-    }
-    val enabledLeagues = remember(ui.enabledLeagueIds) {
-        SPORTS_LEAGUES.filter { it.id in ui.enabledLeagueIds }
     }
 
     Column(Modifier.fillMaxSize().background(Background).padding(top = 8.dp)) {
@@ -448,9 +477,12 @@ fun SportsTabScreen(
                 )
             }
         }
-        // Filtro por esporte (montado a partir dos dados — Futebol,
-        // Futebol Americano, Basquete, Hóquei, Beisebol, conforme os jogos do dia)
-        if (sportsPresent.isNotEmpty()) {
+        // Filtro por esporte (Lote 2, item 8): FIXO — os esportes das ligas
+        // ligadas, não só os dos jogos do dia (antes, um esporte sem jogo
+        // no dia sumia do seletor). Críquete fora: a ESPN não serve
+        // críquete neste endpoint (404 p/ ipl/icc/eng/bbl, verificado ao
+        // vivo em 2026-11-26; o futebol responde 200 no mesmo dia).
+        if (sportsAvailable.isNotEmpty()) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -460,9 +492,32 @@ fun SportsTabScreen(
                         "Todos", ui.sport == "Todos", { viewModel.setSport("Todos") },
                     )
                 }
-                items(sportsPresent, key = { "sport:$it" }) { sport ->
+                items(sportsAvailable, key = { "sport:$it" }) { sport ->
                     com.aotv.app.ui.common.FilterChipPill(
                         sport, ui.sport == sport, { viewModel.setSport(sport) },
+                    )
+                }
+            }
+        }
+        // Lote 2 (v1.47.0, item 8): chips de liga (como no print do Nuvio) —
+        // só as ligas com jogos no dia; filtrar por liga mostra o resumo da
+        // tabela dela (Top 4 + seguidos) acima dos jogos.
+        val leaguesToday = remember(gamesByLeague) {
+            gamesByLeague.keys.mapNotNull { id -> SPORTS_LEAGUES.firstOrNull { it.id == id } }
+        }
+        if (leaguesToday.size > 1) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = pad, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item(key = "league-all") {
+                    com.aotv.app.ui.common.FilterChipPill(
+                        "Todas as ligas", ui.leagueFilter == null, { viewModel.setLeagueFilter(null) },
+                    )
+                }
+                items(leaguesToday, key = { "league:${it.id}" }) { league ->
+                    com.aotv.app.ui.common.FilterChipPill(
+                        league.name, ui.leagueFilter == league.id, { viewModel.setLeagueFilter(league.id) },
                     )
                 }
             }
@@ -483,36 +538,56 @@ fun SportsTabScreen(
             }
         }
         when (ui.section) {
-            SportsTabViewModel.Section.MINE -> SportsTabGamesList(
-                games = mineGames,
-                loading = ui.loading,
-                error = ui.error,
-                emptyTitle = "Nada seguido ainda",
-                emptyMessage = "Siga ligas ou times p/ ver só os seus jogos aqui — toque na estrela de um time ou siga uma liga.",
-                emptyActionLabel = "Escolher ligas",
-                onEmptyAction = { showLeaguePicker = true },
-                followedTeamsNorm = followedTeamsNorm,
-                viewModel = viewModel,
-                onOpenGame = onOpenGame,
-                onPlayChannel = onPlayChannel,
-                onFixChannel = { league, game -> fixTarget = SportsFixTarget(league, game) },
-                pad = pad,
-            )
-            SportsTabViewModel.Section.ALL -> SportsTabGamesList(
-                games = liveGames + upcomingGames + finishedGames,
-                loading = ui.loading,
-                error = ui.error,
-                emptyTitle = "Sem jogos neste dia",
-                emptyMessage = "Nenhum jogo nas ligas ligadas neste dia.",
-                emptyActionLabel = null,
-                onEmptyAction = null,
-                followedTeamsNorm = followedTeamsNorm,
-                viewModel = viewModel,
-                onOpenGame = onOpenGame,
-                onPlayChannel = onPlayChannel,
-                onFixChannel = { league, game -> fixTarget = SportsFixTarget(league, game) },
-                pad = pad,
-            )
+            SportsTabViewModel.Section.MINE -> Column(Modifier.fillMaxSize()) {
+                SportsTableSummaryCard(
+                    league = ui.leagueFilter?.let { id -> SPORTS_LEAGUES.firstOrNull { it.id == id } },
+                    table = ui.tableSummary,
+                    loading = ui.tableSummaryLoading,
+                    followedTeamsNorm = followedTeamsNorm,
+                    onOpenFull = { ui.leagueFilter?.let { onOpenLeague(it) } },
+                    pad = pad,
+                )
+                SportsTabGamesList(
+                    games = mineGames,
+                    loading = ui.loading,
+                    error = ui.error,
+                    emptyTitle = "Nada seguido ainda",
+                    emptyMessage = "Siga ligas ou times p/ ver só os seus jogos aqui — toque na estrela de um time ou siga uma liga.",
+                    emptyActionLabel = "Escolher ligas",
+                    onEmptyAction = { showLeaguePicker = true },
+                    followedTeamsNorm = followedTeamsNorm,
+                    viewModel = viewModel,
+                    onOpenGame = onOpenGame,
+                    onPlayChannel = onPlayChannel,
+                    onFixChannel = { league, game -> fixTarget = SportsFixTarget(league, game) },
+                    pad = pad,
+                )
+            }
+            SportsTabViewModel.Section.ALL -> Column(Modifier.fillMaxSize()) {
+                SportsTableSummaryCard(
+                    league = ui.leagueFilter?.let { id -> SPORTS_LEAGUES.firstOrNull { it.id == id } },
+                    table = ui.tableSummary,
+                    loading = ui.tableSummaryLoading,
+                    followedTeamsNorm = followedTeamsNorm,
+                    onOpenFull = { ui.leagueFilter?.let { onOpenLeague(it) } },
+                    pad = pad,
+                )
+                SportsTabGamesList(
+                    games = liveGames + upcomingGames + finishedGames,
+                    loading = ui.loading,
+                    error = ui.error,
+                    emptyTitle = "Sem jogos neste dia",
+                    emptyMessage = "Nenhum jogo nas ligas ligadas neste dia.",
+                    emptyActionLabel = null,
+                    onEmptyAction = null,
+                    followedTeamsNorm = followedTeamsNorm,
+                    viewModel = viewModel,
+                    onOpenGame = onOpenGame,
+                    onPlayChannel = onPlayChannel,
+                    onFixChannel = { league, game -> fixTarget = SportsFixTarget(league, game) },
+                    pad = pad,
+                )
+            }
             SportsTabViewModel.Section.SEARCH -> Column(Modifier.fillMaxSize()) {
                 OutlinedTextField(
                     value = query, onValueChange = { viewModel.setQuery(it) }, singleLine = true,
@@ -587,6 +662,71 @@ fun SportsTabScreen(
 }
 
 // ── Lista de jogos (Meus / Todos / Buscar) ───────────────────────────────
+
+/**
+ * Resumo da tabela da liga filtrada (Lote 2, item 8 — como no print do
+ * Nuvio): Top 4 + os times seguidos fora do Top 4, com "Ver tabela ›"
+ * abrindo a página da liga. Fora da Libertadores (multi-grupo: o Top 4
+ * plano não faz sentido) e sem liga filtrada.
+ */
+@Composable
+private fun SportsTableSummaryCard(
+    league: SportsLeague?,
+    table: LeagueTable?,
+    loading: Boolean,
+    followedTeamsNorm: Set<String>,
+    onOpenFull: () -> Unit,
+    pad: androidx.compose.ui.unit.Dp,
+) {
+    if (league == null || league.multiGroup) return
+    if (loading && table == null) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
+            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+        }
+        return
+    }
+    val t = table ?: return
+    val followedRows = t.rows.filter { normalizeSportsName(it.team) in followedTeamsNorm }
+    val shown = (t.rows.take(4) + followedRows).distinctBy { it.rank }
+    if (shown.isEmpty()) return
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = pad, vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Tabela — ${t.league.name}", color = TextPrimary, fontSize = 15.sp,
+                fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = onOpenFull) {
+                Text("Ver tabela ›", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("#", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
+            Text("Time", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Text("P", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+            Text("SG", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+            Text("Pts", color = TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+        }
+        shown.forEach { row ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                Text(row.rank.toString(), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(22.dp), textAlign = TextAlign.Center)
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (row.logo.isNotBlank()) AsyncImage(row.logo, row.team, contentScale = ContentScale.Fit, modifier = Modifier.size(20.dp))
+                    Text(row.team, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(row.played.toString(), color = TextPrimary, fontSize = 13.sp, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+                Text(if (row.goalDiff > 0) "+${row.goalDiff}" else row.goalDiff.toString(), color = TextPrimary, fontSize = 13.sp, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+                Text(row.points.toString(), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.width(26.dp), textAlign = TextAlign.Center)
+            }
+        }
+        Text("Top 4 + os times que você segue", color = TextTertiary, fontSize = 12.sp)
+    }
+}
 
 /**
  * Lista de jogos com cabeçalhos de seção: "Ao vivo agora" primeiro, depois
@@ -674,7 +814,18 @@ private fun SportsTabGameCard(
 ) {
     val resolved = viewModel.resolveChannel(game, league)
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(BackgroundCard2)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            // Lote 2 (v1.47.0, item 8): gradiente nas cores dos times (como
+            // no print do Nuvio) — o matiz vem do nome ([teamColorFor]).
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        teamColorFor(game.homeTeam).copy(alpha = 0.28f),
+                        teamColorFor(game.awayTeam).copy(alpha = 0.16f),
+                        BackgroundCard2,
+                    ),
+                ),
+            )
             .clickable { onOpenGame(league.id, game.eventId) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -766,7 +917,8 @@ private fun SportsTabTeamRow(
         }
         if (logo.isNotBlank()) AsyncImage(logo, team, contentScale = ContentScale.Fit, modifier = Modifier.size(26.dp))
         Text(team, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (score != null) Text(score.toString(), color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+        // Lote 2 (v1.47.0, item 8): placar maior (18sp → 24sp, como no print).
+        if (score != null) Text(score.toString(), color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
     }
 }
 
@@ -847,7 +999,7 @@ private fun SportsTabFollowingList(
         }
         item(key = "follow-alerts-note") {
             Text(
-                "Alertas: o vigia de fim de jogo e placar (a cada 15 min) hoje cobre os jogos do guia de TV — os jogos da ESPN ainda não disparam alerta. Gravar jogos: com o botão ligado, o jogo do time é gravado sozinho quando passa num canal do guia (Downloads → Gravações).",
+                "Alertas: o vigia (a cada 15 min) avisa placar, fim de jogo e o início dos jogos das ligas seguidas — vale p/ os times seguidos dentro dessas ligas. Time seguido numa liga não seguida não gera alerta. Gravar jogos: com o botão ligado, o jogo do time é gravado sozinho quando passa num canal do guia (Downloads → Gravações).",
                 color = TextTertiary, fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
@@ -923,7 +1075,7 @@ private fun SportsTabNetworkRow(channel: LiveChannel, onPlay: () -> Unit) {
 // ── Seletor de ligas ───────────────────────────────────────────────────────
 
 /**
- * "Escolher ligas": as ligas que o app REALMENTE conhece (13, da ESPN), com
+ * "Escolher ligas": as ligas que o app REALMENTE conhece (85, da ESPN), com
  * busca dentro do seletor e ligar/desligar em massa. Persistido em
  * PlatformPrefs (`sports_tab_leagues_v1` — null = todas ligadas).
  * A estrela de cada linha SEGUE a liga (Lote 18, item 9 — antes não

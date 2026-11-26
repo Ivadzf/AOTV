@@ -69,9 +69,13 @@ fun TrailerExoOverlay(
     title: String = "",
     onOpenDetail: (() -> Unit)? = null,
     onNext: (() -> Unit)? = null,
+    // Lote 2 item 9h — player compartilhado (o detalhe iça um só): com ele, o
+    // player próprio nasce ocioso (URL em branco) e não toca nada.
+    sharedExo: ExoPlayer? = null,
 ) {
     val context = LocalContext.current
-    val exo = rememberTrailerExo(videoUrl, audioUrl)
+    val ownedExo = rememberTrailerExo(if (sharedExo != null) "" else videoUrl, if (sharedExo != null) null else audioUrl)
+    val exo = sharedExo ?: ownedExo
 
     // Tela cheia de verdade: trava em paisagem e esconde status bar e barra de navegação
     // enquanto o trailer está aberto. Ao fechar, devolve o estado anterior.
@@ -192,42 +196,53 @@ private fun android.content.Context.findActivity(): android.app.Activity? {
 @Composable
 fun rememberTrailerExo(videoUrl: String, audioUrl: String?): ExoPlayer {
     val context = LocalContext.current
-    val exo = remember(videoUrl, audioUrl) {
-        val f = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
-        // Start rápido: o padrão do ExoPlayer segura 2,5s de buffer antes do primeiro frame.
-        // Baixando pra 0,5s o trailer começa quase na hora e segue enchendo o buffer depois.
-        val load = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 50_000, 500, 2_000)
-            .build()
-        // DefaultMediaSourceFactory detecta HLS (.m3u8, ex: Piped) e mp4 automaticamente.
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(f))
-            .setLoadControl(load)
-            .build().apply {
-                if (audioUrl.isNullOrBlank()) {
-                    val item = MediaItem.Builder().setUri(videoUrl)
-                    if (videoUrl.substringBefore('?').endsWith(".m3u8", true) || videoUrl.contains(".m3u8")) {
-                        item.setMimeType(MimeTypes.APPLICATION_M3U8)
-                    }
-                    setMediaItem(item.build())
-                } else {
-                    // NewPipe DASH: vídeo-only + áudio-only (mp4) → mescla.
-                    val v = ProgressiveMediaSource.Factory(f).createMediaSource(MediaItem.fromUri(videoUrl))
-                    val a = ProgressiveMediaSource.Factory(f).createMediaSource(MediaItem.fromUri(audioUrl))
-                    setMediaSource(MergingMediaSource(v, a))
-                }
-                addListener(object : androidx.media3.common.Player.Listener {
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        android.util.Log.w("TrailerExo", "falha ao tocar trailer: ${error.errorCodeName} ${error.message}")
-                    }
-                })
-                prepare()
-                playWhenReady = true
-            }
-    }
+    val exo = remember(videoUrl, audioUrl) { createTrailerExo(context, videoUrl, audioUrl) }
     DisposableEffect(exo) { onDispose { exo.release() } }
     return exo
+}
+
+/**
+ * Constrói o ExoPlayer do trailer (Lote 2 item 9h — içado p/ o detalhe, para
+ * mini, folha e tela cheia usarem a MESMA instância). URL em branco = player
+ * ocioso (sem mídia, sem prepare): o detalhe cria o player só quando há
+ * trailer ativo, e os composables que recebem um player compartilhado pedem
+ * o próprio com URL em branco (não tocam nada).
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+fun createTrailerExo(context: android.content.Context, videoUrl: String, audioUrl: String?): ExoPlayer {
+    val f = DefaultHttpDataSource.Factory()
+        .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36")
+    // Start rápido: o padrão do ExoPlayer segura 2,5s de buffer antes do primeiro frame.
+    // Baixando pra 0,5s o trailer começa quase na hora e segue enchendo o buffer depois.
+    val load = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+        .setBufferDurationsMs(15_000, 50_000, 500, 2_000)
+        .build()
+    // DefaultMediaSourceFactory detecta HLS (.m3u8, ex: Piped) e mp4 automaticamente.
+    return ExoPlayer.Builder(context)
+        .setMediaSourceFactory(DefaultMediaSourceFactory(f))
+        .setLoadControl(load)
+        .build().apply {
+            if (videoUrl.isBlank()) return@apply
+            if (audioUrl.isNullOrBlank()) {
+                val item = MediaItem.Builder().setUri(videoUrl)
+                if (videoUrl.substringBefore('?').endsWith(".m3u8", true) || videoUrl.contains(".m3u8")) {
+                    item.setMimeType(MimeTypes.APPLICATION_M3U8)
+                }
+                setMediaItem(item.build())
+            } else {
+                // NewPipe DASH: vídeo-only + áudio-only (mp4) → mescla.
+                val v = ProgressiveMediaSource.Factory(f).createMediaSource(MediaItem.fromUri(videoUrl))
+                val a = ProgressiveMediaSource.Factory(f).createMediaSource(MediaItem.fromUri(audioUrl))
+                setMediaSource(MergingMediaSource(v, a))
+            }
+            addListener(object : androidx.media3.common.Player.Listener {
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    android.util.Log.w("TrailerExo", "falha ao tocar trailer: ${error.errorCodeName} ${error.message}")
+                }
+            })
+            prepare()
+            playWhenReady = true
+        }
 }
 
 /**

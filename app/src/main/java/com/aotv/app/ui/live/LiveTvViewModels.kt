@@ -85,7 +85,14 @@ class LiveTvViewModel @Inject constructor(
         val addonResolvingId: String? = null,
         /** Falha ao resolver o stream do canal de addon. */
         val addonResolveError: String? = null,
+        /** Nome dos addons com catálogo de TV (id do manifest → nome), p/ os chips de fonte. */
+        val addonNames: Map<String, String> = emptyMap(),
+        /** Addons com catálogo de TV + visibilidade, p/ o seletor da aba (Lote 2, item 2). */
+        val tvAddons: List<TvAddonOption> = emptyList(),
     )
+
+    /** Um addon com catálogo de TV no seletor da aba Ao vivo (Lote 2, item 2). */
+    data class TvAddonOption(val id: String, val name: String, val visible: Boolean, val channelCount: Int)
 
     /**
      * Canais de TV dos addons ligados (Lote 15, Bloco 2, v1.25.0). Fora do
@@ -94,6 +101,8 @@ class LiveTvViewModel @Inject constructor(
      */
     private data class AddonTvData(
         val channels: List<LiveChannel> = emptyList(),
+        /** Catálogos de TV carregados (id/nome do addon), p/ o seletor (Lote 2, item 2). */
+        val catalogs: List<AddonTvCatalog> = emptyList(),
         val loading: Boolean = false,
         val error: String? = null,
         val diag: List<AddonTvDiag> = emptyList(),
@@ -107,7 +116,7 @@ class LiveTvViewModel @Inject constructor(
     private val query = MutableStateFlow("")
     private val clock = MutableStateFlow(System.currentTimeMillis())
 
-    val view: StateFlow<View> = combine(repo.state, filter, query, clock, addonTv) { st, f, q, now, atv ->
+    val view: StateFlow<View> = combine(repo.state, filter, query, clock, addonTv, prefs.liveVisibleAddonIdsFlow) { st, f, q, now, atv, visibleAddonIds ->
         val favs = st.favorites
         // Lote 12 (v1.22.0): canais de exibição — ocultos fora, nome/número/
         // grupo/logo próprios aplicados e na ordem do usuário. O guia já vem
@@ -117,7 +126,12 @@ class LiveTvViewModel @Inject constructor(
         // FIM da lista, como grupo/fonte ao lado de M3U e Xtream (mesmos
         // filtros, busca, favoritos e cartões do hub). Sem EPG, o guia deles
         // vem vazio (repo.epgForChannel devolve vazio p/ id desconhecido).
-        val display = repo.displayChannels(st.channels) + atv.channels
+        // Lote 2 (v1.47.0, item 2): addons ocultos no seletor nem entram na
+        // lista (null = todos visíveis); o id do addon é o sourceId sem o
+        // prefixo "addon-tv:".
+        val visibleAddonChannels = if (visibleAddonIds == null) atv.channels
+            else atv.channels.filter { it.sourceId.removePrefix(AddonTvCatalogs.PREFIX) in visibleAddonIds }
+        val display = repo.displayChannels(st.channels) + visibleAddonChannels
         val epgById = display.associate { it.id to repo.epgForChannel(it.id) }
         val byId = display.associateBy { it.id }
         val clean = prefs.liveCleanGroupNames
@@ -128,7 +142,13 @@ class LiveTvViewModel @Inject constructor(
             else -> display
         }
         val needle = q.trim().lowercase()
-        val list = if (needle.isEmpty()) base else base.filter { it.name.lowercase().contains(needle) || it.group.lowercase().contains(needle) }
+        // Lote 2 (v1.47.0, item 7): a busca casa também o título de qualquer
+        // programa do guia do canal (mesmo filtro do guia, LiveGuideScreen)
+        // — "A Feiticeira" acha o canal que está passando A Feiticeira.
+        val list = if (needle.isEmpty()) base else base.filter {
+            it.name.lowercase().contains(needle) || it.group.lowercase().contains(needle) ||
+                (epgById[it.id].orEmpty()).any { p -> p.title.lowercase().contains(needle) }
+        }
         // Grupos na ordem em que aparecem na lista, com a contagem (uma passada só).
         val counts = LinkedHashMap<String, Int>()
         display.forEach { c -> groupNames(c, clean).forEach { g -> counts[g] = (counts[g] ?: 0) + 1 } }
@@ -174,6 +194,15 @@ class LiveTvViewModel @Inject constructor(
             addonDiag = atv.diag,
             addonResolvingId = atv.resolvingId,
             addonResolveError = atv.resolveError,
+            addonNames = atv.catalogs.associate { it.addonId to it.addonName },
+            tvAddons = atv.catalogs.map { c ->
+                TvAddonOption(
+                    id = c.addonId,
+                    name = c.addonName,
+                    visible = visibleAddonIds == null || c.addonId in visibleAddonIds,
+                    channelCount = visibleAddonChannels.count { it.sourceId.removePrefix(AddonTvCatalogs.PREFIX) == c.addonId },
+                )
+            },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), View())
 
@@ -187,6 +216,24 @@ class LiveTvViewModel @Inject constructor(
     fun reload() {
         viewModelScope.launch { repo.refresh(true) }
         loadAddonTv()
+    }
+
+    /**
+     * Liga/desliga um addon de TV na aba (Lote 2, item 2, v1.47.0). A pref
+     * guarda null = todos visíveis; desligar o 1º materializa o conjunto
+     * (todos menos ele) e, quando todos voltam, a pref volta p/ null.
+     */
+    fun setTvAddonVisible(addonId: String, visible: Boolean) {
+        val all = addonTv.value.catalogs.map { it.addonId }.toSet()
+        if (all.isEmpty() || addonId !in all) return
+        val current = prefs.liveVisibleAddonIds ?: all
+        val next = if (visible) current + addonId else current - addonId
+        prefs.liveVisibleAddonIds = if (next == all) null else next
+    }
+
+    /** Todos os addons de TV de volta (limpa o filtro). */
+    fun showAllTvAddons() {
+        prefs.liveVisibleAddonIds = null
     }
 
     /**
@@ -232,6 +279,7 @@ class LiveTvViewModel @Inject constructor(
             addonTv.update {
                 it.copy(
                     channels = channels,
+                    catalogs = result.catalogs,
                     loading = false,
                     error = if (result.catalogs.isEmpty() && !result.anyResponded)
                         "Não deu para ler os addons — os canais de TV deles não apareceram. Confira a conexão e toque em Atualizar."
