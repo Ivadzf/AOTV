@@ -65,6 +65,16 @@ class MoviesHomeViewModel @Inject constructor(
     /** Séries abandonadas no perfil (Lote 23) — a tela mostra "Desfazer abandono" no lugar de "Abandonar série". */
     val droppedSeries: StateFlow<Set<Int>> = prefs.droppedSeriesFlow
 
+    // v1.46.1 (hotfix): `_uiState` TEM que ficar ANTES do `init` — o
+    // `collect` de `continueArtworkFlow` no init roda na hora pela
+    // Main.immediate e toca `_uiState`; declarado depois do init, o campo
+    // ainda é nulo e o app crasha (NPE) a cada abertura da Início.
+    // Mesma classe de bug do crash da v1.34.0 (a inicialização do Kotlin
+    // segue a ordem textual: o init roda antes do campo existir).
+    private val _uiState = MutableStateFlow(UiState())
+
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
     init {
         // Abrir a Início (e trocar de perfil, que reabre o app) sincroniza com o Trakt.
         // ponytail: sem o intervalo de 30 min do webOS, a sincronia roda a cada abertura da Início.
@@ -341,8 +351,6 @@ class MoviesHomeViewModel @Inject constructor(
     // Cache por aba: trocar de aba de novo não refaz as ~15 chamadas de vídeo.
     private val trailerCache = mutableMapOf<TrailerTab, List<TrailerCard>>()
 
-    private val _uiState = MutableStateFlow(UiState())
-
     /** Perfil infantil. Fixo durante a vida da tela, a troca de perfil reabre o app. */
     private val kids = prefs.isKids
 
@@ -493,8 +501,6 @@ class MoviesHomeViewModel @Inject constructor(
             _uiState.update { it.copy(upcomingEpisodes = sortCalendarEntries(out).take(10)) }
         }
     }
-
-    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     /** Assinatura do histórico já processado — evita refazer a busca a cada tick do Flow. */
     private var lastRecKey: String = ""

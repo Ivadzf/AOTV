@@ -559,6 +559,30 @@ class PlatformPrefs @Inject constructor(
         return true
     }
 
+    /**
+     * Junta perfis com o mesmo nome (v1.46.1, hotfix): a importação da
+     * v1.46.0 renomeou o Principal para o nome do principal do Nuvio sem
+     * checar se outro perfil local já tinha esse nome (e o "Adicionar"
+     * manual também não checa), deixando duplicados no seletor. Em cada
+     * grupo de mesmo nome normalizado fica UM — prioridade: (1) o Principal,
+     * (2) o que tem vínculo Nuvio, (3) o primeiro da lista. Os demais saem
+     * por [removeProfile] (limpa as chaves do perfil). Roda no init (limpa
+     * o estado herdado) e no fim da importação. As linhas do banco (Minha
+     * Lista, Continuar assistindo) dos ids removidos ficam órfãs — são
+     * chaveadas pelo id morto, inalcançáveis, e não entram em nada.
+     */
+    fun dedupeProfiles() {
+        val groups = _profiles.value.groupBy { it.name.trim().lowercase() }.filterValues { it.size > 1 }
+        if (groups.isEmpty()) return
+        val links = nuvioProfileLinks
+        groups.values.forEach { group ->
+            val keeper = group.firstOrNull { it.id == MAIN_PROFILE }
+                ?: group.firstOrNull { links.containsKey(it.id) }
+                ?: group.first()
+            group.filter { it.id != keeper.id }.forEach { removeProfile(it.id) }
+        }
+    }
+
     fun selectProfile(id: String) {
         if (_profiles.value.none { it.id == id }) return
         prefs.edit().putString("profile", id).apply()
@@ -2588,7 +2612,11 @@ class PlatformPrefs @Inject constructor(
         get() = _playerButtons.value
         set(value) { writeStringList("pref_player_buttons", value); _playerButtons.value = value }
 
-    init { migratePlayerButtonsV127() }
+    init {
+        migratePlayerButtonsV127()
+        // v1.46.1 (hotfix): junta perfis duplicados herdados da v1.46.0.
+        dedupeProfiles()
+    }
 
     /**
      * Migração v1.27.0 (Lote 17 item 15): "color" e "info" entraram no

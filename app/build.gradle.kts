@@ -19,8 +19,8 @@ android {
         // v1.1: Chaquopy >= 16 exige minSdk 24 (perde o Android 6.0).
         minSdk         = 24
         targetSdk      = 35
-        versionCode    = 85
-        versionName    = "1.46.0"
+        versionCode    = 86
+        versionName    = "1.46.1"
         // v1.22.1: arm64-v8a + armeabi-v7a (APK universal). O arm64-only
         // economizava ~20 MB, mas TVs Philco/Skyworth rodam Android 32 bits
         // (SoC ARMv8-A em modo 32 bits) e o instalador recusava o APK com

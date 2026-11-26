@@ -268,6 +268,10 @@ class NuvioProfileImport @Inject constructor(
         // e recria a navegação com ProfileEpoch — sem reiniciar o app.
         val landing = mainLocalId ?: originalProfileId
         if (prefs.profileId.value != landing) prefs.selectProfile(landing)
+        // v1.46.1 (hotfix): uma colisão de nome (ex.: Principal renomeado
+        // para um nome que já existia) é limpa na hora, sem esperar a
+        // próxima abertura do app.
+        prefs.dedupeProfiles()
         // Perfis criados de verdade: diferença no tamanho da lista.
         val created = (prefs.profiles.value.size - profilesBefore).coerceAtLeast(0)
         return Result.success(
