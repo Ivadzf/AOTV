@@ -213,8 +213,8 @@ Todos os arquivos ficam na página de **[Releases](../../releases/latest)**. Nã
 
 | Aparelho | Arquivo | Precisa de |
 |---|---|---|
-| Celular ou tablet Android | `AOTV-v*.apk` | Android 6 ou mais novo |
-| Android TV e Google TV | `AOTV-v*.apk` | Android TV 6 ou mais novo |
+| Celular ou tablet Android | `AOTV-v*.apk` | Android 7.0 (API 24) ou mais novo |
+| Android TV e Google TV | `AOTV-v*.apk` | Android TV com Android 7.0 (API 24) ou mais novo |
 
 <details>
 <summary><b>Celular ou tablet Android</b></summary>
@@ -274,8 +274,10 @@ UI (Jetpack Compose)  →  ViewModel (Hilt)  →  Repository  →  Room / Retrof
 <details>
 <summary><b>Como compilar</b></summary>
 
-Precisa do **JDK 17** (ou do JBR do Android Studio) e do Android SDK. Crie um `local.properties` na
-raiz, que não entra no Git,
+Precisa do **JDK 17** (ou do JBR do Android Studio), do Android SDK (API 35) e do Gradle **8.14.1**.
+O `gradle-wrapper.jar` não é versionado neste repositório; por isso, os comandos abaixo usam uma
+instalação local do Gradle em vez de `./gradlew`. O workflow do GitHub Actions instala essa versão
+automaticamente. Crie um `local.properties` na raiz, que não entra no Git,
 
 ```properties
 sdk.dir=/caminho/para/o/Android/Sdk
@@ -284,9 +286,10 @@ sdk.dir=/caminho/para/o/Android/Sdk
 A chave do TMDB pode ir no `~/.gradle/gradle.properties` como `TMDB_API_KEY`. Depois,
 
 ```sh
-./gradlew installDebug          # instala num aparelho conectado
-./gradlew assembleRelease       # APK de release em app/build/outputs/apk/release/
-./gradlew testDebugUnitTest     # testes
+gradle installDebug             # instala num aparelho conectado
+gradle assembleDebug            # gera o APK debug
+gradle testDebugUnitTest         # testes unitários
+gradle assembleRelease           # APK de release em app/build/outputs/apk/release/
 ```
 
 Sem a `TMDB_API_KEY` o app abre pedindo a sua chave do TMDB em Configurações. O AOTV nunca vem
